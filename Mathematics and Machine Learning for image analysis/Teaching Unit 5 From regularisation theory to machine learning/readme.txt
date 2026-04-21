@@ -1,0 +1,1 @@
+We will introduce the basic concepts of (deterministic) regularisation theory and discuss model- and data-driven regularisations. We will discover how these concepts can be utilised to optimally sample data in magnetic resonance imaging and single-pixel camera applications, or to construct decoders for trained encoders in deep learning without additional training of the decoder.

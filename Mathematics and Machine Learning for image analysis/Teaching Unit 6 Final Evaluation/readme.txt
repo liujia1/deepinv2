@@ -1,0 +1,5 @@
+For the final examination, each student must work on at least one (and up to four) of the proposed assignments, each related to one of the teaching units 2, 3, 4, 5. The completed assignement(s) must be submitted via email, as attached files, to the organizers at the email address marco.donatelli@uninsubria.it, by June 21st, 2025.
+
+On the examination day (June 25th, 2025) all the students who submitted an assignment are required to take part in an online meeting (starting from 10am, we will send/upload the link to the meeting) aimed at discussing the proposed solutions, addressing possible doubts, and communicating the final result.
+
+All students/researchers who participated in the school through Erasmus+ mobility are asked to connect to the meeting, even if they have not submitted any assignment.
