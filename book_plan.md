@@ -292,35 +292,38 @@ Part VI  ██████████████████░░  85%  实�
 
 | 练习 | 内容 | 对应知识点 | 素材来源 | 状态 |
 |---|---|---|---|---|
-| 实验4.1 | 1D高斯分布ULA采样 | ULA递推式；Euler离散化Langevin SDE | lab1_ULA_sol（ULA_gauss函数） | ✅ |
-| 实验4.2 | ULA步长δ对收敛的影响 | 步长选择；δ≤1/L条件；收敛性与偏差 | lab1_ULA_sol（实验δ=0.1,0.5,1.0） | ✅ |
-| 实验4.3 | 2D图像ULA后验采样（去卷积） | 高维ULA；后验分布采样；势能函数U=-log后验 | lab1_ULA_sol（2D实验部分） | ✅ |
-| 实验4.4 | MCMC收敛诊断：自相关与有效样本量 | MCMC收敛诊断；burn-in；自相关函数；ESS | lab1_ULA扩展 | 🔄 需补充 |
+| 实验4.1 | Metropolis-Hastings采样（1D高斯混合） | MCMC基本思想；接受-拒绝准则；细致平衡条件；Metropolis-Hastings算法 | 🆕 新写（1D教学案例） | 🆕 新写 |
+| 实验4.2 | 1D高斯分布ULA采样 | ULA递推式；Euler离散化Langevin SDE；MH vs ULA对比 | lab1_ULA_sol（ULA_gauss函数） | ✅ |
+| 实验4.3 | ULA步长δ对收敛的影响 | 步长选择；δ≤1/L条件；收敛性与偏差 | lab1_ULA_sol（实验δ=0.1,0.5,1.0） | ✅ |
+| 实验4.4 | 2D图像ULA后验采样（去卷积） | 高维ULA；后验分布采样；势能函数U=-log后验 | lab1_ULA_sol（2D实验部分） | ✅ |
+| 实验4.5 | MCMC收敛诊断：自相关与有效样本量 | MCMC收敛诊断；burn-in；自相关函数；ESS | lab1_ULA扩展 | 🔄 需补充 |
 
 #### 第5章 朗之万动力学与得分函数
 
 | 练习 | 内容 | 对应知识点 | 素材来源 | 状态 |
 |---|---|---|---|---|
-| 实验5.1 | Tweedie等式验证：去噪器→得分函数 | Tweedie等式∇log p_ε(x)=(D_ε(x)-x)/ε；得分函数 | lab2_PnP_sol（PnP ULA递推） | ✅ |
-| 实验5.2 | PnP-ULA后验采样与不确定性量化 | PnP框架；用去噪器替换先验梯度；后验采样→不确定性量化 | lab2_PnP_sol（去卷积PnP采样） | ✅ |
-| 实验5.3 | 近端算子 vs 学习去噪器：PnP中的先验替换 | 近端算子prox_λR→去噪器D_ε；显式先验→隐式先验 | proximal.m思想 + lab2_PnP | 🔄 需扩展 |
+| 实验5.1 | 从MCMC到朗之万：Langevin SDE的推导与验证 | 朗之万SDE从MCMC的连续化推导；Langevin方程dx=∇log p(x)dt+√2dW；ULA作为Langevin的Euler离散 | lab1_ULA_sol（回顾ULA）+ Unit 2 Pereyra理论 | 🔄 需扩展 |
+| 实验5.2 | Tweedie等式验证：去噪器→得分函数 | Tweedie等式∇log p_ε(x)=(D_ε(x)-x)/ε；得分函数 | lab2_PnP_sol（PnP ULA递推） | ✅ |
+| 实验5.3 | PnP-ULA后验采样与不确定性量化 | PnP框架；用去噪器替换先验梯度；后验采样→不确定性量化 | lab2_PnP_sol（去卷积PnP采样） | ✅ |
+| 实验5.4 | 近端算子 vs 学习去噪器：PnP中的先验替换 | 近端算子prox_λR→去噪器D_ε；显式先验→隐式先验 | proximal.m思想 + lab2_PnP | 🔄 需扩展 |
 
 #### 第6章 得分匹配：从去噪中学习得分
 
 | 练习 | 内容 | 对应知识点 | 素材来源 | 状态 |
 |---|---|---|---|---|
 | 实验6.1 | 训练一个UNet去噪器（DRUNet） | 去噪器作为得分估计器；条件噪声水平训练 | CompImLab25 Part 3 + MiniProject_DenoisingPrior | ✅ |
-| 实验6.2 | 去噪得分匹配（DSM）：从去噪器提取得分 | DSM目标函数；得分匹配与去噪的等价性；s_θ≈∇log p | 基于CompImLab25训练的去噪器 | 🆕 新写 |
+| 实验6.2 | 去噪得分匹配（DSM）：从去噪器提取得分 | DSM目标函数；得分匹配与去噪的等价性；s_θ≈∇log p；SSM（切片得分匹配）与Hutchinson迹估计简介 | 基于CompImLab25训练的去噪器 | 🆕 新写 |
 | 实验6.3 | 用学习到的得分驱动PnP-ULA采样 | 学习得分→PnP采样；与手工先验对比 | lab2_PnP + 实验6.1的去噪器 | 🔄 组合 |
 
 #### 第7章 扩散模型：SDE视角
 
 | 练习 | 内容 | 对应知识点 | 素材来源 | 状态 |
 |---|---|---|---|---|
-| 实验7.1 | DDPM正向加噪过程：不同时间步的噪声水平 | 噪声调度α_t, ᾱ_t；信噪比随时间变化 | 🆕 新写（简单，基于DDPM公式） | 🆕 新写 |
-| 实验7.2 | DDPM反向去噪采样 | 反向SDE；Euler-Maruyama离散化；去噪采样循环 | deepinv库 demo_diffusion_sde | ✅ |
-| 实验7.3 | SDE采样 vs 概率流ODE vs DDIM：质量与速度对比 | 概率流ODE；确定性采样；DDIM加速；采样器权衡 | deepinv库（多个采样器对比） | 🔄 需扩展 |
-| 实验7.4 | PnP-ULA vs 扩散模型：同一去卷积问题的对比 | 采样路径的终点：Langevin→扩散的自然升级 | MiniProject_DenoisingPrior | ✅ |
+| 实验7.1 | 从Langevin到扩散：增加时间维度的连续化推广 | Langevin→扩散SDE的连续时间推广；多时间步噪声调度；连续极限β(t)调度 | 🆕 新写（1D对比：单步Langevin vs 多步扩散） | 🆕 新写 |
+| 实验7.2 | DDPM正向加噪过程：不同时间步的噪声水平 | 噪声调度α_t, ᾱ_t；信噪比随时间变化 | 🆕 新写（简单，基于DDPM公式） | 🆕 新写 |
+| 实验7.3 | DDPM反向去噪采样 | 反向SDE；Euler-Maruyama离散化；去噪采样循环 | deepinv库 demo_diffusion_sde | ✅ |
+| 实验7.4 | SDE采样 vs 概率流ODE vs DDIM：质量与速度对比 | 概率流ODE；确定性采样；DDIM加速；采样器权衡 | deepinv库（多个采样器对比） | 🔄 需扩展 |
+| 实验7.5 | PnP-ULA vs 扩散模型：同一去卷积问题的对比 | 采样路径的终点：Langevin→扩散的自然升级 | MiniProject_DenoisingPrior | ✅ |
 
 ---
 
@@ -346,8 +349,8 @@ Part VI  ██████████████████░░  85%  实�
 
 | 练习 | 内容 | 对应知识点 | 素材来源 | 状态 |
 |---|---|---|---|---|
-| 实验10.1 | 实现层级VAE（2-3层） | 层级潜变量；马尔可夫推断链；层级ELBO | 🆕 新写（在实验9.1基础上扩展） | 🆕 新写 |
-| 实验10.2 | 层级VAE与扩散加噪的类比：观察L→∞的极限 | 层级VAE→扩散的极限关系；高斯编码器=加噪过程 | 🆕 新写 | 🆕 新写 |
+| 实验10.1 | 实现层级VAE（2-3层） | 层级潜变量；马尔可夫推断链；层级ELBO推导；扩散过程的变分下界推导 | 🆕 新写（在实验9.1基础上扩展） | 🆕 新写 |
+| 实验10.2 | 层级VAE与扩散加噪的类比：观察L→∞的极限 | 层级VAE→扩散的极限关系；高斯编码器=加噪过程；变分下界→扩散训练目标；扩散的变分推导 | 🆕 新写 | 🆕 新写 |
 
 #### 第11章 扩散模型：变分视角
 
@@ -383,7 +386,7 @@ Part VI  ██████████████████░░  85%  实�
 
 | 练习 | 内容 | 对应知识点 | 素材来源 | 状态 |
 |---|---|---|---|---|
-| 实验14.1 | 2D点云Flow Matching（教学演示） | 向量场学习；条件Flow Matching；OT-CFM | 🆕 新写 | 🆕 新写 |
+| 实验14.1 | 2D点云Flow Matching（教学演示） | 最优传输问题形式化；Wasserstein距离；Monge vs Kantorovich形式；向量场学习；条件Flow Matching；OT-CFM | 🆕 新写 | 🆕 新写 |
 | 实验14.2 | Rectified Flow图像生成 | Rectified Flow；直线插值 vs 扩散路径；与扩散的对比 | 🆕 新写 | 🆕 新写 |
 
 ---
@@ -403,9 +406,10 @@ Part VI  ██████████████████░░  85%  实�
 | 练习 | 内容 | 对应知识点 | 素材来源 | 状态 |
 |---|---|---|---|---|
 | 实验16.1 | ASTRA断层成像算子与FBP重建 | Radon变换；滤波反投影；ASTRA工具箱 | astra_operators_example | ✅ |
-| 实验16.2 | UNet端到端CT重建 | 端到端学习重建；监督训练；post-processing | Bologna_UNet_example | ✅ |
-| 实验16.3 | Learned Gradient Descent迭代重建 | 学习型迭代重建；算法展开；unrolled optimization | Bologna_LGS_example | ✅ |
-| 实验16.4 | 扩散先验CT重建 | 扩散模型作为CT重建先验；DiffPIR for CT | MiniProject_DenoisingPrior方法迁移到CT | 🔄 需扩展 |
+| 实验16.2 | MRI k-space采样与零填充重建 | MRI正向模型（傅里叶采样）；k-space欠采样掩码；零填充重建；压缩感知MRI基础 | deepinv库MRI算子（sigpy/sigchem参考） | 🆕 新写 |
+| 实验16.3 | UNet端到端CT重建 | 端到端学习重建；监督训练；post-processing | Bologna_UNet_example | ✅ |
+| 实验16.4 | Learned Gradient Descent迭代重建 | 学习型迭代重建；算法展开；unrolled optimization | Bologna_LGS_example | ✅ |
+| 实验16.5 | 扩散先验CT重建 | 扩散模型作为CT重建先验；DiffPIR for CT | MiniProject_DenoisingPrior方法迁移到CT | 🔄 需扩展 |
 
 #### 第17章 自监督学习与等变架构
 
