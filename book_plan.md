@@ -125,36 +125,311 @@ Part VI  实践与应用
 ### 各 Part 覆盖率
 
 ```
-Part I   ████████████████████  90%  充足（.m代码完整覆盖经典方法链）
-Part II  ██████████████████░░  85%  前半充足，后半需扩展（lab有完整解答版）
-Part III ██████████░░░░░░░░░░  45%  有理论基础，需大量推导和代码
-Part IV  ████████████░░░░░░░░  50%  两条路径材料已有，统一论证需新写
-Part V   ████░░░░░░░░░░░░░░░░  15%  基本需新写
-Part VI  ██████████████████░░  85%  实践素材充足（.m + .ipynb）
+Part I   █████████████████░░░  85%  贝叶斯基石充足，部分优化/决策理论需补
+Part II  ██████████████░░░░░░  70%  ULA/Langevin充足，得分匹配与扩散SDE理论缺口大
+Part III █████░░░░░░░░░░░░░░░  25%  仅有周边基础，核心推导几乎全部缺失
+Part IV  ██████░░░░░░░░░░░░░░  30%  两条路径端点有材料，统一论证需新写
+Part V   █░░░░░░░░░░░░░░░░░░░   5%  Flow Matching无任何源材料
+Part VI  ███████████████░░░░░  75%  实践素材充足，MRI与DiT为缺口
 ```
 
-### 逐章材料支撑详情
+### 逐章主题级覆盖详情
 
-| 章 | 可支撑的资料 | 覆盖度 |
+> 状态说明：✅ 有直接源材料 | 🟡 有间接/部分材料 | ❌ 无材料需新写
+
+#### 第1章 逆问题与贝叶斯推断 — 覆盖率 92%
+
+| 子主题 | 可用来源 | 状态 |
 |---|---|---|
-| 第1章 逆问题与贝叶斯推断 | Unit 2讲座(L1&2 84+53页)、Unit 5 Benning讲座(270页)、Winter School Siltanen断层成像(Day1-3 87+174+82+56页+7个.m代码)、Unit 1预课程(Calatroni 59页：正向模型/噪声建模/贝叶斯推导)、Unit 2 exercise(经验贝叶斯) | ✅ 充足 |
-| 第2章 先验：贝叶斯推断的灵魂 | Unit 3先验讲座3讲(82+47+54页)、Unit 1 Calatroni(贝叶斯→变分对应表、先验=正则化推导)、Ratti(贝叶斯去噪器/学习误差分解)、Unit 2 exercise(后验推导+MAP+近端算子) | ✅ 充足 |
-| 第3章 从MAP到后验探索 | Winter School优化(FISTA/ISTA lab)、Benning正则化3讲(270+71+97页)、.m完整方法链(XR03朴素逆→XR04 SVD→BunnyTomo3截断SVD→XR05 Tikhonov→XR09 TV→XR10 Besov小波ISTA)、MIVA优化lab(ISTA/FISTA)、proximal.m(近端算子)、Unit 1(梯度下降) | ✅ 充足 |
-| 第4章 MCMC与ULA | lab1_ULA完整notebook+**解答版lab1_ULA_sol**(1D高斯采样+2D图像实现)、Unit 2讲座Pereyra(Monte Carlo integration) | ✅ 充足 |
-| 第5章 朗之万动力学与得分 | lab2_PnP+**解答版lab2_PnP_sol**(Tweedie等式完整推导+ULA采样实现)、ULA lab、Unit 2"stochastic diffusion processes"、Unit 1 Calatroni(近端算子=去噪器，PnP前传) | ✅ 充足 |
-| 第6章 得分匹配 | PnP lab的Tweedie identity、Unit 3"explicit diffusion models"(82页含扩散模型内容)、MiniProject_DenoisingPrior(PnP vs 扩散对比)、Ratti(Tweedie's formula用于无监督先验学习) | 🟡 需扩展：缺DSM/SSM正式推导和训练代码 |
-| 第7章 扩散SDE视角 | Unit 2 Pereyra"stochastic diffusion processes"(84+53页)、Unit 3"explicit diffusion models based on products of 1D Gaussian mixture models"、deepinv库(diffusion_sde/demo_ddrm/demo_diffpir) | 🟡 需扩展：缺SDE→ODE→DDPM完整推导链 |
-| 第8章 变分推断与ELBO | Unit 5 Benning正则化理论(变分框架270页)、Winter School凸分析(Fenchel共轭65+71页)、Unit 2 Pereyra贝叶斯决策理论 | 🟡 有基础：需自行推导ELBO→VAE桥梁 |
-| 第9章 VAE与重参数化 | Unit 1 Ratti(神经网络架构：MLP/CNN/UNet/**ViT**、训练流程、偏差-方差)、Unit 3"learning generative priors"(最大熵原理) | 🟡 有基础：VAE架构和重参数化需新写 |
-| 第10章 层级VAE | Unit 3"Gaussian mixture models"提示层级结构 | 🟠 弱支撑：需大量新内容 |
-| 第11章 扩散变分视角 | Unit 3"explicit diffusion models"、已有SDE视角可对照 | 🟠 弱支撑：Kingma VDM推导需新写 |
-| 第12章 Score ≡ ELBO | 已有Tweedie identity(PnP lab)+变分下界自然汇合 | 🟡 需论证：等价性证明需自行组织 |
-| 第13章 条件生成与逆问题 | MiniProject_DenoisingPrior(**PnP vs 扩散模型完整对比实践**)、Unit 4 learned iterative reconstruction(LGS notebook)、astra实践 | 🟡 需扩展：条件扩散引导需新写 |
-| 第14章 Flow Matching | Winter School内点法讲座(Gondzio 46+64页)中ADMM/最优传输仅提及 | 🔴 基本需新写 |
-| 第15章 架构实践：UNet→DiT | Bologna_UNet_example(UNet断层成像)、CompImLab25(训练UNet去噪器完整流程)、Unit 1 Ratti(**ViT/Restormer架构介绍**) | 🟡 UNet充足，ViT有铺垫，DiT细节需新写 |
-| 第16章 CT/MRI重建 | astra_operators_example(ASTRA断层成像)、Bologna_UNet_example(UNet重建)、Bologna_LGS_example(Learned Gradient Descent)、.m代码(XR系列完整断层重建链) | ✅ 充足 |
-| 第17章 自监督学习 | MiniProject_Self_Supervised(**Cryo-EM真实数据自监督去噪**，deepinv库，Noise2Noise等) | ✅ 充足 |
-| 第18章 综合项目 | MiniProject_DefiningOperator(多视角自定义算子)、MiniProject_DenoisingPrior(扩散求解逆问题)、Unit 6评估材料 | 🟡 有框架，需设计 |
+| 逆问题定义与Hadamard适定性 | Pereyra L1 P1-5; Benning L1 P1-30 | ✅ |
+| 正向模型y=Ax（卷积/下采样/Radon） | Calatroni P1-13; Siltanen D2 P28-70; MiniProject_DefiningOperator | ✅ |
+| Beer-Lambert定律 | Siltanen D2 P55-70 | ✅ |
+| 高斯噪声→L2数据项 | Calatroni P14-17; Pereyra L1 P8 | ✅ |
+| Poisson噪声→KL散度数据项 | Calatroni P36-37 | ✅ |
+| 脉冲/Laplace噪声→L1数据项 | Calatroni P37-38 | ✅ |
+| 似然函数推导 | Pereyra L1 P8; Calatroni P26-28 | ✅ |
+| 不适定性与病态性 | Benning L1 P1-30; Pereyra L1 P5 | ✅ |
+| inverse crime | Siltanen D2 (XR02代码) | 🟡 代码有,理论解释少 |
+| 贝叶斯定理p(x\|y)∝p(y\|x)p(x) | Pereyra L1 P7-10; Calatroni P26-28 | ✅ |
+| 图像质量度量(MSE/PSNR/SSIM) | Calatroni P18-24; CompImLab25 Part 1 | ✅ |
+
+#### 第2章 先验：贝叶斯推断的灵魂 — 覆盖率 83%
+
+| 子主题 | 可用来源 | 状态 |
+|---|---|---|
+| -ln后验=数据项+正则项（完整对应表） | Calatroni P29-44; Pock L2 P7-13 | ✅ |
+| 高斯先验→Tikhonov | Calatroni P29-34; Benning L1 P75-83 | ✅ |
+| Laplace先验→L1/稀疏 | Calatroni P35; Benning L1 P138-139 | ✅ |
+| 梯度高斯先验→Sobolev平滑 | Calatroni P43 | ✅ |
+| TV先验→全变差 | Siltanen D2; Pock L3 P1-9; Benning L1 P139+ | ✅ |
+| TGV先验 | Siltanen D2 P11; Pock L3 (简要) | 🟡 仅提及,无理论 |
+| Fields of Experts (FoE)先验 | Pock L1 P6-20 | ✅ |
+| 最大熵先验 | Pock L2 P7-8 | ✅ |
+| MMSE vs MAP估计器 | Ratti P10-13; Pock L2 P7-13 | ✅ |
+| 五类误差分解 | Ratti P49-57 | ✅ |
+| 从显式先验到隐式先验 | Pock L1 P20-56; Pereyra L3 P36-52 | ✅ |
+| 贝叶斯去噪器 | Ratti P1-13 | ✅ |
+
+#### 第3章 从MAP到后验探索 — 覆盖率 88%
+
+| 子主题 | 可用来源 | 状态 |
+|---|---|---|
+| MAP估计与贝叶斯决策理论 | Pereyra L1 P12, P24-25 | ✅ |
+| 凸性/Lipschitz/强制性 | Calatroni P49-51; opt1 P19-40 | ✅ |
+| 梯度下降与步长选择 | opt1 P41-55; Calatroni P51-53 | ✅ |
+| Tikhonov迭代+闭式解(DFT) | Calatroni P53; Benning L1 P75-83; XR05 | ✅ |
+| ISTA/FISTA | opt2 P21+; PHD_MIVA lab | ✅ |
+| 迭代硬阈值(IHT) | opt3 P20-22 | ✅ |
+| 重加权L1 | opt3 P28+ | ✅ |
+| TV正则化与Chambolle-Pock | XR09_TV; tomo_tv; Siltanen D2 P46-48 | ✅ |
+| ADMM算法 | Gondzio L6 | 🟡 仅提及,缺完整推导 |
+| Bregman距离与误差估计 | Benning L2 P68-71; Benning L1 P170+ | ✅ |
+| 源条件与收敛速率 | Benning L2 P10-20, P33-38 | ✅ |
+| 近端算子定义与计算 | opt2 P9-20; Calatroni P41-44; proximal.m | ✅ |
+| 截断SVD正则化 | Benning L1 P40-70; BunnyTomo3 | ✅ |
+| 经验贝叶斯参数估计 | Pereyra L1 P58-84; Unit2_exercise | ✅ |
+| 从MAP到后验的动机 | Pereyra L1 P30+; Pock L2 P18-24 | ✅ |
+
+#### 第4章 MCMC与ULA算法 — 覆盖率 91%
+
+| 子主题 | 可用来源 | 状态 |
+|---|---|---|
+| Monte Carlo积分 | Pereyra L1 P30-35 | ✅ |
+| Metropolis-Hastings算法 | Pereyra L1 P35-40 | ✅ |
+| ULA递推式与Euler离散化 | Pereyra L1 P40-50; Pock L2 P14-17; lab1_ULA_sol | ✅ |
+| 步长δ≤1/L条件 | Pereyra L1 P45-48; lab1_ULA_sol | ✅ |
+| MH vs ULA对比 | Pereyra L1 P48-50; Pock L2 P15-17 | ✅ |
+| MYULA（Moreau包络） | Pereyra L1 P43-44; Pereyra L3 P9-11 | ✅ |
+| Gibbs采样 | Pock L2 P27-31 | ✅ |
+| 过松弛/惯性Langevin | Pock L2 P32-33 | ✅ |
+| 半二次最小化→GLM | Pock L2 P25-26 | ✅ |
+| MCMC收敛诊断 | lab1_ULA_sol (部分) | 🟡 实践有,理论少 |
+
+#### 第5章 朗之万动力学与得分函数 — 覆盖率 100%
+
+| 子主题 | 可用来源 | 状态 |
+|---|---|---|
+| 从MCMC到Langevin SDE | Pereyra L1 P40-50; Pock L2 P14 | ✅ |
+| Langevin方程dx=∇log p dt+√2dW | Pereyra L1 P45-48; Pock L2 P14 | ✅ |
+| 得分函数几何含义 | Pereyra L1 P58-60 | ✅ |
+| Tweedie等式 | Pock L2 P10-13; Pereyra L3 P12-21; Ratti P9-13 | ✅ |
+| MAP/MMSE结构对偶(Moreau vs 软下卷积) | Pock L2 P7-13, P18-20 | ✅ |
+| PnP框架 | Pereyra L3 P9-11; Calatroni P41-44; lab2_PnP_sol | ✅ |
+| PnP-ULA后验采样与不确定性量化 | Pereyra L3 P22-35; lab2_PnP_sol | ✅ |
+| Moreau-Yoshida近似理论 | Pereyra L1 P43-44; Pereyra L3 P9-11 | ✅ |
+
+#### 第6章 得分匹配：从去噪中学习得分 — 覆盖率 33%
+
+| 子主题 | 可用来源 | 状态 |
+|---|---|---|
+| 得分函数不可计算（需Z） | Pereyra L1 P58-60 (隐含) | 🟡 动机不够明确 |
+| 显式得分匹配(ESM)与不可行性 | — | ❌ |
+| 去噪得分匹配(DSM)目标函数推导 | — | ❌ |
+| 去噪=得分匹配的等价性 | Tweedie identity可间接推出 | 🟡 有Tweedie但缺DSM推导 |
+| 切片得分匹配(SSM)与Hutchinson | — | ❌ |
+| ESM/DSM/SSM三者关系 | — | ❌ |
+| 去噪器作为得分估计器(条件噪声水平) | MiniProject_DenoisingPrior; CompImLab25 | 🟡 实践有,理论缺 |
+| Tweedie等式连接去噪器与得分 | Pock L2 P10-13; Tachella P14 | ✅ |
+| 用学习到的得分驱动PnP-ULA | lab2_PnP_sol; MiniProject_DenoisingPrior | ✅ |
+
+#### 第7章 扩散模型：SDE视角 — 覆盖率 40%
+
+| 子主题 | 可用来源 | 状态 |
+|---|---|---|
+| 从Langevin到扩散：连续时间推广 | Pock L2 P14 (概念); Pereyra L1 P50 | 🟡 概念有,完整推广缺 |
+| 正向SDE与逆向SDE | Pereyra L1 P50-55; Pereyra L3 P7-8 | 🟡 有基础但缺完整推导 |
+| 概率流ODE | — | ❌ |
+| Euler-Maruyama离散化 | lab1_ULA_sol (ULA类似) | 🟡 ULA有,扩散离散化缺 |
+| DDPM作为SDE离散特例 | — | ❌ |
+| 采样器选择：DDPM vs DDIM vs ODE | — | ❌ |
+| "扩散在绝对零度"概念 | Pock L2 P14 (温度→0) | ✅ |
+| deepinv扩散SDE demo | demo_diffusion_sde | ✅ |
+
+#### 第8章 变分推断与ELBO — 覆盖率 29%
+
+| 子主题 | 可用来源 | 状态 |
+|---|---|---|
+| 为什么需要变分推断？ | Pereyra L1 P6 (隐含) | 🟡 动机弱 |
+| ELBO推导：Jensen不等式+KL散度 | — | ❌ |
+| log p(x) = ELBO + KL(q\|p) | — | ❌ |
+| Fenchel共轭与变分下界 | Benning L2 P23-25; opt3 | 🟡 凸共轭有,ELBO连接缺 |
+| 变分正则化框架 | Benning L1 P130-175 | ✅ |
+| 变分族选择：平均场近似 | — | ❌ |
+| 变分间隙 | — | ❌ |
+
+#### 第9章 VAE与重参数化 — 覆盖率 44%
+
+| 子主题 | 可用来源 | 状态 |
+|---|---|---|
+| VAE架构：编码器-解码器 | — | ❌ |
+| 重参数化技巧 | — | ❌ |
+| REINFORCE vs 重参数化 | — | ❌ |
+| ELBO训练与KL正则化 | — | ❌ |
+| β-VAE与解纠缠 | — | ❌ |
+| 四种学习设定 | Ratti P18-21 | ✅ |
+| 神经网络架构(MLP/CNN/UNet/ViT) | Ratti P31-48 | ✅ |
+| 通用近似定理 | Ratti P33 | ✅ |
+| 偏差-方差与双重下降 | Ratti P26-30 | ✅ |
+
+#### 第10章 层级VAE与扩散的变分推导 — 覆盖率 14%
+
+| 子主题 | 可用来源 | 状态 |
+|---|---|---|
+| 从VAE到层级VAE | — | ❌ |
+| 马尔可夫推断链 | — | ❌ |
+| 层级ELBO推导 | — | ❌ |
+| 高斯编码器=加噪过程 | — | ❌ |
+| 变分下界→扩散训练目标 | — | ❌ |
+| 层级VAE→扩散极限(L→∞) | Pock L2 P14 (概念) | 🟡 极弱 |
+| GMM层级结构提示 | Pock L1 (间接) | 🟡 间接 |
+
+#### 第11章 扩散模型：变分视角 — 覆盖率 0%
+
+| 子主题 | 可用来源 | 状态 |
+|---|---|---|
+| VLB分解：L_T + L_{t-1} + L_0 | — | ❌ |
+| 三种参数化：ε_θ vs s_θ vs x₀预测 | — | ❌ |
+| 参数化对训练稳定性的影响 | — | ❌ |
+| 简化VLB与DDPM训练 | — | ❌ |
+| DDPM训练目标作为VLB简化 | — | ❌ |
+
+#### 第12章 Score ≡ ELBO：殊途同归 — 覆盖率 17%
+
+| 子主题 | 可用来源 | 状态 |
+|---|---|---|
+| 采样路径回顾：Score Matching损失 | 第6章Tweedie identity | 🟡 有Tweedie缺DSM |
+| 变分路径回顾：变分下界 | 第8-11章(均缺失) | ❌ |
+| DSM损失≡VLB等价性证明 | — | ❌ |
+| 直观解释+形式化证明 | — | ❌ |
+| 两种训练视角对比 | — | ❌ |
+| 训练目标选择指南 | — | ❌ |
+
+#### 第13章 条件生成与逆问题求解 — 覆盖率 40%
+
+| 子主题 | 可用来源 | 状态 |
+|---|---|---|
+| 条件扩散模型p(x\|y) | — | ❌ |
+| 逆问题=条件生成的等价性 | Pereyra L1 P5-10 (隐含) | 🟡 |
+| 分类器引导(Classifier Guidance) | — | ❌ |
+| 无分类器引导(CFG) | — | ❌ |
+| DDRM算法 | deepinv demo_ddrm | ✅ |
+| DiffPIR算法 | deepinv demo_diffpir | ✅ |
+| DPS算法 | — | ❌ |
+| PnP vs 扩散对比实践 | MiniProject_DenoisingPrior | ✅ |
+| 贝叶斯假设检验 | Pereyra L1 P30, P51-53 | 🟡 |
+
+#### 第14章 Flow Matching与最优传输 — 覆盖率 0%
+
+| 子主题 | 可用来源 | 状态 |
+|---|---|---|
+| 最优传输基础(Monge/Kantorovich) | — | ❌ |
+| Wasserstein距离 | — | ❌ |
+| 连续归一化流(CNF) | — | ❌ |
+| Flow Matching / 条件Flow Matching | — | ❌ |
+| OT-CFM | — | ❌ |
+| Rectified Flow | — | ❌ |
+| 与扩散模型对比 | — | ❌ |
+| SD3/Flux = Rectified Flow + DiT | — | ❌ |
+
+#### 第15章 扩散模型的架构实践：UNet → DiT — 覆盖率 62%
+
+| 子主题 | 可用来源 | 状态 |
+|---|---|---|
+| UNet架构(编码器-解码器+skip) | Ratti P36-37; Bologna_UNet_example | ✅ |
+| UNet去噪器训练 | CompImLab25 Part 3 | ✅ |
+| UNet端到端CT重建 | Bologna_UNet_example | ✅ |
+| ViT概念(单页) | Ratti P38 | 🟡 仅概念,无细节 |
+| Restormer(仅提及) | Ratti P38 | 🟡 仅名称 |
+| Transformer架构细节(MHA/MLP块) | — | ❌ |
+| DiT架构(Patchify/adaLN-Zero) | — | ❌ |
+| 时间步嵌入机制 | — | ❌ |
+| 训练最佳实践 | Ratti P44-48 | ✅ |
+| 反向传播与SGD | Ratti P40-43 | ✅ |
+
+#### 第16章 CT/MRI重建 — 覆盖率 75%
+
+| 子主题 | 可用来源 | 状态 |
+|---|---|---|
+| Beer-Lambert定律 | Siltanen D2 P37-47 | ✅ |
+| 像素化测量模型(矩阵A) | Siltanen D2 P48-97 | ✅ |
+| 反投影(A^T) | Siltanen D2 P98-103 | ✅ |
+| Fourier切片定理(含证明) | Siltanen D3A P51 | ✅ |
+| 滤波反投影(FBP) | Siltanen D2 P5-7 | ✅ |
+| 有限角CT与不适定性 | Siltanen D3A P28-54 | ✅ |
+| 波前集理论(可见vs不可见边缘) | Siltanen D3A P55-58 | ✅ |
+| 剪切波学习不可见边缘 | Siltanen D3A P63 | ✅ |
+| CT正则化(Tikhonov/TV/小波/剪切波) | Siltanen D2 P125-162 | ✅ |
+| 发射断层(PET/PGET) | Siltanen D3B P1-27 | ✅ |
+| Helsinki挑战赛 | Siltanen D3A P70-80 | ✅ |
+| ASTRA工具箱(代码) | astra_operators_example | ✅ |
+| UNet端到端CT(代码) | Bologna_UNet_example | ✅ |
+| Learned Gradient Descent(代码) | Bologna_LGS_example | ✅ |
+| **MRI k-space采样** | — | ❌ |
+| **MRI正向模型(傅里叶算子)** | — | ❌ |
+| **MRI欠采样掩码** | — | ❌ |
+| **压缩感知MRI** | — | ❌ |
+| **学习MRI采样模式** | Benning L2(提及,无源文件) | ❌ |
+| 扩散先验CT重建 | MiniProject_DenoisingPrior(去模糊) | 🟡 需迁移到CT算子 |
+
+#### 第17章 自监督学习与等变架构 — 覆盖率 80%
+
+| 子主题 | 可用来源 | 状态 |
+|---|---|---|
+| 自监督学习动机 | Tachella P1-9 | ✅ |
+| SURE(Stein无偏风险估计) | Tachella P12-13 | ✅ |
+| UNSURE(未知噪声水平) | Tachella P17-19 | ✅ |
+| Noise2Void/Noise2Self | Tachella P15-16 | ✅ |
+| Recorrupted2Recorrupted(R2R) | Tachella P13, P41 | ✅ |
+| 等变成像(EI)原理 | Tachella P28-30 | ✅ |
+| EI损失与伪代码 | Tachella P31 | ✅ |
+| 算子-等变性表(平移/旋转/CT/MRI) | Tachella P29 | ✅ |
+| 四种学习设定分类 | Ratti P18-21 | ✅ |
+| Cryo-EM自监督去噪(代码) | MiniProject_Self_Supervised | ✅ |
+| deepinv自监督损失API | MiniProject_Self_Supervised Step3 | ✅ |
+| Noise2Noise专门处理 | Ratti P37仅提及 | 🟡 无专门材料 |
+| EI代码实现 | MiniProject "Going Further"仅提及 | 🟡 无代码 |
+
+#### 第18章 综合项目 — 覆盖率 65%
+
+| 子主题 | 可用来源 | 状态 |
+|---|---|---|
+| 自定义前向算子(MultiViewPhysics) | MiniProject_DefiningOperator | ✅ |
+| 伴随算子自动计算与验证 | MiniProject_DefiningOperator | ✅ |
+| 扩散模型求解逆问题(去模糊) | MiniProject_DenoisingPrior | ✅ |
+| PnP vs 扩散对比 | MiniProject_DenoisingPrior | ✅ |
+| 不确定性量化方法 | lab1_ULA_sol + 扩散采样 | 🟡 方法有,需组合 |
+| 端到端自定义逆问题流程 | — | ❌ 需设计整合 |
+
+### 缺失内容汇总
+
+#### 完全缺失（需从零写的核心内容）
+
+| 章 | 缺失核心内容 | 建议参考文献 |
+|---|---|---|
+| 第6章 | ESM/DSM/SSM完整推导与训练代码 | Hyvärinen 2005; Vincent 2011 |
+| 第7章 | 正向/逆向SDE推导；概率流ODE；DDPM=SDE离散特例；采样器理论 | Song et al. 2021 (Score-SDE) |
+| 第8章 | ELBO推导；Jensen→KL分解；平均场近似；变分间隙 | Bishop PRML Ch10; Blei et al. 2017 |
+| 第9章 | VAE架构；重参数化技巧；ELBO训练；β-VAE | Kingma & Welling 2014; Rezende et al. 2014 |
+| 第10章 | 层级VAE全链；层级ELBO推导；高斯编码器=加噪 | Kingma et al. 2021 (VDM); Sønderby 2016 |
+| 第11章 | VLB分解；三种参数化；简化VLB | Ho et al. 2020 (DDPM); Kingma 2021 |
+| 第12章 | DSM≡VLB等价性证明 | Luo 2022综述; Song & Kingma |
+| 第14章 | 全部（OT/Wasserstein/CNF/FM/RF） | Lipman et al. 2023; Liu et al. 2023 |
+| 第16章 | MRI全部（k-space/欠采样/压缩感知） | Lustig et al. 2008; deepinv MRI |
+
+#### 部分缺失（需扩展的关键内容）
+
+| 章 | 缺失内容 | 可扩展的基座 |
+|---|---|---|
+| 第1章 | inverse crime理论解释 | XR02代码已有实践 |
+| 第3章 | ADMM完整推导 | Gondzio L6有提及 |
+| 第4章 | MCMC收敛诊断理论 | lab1_ULA_sol有实践 |
+| 第6章 | DSM理论推导（从Tweedie推出） | Pock L2有Tweedie |
+| 第7章 | Langevin→扩散SDE完整推广 | Pock L2有概念 |
+| 第13章 | 条件扩散/引导采样理论 | MiniProject有DDRM/DiffPIR代码 |
+| 第15章 | Transformer/DiT架构细节 | Ratti P38有ViT概念 |
+| 第16章 | 扩散先验迁移到CT | MiniProject有去模糊版本 |
+| 第17章 | Noise2Noise专门材料; EI代码 | Tachella有理论 |
+| 第18章 | 端到端整合流程设计 | 两个MiniProject可组合 |
 
 ### 资源清单（按类型）
 
@@ -433,12 +708,12 @@ Part VI  ██████████████████░░  85%  实�
 
 | 状态 | 数量 | 占比 |
 |---|---|---|
-| ✅ 有现成素材 | 20 | 38% |
-| 🔄 有素材需改造/扩展 | 17 | 33% |
-| 🆕 需从零新写 | 15 | 29% |
-| **总计** | **52** | 100% |
+| ✅ 有现成素材 | 20 | 36% |
+| 🔄 有素材需改造/扩展 | 18 | 32% |
+| 🆕 需从零新写 | 18 | 32% |
+| **总计** | **56** | 100% |
 
-### 新写练习重点清单（15个）
+### 新写练习重点清单（18个）
 
 | 优先级 | 练习 | 对应知识点 | 难度 | 依赖 |
 |---|---|---|---|---|
@@ -447,16 +722,19 @@ Part VI  ██████████████████░░  85%  实�
 | ⭐⭐⭐ | 实验10.1 层级VAE | 层级潜变量；马尔可夫推断链；层级ELBO | 中高 | 实验9.1 |
 | ⭐⭐⭐ | 实验11.2 简化VLB训练扩散 | 简化VLB；噪声预测参数化；DDPM训练=VLB简化 | 高 | 实验10.1 |
 | ⭐⭐⭐ | 实验12.1 DSM≡VLB数值验证 | Score Matching≡变分下界；殊途同归的数值验证 | 高 | 实验6.2+11.1 |
+| ⭐⭐ | 实验4.1 Metropolis-Hastings采样 | MCMC；接受-拒绝准则；细致平衡条件 | 低 | 无 |
+| ⭐⭐ | 实验7.1 从Langevin到扩散 | Langevin→扩散SDE连续时间推广；多时间步噪声调度 | 中 | 实验5.1+4.2 |
 | ⭐⭐ | 实验8.1 1D高斯混合ELBO | ELBO定义；Jensen不等式；KL散度 | 低 | 无 |
 | ⭐⭐ | 实验8.3 变分推断1D案例 | 变分族q；平均场近似；变分间隙 | 低 | 实验8.1 |
 | ⭐⭐ | 实验9.2 重参数化数值验证 | 梯度穿过随机节点；REINFORCE vs 重参数化 | 低 | 实验9.1 |
 | ⭐⭐ | 实验9.3 VAE隐空间可视化 | 隐空间结构；KL正则化；插值生成 | 低 | 实验9.1 |
-| ⭐⭐ | 实验13.2 Classifier-free guidance | 引导采样；无分类器引导；引导权重w | 中高 | 实验7.2扩散模型 |
-| ⭐ | 实验7.1 DDPM正向加噪 | 噪声调度α_t, ᾱ_t；信噪比随时间变化 | 低 | 无 |
+| ⭐⭐ | 实验13.2 Classifier-free guidance | 引导采样；无分类器引导；引导权重w | 中高 | 实验7.3扩散模型 |
+| ⭐ | 实验7.2 DDPM正向加噪 | 噪声调度α_t, ᾱ_t；信噪比随时间变化 | 低 | 无 |
 | ⭐ | 实验10.2 层级VAE→扩散极限 | 层级VAE→扩散极限；高斯编码器=加噪 | 中 | 实验10.1 |
 | ⭐ | 实验11.1 VLB数值计算 | VLB分解；重建项+先验匹配项 | 中 | 实验9.1 |
-| ⭐ | 实验14.1 2D点云Flow Matching | 向量场学习；条件Flow Matching；OT-CFM | 中 | 无 |
+| ⭐ | 实验14.1 2D点云Flow Matching | 最优传输；Wasserstein距离；向量场学习；OT-CFM | 中 | 无 |
 | ⭐ | 实验14.2 Rectified Flow图像生成 | Rectified Flow；直线插值 vs 扩散路径 | 高 | 实验14.1 |
+| ⭐ | 实验16.2 MRI k-space采样与重建 | MRI正向模型；k-space欠采样；压缩感知MRI | 中 | 实验16.1 |
 
 ---
 
@@ -495,3 +773,452 @@ Part IV   统一：Score ≡ ELBO
 Part V   Flow      Part VI    实践
          Matching   架构应用    项目
 ```
+
+---
+
+## 十三、环境与工具依赖
+
+### 核心工具链
+
+| 工具 | 用途 | 涉及章节 | 安装方式 |
+|---|---|---|---|
+| Python ≥3.9 | 编程语言 | 全书 | — |
+| PyTorch ≥2.0 | 深度学习框架 | 第6,9-15章 | `pip install torch torchvision` |
+| deepinv | 逆问题与扩散模型库 | 第1,4-7,13,16-18章 | `pip install git+https://github.com/deepinv/deepinv.git#egg=deepinv` |
+| ASTRA Toolbox | CT断层成像算子 | 第1,16章 | `pip install astra_toolbox` |
+| NumPy / SciPy | 数值计算 | 第1-8章 | `pip install numpy scipy` |
+| Matplotlib | 可视化 | 全书 | `pip install matplotlib` |
+
+### deepinv 关键API索引
+
+| 模块 | 类/函数 | 对应练习 |
+|---|---|---|
+| `deepinv.models` | `DRUNet`, `DiffUNet`, `NCSNpp` | 实验6.1, 7.3, 13.3 |
+| `deepinv.physics` | `Denoising`, `GaussianNoise`, `Downsampling`, `LinearPhysics`, `Tomography` | 实验1.2, 16.1, 18.1 |
+| `deepinv.physics.blur` | `gaussian_blur` | 实验1.2, 13.1 |
+| `deepinv.optim` | `DPIR` | 实验16.5 |
+| `deepinv.loss` | `SplittingLoss`, `Neighbor2Neighbor`, `SureGaussianLoss`, `R2RLoss`, `EILoss` | 实验17.1-17.3 |
+| `deepinv.datasets` | `HDF5Dataset`, `generate_dataset` | 实验17.1 |
+| `deepinv.Trainer` | 训练编排器 | 实验17.1 |
+| `deepinv.utils` | `plot`, `load_example`, `get_freer_gpu` | 全书 |
+
+### 预训练模型
+
+| 模型 | 权重来源 | 用途 |
+|---|---|---|
+| DRUNet | `huggingface.co/deepinv/drunet` | 通用去噪器/得分估计 |
+| DiffUNet | `huggingface.co/deepinv/diffunet` | 扩散去噪 |
+| NCSNpp | `huggingface.co/deepinv/edm` | Score-SDE模型 |
+
+---
+
+## 十四、各章节要点大纲
+
+> 以下为除第7章、第15章（已有大纲）外各章的建议章节结构，整合了讲座材料中发现的关键知识点。
+
+### 第1章 逆问题与贝叶斯推断
+
+```
+1.1  什么是逆问题？从观察到因果的推理
+1.2  正向模型：线性算子y=Ax
+     - 卷积模糊、下采样、Radon变换
+1.3  噪声建模与似然函数
+     - 高斯噪声 → L2数据项
+     - Poisson噪声 → KL散度数据项（Calatroni P36-37）
+     - 脉冲/Laplace噪声 → L1数据项（Calatroni P37-38）
+1.4  不适定性：为什么逆问题难？
+     - Hadamard适定性条件；病态性；inverse crime
+1.5  贝叶斯框架：从似然到后验
+     - 贝叶斯定理p(x|y)∝p(y|x)p(x)
+     - 后验=似然×先验：信息融合的数学表达
+```
+
+### 第2章 先验：贝叶斯推断的灵魂
+
+```
+2.1  先验的数学角色：正则化的概率诠释
+     - -ln后验=数据项+正则项（Calatroni P29-44完整对应表）
+2.2  经典先验族
+     - 高斯先验 → Tikhonov正则化
+     - Laplace先验 → L1/稀疏正则化
+     - 梯度高斯先验 → Sobolev/平滑正则化（Calatroni P43）
+     - TV先验 → 全变差正则化
+     - TGV先验 → 广义全变差（避免阶梯效应）
+2.3  先验的质量：MMSE vs MAP估计器
+     - 贝叶斯估计器层级：真解→Bayes估计器→最优目标→经验目标→训练结果
+     - 五类误差分解：不可约/近似/采样/优化误差（Ratti P49-57）
+2.4  从显式先验到隐式先验
+     - 学习型先验：从手工设计到数据驱动
+```
+
+### 第3章 从MAP到后验探索
+
+```
+3.1  MAP估计：后验众数求解
+     - 贝叶斯决策理论：MAP在Bregman散度损失下的最优性（Pereyra P28）
+3.2  优化基础
+     - 凸性、Lipschitz梯度、强制性的理论前提（Calatroni P49-51）
+     - 梯度下降：步长选择与收敛条件
+3.3  Tikhonov正则化
+     - 迭代求解（梯度下降）
+     - 闭式解：DFT域直接求解（Calatroni P53）
+3.4  稀疏优化与近端方法
+     - ISTA/FISTA：近端梯度下降+Nesterov加速
+     - 迭代硬阈值(IHT)：L0的近端算子（MIVA opt3）
+     - 重加权L1：L0的连续松弛（MIVA opt3）
+3.5  TV正则化与原始-对偶算法
+     - Chambolle-Pock算法
+     - ADMM：交替方向乘子法（Gondzio L6）
+3.6  收敛性分析基础
+     - Bregman距离与误差估计（Benning L2）
+     - 源条件与收敛速率
+3.7  从MAP到后验：为什么要探索后验分布？
+     - MAP只是众数，丢失不确定性信息
+     - 分叉点：采样还是近似？
+```
+
+### 第4章 MCMC与ULA算法
+
+```
+4.1  Monte Carlo方法：从积分到采样
+4.2  Metropolis-Hastings算法
+     - 接受-拒绝准则；细致平衡条件
+4.3  ULA：Langevin采样的Euler离散
+     - ULA递推式；步长δ≤1/L
+     - MH vs ULA：有偏但高效
+4.4  MYULA：近端ULA
+     - Moreau包络近似不可微势能（Pereyra P43-44）
+     - 近端算子→平滑梯度的理论保证
+4.5  加速采样方法（可选/进阶）
+     - 过松弛采样（Pock L2）
+     - 惯性Langevin算法(ILA)与欠阻尼Langevin（Pock L2）
+4.6  MCMC收敛诊断
+     - Burn-in；自相关函数；有效样本量(ESS)
+```
+
+### 第5章 朗之万动力学与得分函数
+
+```
+5.1  从MCMC到Langevin SDE
+     - 离散迭代→连续SDE的推导
+     - Langevin方程：dx=∇log p(x)dt+√2dW
+5.2  得分函数：对数概率的梯度
+     - ∇_x log p(x)的几何含义
+     - Tweedie等式：去噪器与得分函数的桥梁
+       ∇log p_ε(x)=(D_ε(x)-x)/ε
+5.3  MAP与MMSE的结构对偶性（Pock L2）
+     - 近端算子=Moreau包络的一步梯度（MAP方向）
+     - 去噪器=软下卷积的一步梯度（MMSE方向）
+5.4  PnP框架：用去噪器替换先验梯度
+     - 近端算子prox_λR→去噪器D_ε
+     - PnP-ULA后验采样与不确定性量化
+5.5  Moreau-Yoshida近似理论（Pereyra P43-44）
+     - p_λ的性质：真密度、log-concave、C^1
+     - 近似误差界‖p_λ-p‖_TV≤λL_g²
+```
+
+### 第6章 得分匹配：从去噪中学习得分
+
+```
+6.1  得分匹配问题：为什么需要学习得分？
+     - 得分函数不可直接计算（需要归一化常数Z）
+6.2  显式得分匹配（ESM）与不可行性
+6.3  去噪得分匹配（DSM）
+     - DSM目标函数推导
+     - 去噪=得分匹配的等价性
+6.4  切片得分匹配（SSM）与Hutchinson迹估计
+     - 避免Hessian计算的随机估计
+     - ESM/DSM/SSM三者关系
+6.5  去噪器作为得分估计器
+     - 条件噪声水平训练（DRUNet）
+     - Tweedie等式连接去噪器与得分
+6.6  用学习到的得分驱动采样
+     - 学习得分→PnP-ULA vs 手工先验对比
+```
+
+### 第8章 变分推断与ELBO
+
+```
+8.1  为什么需要变分推断？
+     - 真实后验不可解；MCMC的计算代价
+8.2  ELBO推导
+     - Jensen不等式；KL散度分解
+     - log p(x) = ELBO + KL(q‖p)
+8.3  Fenchel共轭与变分下界
+     - 凸共轭作为ELBO的优化理论根基
+8.4  变分族的选择
+     - 平均场近似；变分间隙
+     - 自适应变分族
+```
+
+### 第9章 VAE与重参数化
+
+```
+9.1  VAE架构：编码器-解码器
+     - 识别模型q_φ(z|x)与生成模型p_θ(x|z)
+9.2  重参数化技巧
+     - 梯度穿过随机节点
+     - REINFORCE vs 重参数化：方差对比
+9.3  ELBO训练与KL正则化
+     - 重建项+KL项的权衡
+     - β-VAE与解纠缠
+9.4  四种学习设定（Ratti P18-21）
+     - 监督学习（配对数据）
+     - 自监督（已知噪声模型的干净数据）
+     - 无监督-x（Tweedie等式学习先验）
+     - 无监督-y（仅有噪声数据）
+9.5  过参数化与双重下降（Ratti P29-30，可选/进阶）
+     - 经典U形偏差-方差曲线 vs 现代双重下降
+```
+
+### 第10章 层级VAE与扩散的变分推导
+
+```
+10.1 从VAE到层级VAE
+     - 层级潜变量z_1,...,z_L
+     - 马尔可夫推断链
+     - 层级ELBO推导
+10.2 扩散过程的变分下界推导
+     - 高斯编码器=加噪过程
+     - 变分下界→扩散训练目标
+10.3 层级VAE→扩散的极限
+     - L→∞时层级VAE→连续扩散过程
+     - VAE编码/解码→扩散加噪/去噪的统一视角
+```
+
+### 第11章 扩散模型：变分视角
+
+```
+11.1 变分下界(VLB)分解
+     - L_T + L_{t-1} + L_0
+     - 重建项与先验匹配项
+11.2 三种参数化
+     - 噪声预测ε_θ vs 得分预测s_θ vs x₀预测
+     - 参数化选择对训练稳定性的影响
+11.3 简化VLB与DDPM训练
+     - DDPM训练目标作为VLB的简化
+     - 简化损失vs完整VLB的权衡
+```
+
+### 第12章 Score ≡ ELBO：殊途同归
+
+```
+12.1 采样路径回顾：Score Matching损失
+12.2 变分路径回顾：变分下界
+12.3 等价性证明
+     - DSM损失≡VLB的形式化推导
+     - 直观解释+形式化证明双写
+12.4 实践意义
+     - 同一扩散模型的两种训练视角
+     - 训练目标选择指南
+```
+
+### 第13章 条件生成与逆问题求解
+
+```
+13.1 条件扩散模型
+     - 条件生成p(x|y)的采样
+     - 逆问题=条件生成的数学等价
+13.2 引导采样
+     - 分类器引导(Classifier Guidance)
+     - 无分类器引导(Classifier-Free Guidance)
+     - 引导权重w与生成质量-多样性权衡
+13.3 扩散逆问题求解算法
+     - DDRM：扩散模型正则化重建
+     - DiffPIR：扩散即先验迭代重建
+     - DPS（Diffusion Posterior Sampling）
+13.4 闭环：回到第1章的逆问题
+     - 从贝叶斯框架到条件扩散的完整路径
+```
+
+### 第14章 Flow Matching与最优传输
+
+```
+14.1 最优传输基础
+     - Monge问题与Kantorovich松弛
+     - Wasserstein距离
+14.2 连续归一化流(CNF)
+     - 向量场与流ODE
+14.3 Flow Matching
+     - 条件Flow Matching目标
+     - OT-CFM：最优传输条件流
+14.4 Rectified Flow
+     - 直线插值 vs 扩散路径
+     - 与扩散模型的对比
+14.5 前沿组合：SD3/Flux = Rectified Flow + DiT
+```
+
+### 第16章 CT/MRI重建
+
+```
+16.1 CT重建基础
+     - Beer-Lambert定律（X射线衰减物理）
+     - Radon变换与sinogram
+     - Fourier切片定理与滤波反投影(FBP)
+16.2 不适定性与有限角CT
+     - 奇异值衰减：全角~1/n vs 有限角指数衰减
+     - 波前集理论：为什么有限角丢失信息
+16.3 MRI重建基础
+     - k-space采样与傅里叶算子
+     - 欠采样掩码与零填充重建
+     - 压缩感知MRI基础
+16.4 学习型重建方法
+     - UNet端到端重建
+     - Learned Gradient Descent迭代重建
+     - 学习MRI采样模式（Benning L2）
+16.5 扩散先验重建
+     - DiffPIR for CT/MRI
+```
+
+### 第17章 自监督学习与等变架构
+
+```
+17.1 为什么自监督？
+     - 无需干净数据的训练动机
+17.2 自监督去噪方法族
+     - Noise2Self / Noise2Void（盲点网络）
+     - Noise2Noise（配对噪声数据）
+     - SURE（Stein无偏风险估计）
+     - R2R（Recorrupted-to-Recorrupted）
+17.3 等变架构
+     - 等变性的数学定义
+     - 测量一致性损失
+     - 物理约束融入网络
+17.4 四种学习设定的统一视角（回顾Ratti P18-21）
+```
+
+### 第18章 综合项目：用扩散模型求解自定义逆问题
+
+```
+18.1 定义自定义前向算子
+     - deepinv Physics类设计
+     - 伴随算子验证
+18.2 扩散模型求解自定义逆问题
+     - 全书知识整合流程
+18.3 不确定性量化
+     - 多次后验采样→像素级置信区间
+18.4 拓展方向
+     - 赫尔辛基断层成像挑战赛（有限角CT竞赛）
+     - 自定义逆问题的扩散求解
+```
+
+---
+
+## 十五、讲座材料中待整合的内容要点
+
+> 以下为讲座中发现的、应纳入对应章节但book_plan尚未体现的重要知识点。
+
+### 高优先级（直接影响章节完整性）
+
+| 内容 | 来源 | 建议纳入章节 | 说明 |
+|---|---|---|---|
+| Poisson噪声的KL散度数据项 | Calatroni P36-37 | 第1章 | 非高斯噪声的数据项推导，CT/PET成像的核心 |
+| Laplace/脉冲噪声的L1数据项 | Calatroni P37-38 | 第1章 | 与L2数据项对称，补完噪声→数据项映射 |
+| 贝叶斯→变分完整对应表 | Calatroni P29-44 | 第2章 | 噪声模型→似然→数据项，先验→正则项，参数→超参数的系统映射表 |
+| Tikhonov闭式解（DFT域） | Calatroni P53 | 第3章 | 迭代法之外的直接求解法，教学对比用 |
+| 贝叶斯决策理论 | Pereyra P24-25 | 第3章 | MAP/MMSE最优性的理论根基 |
+| ADMM算法 | Gondzio L6 | 第3章 | 与原始-对偶并列的重要优化方法 |
+| Moreau-Yoshida近似理论 | Pereyra P43-44 | 第5章 | MYULA的理论保证，近似误差界 |
+| MAP/MMSE结构对偶（Moreau vs 软下卷积） | Pock L2 | 第5章 | 近端=Moreau一步梯度(MAP)，Tweedie=软下卷积一步梯度(MMSE) |
+| VLB三种参数化（ε/s/x₀） | — | 第11章 | 噪声预测vs得分预测vs直接预测，训练稳定性差异 |
+| Fourier切片定理 | Siltanen Day3A | 第16章 | FBP的理论根基，CT重建必讲 |
+| Beer-Lambert定律 | Siltanen Day2 | 第16章 | CT成像物理基础 |
+| 有限角CT与波前集理论 | Siltanen Day3A | 第16章 | 为什么有限角丢失信息的数学解释 |
+
+### 中优先级（增强深度与前沿性）
+
+| 内容 | 来源 | 建议纳入章节 | 说明 |
+|---|---|---|---|
+| TGV（广义全变差）正则化 | Siltanen Day2, Pock L3 | 第2/3章 | TV的进阶版，避免阶梯效应 |
+| 四种学习设定分类法 | Ratti P18-21 | 第9/17章 | 监督/自监督/无监督-x/无监督-y的系统分类 |
+| Bregman距离与误差估计 | Benning L2 | 第3章 | 正则化解与真解的误差分析 |
+| 欠阻尼Langevin/惯性Langevin | Pock L2 | 第4章 | 采样加速方法，与FISTA对称 |
+| "扩散在绝对零度"概念 | Pock L2 | 第7章 | 温度参数T→0时PnP-近端→PnP-扩散的桥梁 |
+| Fields of Experts (FoE)先验 | Pock L2 | 第2章 | 学习型卷积先验模型 |
+| 过参数化与双重下降 | Ratti P29-30 | 第9/15章 | 现代深度学习的重要现象 |
+| Restormer架构 | Ratti P38 | 第15章 | ViT→DiT之间的桥梁架构 |
+| 学习MRI采样模式 | Benning L2 | 第16章 | k-space最优欠采样，deepinv+源条件方法 |
+| IHT（迭代硬阈值） | MIVA opt3 | 第3章 | L0的直接算法，与软阈值(ISTA)对比 |
+| 压缩感知与RIP | MIVA opt3 | 第3/16章 | 稀疏恢复的理论保证 |
+
+### 低优先级（可选择性纳入或作为延伸阅读）
+
+| 内容 | 来源 | 建议纳入章节 | 说明 |
+|---|---|---|---|
+| 贝叶斯假设检验 | Pereyra P30,51-53 | 第3/13章 | 结构检测的形式化框架 |
+| 贝叶斯模型选择/平均 | Pereyra P31-33 | 第3章 | 多模型竞争下的推理 |
+| Gibbs采样 | Pock L2 | 第4章 | 与MH并列的经典MCMC方法 |
+| 半二次最小化→GLM | Pock L2 | 第4/5章 | 结构化先验的可采栾示例 |
+| 双层优化学习正则化 | Pock L3, Benning L2 | 第15/16章 | 学习正则化器参数的前沿方法 |
+| Gamma收敛理论 | Pock L3 | 第3章 | 离散→连续正则化的数学保证 |
+| 发射断层成像(PET) | Siltanen Day3B | 第16章 | 非线性CT，Levenberg-Marquardt方法 |
+| 通用近似定理 | Ratti P33 | 第9章 | NN表达能力的形式化保证 |
+| 训练最佳实践 | Ratti P44-48 | 第15章 | 初始化/调度/早停/验证 |
+| Helsinki Tomography Challenge | Siltanen Seminar | 第18章 | 可作为综合项目素材 |
+
+---
+
+## 十六、补充资源清单
+
+> 以下为book_plan.md原资源清单中遗漏的文件。
+
+### 遗漏的.ipynb文件
+
+| 文件 | 位置 | 功能 | 对应章节 |
+|---|---|---|---|
+| Lab_1.zip | Unit 3 Labs/ | Unit 3先验学习实验 | 第6章 |
+| Lab_2.zip | Unit 3 Labs/ | Unit 3先验学习实验 | 第6章 |
+
+### 遗漏的.pdf/.md文件
+
+| 文件 | 位置 | 功能 | 对应章节 |
+|---|---|---|---|
+| Bologna_exercise.pdf | Unit 6/ | 博洛尼亚课程期末练习 | 第18章 |
+| Seminar_Roffilli.md | Seminars/ | 应用报告 | 第16/18章 |
+| Seminar_Vezzali.ppsx | Seminars/ | 应用报告 | 第18章 |
+
+### 遗漏的.zip文件
+
+| 文件 | 位置 | 功能 | 对应章节 |
+|---|---|---|---|
+| lab2_PnP.zip | Unit 2 labs/ | PnP实验补充数据 | 第5章 |
+| Bologna_summerschool_share_Hauptmann.zip | Unit 4/ | 迭代重建补充材料 | 第16章 |
+
+### 竞赛与开放数据集
+
+| 资源 | 说明 | 对应章节 |
+|---|---|---|
+| Helsinki Tomography Challenge 2022 | 有限角CT竞赛，含评分标准(MCC) | 第18章 |
+| Helsinki Deblur Challenge 2021 | 图像去模糊竞赛 | 第18章 |
+| fips.fi/dataset.php | 开放X射线数据集 | 第16章 |
+
+---
+
+## 十七、参考文献策略
+
+### 核心参考文献（全书引用）
+
+| 文献 | 用途 | 涉及章节 |
+|---|---|---|
+| Song et al. "Score-Based Generative Modeling through SDEs" ICLR 2021 | 采样路径+SDE理论基础 | 第4-7,12章 |
+| Kingma & Welling "Auto-Encoding Variational Bayes" ICLR 2014 | VAE原始论文 | 第9章 |
+| Kingma et al. "Variational Diffusion Models" NeurIPS 2021 | 变分扩散推导 | 第10-12章 |
+| Ho et al. "Denoising Diffusion Probabilistic Models" NeurIPS 2020 | DDPM原始论文 | 第7,11章 |
+| Dhariwal & Nichol "Diffusion Models Beat GANs on Image Synthesis" NeurIPS 2021 | Classifier Guidance | 第13章 |
+| Ho & Salimans "Classifier-Free Diffusion Guidance" 2022 | Classifier-Free Guidance | 第13章 |
+| Lipman et al. "Flow Matching for Generative Modeling" ICLR 2023 | Flow Matching | 第14章 |
+| Liu et al. "Flow Straight and Fast" ICLR 2023 | Rectified Flow | 第14章 |
+| Luo "Understanding Diffusion Models: A Unified Perspective" 2022 | Score≡VLB统一综述 | 第12章 |
+| Bishop "Pattern Recognition and Machine Learning" Ch10 | 变分推断经典教材 | 第8-10章 |
+
+### 按章节补充文献
+
+| 章节 | 补充文献 |
+|---|---|
+| 第1章 | Siltanen & Mueller "Linear and Nonlinear Inverse Problems with Practical Applications" |
+| 第2-3章 | Benning & Burger "Modern Regularization Methods for Inverse Problems" |
+| 第4-5章 | Durmus & Moulines "High-dimensional Bayesian inference via ULA" |
+| 第6章 | Hyvärinen "Estimation of Non-Normalized Statistical Models by Score Matching" |
+| 第15章 | Peebles & Xie "Scalable Diffusion Models with Transformers" (DiT); Zamir et al. "Restormer" |
+| 第16章 | Lustig et al. "Compressed Sensing MRI"; Benning "Learning Optimal Sampling" |
+| 第17章 | Batson & Royer "Noise2Self"; Krull et al. "Noise2Void"; Tachella "Equivariant Imaging" |
