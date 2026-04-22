@@ -1,0 +1,33 @@
+name: diffusion-gpu
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pytorch
+  - torchvision
+  - pytorch-cuda=12.4
+  - numpy
+  - scipy
+  - matplotlib
+  - pillow
+  - libjpeg-turbo
+  - tqdm
+  - einops
+  - diffusers
+  - transformers
+  - datasets
+  - accelerate
+  - safetensors
+  - sentencepiece
+  - ipykernel
+  - ipywidgets
+  - jupyterlab
+  - notebook
+  - pip:
+    - opencv-python
+    - controlnet_aux==0.0.9
+    - invisible_watermark>=0.2.0
