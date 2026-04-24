@@ -1,57 +1,68 @@
 ---
 name: "markdown-converter"
-description: "Converts various document formats (PDF, HTML, DOCX) to Markdown using pymupdf4llm, html2text, and python-docx. Invoke when user wants to convert documents to Markdown format."
+description: "Converts various document formats (PDF, Word, Excel, PowerPoint, HTML, images, audio) to Markdown using Microsoft's markitdown library. Invoke when user wants to convert documents to Markdown format."
 ---
 
-# Markdown Converter Skill
+# Markdown Converter Skill (Powered by Microsoft MarkItDown)
 
 ## Overview
-This skill converts various document formats to clean Markdown format using specialized libraries for each input type.
+This skill uses Microsoft's official MarkItDown library to convert various document formats to clean Markdown format.
 
 ## Supported Formats
-- **PDF**: Uses pymupdf4llm for high-quality text extraction and structure preservation
-- **HTML**: Uses html2text with BeautifulSoup for clean HTML to Markdown conversion
-- **DOCX**: Uses python-docx for direct Word document to Markdown conversion
+- **PDF**: High-quality text extraction with structure preservation
+- **Word (DOCX/DOC)**: Direct conversion from Word documents
+- **Excel (XLSX/XLS)**: Converts spreadsheets to Markdown tables
+- **PowerPoint (PPTX/PPT)**: Extracts slides content to Markdown
+- **HTML**: Clean HTML to Markdown conversion
+- **Images**: OCR text extraction from images
+- **Audio**: Speech transcription to text
+- **CSV**: Converts CSV files to Markdown tables
+- **JSON/XML**: Structured data to Markdown
+- **ZIP**: Batch conversion of files inside ZIP archives
 
 ## Usage
 
 ### Basic Conversion
 ```python
-from markdown_converter import convert_to_markdown
+from markitdown import convert_file_to_markdown
 
 # Convert PDF to Markdown
-convert_to_markdown("document.pdf", "output.md")
+convert_file_to_markdown("document.pdf", "output.md")
 
-# Convert HTML to Markdown
-convert_to_markdown("page.html", "output.md")
+# Convert Word to Markdown
+convert_file_to_markdown("document.docx", "output.md")
 
-# Convert DOCX to Markdown
-convert_to_markdown("document.docx", "output.md")
+# Convert Excel to Markdown
+convert_file_to_markdown("spreadsheet.xlsx", "output.md")
 ```
 
 ### Batch Conversion
 ```python
-from markdown_converter import batch_convert
+import os
+from markitdown import convert_file_to_markdown
 
-# Convert all PDFs in directory to Markdown
-batch_convert("/path/to/directory", "pdf", "md")
-```
-
-## Dependencies
-- pymupdf4llm (for PDF conversion)
-- html2text (for HTML conversion)
-- beautifulsoup4 (for HTML parsing)
-- python-docx (for DOCX conversion)
-- python-magic (for automatic format detection)
-
-## Installation
-```bash
-pip install pymupdf4llm html2text beautifulsoup4 python-docx python-magic-bin
+directory = "/path/to/documents"
+for filename in os.listdir(directory):
+    if filename.lower().endswith(('.pdf', '.docx', '.html')):
+        input_path = os.path.join(directory, filename)
+        output_path = os.path.join(directory, f"{os.path.splitext(filename)[0]}.md")
+        convert_file_to_markdown(input_path, output_path)
 ```
 
 ## Features
-- Preserves document structure (headings, lists, tables)
+- Preserves document structure (headings, lists, tables, links)
 - Handles complex layouts in PDF documents
-- Clean HTML stripping and conversion
-- Supports batch processing of multiple files
+- Supports OCR for image files
+- Speech transcription for audio files
 - Automatic format detection
+- Clean and readable Markdown output
+
+## Installation
+```bash
+pip install markitdown
+```
+
+## Notes
+- For large files (>10MB), consider splitting them into smaller chunks
+- Image OCR requires internet connection for cloud processing
+- Audio transcription may have limitations on file size and language support
