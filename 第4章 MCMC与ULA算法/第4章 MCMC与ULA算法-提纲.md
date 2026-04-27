@@ -60,7 +60,7 @@ Monte Carlo(4.1) → MH算法(4.2) → ULA/梯度采样(4.3) → MYULA/不可微
   - 即使知道归一化常数，高维分布的直接采样（逆CDF、拒绝采样）也效率极低
   - **出路**：不要求独立采样，构造一条**马尔可夫链**，使其平稳分布为 $p(x|y)$——MCMC
 
-- **📌 侧栏：Monte Carlo与优化的对比**
+- **Monte Carlo与优化的对比**（已升格为4.1节内独立小节）
   - 优化（第3章）：从后验中提取一个点（MAP）→ 计算 $\arg\max_x p(x|y)$
   - Monte Carlo：从后验中提取分布信息 → 计算 $\mathbb{E}[h(x)|y]$
   - 优化只需梯度，Monte Carlo需要样本——但样本的获取比梯度困难得多
@@ -113,7 +113,7 @@ Monte Carlo(4.1) → MH算法(4.2) → ULA/梯度采样(4.3) → MYULA/不可微
     - 高维/无穷维中特别重要：接受率不随维数下降
     - **来源**：LectureNotes2020_v2 Example 8.2.7; Cotter et al. (2013)
 
-- **📌 侧栏：MH的物理直觉——"试错法"**
+- **MH的物理直觉——"试错法"**（已升格为4.2节内独立小节）
   - MH像一个谨慎的探险者：先试探性地走一步（提议），然后评估这一步是否"更好"（后验比值）
   - 更好的步 → 一定接受；更差的步 → 以一定概率接受（避免陷入局部）
   - 关键：即使接受"更差"的步，长远来看链会收敛到正确的分布
@@ -165,13 +165,13 @@ Monte Carlo(4.1) → MH算法(4.2) → ULA/梯度采样(4.3) → MYULA/不可微
     - 维数低/后验简单 → MH足够
     - 维数高/后验光滑 → ULA显著更优
     - 需要无偏采样 → MALA（Metropolis-Adjusted Langevin Algorithm）：ULA + MH校正步
-  - 📌 **侧栏：MALA——ULA与MH的折中**
+  - **MALA——ULA与MH的折中**（已升格为4.3节内###小节）
     - MALA = ULA提议 + MH接受/拒绝步
     - 既有梯度的方向性，又有MH的无偏性
     - 代价：每步需要额外计算接受概率
     - 实践中，当ULA偏差可接受时（图像逆问题中常如此），ULA优于MALA——计算效率更高
 
-- **📌 侧栏：ULA = 梯度下降 + 噪声**
+- **ULA = 梯度下降 + 噪声**（已升格为4.3节内独立小节）
   - 梯度下降（第3章）：$x_{k+1} = x_k - \tau\nabla f(x_k)$——确定性，收敛到众数
   - ULA（本章）：$X_{m+1} = X_m + \delta\nabla\log p(X_m|y) + \sqrt{2\delta}\,Z_{m+1}$——随机性，收敛到分布
   - 当步长 $\delta \to 0$、噪声项 $\sqrt{2\delta}\,Z \to 0$，ULA退化为梯度下降
@@ -224,7 +224,7 @@ Monte Carlo(4.1) → MH算法(4.2) → ULA/梯度采样(4.3) → MYULA/不可微
   - 权衡：$\lambda$ 小 → 近似误差小，但 $L = L_f + 1/\lambda$ 大 → 步长 $\delta$ 小 → 收敛慢
   - $\lambda$ 大 → $L$ 小 → 步长大 → 收敛快，但近似误差大
 
-- **📌 侧栏：MYULA与近端梯度下降的对偶**
+- **MYULA与近端梯度下降的对偶**（已升格为4.4节内独立小节）
   - 近端梯度下降（第3章3.4节）：$x_{k+1} = \text{prox}_{\tau g}(x_k - \tau\nabla f(x_k))$
   - MYULA：$X_{m+1} = (1 - \delta/\lambda)X_m - \delta\nabla f(X_m) + (\delta/\lambda)\text{prox}_{\lambda g}(X_m) + \sqrt{2\delta}\,Z_{m+1}$
   - 当 $\lambda = \tau$ 且 $\delta = \tau$ 时，MYULA ≈ 近端梯度下降 + 噪声
@@ -288,7 +288,7 @@ Monte Carlo(4.1) → MH算法(4.2) → ULA/梯度采样(4.3) → MYULA/不可微
     | 半二次最小化 | GLM |
     | 收敛到众数 | 收敛到分布 |
 
-  - 📌 **侧栏：优化→采样的转化律**
+  - **优化→采样的转化律**（已融入4.3-4.6各节主线，作为贯穿全章的统一叙事线索）
     - $\min \to \text{softmin}$：优化是最小化，采样是soft-minimum（带指数权重的平均）
     - 梯度下降 $\to$ ULA：加噪声
     - 近端梯度下降 $\to$ MYULA：加噪声
@@ -334,7 +334,7 @@ Monte Carlo(4.1) → MH算法(4.2) → ULA/梯度采样(4.3) → MYULA/不可微
   - 收敛性定理：若 $E$ 是强凸且Lipschitz梯度，ILA的样本分布在 $W_2$ 距离下收敛到欠阻尼Langevin SDE的平稳分布
   - 与第7章的联系：欠阻尼Langevin SDE是扩散模型中二阶SDE的特例
 
-- **📌 侧栏：优化加速 → 采样加速的完整对偶表**
+- **优化加速 → 采样加速的完整对偶表**（已升格为4.6节内独立小节）
 
   | 优化方法 | 采样方法 | 加速机制 |
   |---|---|---|
@@ -384,7 +384,7 @@ Monte Carlo(4.1) → MH算法(4.2) → ULA/梯度采样(4.3) → MYULA/不可微
     - 用HPD区域判断：若零假设值不在HPD区域内，则拒绝
     - **来源**：Pereyra L1 P980-1022
 
-- **📌 侧栏：MCMC实践检查清单**
+- **MCMC实践检查清单**（已拆散融入4.3-4.7各节，未保留独立小节）
   1. 选择算法：光滑后验 → ULA；不可微 → MYULA；有条件结构 → Gibbs
   2. 选择步长：$\delta \leq 1/L$；过大则链发散，过小则移动慢
   3. Burn-in：从轨迹图判断，丢弃前期未收敛样本
@@ -444,7 +444,7 @@ Monte Carlo(4.1) → MH算法(4.2) → ULA/梯度采样(4.3) → MYULA/不可微
 | ULA递推式与Euler离散化 | Pereyra L1 P40-50; Pock L2 P14-17; lab1_ULA_sol | ✅ |
 | ULA步长δ≤1/L条件 | Pereyra L1 P45-48; lab1_ULA_sol | ✅ |
 | MH vs ULA对比 | Pereyra L1 P48-50; Pock L2 P15-17 | ✅ |
-| MALA侧栏 | Pereyra L1 P48-50 | ✅ |
+| MALA（ULA与MH的折中） | Pereyra L1 P48-50 | ✅ |
 | MYULA（Moreau包络） | Pereyra L1 P43-44; Pereyra L3 P9-11 | ✅ |
 | MYULA收敛性（Durmus et al. 2018） | Pereyra L1 P46-47 | ✅ |
 | Gibbs采样基本思想 | Pock L2 P28; Geman & Geman (1984) | ✅ |

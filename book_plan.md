@@ -139,7 +139,7 @@ Part VI  实践与应用
      - MMSE估计器（后验均值）vs MAP估计器（后验众数）
      - 贝叶斯去噪器：去噪器=先验p(x)下的MMSE估计器（→第5章Tweedie等式的铺垫）
      - 共轭先验：高斯似然+高斯先验→高斯后验（→第3章闭式解的理论来源）
-     - 📌侧栏：误差分解五层次——不可约/近似/采样/优化误差（Ratti P49-57）
+     - 误差分解五层次——不可约/近似/采样/优化/训练误差（Ratti P49-57，已升格为2.3节内独立小节）
 2.4  从显式先验到隐式先验
      - 学习型先验：从手工设计到数据驱动
 ```
@@ -195,66 +195,110 @@ Part VI  实践与应用
 5.1  从MCMC到Langevin SDE
      - 离散迭代→连续SDE的推导
      - Langevin方程：dx=∇log p(x)dt+√2dW
+     - Fokker-Planck方程与平稳分布证明
 5.2  得分函数：对数概率的梯度
      - ∇_x log p(x)的几何含义
-     - Tweedie等式：去噪器与得分函数的桥梁
-       ∇log p_ε(x)=(D_ε(x)-x)/ε
-5.3  MAP与MMSE的结构对偶性（Pock L2）
+     - 后验得分分解：似然得分+先验得分
+     - 噪声扰动分布的得分函数
+5.3  Tweedie等式：从去噪器到得分函数（从5.2独立出来）
+     - Tweedie等式：∇log p_ε(x)=(D_ε(x)-x)/ε
+     - 去噪=得分估计的等价性
+     - 从Tweedie到PnP-ULA的计算链
+5.4  MAP与MMSE的结构对偶性（Pock L2）
      - 近端算子=Moreau包络的一步梯度（MAP方向）
      - 去噪器=软下卷积的一步梯度（MMSE方向）
-5.4  PnP框架：用去噪器替换先验梯度
+     - 温度参数：MAP=零温度的MMSE
+5.5  PnP框架：用去噪器替换先验梯度
      - 近端算子prox_λR→去噪器D_ε
      - PnP-ULA后验采样与不确定性量化
-5.5  Moreau-Yoshida近似理论（Pereyra P43-44）
+     - PnP-ADMM优化视角
+5.6  近似理论与收敛保证（原5.5，前移并扩展）
      - p_λ的性质：真密度、log-concave、C^1
      - 近似误差界‖p_λ-p‖_TV≤λL_g²
+     - PnP-ULA收敛性（Laumont et al. 2021）
 ```
 
 #### 第6章 得分匹配：从去噪中学习得分
 
 ```
-6.1  得分匹配问题：为什么需要学习得分？
+6.1  为什么需要学习得分？
      - 得分函数不可直接计算（需要归一化常数Z）
-6.2  显式得分匹配（ESM）与不可行性
+     - 得分函数的关键优势：无需归一化常数
+6.2  显式得分匹配（ESM）与隐式得分匹配（ISM）
+     - ESM目标函数与不可行性
+     - ISM：分部积分消去∇log p(x)
+     - ISM的计算瓶颈：Jacobian迹
 6.3  去噪得分匹配（DSM）
      - DSM目标函数推导
-     - 去噪=得分匹配的等价性
+     - DSM=ESM+常数等价性（Vincent 2011）
+     - 去噪=得分匹配的等价性（呼应Tweedie）
 6.4  切片得分匹配（SSM）与Hutchinson迹估计
-     - 避免Hessian计算的随机估计
-     - ESM/DSM/SSM三者关系
-6.5  去噪器作为得分估计器
-     - 条件噪声水平训练（DRUNet）
-     - Tweedie等式连接去噪器与得分
-6.6  用学习到的得分驱动采样
-     - 学习得分→PnP-ULA vs 手工先验对比
+     - 避免Jacobian精确计算的随机估计
+     - ESM/ISM/DSM/SSM四种方法关系与对比
+6.5  多尺度得分匹配：从单一噪声到噪声条件网络
+     - 低密度区域问题与流形假设
+     - NCSN训练与噪声调度
+     - 退火Langevin动力学
+     - NCSN→扩散模型的桥梁
+6.6  去噪器作为得分估计器：实践与架构
+     - DRUNet条件噪声水平设计
+     - 三种参数化：ε预测/s预测/x₀预测
+     - Tweedie等式在实践中的角色
+6.7  用学习到的得分驱动采样
+     - 退火Langevin动力学（生成）
+     - PnP-ULA（逆问题求解）
+     - 学习先验 vs 手工先验对比
 ```
 
 #### 第7章 扩散模型：SDE视角
 
 ```
 7.1  从Langevin到扩散：连续时间推广
-7.2  正向SDE与逆向SDE
-7.3  概率流ODE：随机采样的确定性等价
-7.4  数值离散化：从连续方程到可执行算法
+7.2  正向SDE：从数据到噪声的连续过程
+7.3  逆向SDE：从噪声到数据的采样过程
+7.4  概率流ODE：随机采样的确定性等价
+7.5  数值离散化：从连续方程到可执行算法
      - Euler-Maruyama 方法
      - DDPM 作为 SDE 的离散特例
+     - SMLD 作为 VE-SDE 的离散特例
      - 采样器选择：DDPM vs DDIM vs 概率流ODE
-7.5  实践：用离散化SDE实现图像生成
+7.6  实践：用扩散SDE实现图像生成
+附录7A Anderson逆向时间SDE定理的证明概要
+附录7B VE-SDE与VP-SDE的推理等价性
 ```
 
 #### 第8章 变分推断与ELBO
 
 ```
 8.1  为什么需要变分推断？
-     - 真实后验不可解；MCMC的计算代价
-8.2  ELBO推导
-     - Jensen不等式；KL散度分解
-     - log p(x) = ELBO + KL(q‖p)
-8.3  Fenchel共轭与变分下界
-     - 凸共轭作为ELBO的优化理论根基
-8.4  变分族的选择
-     - 平均场近似；变分间隙
-     - 自适应变分族
+     - 采样路径的成就与局限
+     - 真实后验不可解的普遍性
+     - 变分推断的核心思想：从采样到优化
+     - 两条路径的分野与互补
+8.2  ELBO推导：证据下界
+     - Jensen不等式推导
+     - KL散度分解：log p(x) = ELBO + KL(q‖p(z|x))
+     - ELBO两种等价分解：联合-熵 / 重建+正则
+     - ELBO最大化 = KL最小化
+8.3  变分推断作为优化问题
+     - 变分族q的选择与近似-效率权衡
+     - 平均场近似（Mean-Field Approximation）
+     - 坐标上升变分推断（CAVI）
+     - 变分间隙
+     - 变分推断 vs MCMC对比
+8.4  变分推断与正则化的统一视角
+     - ELBO = 重建项 + KL正则项
+     - 回顾第2章：先验 = 正则化
+     - 两层对应：点估计 vs 分布估计；确定性正则 vs 概率正则
+     - Fenchel共轭与变分下界的优化根基（简述，详见附录8A）
+     - 变分正则化框架
+8.5  从变分推断到生成模型：路线图
+     - 逐样本推断 vs 摊推断（Amortized Inference）
+     - 生成模型的变分框架
+     - 变分路径路线图：ELBO → VAE → 层级VAE → 变分扩散
+附录8A Fenchel共轭与ELBO的优化理论根基
+附录8B 平均场近似的闭式推导（CAVI算法推导）
+附录8C KL散度的性质与变分推断的信息论视角
 ```
 
 #### 第9章 VAE与重参数化
@@ -280,30 +324,59 @@ Part VI  实践与应用
 #### 第10章 层级VAE与扩散的变分推导
 
 ```
+10.0 本章导读：从一步编码到逐步加噪
 10.1 从VAE到层级VAE
-     - 层级潜变量z_1,...,z_L
+     - 单层VAE的局限
+     - 层级潜变量z_1,...,z_L的引入
      - 马尔可夫推断链
      - 层级ELBO推导
 10.2 扩散过程的变分下界推导
      - 高斯编码器=加噪过程
-     - 变分下界→扩散训练目标
-10.3 层级VAE→扩散的极限
-     - L→∞时层级VAE→连续扩散过程
-     - VAE编码/解码→扩散加噪/去噪的统一视角
+     - 噪声调度与直接采样
+     - VLB三项KL分解
+     - 前向过程后验q(x_{t-1}|x_t,x_0)的闭式解
+10.3 从变分下界到去噪目标
+     - KL散度项的化简
+     - 逆向过程的参数化（x₀预测 vs ε预测）
+     - 简化训练目标L_simple
+     - 变分视角与得分视角的初步对应（→第12章）
+10.4 层级VAE→扩散的极限
+     - L→∞：从离散步到连续过程
+     - 正向SDE：编码链的连续极限
+     - 逆向SDE：解码链的连续极限
+     - 统一视角：编码/解码↔加噪/去噪
+附录10A 层级ELBO的完整推导
+附录10B 前向过程后验的闭式推导
 ```
 
 #### 第11章 扩散模型：变分视角
 
 ```
-11.1 变分下界(VLB)分解
-     - L_T + L_{t-1} + L_0
-     - 重建项与先验匹配项
-11.2 三种参数化
-     - 噪声预测ε_θ vs 得分预测s_θ vs x₀预测
-     - 参数化选择对训练稳定性的影响
-11.3 简化VLB与DDPM训练
-     - DDPM训练目标作为VLB的简化
-     - 简化损失vs完整VLB的权衡
+11.0 本章导读：从层级VAE的训练目标到扩散实践
+11.1 VLB分解与正向过程后验
+     - VLB三项分解：L_T + ΣL_{t-1} + L_0
+     - 正向过程后验 q(x_{t-1}|x_t, x_0) 的闭式推导
+     - 三项的物理意义与训练角色
+11.2 一致性项化简：从KL散度到均值匹配
+     - L_{t-1} = KL(q||p_θ) 的高斯闭式解
+     - 均值匹配目标 ‖μ̃_t - μ_θ‖²
+     - 从均值匹配到可训练目标
+11.3 三种参数化：ε预测、得分预测与x₀预测
+     - 噪声预测ε_θ参数化（DDPM）
+     - x₀预测参数化（去噪参数化）
+     - 得分预测s_θ参数化（SMLD/NCSN）
+     - 三种参数化的数学等价性与训练稳定性差异
+11.4 简化VLB与DDPM训练
+     - Ho et al. 简化目标 L_simple
+     - 丢弃时间权重的动机与效果
+     - L_simple vs L_VLB 的实验对比
+     - 学习方差：Improved DDPM (Nichol & Dhariwal 2021)
+11.5 两条路径的交汇预告
+     - VLB训练目标与DSM损失的结构相似性
+     - ε预测VLB = 加权DSM
+     - 预告第12章：Score ≡ ELBO的等价性证明
+附录11A L_0项的离散解码器推导
+附录11B 连续时间VLB与VDM (Kingma 2021)
 ```
 
 #### 第12章 Score ≡ ELBO：殊途同归
@@ -536,19 +609,27 @@ Part VI  ███████████████░░░░░  75%  实�
 | PnP-ULA后验采样与不确定性量化 | Pereyra L3 P22-35; lab2_PnP_sol | ✅ |
 | Moreau-Yoshida近似理论 | Pereyra L1 P43-44; Pereyra L3 P9-11 | ✅ |
 
-#### 第6章 得分匹配：从去噪中学习得分 — 覆盖率 33%
+#### 第6章 得分匹配：从去噪中学习得分 — 覆盖率 75%
 
 | 子主题 | 可用来源 | 状态 |
 |---|---|---|
-| 得分函数不可计算（需Z） | Pereyra L1 P58-60 (隐含) | 🟡 动机不够明确 |
-| 显式得分匹配(ESM)与不可行性 | — | ❌ |
-| 去噪得分匹配(DSM)目标函数推导 | — | ❌ |
-| 去噪=得分匹配的等价性 | Tweedie identity可间接推出 | 🟡 有Tweedie但缺DSM推导 |
-| 切片得分匹配(SSM)与Hutchinson | — | ❌ |
-| ESM/DSM/SSM三者关系 | — | ❌ |
-| 去噪器作为得分估计器(条件噪声水平) | MiniProject_DenoisingPrior; CompImLab25 | 🟡 实践有,理论缺 |
-| Tweedie等式连接去噪器与得分 | Pock L2 P10-13; Tachella P14 | ✅ |
-| 用学习到的得分驱动PnP-ULA | lab2_PnP_sol; MiniProject_DenoisingPrior | ✅ |
+| 得分函数不可计算（需Z） | Pereyra L1 P58-60 | ✅ |
+| 得分函数关键优势：无需Z | 第5章5.2节 | ✅ |
+| ESM目标函数与不可行性 | Tutorial_Diffusion Sec 3.3; Hyvärinen (2005) | ✅ |
+| ISM分部积分与Jacobian迹 | Tutorial_Diffusion Sec 3.3; Hyvärinen (2005) | ✅ |
+| DSM目标函数推导 | Tutorial_Diffusion Sec 3.3; Vincent (2011) | ✅ |
+| DSM=ESM+常数等价性证明 | Tutorial_Diffusion Theorem 3.4; Vincent (2011) | ✅ |
+| 去噪=得分匹配等价性 | 第5章Tweedie等式; Tutorial_Diffusion | ✅ |
+| 三种参数化（ε/s/x₀预测） | Tutorial_Diffusion; 2508.01975v1 | ✅ |
+| SSM与Hutchinson迹估计 | Song et al. (2019) SSM; Hutchinson (1990) | ✅ |
+| ESM/ISM/DSM/SSM关系 | Tutorial_Diffusion Sec 3.3 | ✅ |
+| 多尺度得分匹配(NCSN) | Song & Ermon (2019); Tutorial_Diffusion | ✅ |
+| 低密度区域与流形假设 | Song & Ermon (2019) | ✅ |
+| 退火Langevin动力学 | Song & Ermon (2019) | ✅ |
+| DRUNet架构 | Zhang et al. (2021); MiniProject_DenoisingPrior | ✅ |
+| Tweedie等式实践连接 | Pock L2 P10-13; 第5章5.3节 | ✅ |
+| PnP-ULA实验 | Pereyra L3 P22-35; lab2_PnP_sol | ✅ |
+| 学习先验vs手工先验对比 | lab2_PnP_sol; MiniProject_DenoisingPrior | ✅ |
 
 #### 第7章 扩散模型：SDE视角 — 覆盖率 40%
 
@@ -589,17 +670,26 @@ Part VI  ███████████████░░░░░  75%  实�
 | 通用近似定理 | Ratti P33 | ✅ |
 | 偏差-方差与双重下降 | Ratti P26-30 | ✅ |
 
-#### 第10章 层级VAE与扩散的变分推导 — 覆盖率 14%
+#### 第10章 层级VAE与扩散的变分推导 — 覆盖率 85%（已写完，原14%）
 
 | 子主题 | 可用来源 | 状态 |
 |---|---|---|
-| 从VAE到层级VAE | — | ❌ |
-| 马尔可夫推断链 | — | ❌ |
-| 层级ELBO推导 | — | ❌ |
-| 高斯编码器=加噪过程 | — | ❌ |
-| 变分下界→扩散训练目标 | — | ❌ |
-| 层级VAE→扩散极限(L→∞) | Pock L2 P14 (概念) | 🟡 极弱 |
-| GMM层级结构提示 | Pock L1 (间接) | 🟡 间接 |
+| 从VAE到层级VAE | Tutorial_Diffusion Sec 1-2; Kingma & Welling (2014) | ✅ |
+| 马尔可夫推断链 | Tutorial_Diffusion Sec 2.1; 2406.08929v2 Sec 5 | ✅ |
+| 层级ELBO推导 | Tutorial_Diffusion Theorem 2.3; DDPM Appendix A | ✅ |
+| 高斯编码器=加噪过程 | Tutorial_Diffusion Sec 2.1; 2508.01975v1 Sec 2.2 | ✅ |
+| 噪声调度与直接采样 | DDPM (Ho et al. 2020); Tutorial_Diffusion | ✅ |
+| VLB三项分解 | Tutorial_Diffusion Theorem 2.3-2.4; DDPM Eq.5 | ✅ |
+| 前向后验闭式解 | Tutorial_Diffusion Theorem 2.5; DDPM Appendix B | ✅ |
+| x₀预测参数化 | Tutorial_Diffusion Sec 2.4; Kingma et al. (2021) | ✅ |
+| ε预测参数化 | Tutorial_Diffusion Sec 2.5; DDPM | ✅ |
+| 简化训练目标L_simple | DDPM (Ho et al. 2020) | ✅ |
+| 变分与得分对应 | 2406.08929v2 Sec 5; 第6章DSM | ✅ |
+| L→∞连续极限 | Tutorial_Diffusion Sec 4; Song et al. (2021) | 🟡 概念有，严格推导待补 |
+| VP-SDE连续极限推导 | Song et al. (2021) Score-SDE | 🟡 需从SDE视角补充细节 |
+| 编码/解码↔加噪/去噪对应表 | 2406.08929v2; VDM论文概念 | ✅ |
+| 贝叶斯反转推导 | DDPM Appendix A | 🟡 待补充到附录 |
+| 图示与可视化 | — | ❌ 缺少图示 |
 
 #### 第11章 扩散模型：变分视角 — 覆盖率 0%
 
@@ -820,7 +910,7 @@ Part VI  ███████████████░░░░░  75%  实�
 | Jin & Rundell 2015 | 物理反常扩散（分数阶PDE）的逆问题 | — | ⚠️ 此文"扩散"指物理扩散，与生成式扩散无关，不建议纳入正文 |
 | Sato report | 综述报告 | 待确认 | 待评估 |
 
-> ⚠️ **关于Jin & Rundell 2015**：此文的"扩散"指物理中的反常扩散过程（分数阶微分方程），与本书的生成式扩散模型是完全不同的概念。不建议纳入正文，以免造成术语混淆。若需要，仅可在侧栏简述两种"扩散"的词源关系。
+> ⚠️ **关于Jin & Rundell 2015**：此文的"扩散"指物理中的反常扩散过程（分数阶微分方程），与本书的生成式扩散模型是完全不同的概念。不建议纳入正文，以免造成术语混淆。
 
 #### .ipynb代码（13个）
 
