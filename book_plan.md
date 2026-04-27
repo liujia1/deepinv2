@@ -399,30 +399,72 @@ Part VI  实践与应用
      - 回顾全书推理链：逆问题 → 贝叶斯 → 采样 → 得分 → 扩散
      - 关键等式：条件扩散采样 p(x|y) = 逆问题求解
      - 扩散模型的独特优势：无需显式先验、无需归一化常数、零样本迁移
-13.2 后验得分分解
-     - ∇log p(x_t|y) = ∇log p(x_t) + ∇log p(y|x_t)
-     - 第一项：无条件扩散模型提供（已学到的先验得分）
-     - 第二项：不可直接计算——所有方法的差异在于如何近似这一项
-     - 来源：Chung et al. (2025) Theorem 1
-13.3 近似方法分类（基于Daras et al. Survey四类框架）
-     - 第一类：显式近似（Score-ALD, DDRM, DPS, ΠGDM）
-       * 用闭式表达式近似 ∇log p(y|x_t)
-       * DPS近似：p(y|x_t) ≈ p(y|x̂_{0|t})（Jensen近似）
+
+13.2 后验得分分解：条件化的理论基础
+     13.2.1 条件逆向SDE的推导
+       - 从无条件逆向SDE出发：dx = [f(x,t) - g(t)²∇log p_t(x)]dt + g(t)d𝑤̄
+       - 引入条件y：dx = [f(x,t) - g(t)²∇log p_t(x|y)]dt + g(t)d𝑤̄_y
+       - 条件逆向SDE与无条件逆向SDE的形式统一
+     13.2.2 后验得分分解定理
+       - ∇log p(x_t|y) = ∇log p(x_t) + ∇log p(y|x_t)
+       - 第一项：无条件扩散模型提供（已学到的先验得分）
+       - 第二项：似然得分——所有方法的差异在于如何近似这一项
+       - 证明思路：贝叶斯定理在得分函数层面的应用
+       - 来源：Chung et al. (2508.01975) 公式(3)
+     13.2.3 似然得分 ∇log p(y|x_t) 的计算挑战
+       - 为什么不可直接计算：p(y|x_t) = ∫ p(y|x₀)p(x₀|x_t)dx₀，积分不可解
+       - 直观理解：这一项将观测y"拉回"到与测量一致的轨迹上
+       - 与Tweedie等式的联系：x̂₀ = E[x₀|x_t] 通过Tweedie从得分函数提取
+       - 形成闭环：得分→去噪→一致性梯度→修正得分
+
+13.3 近似方法分类与DPS深度剖析
+     13.3.1 第一类：显式近似（Laplace近似族）
+       * Score-ALD：最简单的投影近似
+       * DDRM：基于SVD分解的线性问题专用方法
+       * DPS近似：p(y|x_t) ≈ p(y|x̂_{0|t})（Jensen近似/delta函数近似）
+       * ΠGDM：用各向同性高斯替代delta函数
        * 近似精度递进：delta函数(DPS) → 各向同性高斯(ΠGDM) → 完整协方差(Moment Matching)
-     - 第二类：变分推断（RED-Diff, VIDS）
-       * 用参数化分布近似后验 p(x_0|y)
-     - 第三类：隐空间优化/CSGM类（DiffPIR, DDS, DMPlug）
+     13.3.2 DPS深度剖析
+       * 核心思想：用Laplace近似 p(y|x₀)，在 x̂₀ = E[x₀|x_t] 处线性化
+       * 近似公式：∇log p_t(y|x_t) ≈ ∇log p(y|x̂₀) · ∂x̂₀/∂x_t
+       * DPS算法伪代码：
+         for t in reversed(range(T)):
+             1. 预测干净图像：x̂₀ = predict_x0(x_t, t)   # Tweedie或ε预测器反推
+             2. 计算数据一致性梯度：∇_l = Aᵀ(y - Ax̂₀) / σ_y²
+             3. 修正得分：corrected = s_θ(x_t,t) + ζ·∇_l   # ζ为缩放因子
+             4. Euler-Maruyama步进：x_{t-1} = x_t + f·dt - g²·corrected·dt + g·√dt·z
+       * 缩放因子ζ的作用：控制数据一致性强度，经验值ζ∈[0.1,1.0]
+       * 优势：简单、通用、无需重新训练、支持非线性逆问题
+       * 局限：Laplace近似在高噪声下不准确
+       * 与Tweedie等式的闭环：得分→去噪估计x̂₀→一致性梯度→修正得分
+     13.3.3 第二类：变分推断（RED-Diff, VIDS）
+       * 用参数化分布近似后验 p(x_0|y)，优化ELBO
+     13.3.4 第三类：隐空间优化/CSGM类（DiffPIR, DDS, DMPlug）
        * 通过反向传播优化初始噪声z
        * Gutha et al. MAP-GA：MAP估计视角 + 一致性模型重参数化
-     - 第四类：渐近精确方法（MCMC/SMC, DreamSampler）
-       * 目标是从真实后验采样
-13.4 引导采样
-     - 分类器引导(Classifier Guidance)
-     - 无分类器引导(Classifier-Free Guidance)
-     - 引导权重w与生成质量-多样性权衡
+     13.3.5 第四类：渐近精确方法（MCMC/SMC, DreamSampler）
+       * 目标是从真实后验采样，计算代价高
+     13.3.6 四类方法的对比与选择指南
+
+13.4 引导采样：从分类器引导到逆问题引导
+     13.4.1 Classifier Guidance与DPS的数学统一与关键差异
+       - 数学结构相似：均基于条件得分分解 s = s_uncond + ∇log p(condition|x)
+       - 关键差异：
+         * Classifier Guidance：∇log p(c|x_t)，需额外训练噪声分类器，用于类别/文本条件生成
+         * DPS：∇log p(y|x_t)，利用Tweedie估计+测量模型，无需额外训练，用于逆问题求解
+       - DPS是classifier guidance在逆问题领域的自然延伸
+       - 引导强度对比：Classifier Guidance的w ↔ DPS的ζ
+     13.4.2 Classifier-Free Guidance (CFG)
+       - CFG核心公式：s_θ(x,y) = s_θ(x) + w·(s_θ(x,y) - s_θ(x))
+       - 逆问题中的CFG前沿：训练时随机丢弃测量y，推理时用引导权重控制一致性
+       - 优势：避免显式计算∇log p(y|x)，更稳定
+     13.4.3 引导权重w与质量-多样性权衡
+
 13.5 扩散最优控制（进阶）
      - 控制论视角：逆向扩散过程作为最优控制问题
+     - 与DPS的联系：DPS可视为最优控制的近似解
      - 来源：NeurIPS 2024 "Solving Inverse Problems via Diffusion Optimal Control"
+
 13.6 闭环：回到第1章的逆问题
      - 从贝叶斯框架到条件扩散的完整路径
      - 扩散模型为何能超越传统方法：任意复杂先验、不确定性量化、零样本迁移
@@ -712,20 +754,26 @@ Part VI  ███████████████░░░░░  75%  实�
 | 两种训练视角对比 | — | ❌ |
 | 训练目标选择指南 | — | ❌ |
 
-#### 第13章 条件生成与逆问题求解 — 覆盖率 55%
+#### 第13章 条件生成与逆问题求解 — 覆盖率 70%
 
 | 子主题 | 可用来源 | 状态 |
 |---|---|---|
 | 闭环叙事：逆问题→扩散→回到逆问题 | 第1-12章完整链 | ✅ |
-| 后验得分分解 ∇log p(x_t\|y) = ∇log p(x_t) + ∇log p(y\|x_t) | Chung et al. (2508.01975) | ✅ |
-| DPS近似链（delta→高斯→完整协方差） | Chung et al. (2508.01975) | ✅ |
+| 条件逆向SDE推导 | Chung et al. (2508.01975) §2 | ✅ |
+| 后验得分分解 ∇log p(x_t\|y) = ∇log p(x_t) + ∇log p(y\|x_t) | Chung et al. (2508.01975) 公式(3) | ✅ |
+| 似然得分∇log p(y\|x_t)的计算挑战与Tweedie闭环 | Chung et al. (2508.01975) Theorem 1 | ✅ |
+| DPS深度剖析：Laplace近似推导+算法伪代码 | Chung et al. (2508.01975) §3.2 | ✅ |
+| DPS缩放因子ζ与实践技巧 | Chung et al. (2508.01975) §3.2 | ✅ |
+| DPS近似链（delta→高斯→完整协方差） | Chung et al. (2508.01975) §3.2 | ✅ |
 | 四类方法分类（显式近似/变分/CSGM/渐近精确） | Daras et al. Survey (2410.00083) | ✅ |
 | MAP-GA算法（MAP估计+一致性模型） | Gutha et al. WACV 2025 | ✅ |
+| Classifier Guidance与DPS的统一与差异 | diffusion-tutorials 06-classifier-guidance.ipynb + Chung et al. | 🟡 |
+| Classifier-Free Guidance | diffusion-tutorials 07-classifier-free-guidance.ipynb | 🟡 |
+| 引导权重w与质量-多样性权衡 | — | ❌ |
 | 扩散最优控制视角 | NeurIPS 2024 | ✅ |
-| 分类器引导(Classifier Guidance) | — | ❌ |
-| 无分类器引导(CFG) | — | ❌ |
 | DDRM算法 | deepinv demo_ddrm | ✅ |
 | DiffPIR算法 | deepinv demo_diffpir | ✅ |
+| DPS算法实现（建议新增demo_dps） | deepinv（待实现） | ❌ |
 | 贝叶斯假设检验 | Pereyra L1 P30, P51-53 | 🟡 |
 
 #### 第14章 Flow Matching与最优传输 — 覆盖率 0%
