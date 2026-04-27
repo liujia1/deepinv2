@@ -102,7 +102,7 @@ $$\text{ELBO}(\mathbf{x}) = \mathbb{E}_{q(\mathbf{z}_1|\mathbf{x})}[\log p(\math
 
 $$\text{ELBO}(\mathbf{x}_0) = \mathbb{E}_{q(\mathbf{x}_1|\mathbf{x}_0)}[\log p_\theta(\mathbf{x}_0|\mathbf{x}_1)] - \sum_{t=1}^{T-1} \mathbb{E}_{q(\mathbf{x}_{t-1}, \mathbf{x}_{t+1}|\mathbf{x}_0)}\left[D_{\text{KL}}(q(\mathbf{x}_t|\mathbf{x}_{t-1}) \| p_\theta(\mathbf{x}_t|\mathbf{x}_{t+1}))\right] - D_{\text{KL}}(q(\mathbf{x}_T|\mathbf{x}_{T-1}) \| p(\mathbf{x}_T))$$
 
-通过10.2.3节的贝叶斯反转技巧，可以将其转化为更实用的形式（Theorem 2.4 in Tutorial on Diffusion Models）：
+通过10.2节的贝叶斯反转技巧，可以将其转化为更实用的形式（Theorem 2.4 in Tutorial on Diffusion Models）：
 
 $$\text{ELBO}(\mathbf{x}_0) = \mathbb{E}_{q(\mathbf{x}_1|\mathbf{x}_0)}[\log p_\theta(\mathbf{x}_0|\mathbf{x}_1)] - D_{\text{KL}}(q(\mathbf{x}_T|\mathbf{x}_0) \| p(\mathbf{x}_T)) - \sum_{t=2}^{T} \mathbb{E}_{q(\mathbf{x}_t|\mathbf{x}_0)}\left[D_{\text{KL}}(q(\mathbf{x}_{t-1}|\mathbf{x}_t, \mathbf{x}_0) \| p_\theta(\mathbf{x}_{t-1}|\mathbf{x}_t))\right]$$
 
