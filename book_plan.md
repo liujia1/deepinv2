@@ -491,64 +491,152 @@ Part VI  实践与应用
 #### 第15章 扩散模型的架构实践：UNet → DiT
 
 ```
-15.1  去噪器架构演进：CNN → UNet → DiT
-15.2  DiT的关键设计：Patchify、adaLN-Zero
-15.3  扩散 + Transformer的SOTA组合
-      （SD3/Flux = Rectified Flow + DiT）
+15.0  本章导读：架构即先验
+15.1  去噪器的经典架构：CNN与UNet
+      15.1.1 CNN去噪器：DnCNN
+      15.1.2 UNet：编码器-解码器+跳跃连接
+      15.1.3 UNet在扩散模型中的角色
+15.2  时间步嵌入：让网络感知噪声水平
+      15.2.1 为什么需要时间步条件？
+      15.2.2 正弦位置编码
+      15.2.3 条件注入方式：从加法到调制（adaLN-Zero）
+15.3  从ViT到DiT：Transformer接管扩散模型
+      15.3.1 Transformer基础：自注意力机制
+      15.3.2 Vision Transformer：图像→Patch序列
+      15.3.3 DiT：用Transformer替换UNet
+15.4  UNet vs DiT：架构选择的艺术
+      15.4.1 设计哲学对比：归纳偏置 vs 数据驱动
+      15.4.2 性能对比与缩放规律
+      15.4.3 何时选择UNet？何时选择DiT？
+15.5  训练最佳实践
+      15.5.1 优化器与学习率调度
+      15.5.2 初始化策略
+      15.5.3 早停、验证与超参数调优
+      15.5.4 过参数化与双重下降
+附录15A Transformer架构：从注意力到MLP
+附录15B 正弦位置编码的数学性质
 ```
 
 #### 第16章 CT/MRI重建
 
 ```
-16.1 CT重建基础
-     - Beer-Lambert定律（X射线衰减物理）
-     - Radon变换与sinogram
-     - Fourier切片定理与滤波反投影(FBP)
-16.2 不适定性与有限角CT
-     - 奇异值衰减：全角~1/n vs 有限角指数衰减
-     - 波前集理论：为什么有限角丢失信息
-16.3 MRI重建基础
-     - k-space采样与傅里叶算子
-     - 欠采样掩码与零填充重建
-     - 压缩感知MRI基础
+16.0 本章导读
+16.1 CT成像：从X射线到sinogram
+     16.1.1 Beer-Lambert定律：X射线衰减的物理
+     16.1.2 Radon变换与sinogram
+     16.1.3 Fourier切片定理
+     16.1.4 滤波反投影（FBP）
+16.2 CT的不适定性与正则化重建
+     16.2.1 全角CT的奇异性分析
+     16.2.2 有限角CT：奇异值的指数衰减
+     16.2.3 波前集理论：为什么有限角丢失信息
+     16.2.4 正则化重建：从Tikhonov到TV到剪切波
+16.3 MRI成像：从自旋到k-space
+     16.3.1 MRI物理基础：Bloch方程与信号生成
+     16.3.2 k-space采样与傅里叶重建
+     16.3.3 欠采样掩码与零填充重建
+     16.3.4 加速采集：并行成像与压缩感知MRI
 16.4 学习型重建方法
-     - UNet端到端重建
-     - Learned Gradient Descent迭代重建
-     - 学习MRI采样模式（Benning L2）
+     16.4.1 UNet端到端重建
+     16.4.2 算法展开：Learned Gradient Descent
+     16.4.3 学习MRI采样模式
 16.5 扩散先验重建
-     - DiffPIR for CT/MRI
+     16.5.1 从传统先验到扩散先验：回到第13章
+     16.5.2 DiffPIR for CT/MRI
+     16.5.3 DDRM与DPS for CT/MRI
+     16.5.4 方法对比与选择指南
+16.6 本章小结：从物理到先验的统一
+附录16A Radon变换与Fourier切片定理的严格证明
+附录16B Bloch方程的完整推导
+附录16C 波前集理论与有限角CT的数学框架
+附录16D PET与发射断层成像
 ```
 
 #### 第17章 自监督学习与等变架构
 
 ```
-17.1 为什么自监督？
-     - 无需干净数据的训练动机
-17.2 自监督去噪方法族
-     - Noise2Self / Noise2Void（盲点网络）
-     - Noise2Noise（配对噪声数据）
-     - SURE（Stein无偏风险估计）
-     - R2R（Recorrupted-to-Recorrupted）
-17.3 等变架构
-     - 等变性的数学定义
+17.0 本章导读
+17.1 为什么自监督？——数据困境与学习设定的谱系
+     - 医学/科学成像中配对数据的稀缺
+     - 四种学习设定（supervised → self-supervised → unsupervised-x → unsupervised-y）
+     - 自监督风险估计器的目标：E_y[L_SELF] = E_{x,y}[L_SUP] + const
+     - 本章路线图
+17.2 Noise2Noise：用噪声替代干净标签
+     - 核心思想：零均值噪声下E[y'|x]=x
+     - 理论保证与收敛性
+     - 实践局限：需要配对噪声数据
+17.3 SURE：Stein无偏风险估计与R2R
+     - 监督风险与自监督风险的桥梁
+     - Stein引理与SURE公式推导
+     - Monte Carlo SURE与Autodiff SURE
+     - SURE→Tweedie闭环：得分函数的自监督学习
+     - R2R（Recorrupted-to-Recorrupted）：避免散度计算
+17.4 盲点网络与UNSURE：Noise2Self/Noise2Void及未知噪声
+     - 核心思想：限制f_i不依赖y_i
+     - Noise2Void掩码策略与盲点网络架构
+     - Noise2Self的理论保证
+     - SURE视角：盲点网络是SURE的约束版本
+     - UNSURE：未知噪声水平的自监督学习
+     - 局限：不是MMSE最优
+17.5 等变成像：从不完整测量中学习
+     - 从去噪(A=I)到不完整测量(A≠I)的跳跃
+     - 零空间问题：自监督风险不惩罚零空间方向
+     - 多算子成像(MOI)：利用多个测量算子
+     - 等变性的数学定义与算子-等变性对照表
+     - 等变成像(EI)原理与损失函数
+     - Robust EI（REI++）：UNSURE + EI
+     - 实验与应用
+17.6 测量一致性与等变架构
      - 测量一致性损失
-     - 物理约束融入网络
-17.4 四种学习设定的统一视角（回顾Ratti P18-21）
+     - 等变网络架构设计
+     - 两种约束的互补性
+     - deepinv实现
+17.7 本章小结：从数据困境到自监督统一
+附录17A SURE的无偏性证明
+附录17B R2R与SURE等价性的推导
+附录17C 等变成像必要条件的证明
 ```
 
 #### 第18章 综合项目：用扩散模型求解自定义逆问题
 
 ```
-18.1 定义自定义前向算子
-     - deepinv Physics类设计
+18.0 本章导读
+18.1 从理论到实践：全书知识整合框架
+     - 全书推理链回顾
+     - 三类求解方法谱系（优化/PnP/扩散采样）
+     - 端到端管线设计
+18.2 定义自定义前向算子
+     - 前向算子的数学描述
+     - deepinv Physics类设计哲学
+     - 自定义线性前向算子
      - 伴随算子验证
-18.2 扩散模型求解自定义逆问题
-     - 全书知识整合流程
-18.3 不确定性量化
-     - 多次后验采样→像素级置信区间
-18.4 拓展方向
-     - 赫尔辛基断层成像挑战赛（有限角CT竞赛）
-     - 自定义逆问题的扩散求解
+     - 噪声模型选择
+18.3 求解策略选择与对比
+     - 优化类方法回顾
+     - PnP类方法回顾
+     - 扩散采样类方法回顾
+     - 方法选择决策指南
+18.4 端到端实战：扩散模型求解自定义逆问题
+     - 项目1：图像去模糊
+     - 项目2：超分辨率重建
+     - 项目3：图像修复
+     - 多方法综合对比
+     - deepinv端到端代码模板
+18.5 不确定性量化：从点估计到分布推断
+     - 为什么需要不确定性量化
+     - 从后验采样到不确定性度量
+     - 扩散采样的不确定性量化实践
+     - 不同方法的不确定性比较
+     - 不确定性的可视化与解释
+18.6 拓展方向与前沿挑战
+     - 赫尔辛基断层成像挑战赛
+     - 赫尔辛基去模糊挑战赛
+     - 扩散模型求解逆问题的前沿方法
+     - 计算加速与实时扩散采样
+     - 新模态与新应用
+18.7 本章小结：从贝叶斯到扩散的完整旅程
+附录18A deepinv Physics类详解与自定义算子完整示例
+附录18B 后验采样的统计性质与收敛性
 ```
 
 ---
@@ -789,20 +877,26 @@ Part VI  ███████████████░░░░░  75%  实�
 | 与扩散模型对比 | — | ❌ |
 | SD3/Flux = Rectified Flow + DiT | — | ❌ |
 
-#### 第15章 扩散模型的架构实践：UNet → DiT — 覆盖率 62%
+#### 第15章 扩散模型的架构实践：UNet → DiT — 覆盖率 85%（已扩展为5节+2附录）
 
 | 子主题 | 可用来源 | 状态 |
 |---|---|---|
+| CNN去噪器（DnCNN） | Ratti P34-35; Zhang et al. (2017) | ✅ |
 | UNet架构(编码器-解码器+skip) | Ratti P36-37; Bologna_UNet_example | ✅ |
 | UNet去噪器训练 | CompImLab25 Part 3 | ✅ |
-| UNet端到端CT重建 | Bologna_UNet_example | ✅ |
-| ViT概念(单页) | Ratti P38 | 🟡 仅概念,无细节 |
-| Restormer(仅提及) | Ratti P38 | 🟡 仅名称 |
-| Transformer架构细节(MHA/MLP块) | — | ❌ |
-| DiT架构(Patchify/adaLN-Zero) | — | ❌ |
-| 时间步嵌入机制 | — | ❌ |
-| 训练最佳实践 | Ratti P44-48 | ✅ |
+| UNet在扩散模型中的角色（DDPM/NCSNpp） | Ho et al. (2020); Song et al. (2021) | ✅ |
+| 时间步嵌入（正弦编码+条件注入） | Vaswani et al. (2017); Perez et al. (2018) | ✅ 新写 |
+| adaLN-Zero条件注入机制 | Peebles & Xie (2023) | ✅ 新写 |
+| ViT概念+Patchify | Ratti P38; Dosovitskiy et al. (2021) | ✅ 扩展 |
+| Restormer(桥梁架构) | Ratti P38; Zamir et al. (2022) | ✅ 补充 |
+| DiT架构(Patchify/adaLN-Zero/缩放) | Peebles & Xie (2023) | ✅ 新写 |
+| UNet vs DiT对比与选择指南 | 综合分析 | ✅ 新写 |
+| 训练最佳实践（优化器/初始化/调度） | Ratti P40-48 | ✅ |
 | 反向传播与SGD | Ratti P40-43 | ✅ |
+| 过参数化与双重下降 | Ratti P29-30; Belkin et al. (2019) | ✅ |
+| Transformer架构细节（MHA/MLP/LN） | Vaswani et al. (2017) | ✅ 新写（附录15A） |
+| 正弦位置编码数学性质 | — | ✅ 新写（附录15B） |
+| UNet/DiT/ViT架构图 | — | ❌ 待补充图片 |
 
 #### 第16章 CT/MRI重建 — 覆盖率 75%
 
