@@ -99,7 +99,7 @@ Transformer革命（ViT→DiT如何替换UNet？）→ 架构选择（UNet vs Di
   - 训练流程：数据加载 → 加噪 → 前向传播 → 计算MSE损失 → 反向传播 → 更新参数
   - 典型超参数：Adam优化器，lr=1e-3，20-50 epochs
 
-> **过渡**：UNet之所以能成为扩散模型的标准去噪架构，不仅因为其编码器-解码器+跳跃连接的设计，更因为一个被我们在前14章中反复使用但从未展开的关键机制——**时间步嵌入**。它让同一个网络在不同噪声水平下表现出不同的去噪策略。下一节深入剖析这一机制。
+UNet之所以能成为扩散模型的标准去噪架构，不仅因为其编码器-解码器+跳跃连接的设计，更因为一个被我们在前14章中反复使用但从未展开的关键机制——**时间步嵌入**。它让同一个网络在不同噪声水平下表现出不同的去噪策略。
 
 **来源**：Zhang et al. (2017) DnCNN; Ronneberger et al. (2015) UNet; Ho et al. (2020) DDPM; Song et al. (2021) Score-SDE; Ratti P35-37 (UNet去噪示例); CompImLab25 Part 3; Bologna_UNet_example
 
@@ -167,7 +167,7 @@ Transformer革命（ViT→DiT如何替换UNet？）→ 架构选择（UNet vs Di
   | FiLM | $\gamma(t) \odot h + \beta(t)$ | 中等 | 中等 | 较好 |
   | adaLN-Zero | $(1+\gamma(t)) \odot \text{LN}(h) + \beta(t)$ | 中等 | 强 | 最好 |
 
-> **过渡**：时间步嵌入解决了"如何让网络感知噪声水平"的问题，但UNet的CNN架构本身有一个根本性局限——局部感受野。无论堆叠多少层卷积，每个像素的"视野"始终有限。Transformer的自注意力机制提供了一种完全不同的信息聚合方式：每个位置可以直接"看到"整幅图像的所有位置。这一特性使得Transformer成为扩散模型去噪器的下一代架构选择。
+时间步嵌入解决了"如何让网络感知噪声水平"的问题，但UNet的CNN架构本身有一个根本性局限：局部感受野。无论堆叠多少层卷积，每个像素的"视野"始终有限。而Transformer的自注意力机制提供了一种完全不同的信息聚合方式——每个位置可以直接"看到"整幅图像的所有位置，这一特性使得Transformer成为扩散模型去噪器的下一代架构选择。
 
 **来源**：Vaswani et al. (2017) Attention Is All You Need; Perez et al. (2018) FiLM; Peebles & Xie (2023) DiT; Ho et al. (2020) DDPM; Dhariwal & Nichol (2021) ADM
 
@@ -250,7 +250,7 @@ Transformer革命（ViT→DiT如何替换UNet？）→ 架构选择（UNet vs Di
   - 参数量与FID的幂律关系：$\text{FID} \propto (\text{params})^{-\alpha}$
   - 意义：可以通过小规模实验预测大规模模型的性能
 
-> **过渡**：DiT在ImageNet类别条件生成上证明了Transformer可以替代UNet。但对于扩散模型的实践者而言，更实际的问题是：在具体任务中，应该选择UNet还是DiT？两种架构的设计哲学有何本质区别？
+DiT在ImageNet类别条件生成上证明了Transformer可以替代UNet。但对于扩散模型的实践者而言，更实际的问题是：在具体任务中，应该选择UNet还是DiT？两种架构的设计哲学有何本质区别？
 
 **来源**：Dosovitskiy et al. (2021) ViT; Peebles & Xie (2023) DiT; Zamir et al. (2022) Restormer; Vaswani et al. (2017) Transformer; Ratti P38 (ViT概念)
 
@@ -318,7 +318,7 @@ Transformer革命（ViT→DiT如何替换UNet？）→ 架构选择（UNet vs Di
   - UNet的自注意力变体：在UNet的某些层引入自注意力（如DDPM-UNet）
   - DiT的多尺度变体：在低分辨率层使用Transformer，高分辨率层使用卷积
 
-> **过渡**：无论选择UNet还是DiT，一个训练不当的去噪器都无法发挥架构的优势。训练最佳实践是连接"好的架构设计"和"好的生成质量"的最后一英里。
+无论选择UNet还是DiT，一个训练不当的去噪器都无法发挥架构的优势。训练最佳实践是连接"好的架构设计"和"好的生成质量"的最后一英里。
 
 **来源**：Peebles & Xie (2023) DiT; Esser et al. (2024) SD3; Dhariwal & Nichol (2021) ADM; Ho et al. (2020) DDPM
 
@@ -392,7 +392,7 @@ Transformer革命（ViT→DiT如何替换UNet？）→ 架构选择（UNet vs Di
 - **回顾第9章9.5节**
   - 此内容在第9章已简要提及，本节从训练实践角度补充
 
-> **过渡**：本章系统梳理了去噪器的架构演进（CNN→UNet→DiT）、关键设计（时间步嵌入）、架构选择（UNet vs DiT）和训练实践。下一章将把这些架构知识应用到具体的逆问题求解中——CT和MRI重建。
+本章系统梳理了去噪器的架构演进（CNN→UNet→DiT）、关键设计（时间步嵌入）、架构选择（UNet vs DiT）和训练实践。下一章将把这些架构知识应用到具体的逆问题求解中——CT和MRI重建。
 
 **来源**：Kingma & Ba (2015) Adam; Loshchilov & Hutter (2019) AdamW; Glorot & Bengio (2010) Xavier初始化; He et al. (2015) He初始化; Belkin et al. (2019) Double Descent; Nakkiran et al. (2021) Deep Double Descent; Ratti P40-48 (训练最佳实践); Ratti P29-30 (过参数化与双重下降)
 

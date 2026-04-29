@@ -110,7 +110,7 @@ Flow Matching（突破：学向量场）→ Rectified Flow（直线路径+Reflow
   - 这是Wasserstein空间中连接 $p_0$ 和 $p_1$ 的"最短路径"
   - **关键意义**：OT测地线给出的是直线路径 $x_t = (1-t)x_0 + tT(x_0)$，即McCann插值——这正是OT-CFM和Rectified Flow的数学基础
 
-> **过渡**：最优传输给出了分布之间"最短路径"的数学描述——Wasserstein测地线。但如何用神经网络实现这条最短路径？连续归一化流（CNF）提供了一种基于ODE的框架，但训练效率低下。Flow Matching正是对CNF训练方式的革新。
+最优传输给出了分布之间"最短路径"的数学描述——Wasserstein测地线。但如何用神经网络实现这条最短路径？连续归一化流（CNF）提供了一种基于ODE的框架，但训练效率低下，而Flow Matching正是对CNF训练方式的革新。
 
 **来源**：Villani (2008) "Optimal Transport: Old and New"; Santambrogio (2015) "Optimal Transport for Applied Mathematicians"; Peyré & Cuturi (2019) "Computational Optimal Transport"; winter_school/JGondzio-Lecture5.md (离散OT)
 
@@ -178,7 +178,7 @@ Flow Matching（突破：学向量场）→ Rectified Flow（直线路径+Reflow
   | 路径形态 | 自由（由 $v_\theta$ 决定） | 固定（由SDE结构决定） |
 - **关键洞察**：扩散模型之所以训练高效，是因为它绕过了"模拟ODE"这一步——DSM损失只需单步预测。Flow Matching的核心思想正是将这一优势移植到CNF：**用回归损失训练向量场，无需模拟ODE**。
 
-> **过渡**：CNF的架构自由度是优势，但训练时的仿真代价是致命瓶颈。扩散模型通过DSM训练绕过了仿真——那么，能否用类似思路训练CNF？答案是Flow Matching：直接回归向量场，无需模拟ODE。
+CNF的架构自由度是优势，但训练时的仿真代价是致命瓶颈。扩散模型通过DSM训练绕过了仿真，那么，能否用类似思路训练CNF？答案是Flow Matching：直接回归向量场，无需模拟ODE。
 
 **来源**：Chen et al. (2018) "Neural Ordinary Differential Equations"; Grathwohl et al. (2019) "FFJORD"; Rezende & Mohamed (2015) "Variational Inference with Normalizing Flows"
 
@@ -310,7 +310,7 @@ Flow Matching（突破：学向量场）→ Rectified Flow（直线路径+Reflow
   | DDIM | Flow Matching（扩散耦合） | 确定性 | 较直 |
   | OT-CFM | Flow Matching（OT耦合） | 确定性 | 最直 |
 
-> **过渡**：Flow Matching通过OT耦合获得了更直的路径，但实践中OT耦合的精确计算代价高昂。Rectified Flow从另一个角度解决路径弯曲问题：通过直线插值+Reflow迭代，逐步拉直路径，无需显式计算OT耦合。
+Flow Matching通过OT耦合获得了更直的路径，但实践中OT耦合的精确计算代价高昂。Rectified Flow从另一个角度解决路径弯曲问题：通过直线插值+Reflow迭代，逐步拉直路径，无需显式计算OT耦合。
 
 **来源**：Lipman et al. (2023) "Flow Matching for Generative Modeling"; Nakkiran et al. (2024) "Step-by-Step Diffusion" §4; Pooladian et al. (2023) "Multisample Flow Matching"; Tong et al. (2024) "Conditional Flow Matching"
 
@@ -380,7 +380,7 @@ Flow Matching（突破：学向量场）→ Rectified Flow（直线路径+Reflow
 | 极限少步 | 4-8步（质量下降） | 4-8步（OT-CFM较好） | 1步（Reflow后） |
 | 理论优雅度 | SDE框架深刻 | ODE框架简洁 | 直线直觉清晰 |
 
-> **过渡**：Rectified Flow通过直线化和Reflow实现了高效的少步生成，但在工业级文本到图像生成中，算法只是拼图的一半——架构是另一半。SD3/Flux将Rectified Flow与DiT架构结合，实现了SOTA性能。
+Rectified Flow通过直线化和Reflow实现了高效的少步生成，但在工业级文本到图像生成中，算法只是拼图的一半——架构是另一半。SD3/Flux将Rectified Flow与DiT架构结合，实现了SOTA性能。
 
 **来源**：Liu et al. (2023) "Flow Straight and Fast: Learning to Generate and Transfer Data with Rectified Flow"; Liu et al. (2024) "InstaFlow"
 

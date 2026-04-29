@@ -78,7 +78,7 @@ VAE（Variational Autoencoder, Kingma & Welling, 2014）对这两个问题给出
 
 > **来源**：Kingma & Welling (2014); Tutorial_Diffusion_Imaging_Vision Sec 1.1; 01-vae.ipynb
 
-> **过渡**：VAE架构有了，但训练面临一个根本障碍——采样操作不可微，梯度无法穿过随机节点。这就是重参数化技巧要解决的问题。
+VAE架构有了，但训练面临一个根本障碍：采样操作不可微，梯度无法穿过随机节点。这就是重参数化技巧要解决的问题。
 
 ---
 
@@ -119,7 +119,7 @@ VAE（Variational Autoencoder, Kingma & Welling, 2014）对这两个问题给出
 
 > **来源**：Kingma & Welling (2014); Rezende et al. (2014); Tutorial_Diffusion_Imaging_Vision Sec 1.3; 01-vae.ipynb; Williams (1992) REINFORCE
 
-> **过渡**：重参数化技巧解决了梯度传播问题，现在可以实际训练VAE了。训练目标是什么？最大化ELBO。ELBO的分解与各项的含义，以及训练中的权衡，是下一节的主题。
+至此，重参数化技巧解决了梯度传播问题，VAE可以实际训练了。训练目标是什么？最大化ELBO。而ELBO的分解与各项的含义，以及训练中的权衡，需要进一步剖析。
 
 ---
 
@@ -165,7 +165,7 @@ VAE（Variational Autoencoder, Kingma & Welling, 2014）对这两个问题给出
 
 > **来源**：Kingma & Welling (2014); Higgins et al. (2017) β-VAE; Bowman et al. (2016) KL annealing; Tutorial_Diffusion_Imaging_Vision Sec 1.2-1.3; 01-vae.ipynb
 
-> **过渡**：理解了VAE的训练机制后，一个自然的问题是：训练好的VAE如何服务于逆问题求解？这正是本书主线的交汇点——VAE作为逆问题的学习先验。
+理解了VAE的训练机制后，一个自然的问题是：训练好的VAE如何服务于逆问题求解？这正是本书主线的交汇点——VAE作为逆问题的学习先验。
 
 ---
 
@@ -202,7 +202,7 @@ VAE（Variational Autoencoder, Kingma & Welling, 2014）对这两个问题给出
 
 > **来源**：Pereyra Lecture 3 P33-36; Ratti Pre-course II P18-21; Holden et al. (2022)
 
-> **过渡**：理论框架就绪，让我们动手实现——用PyTorch在MNIST数据集上训练VAE，观察隐空间结构与训练动态。
+理论框架就绪，让我们动手实现：用PyTorch在MNIST数据集上训练VAE，观察隐空间结构与训练动态。
 
 ---
 
@@ -234,7 +234,7 @@ VAE（Variational Autoencoder, Kingma & Welling, 2014）对这两个问题给出
 
 > **来源**：01-vae.ipynb; CompImLab25训练流程
 
-> **过渡**：VAE是变分路径的第一个里程碑。但单层VAE的表达能力有限——第10章将把VAE扩展为层级VAE，当层数 $L \to \infty$ 时，层级VAE收敛于扩散过程。编码器的加噪结构，将成为扩散模型的前向过程。
+VAE是变分路径的第一个里程碑。但单层VAE的表达能力有限——第10章将把VAE扩展为层级VAE，当层数 $L \to \infty$ 时，层级VAE收敛于扩散过程。编码器的加噪结构，将成为扩散模型的前向过程。
 
 ---
 

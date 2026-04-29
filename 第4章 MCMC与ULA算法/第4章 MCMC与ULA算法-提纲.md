@@ -68,7 +68,7 @@ Monte Carlo(4.1) → MH算法(4.2) → ULA/梯度采样(4.3) → MYULA/不可微
 
 **来源**：Pereyra L1 P30-35; LectureNotes2020_v2 Section 8.2.1; invprobs_v2 Ch12
 
-> **过渡**：Monte Carlo方法的瓶颈是"如何从后验中采样"。MCMC方法通过构造马尔可夫链巧妙地绕过了直接采样的困难——Metropolis-Hastings算法是MCMC的经典框架。
+Monte Carlo方法的瓶颈在于"如何从后验中采样"。MCMC方法通过构造马尔可夫链巧妙地绕过了直接采样的困难——Metropolis-Hastings算法是MCMC的经典框架。
 
 ---
 
@@ -120,7 +120,7 @@ Monte Carlo(4.1) → MH算法(4.2) → ULA/梯度采样(4.3) → MYULA/不可微
 
 **来源**：Pereyra L1 P35-40; LectureNotes2020_v2 Section 8.2 (lines 5041-5235); Pock L2 P28
 
-> **过渡**：MH是通用框架，但其随机游走提议在高维空间效率极低——就像蒙眼随机行走，每步都很小。能否利用后验的**梯度信息**，让每一步都"朝着正确的方向"走？这就是ULA的思想——Langevin扩散的离散化。
+MH是通用框架，但其随机游走提议在高维空间效率极低——就像蒙眼随机行走，每步都很小。能否利用后验的**梯度信息**，让每一步都"朝着正确的方向"走？这就是ULA的思想——Langevin扩散的离散化。
 
 ---
 
@@ -180,7 +180,7 @@ Monte Carlo(4.1) → MH算法(4.2) → ULA/梯度采样(4.3) → MYULA/不可微
 
 **来源**：Pereyra L1 P40-50; Pock L2 P14-17; lab1_ULA_sol; Durmus & Moulines (2019)
 
-> **过渡**：ULA要求 $\nabla\log p(x|y)$ 存在且Lipschitz连续——但图像逆问题的后验常含不可微项（TV范数、L1范数、指示函数），ULA的梯度要求被违反。MYULA通过Moreau-Yoshida包络光滑化不可微项，巧妙地将ULA扩展到不可微情形。
+ULA要求 $\nabla\log p(x|y)$ 存在且Lipschitz连续，但图像逆问题的后验常含不可微项（TV范数、L1范数、指示函数），ULA的梯度要求被违反。MYULA通过Moreau-Yoshida包络光滑化不可微项，巧妙地将ULA扩展到不可微情形。
 
 ---
 
@@ -232,7 +232,7 @@ Monte Carlo(4.1) → MH算法(4.2) → ULA/梯度采样(4.3) → MYULA/不可微
 
 **来源**：Pereyra L1 P43-44; Pereyra L3 P9-11; Durmus et al. (2018); Pereyra (2015)
 
-> **过渡**：ULA/MYULA利用后验的梯度信息构造采样步骤。另一种利用后验结构的方式是Gibbs采样——不利用梯度，而是利用条件分布的结构。通过引入辅助变量，将复杂后验分解为简单的条件分布，Gibbs采样在特定结构下极为高效。
+ULA/MYULA利用后验的梯度信息构造采样步骤。另一种利用后验结构的方式是Gibbs采样——不利用梯度，而是利用条件分布的结构。通过引入辅助变量，将复杂后验分解为简单的条件分布，Gibbs采样在特定结构下极为高效。
 
 ---
 
@@ -297,7 +297,7 @@ Monte Carlo(4.1) → MH算法(4.2) → ULA/梯度采样(4.3) → MYULA/不可微
 
 **来源**：Pock L2 P25-33; Geman & Reynolds (1992); Kuric, Zach, Habring, Unser & Pock (2025); Geman & Geman (1984)
 
-> **过渡**：Gibbs采样利用条件分布结构，ULA利用梯度信息——两种策略各有优势。能否进一步加速采样？正如优化中的Nesterov加速之于梯度下降，采样中也有对应的加速机制——过松弛与惯性Langevin算法。
+Gibbs采样利用条件分布结构，ULA利用梯度信息——两种策略各有优势。能否进一步加速采样？正如优化中的Nesterov加速之于梯度下降，采样中也有对应的加速机制——过松弛与惯性Langevin算法。
 
 ---
 
@@ -349,7 +349,7 @@ Monte Carlo(4.1) → MH算法(4.2) → ULA/梯度采样(4.3) → MYULA/不可微
 
 **来源**：Pock L2 P32-42; Adler (1981); Fox & Parker (2017); Falk, Habring & Pock (2025); Polyak (1964)
 
-> **过渡**：我们已建立了MCMC采样的完整方法工具箱——从通用框架（MH）到高效特例（ULA/MYULA），从梯度驱动到结构驱动（Gibbs），从基本方法到加速方法。但MCMC的输出是一条马尔可夫链——如何判断它是否收敛？收敛后如何用采样结果进行不确定性量化？
+至此我们已建立了MCMC采样的完整方法工具箱——从通用框架（MH）到高效特例（ULA/MYULA），从梯度驱动到结构驱动（Gibbs），从基本方法到加速方法。但MCMC的输出是一条马尔可夫链——如何判断它是否收敛？收敛后如何用采样结果进行不确定性量化？
 
 ---
 
