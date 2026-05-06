@@ -92,6 +92,13 @@ if PARENT_DIR not in sys.path:
 
 from sampling_tools import *
 
+# 显式 fallback：确保关键函数已导入（防止 __init__.py 通配符静默失败）
+from sampling_tools.plots import plot_im, plots
+from sampling_tools.blur_operators import blur_operators
+from sampling_tools.measures import NRMSE, PSNR, SSIM
+from sampling_tools.welford import welford
+from sampling_tools.load_model import load_model
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Device: {device}")
 
