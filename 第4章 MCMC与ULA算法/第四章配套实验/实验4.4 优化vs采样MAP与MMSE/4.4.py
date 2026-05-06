@@ -18,14 +18,51 @@ import matplotlib as mpl
 import warnings
 import logging
 
-# ====== 解决中文乱码的核心代码 ======
+# ====== 解决中文乱码的核心代码（Windows + Linux 自动适配）======
 logging.getLogger('matplotlib').setLevel(logging.ERROR)
 logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*U\\+2212.*")
 warnings.filterwarnings("ignore", message=".*glyph.*")
-plt.rcParams['font.family'] = ['SimHei', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
+
+import platform
+from matplotlib.font_manager import FontManager, FontProperties
+
+def _find_chinese_font():
+    """自动检测系统中可用的中文字体，兼容 Windows / Linux"""
+    candidates = []
+    if platform.system() == 'Windows':
+        candidates = ['SimHei', 'Microsoft YaHei', 'KaiTi', 'FangSong']
+    else:
+        candidates = [
+            'WenQuanYi Micro Hei', 'WenQuanYi Zen Hei',
+            'Noto Sans CJK SC', 'Noto Sans CJK',
+            'Source Han Sans SC', 'AR PL UMing CN',
+            'SimHei',
+        ]
+    fm = FontManager()
+    available = set(f.name for f in fm.ttflist)
+    for font in candidates:
+        if font in available:
+            return font
+    import os, re
+    cjk_patterns = ['cjk', 'wqy', 'noto.*cjk', 'wenquan', 'chinese', 'simhei']
+    for f in fm.ttflist:
+        name_lower = f.name.lower()
+        fname_lower = (os.path.basename(f.fname) if hasattr(f, 'fname') else '').lower()
+        for pat in cjk_patterns:
+            if re.search(pat, name_lower) or re.search(pat, fname_lower):
+                return f.name
+    return None
+
+_cn_font = _find_chinese_font()
+if _cn_font:
+    plt.rcParams['font.sans-serif'] = [_cn_font] + plt.rcParams.get('font.sans-serif', [])
+    plt.rcParams['font.family'] = 'sans-serif'
+    print(f"[Font] 已检测到中文字体: {_cn_font}")
+else:
+    print("[Font] 未找到中文字体，中文可能显示为方框")
 # ========================================================
 
 np.random.seed(42)
