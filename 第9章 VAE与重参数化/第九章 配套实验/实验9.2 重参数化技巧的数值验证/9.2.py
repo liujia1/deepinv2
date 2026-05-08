@@ -9,7 +9,8 @@
 """
 
 import sys
-sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
 
 import os
 import numpy as np
@@ -34,7 +35,7 @@ np.random.seed(42)
 import torch
 torch.manual_seed(42)
 
-SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
+SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
 
 
 # ============================================================
