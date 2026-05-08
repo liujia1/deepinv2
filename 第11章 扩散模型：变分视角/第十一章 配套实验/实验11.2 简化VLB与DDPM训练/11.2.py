@@ -5,7 +5,7 @@
   - 11.4节 简化VLB与DDPM训练（L_simple、DDPM采样算法）
   - 11.3节 三种参数化（训练中对比ε-prediction vs x₀-prediction）
 
-在MNIST上训练一个简化的DDPM模型（ResMLP架构），
+在MNIST上训练一个简化的DDPM模型（小型UNet架构），
 验证简化VLB的训练效果，对比ε-prediction和x₀-prediction两种参数化。
 """
 
@@ -46,7 +46,7 @@ print(f'使用设备: {device}')
 # ============================================================
 # 噪声调度
 # ============================================================
-T = 100  # 减少步数以适配MLP架构的学习能力
+T = 200
 beta_min, beta_max = 1e-4, 0.02
 betas = torch.linspace(beta_min, beta_max, T).to(device)
 alphas = 1.0 - betas
@@ -66,17 +66,17 @@ beta_over_sqrt_1m_ab = betas / sqrt_one_minus_alpha_bars
 # 前向过程: q(x_t|x_0)
 # ============================================================
 def q_sample(x_0, t, noise=None):
-    """x_t = √ᾱ_t·x_0 + √(1-ᾱ_t)·ε"""
+    """x_t = √ᾱ_t·x_0 + √(1-ᾱ_t)·ε, 输入为[B,1,28,28]图像"""
     if noise is None:
         noise = torch.randn_like(x_0)
     return (
-        sqrt_alpha_bars[t][:, None] * x_0 +
-        sqrt_one_minus_alpha_bars[t][:, None] * noise
+        sqrt_alpha_bars[t][:, None, None, None] * x_0 +
+        sqrt_one_minus_alpha_bars[t][:, None, None, None] * noise
     )
 
 
 # ============================================================
-# 去噪网络: ResMLP（残差块 + 每层时间注入 + LayerNorm）
+# 去噪网络: 小型UNet（带时间嵌入）
 # ============================================================
 import torch.nn as nn
 import torch.nn.functional as F
@@ -85,7 +85,7 @@ from torch.utils.data import DataLoader
 
 
 class SinusoidalTimeEmbedding(nn.Module):
-    """正弦时间嵌入（与02-ddpm.ipynb相同）"""
+    """正弦时间嵌入"""
     def __init__(self, dim):
         super().__init__()
         self.dim = dim
@@ -98,51 +98,90 @@ class SinusoidalTimeEmbedding(nn.Module):
         return torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
 
 
-class ResBlock(nn.Module):
-    """残差块 + 时间条件注入 + LayerNorm"""
-    def __init__(self, dim, time_dim):
+class ConvBlock(nn.Module):
+    """Conv + GroupNorm + SiLU，注入时间条件"""
+    def __init__(self, in_ch, out_ch, time_dim):
         super().__init__()
-        self.norm1 = nn.LayerNorm(dim)
-        self.fc1 = nn.Linear(dim, dim)
-        self.time_proj = nn.Linear(time_dim, dim)
-        self.norm2 = nn.LayerNorm(dim)
-        self.fc2 = nn.Linear(dim, dim)
+        gn_groups = min(4, out_ch)  # 自适应分组数，确保能整除
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, 3, padding=1),
+            nn.GroupNorm(gn_groups, out_ch),
+            nn.SiLU(),
+        )
+        self.time_proj = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(time_dim, out_ch),
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(out_ch, out_ch, 3, padding=1),
+            nn.GroupNorm(gn_groups, out_ch),
+            nn.SiLU(),
+        )
+        self.shortcut = nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else nn.Identity()
 
     def forward(self, x, t_emb):
-        h = self.norm1(x)
-        h = F.silu(h)
-        h = self.fc1(h)
-        h = h + self.time_proj(F.silu(t_emb))  # 每层注入时间条件
-        h = self.norm2(h)
-        h = F.silu(h)
-        h = self.fc2(h)
-        return x + h  # 残差连接
+        h = self.conv1(x)
+        h = h + self.time_proj(t_emb)[:, :, None, None]
+        h = self.conv2(h)
+        return h + self.shortcut(x)
 
 
-class DenoisingMLP(nn.Module):
-    """ResMLP去噪网络（ε-prediction或x₀-prediction）"""
-    def __init__(self, input_dim=784, hidden_dim=512, time_dim=64, n_blocks=4, pred_type='epsilon'):
+class SmallUNet(nn.Module):
+    """小型UNet去噪网络（适配MNIST 28x28）"""
+    def __init__(self, time_dim=64, pred_type='epsilon'):
         super().__init__()
         self.pred_type = pred_type
+        ch = [1, 16, 32, 64]
+
+        # 时间嵌入
         self.time_mlp = nn.Sequential(
             SinusoidalTimeEmbedding(time_dim),
             nn.Linear(time_dim, time_dim),
             nn.SiLU(),
         )
-        self.input_proj = nn.Linear(input_dim, hidden_dim)
-        self.blocks = nn.ModuleList([ResBlock(hidden_dim, time_dim) for _ in range(n_blocks)])
-        self.output_proj = nn.Sequential(
-            nn.LayerNorm(hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, input_dim),
-        )
+
+        # 编码器（下采样）
+        self.down1 = ConvBlock(ch[0], ch[1], time_dim)  # 28x28
+        self.down2 = ConvBlock(ch[1], ch[2], time_dim)  # 14x14
+        self.down3 = ConvBlock(ch[2], ch[3], time_dim)  # 7x7
+
+        # 瓶颈层
+        self.bottleneck = ConvBlock(ch[3], ch[3], time_dim)  # 7x7
+
+        # 解码器（上采样）
+        self.up3 = ConvBlock(ch[3] + ch[2], ch[2], time_dim)  # 14x14
+        self.up2 = ConvBlock(ch[2] + ch[1], ch[1], time_dim)  # 28x28
+        self.up1 = ConvBlock(ch[1] + ch[0], ch[0], time_dim)  # 28x28
+
+        # 输出
+        self.out_conv = nn.Conv2d(ch[0], 1, 1)
+
+        self.pool = nn.MaxPool2d(2)
 
     def forward(self, x_t, t):
         t_emb = self.time_mlp(t)
-        h = self.input_proj(x_t)
-        for block in self.blocks:
-            h = block(h, t_emb)
-        return self.output_proj(h)
+
+        # 编码器
+        h1 = self.down1(x_t, t_emb)       # [B,16,28,28]
+        h2 = self.down2(self.pool(h1), t_emb)  # [B,32,14,14]
+        h3 = self.down3(self.pool(h2), t_emb)  # [B,64,7,7]
+
+        # 瓶颈
+        h = self.bottleneck(self.pool(h3), t_emb)  # 这里pool会让7→3，所以用stride处理
+        # 实际上7x7 pool2 → 3x3，上采样回去是6x6，不匹配
+        # 改用直接在h3上做bottleneck
+        h = self.bottleneck(h3, t_emb)  # [B,64,7,7]
+
+        # 解码器 + 跳跃连接
+        h = F.interpolate(h, size=(14, 14), mode='nearest')
+        h = self.up3(torch.cat([h, h2], dim=1), t_emb)  # [B,32,14,14]
+
+        h = F.interpolate(h, size=(28, 28), mode='nearest')
+        h = self.up2(torch.cat([h, h1], dim=1), t_emb)  # [B,16,28,28]
+
+        h = self.up1(torch.cat([h, x_t], dim=1), t_emb)  # [B,1,28,28]
+
+        return self.out_conv(h)
 
 
 # ============================================================
@@ -150,7 +189,7 @@ class DenoisingMLP(nn.Module):
 # ============================================================
 @torch.no_grad()
 def ddpm_sample(model, shape, pred_type='epsilon'):
-    """DDPM反向采样 x_T→x_0"""
+    """DDPM反向采样 x_T→x_0, shape=[B,1,28,28]"""
     model.eval()
     x = torch.randn(shape, device=device)
 
@@ -186,9 +225,9 @@ def ddpm_sample(model, shape, pred_type='epsilon'):
 # ============================================================
 # 训练函数
 # ============================================================
-def train_ddpm(pred_type='epsilon', num_epochs=25):
+def train_ddpm(pred_type='epsilon', num_epochs=50):
     """训练DDPM模型"""
-    model = DenoisingMLP(pred_type=pred_type).to(device)
+    model = SmallUNet(pred_type=pred_type).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
 
     history = {'loss': []}
@@ -198,7 +237,7 @@ def train_ddpm(pred_type='epsilon', num_epochs=25):
         total_loss = 0
 
         for x, _ in train_loader:
-            x = x.view(-1, 784).to(device)
+            x = x.to(device)
             batch = x.shape[0]
 
             # 随机采样时间步
@@ -250,15 +289,15 @@ print(f"训练集: {len(train_dataset)}, 测试集: {len(test_dataset)}")
 # ============================================================
 # 步骤1: 训练两种参数化
 # ============================================================
-num_epochs = 25
+num_epochs = 50
 
 print(f"\n{'='*60}")
-print(f"步骤1: 训练 ε-prediction DDPM (T={T}, epochs={num_epochs})")
+print(f"步骤1: 训练 ε-prediction DDPM (T={T}, epochs={num_epochs}, UNet)")
 print(f"{'='*60}")
 model_eps, history_eps = train_ddpm('epsilon', num_epochs)
 
 print(f"\n{'='*60}")
-print(f"步骤1: 训练 x₀-prediction DDPM (T={T}, epochs={num_epochs})")
+print(f"步骤1: 训练 x₀-prediction DDPM (T={T}, epochs={num_epochs}, UNet)")
 print(f"{'='*60}")
 model_x0, history_x0 = train_ddpm('x0', num_epochs)
 
@@ -269,8 +308,8 @@ model_x0, history_x0 = train_ddpm('x0', num_epochs)
 print("\n生成训练曲线与加噪过程图...")
 
 fig, ax = plt.subplots(1, 1, figsize=(8, 5))
-ax.plot(range(1, num_epochs+1), history_eps['loss'], 'b-o', markersize=4, label='ε-prediction')
-ax.plot(range(1, num_epochs+1), history_x0['loss'], 'r-s', markersize=4, label='x₀-prediction')
+ax.plot(range(1, len(history_eps['loss'])+1), history_eps['loss'], 'b-o', markersize=4, label='ε-prediction')
+ax.plot(range(1, len(history_x0['loss'])+1), history_x0['loss'], 'r-s', markersize=4, label='x₀-prediction')
 ax.set_xlabel('Epoch', fontsize=12)
 ax.set_ylabel('L_simple损失', fontsize=12)
 ax.set_title('(a) 两种参数化的训练曲线', fontsize=13)
@@ -283,17 +322,17 @@ print(f"图1a已保存: {fig_path1a}")
 
 # (b) 前向加噪过程可视化
 test_imgs, _ = next(iter(test_loader))
-t_show = [0, 5, 15, 30, 50, 99]
+t_show = [0, 20, 50, 100, 150, 199]
 
 fig2, axes_sub = plt.subplots(2, 3, figsize=(14, 6))
 for i, t_idx in enumerate(t_show):
     torch.manual_seed(42)
-    x0_t = test_imgs[0:1].view(-1, 784).to(device)
+    x0_t = test_imgs[0:1].to(device)
     t_t = torch.tensor([t_idx], device=device)
     eps_t = torch.randn_like(x0_t)
     x_t = q_sample(x0_t, t_t, eps_t)
     row, col = i // 3, i % 3
-    axes_sub[row, col].imshow(x_t.view(28, 28).cpu().numpy(), cmap='gray')
+    axes_sub[row, col].imshow(x_t[0, 0].cpu().numpy(), cmap='gray')
     if t_idx == 0:
         axes_sub[row, col].set_title('x₀ (原始)', fontsize=11)
     else:
@@ -313,29 +352,30 @@ print(f"图1b已保存: {fig_path1b}")
 print("\n步骤2: DDPM采样...")
 
 n_samples = 8
+sample_shape = (n_samples, 1, 28, 28)
 
 # ε-prediction采样
 print("  ε-prediction采样中...")
-samples_eps = ddpm_sample(model_eps, (n_samples, 784), 'epsilon')
+samples_eps = ddpm_sample(model_eps, sample_shape, 'epsilon')
 
 # x₀-prediction采样
 print("  x₀-prediction采样中...")
-samples_x0 = ddpm_sample(model_x0, (n_samples, 784), 'x0')
+samples_x0 = ddpm_sample(model_x0, sample_shape, 'x0')
 
 fig, axes = plt.subplots(2, n_samples, figsize=(16, 4))
 
 for i in range(n_samples):
     # ε-prediction
-    axes[0, i].imshow(samples_eps[i].view(28, 28).cpu().numpy(), cmap='gray')
+    axes[0, i].imshow(samples_eps[i, 0].cpu().numpy(), cmap='gray')
     axes[0, i].axis('off')
     if i == 0: axes[0, i].set_ylabel('ε-prediction', fontsize=12, rotation=0, labelpad=60)
 
     # x₀-prediction
-    axes[1, i].imshow(samples_x0[i].view(28, 28).cpu().numpy(), cmap='gray')
+    axes[1, i].imshow(samples_x0[i, 0].cpu().numpy(), cmap='gray')
     axes[1, i].axis('off')
     if i == 0: axes[1, i].set_ylabel('x₀-prediction', fontsize=12, rotation=0, labelpad=60)
 
-plt.suptitle(f'DDPM采样 (T={T}, {num_epochs} epochs, ResMLP)', fontsize=14, y=1.02)
+plt.suptitle(f'DDPM采样 (T={T}, {num_epochs} epochs, UNet)', fontsize=14, y=1.02)
 plt.tight_layout()
 fig_path2 = os.path.join(SAVE_DIR, '步骤2_DDPM采样对比.png')
 plt.savefig(fig_path2, dpi=150, bbox_inches='tight')
@@ -345,6 +385,7 @@ print(f"图2已保存: {fig_path2}")
 
 # ============================================================
 # ★ 步骤3: 原创设计 - 逐步去噪过程可视化
+# 从纯噪声x_T~N(0,I)开始，记录DDPM逐步去噪的中间结果
 # ============================================================
 print("\n步骤3: 逐步去噪过程可视化...")
 
@@ -353,7 +394,7 @@ t_denoise = [T-1, T*3//4, T//2, T//4, T//8, T//16, 0]  # 从T到0
 
 # 从纯噪声开始
 torch.manual_seed(42)
-x_T = torch.randn(1, 784, device=device)
+x_T = torch.randn(1, 1, 28, 28, device=device)
 
 # 完整采样并记录中间步骤
 denoise_trajectory = []
@@ -372,7 +413,7 @@ with torch.no_grad():
             x = model_mean + torch.sqrt(posterior_var[t_idx]) * noise
 
         if t_idx in t_denoise:
-            denoise_trajectory.append((t_idx, x.view(28, 28).cpu().numpy()))
+            denoise_trajectory.append((t_idx, x[0, 0].cpu().numpy()))
 
 fig, axes = plt.subplots(1, len(denoise_trajectory), figsize=(20, 3))
 for i, (t_val, img) in enumerate(denoise_trajectory):
@@ -414,4 +455,8 @@ print(f"""
 4. 前向加噪=固定编码器（11.1节联系）
    - x_t = √ᾱ_t·x_0 + √(1-ᾱ_t)·ε 精确实现固定高斯编码器
    - 无需训练编码器，只需训练去噪网络
+
+5. UNet vs MLP（架构影响）
+   - UNet的卷积归纳偏置天然适合图像，保留空间结构
+   - 跳跃连接使细节信息可直达输出层，减少误差累积
 """)
