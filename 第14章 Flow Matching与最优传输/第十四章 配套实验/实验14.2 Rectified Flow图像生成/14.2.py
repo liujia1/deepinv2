@@ -76,7 +76,14 @@ torch.manual_seed(42)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(42)
 
-SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
+_gdrive = '/content/drive/MyDrive'
+if os.path.isdir(_gdrive):
+    SAVE_DIR = os.path.join(_gdrive, '实验14_2_RectifiedFlow')
+    os.makedirs(SAVE_DIR, exist_ok=True)
+    print(f"检测到 Google Drive，结果将保存至: {SAVE_DIR}")
+else:
+    SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
+    print(f"本地环境，结果将保存至: {SAVE_DIR}")
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'使用设备: {device}')
 
