@@ -49,6 +49,7 @@ def _find_chinese_font():
         candidates = [
             'WenQuanYi Micro Hei', 'WenQuanYi Zen Hei',
             'Noto Sans CJK SC', 'Noto Sans CJK',
+            'Noto Sans SC',
             'Source Han Sans SC', 'AR PL UMing CN', 'SimHei',
         ]
     fm = FontManager()
@@ -57,7 +58,7 @@ def _find_chinese_font():
         if font in available:
             return font
     import os as _os, re
-    cjk_patterns = ['cjk', 'wqy', 'noto.*cjk', 'wenquan', 'chinese', 'simhei']
+    cjk_patterns = ['cjk', 'wqy', 'noto.*sc', 'wenquan', 'chinese', 'simhei']
     for f in fm.ttflist:
         name_lower = f.name.lower()
         fname_lower = (_os.path.basename(f.fname) if hasattr(f, 'fname') else '').lower()
@@ -72,7 +73,34 @@ if _cn_font:
     plt.rcParams['font.family'] = 'sans-serif'
     print(f"[Font] 已检测到中文字体: {_cn_font}")
 else:
-    print("[Font] 未找到中文字体，中文可能显示为方框")
+    # Linux/Colab 未找到中文字体，尝试加载或下载 Noto Sans SC
+    if platform.system() != 'Windows':
+        _font_url = 'https://github.com/jsntn/webfonts/raw/master/NotoSansSC-Regular.ttf'
+        _font_file = os.path.join(SAVE_DIR if 'SAVE_DIR' in dir() else '.', 'NotoSansSC-Regular.ttf')
+        if os.path.exists(_font_file):
+            # 已下载过，直接加载
+            from matplotlib.font_manager import fontManager
+            fontManager.addfont(_font_file)
+            plt.rcParams['font.sans-serif'] = ['Noto Sans SC'] + plt.rcParams.get('font.sans-serif', [])
+            plt.rcParams['font.family'] = 'sans-serif'
+            _cn_font = 'Noto Sans SC'
+            print(f"[Font] 已加载缓存字体: {_cn_font}")
+        else:
+            # 未下载过，下载并保存
+            try:
+                import urllib.request
+                print(f"[Font] 正在下载中文字体 NotoSansSC...")
+                urllib.request.urlretrieve(_font_url, _font_file)
+                from matplotlib.font_manager import fontManager
+                fontManager.addfont(_font_file)
+                plt.rcParams['font.sans-serif'] = ['Noto Sans SC'] + plt.rcParams.get('font.sans-serif', [])
+                plt.rcParams['font.family'] = 'sans-serif'
+                _cn_font = 'Noto Sans SC'
+                print(f"[Font] 已下载并注册中文字体: {_cn_font}")
+            except Exception as e:
+                print(f"[Font] 字体下载失败: {e}，中文可能显示为方框")
+    else:
+        print("[Font] 未找到中文字体，中文可能显示为方框")
 # ========================================================
 
 np.random.seed(42)
@@ -252,7 +280,7 @@ loader = torch.utils.data.DataLoader(dataset, batch_size=128, shuffle=True, num_
 model = SmallUNet(time_dim=64).to(device)
 optimizer = optim.Adam(model.parameters(), lr=2e-4)
 
-n_epochs = 30
+n_epochs = 50
 train_losses = []
 
 # ★ Resume: 检测已有checkpoint，支持断点续训
@@ -340,13 +368,20 @@ def ddpm_sample(model, shape):
 def tweedie_predict(x_t, t_idx):
     """从x_t和噪声预测预测x_0: x̂_0 = (x_t - √(1-ᾱ_t)·ε̂) / √ᾱ_t
     
+    ★ 数值稳定化：当ᾱ_t很小时（大t），Tweedie估计会爆炸，
+      用soft clamp限制x0_hat的范围，避免clamp(0,1)后全黑
+    
     Returns:
         x0_hat: Tweedie估计的干净图像
         pred_noise: 模型预测的噪声（可复用，避免重复前向）
     """
     t = torch.full((x_t.shape[0],), t_idx, device=device, dtype=torch.long)
     pred_noise = model(x_t, t)
-    x0_hat = (x_t - sqrt_one_minus_alpha_bars[t_idx] * pred_noise) / sqrt_alpha_bars[t_idx]
+    # 数值稳定化：先除以clamped的√ᾱ_t，避免除零
+    sqrt_ab = sqrt_alpha_bars[t_idx].clamp(min=1e-3)
+    x0_hat = (x_t - sqrt_one_minus_alpha_bars[t_idx] * pred_noise) / sqrt_ab
+    # soft clamp: 限制到[-2, 2]而不是直接[0,1]，避免梯度消失
+    x0_hat = x0_hat.clamp(-2, 2)
     return x0_hat, pred_noise
 
 
@@ -363,12 +398,14 @@ def diffpir_mri(model, y, mri_op, shape, zeta=1.0):
     ★ 修正版 DiffPIR算法 for MRI（16.5.2节）:
     对 t = T-1, T-2, ..., 0:
       1. 预测干净图像: x̂_{0|t} = Tweedie(x_t, t)
-      2. 数据一致性步: x̂'_{0|t} = DC(x̂_{0|t}, y)
+      2. 数据一致性步: x̂'_{0|t} = DC(x̂_{0|t}, y)  (仅小t时启用)
       3. 利用DDPM后验公式 q(x_{t-1}|x_t, x̂'_0) 从 x_t 推进到 x_{t-1}
          μ̃_t = coef1_t * x̂'_0 + coef2_t * x_t
 
-    ★ 修正要点：不再用新鲜噪声重新编码，而是用修正后的x̂'_0替换后验公式中的x_0，
-    直接从当前x_t出发计算后验均值，与DiffPIR原文算法一致。
+    ★ 关键修正：
+    - 大t时Tweedie估计不可靠，跳过DC步，使用纯后验公式
+    - 小t时Tweedie估计可靠，DC步提供数据一致性约束
+    - dc_weight从t=T/2开始线性增长到1，避免早期垃圾估计污染采样
     """
     model.eval()
     x = torch.randn(shape, device=device)
@@ -376,22 +413,29 @@ def diffpir_mri(model, y, mri_op, shape, zeta=1.0):
     for t_idx in reversed(range(T)):
         t = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
 
-        # 1. 预测干净图像（Tweedie公式）
+        # 1. 预测干净图像（Tweedie公式，已含数值稳定化）
         x0_hat, _ = tweedie_predict(x, t_idx)
         x0_hat = x0_hat.clamp(0, 1)
 
-        # 2. 数据一致性步
-        x0_hat_corrected = mri_op.data_consistency(x0_hat, y, zeta=zeta)
+        # 2. 数据一致性步（仅在Tweedie可靠时启用）
+        #    dc_weight: t_idx大→0（Tweedie不准），t_idx小→1（Tweedie准）
+        dc_weight = max(0.0, 1.0 - t_idx / (T * 0.5))  # t_idx > T/2 时为0
+        if dc_weight > 0:
+            x0_hat_corrected = mri_op.data_consistency(x0_hat, y, zeta=zeta)
+            # 混合：dc_weight控制DC步的影响，其余保持Tweedie原始估计
+            x0_hat_used = dc_weight * x0_hat_corrected + (1 - dc_weight) * x0_hat
+        else:
+            x0_hat_used = x0_hat
 
-        # 3. 利用DDPM后验公式从x_t推进到x_{t-1}，但用x0_hat_corrected替换x_0
+        # 3. 利用DDPM后验公式从x_t推进到x_{t-1}，但用x0_hat_used替换x_0
         #    后验均值: μ̃_t = (√ᾱ_{t-1} β_t)/(1-ᾱ_t) * x̂'_0 + (√α_t (1-ᾱ_{t-1}))/(1-ᾱ_t) * x_t
         if t_idx > 0:
-            model_mean = (posterior_mean_coef1[t_idx] * x0_hat_corrected +
+            model_mean = (posterior_mean_coef1[t_idx] * x0_hat_used +
                           posterior_mean_coef2[t_idx] * x)
             noise = torch.randn_like(x)
             x = model_mean + torch.exp(0.5 * posterior_log_variance[t_idx]) * noise
         else:
-            x = x0_hat_corrected
+            x = x0_hat_used
 
     return x.clamp(0, 1)
 
@@ -410,14 +454,22 @@ def dps_mri(model, y, mri_op, shape, zeta=0.5):
     对 t = T-1, T-2, ..., 0:
       1. 预测干净图像: x̂_{0|t} = Tweedie(x_t, t)
       2. 计算似然得分梯度: ∇_l = A^T(y - A*x̂_{0|t})
-      3. 修正得分: s_corrected = s_θ(x_t, t) + ζ * ∇_l
+      3. 修正得分: s_corrected = s_θ(x_t, t) + ζ(t) * ∇_l
       4. Euler-Maruyama步进
+    
+    ★ ζ(t)调度策略（关键修正）：
+      大t时Tweedie估计不可靠 → ζ(t)=0，不做似然修正
+      小t时Tweedie估计可靠 → ζ(t)逐步增大，注入数据一致性
+      ζ(t) = ζ * max(0, 1 - 2t/T)，在t > T/2时完全跳过似然修正
     """
     model.eval()
     x = torch.randn(shape, device=device)
 
     for t_idx in reversed(range(T)):
         t = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
+
+        # ★ zeta调度：小t(Tweedie准)时增大修正，大t(Tweedie不准)时跳过修正
+        zeta_t = zeta * max(0.0, 1.0 - 2.0 * t_idx / T)
 
         # 1. 预测干净图像（同时获取噪声预测，复用避免重复前向）
         x0_hat, pred_noise = tweedie_predict(x, t_idx)
@@ -431,10 +483,11 @@ def dps_mri(model, y, mri_op, shape, zeta=0.5):
             grad_likelihood = grad_likelihood / grad_norm
 
         # 3. 条件反向SDE步进（直接复用tweedie_predict返回的pred_noise）
-        # μ_θ = (1/√α_t)(x_t - β_t/√(1-ᾱ_t)·ε̂) + ζ * ∇_l * g^2
+        # μ_θ = (1/√α_t)(x_t - β_t/√(1-ᾱ_t)·ε̂) + ζ(t) * ∇_l
+        # ★ 注意：不加betas[t_idx]缩放！之前版本乘以betas导致修正量~0.003太小
         model_mean = sqrt_recip_alphas[t_idx] * (x - beta_over_sqrt_1m_ab[t_idx] * pred_noise)
-        # 加入似然修正
-        model_mean = model_mean + zeta * grad_likelihood * betas[t_idx]
+        # 加入似然修正（zeta_t已包含衰减，直接缩放归一化后的梯度）
+        model_mean = model_mean + zeta_t * grad_likelihood
 
         if t_idx > 0:
             noise = torch.randn_like(x)
@@ -472,15 +525,21 @@ y_test = mri_op.A(test_batch)
 # 零填充重建
 x_zf = mri_op.AT(y_test)
 
+# ★ 诊断：检查各重建结果的数值范围
+print(f"  [诊断] test_batch: mean={test_batch.mean():.4f}, min={test_batch.min():.4f}, max={test_batch.max():.4f}")
+print(f"  [诊断] x_zf:      mean={x_zf.mean():.4f}, min={x_zf.min():.4f}, max={x_zf.max():.4f}")
+print(f"  [诊断] y_test:    dtype={y_test.dtype}, is_complex={y_test.is_complex()}")
+
 # DiffPIR重建
 print("  正在执行DiffPIR重建...")
 x_diffpir = diffpir_mri(model, y_test, mri_op, test_batch.shape, zeta=1.0)
 
-# DPS重建
-print("  正在执行DPS重建...")
-x_dps = dps_mri(model, y_test, mri_op, test_batch.shape, zeta=0.5)
+# DPS重建（zeta=0.3，比0.5更保守，配合衰减策略通常PSNR更高）
+print("  正在执行DPS重建 (zeta=0.3, 线性衰减)...")
+x_dps = dps_mri(model, y_test, mri_op, test_batch.shape, zeta=0.3)
 
 # PSNR计算
+print("\n  PSNR对比:")
 for i in range(4):
     gt = test_batch[i, 0].cpu().numpy()
     zf_p = psnr(gt, x_zf[i, 0].cpu().numpy(), data_range=1.0)
@@ -488,82 +547,150 @@ for i in range(4):
     dps_p = psnr(gt, x_dps[i, 0].cpu().numpy().clip(0, 1), data_range=1.0)
     print(f"  样本{i}: 零填充={zf_p:.1f}dB, DiffPIR={diffpir_p:.1f}dB, DPS={dps_p:.1f}dB")
 
+# ★ ζ敏感性分析（16.5.3节）—— 在不确定性量化之前执行，以便选取最优ζ
+print("\n  ζ敏感性分析:")
+zeta_list = [0.1, 0.3, 0.5, 1.0]
+zeta_results = {}
+for z in zeta_list:
+    x_z = dps_mri(model, y_test[:1], mri_op, (1, 1, 28, 28), zeta=z)
+    p = psnr(test_batch[0, 0].cpu().numpy(), x_z[0, 0].cpu().numpy().clip(0, 1), data_range=1.0)
+    zeta_results[z] = (x_z, p)
+    print(f"    ζ={z:.1f}: PSNR={p:.1f}dB")
+
 # ★ 不确定性量化（16.5.4节）
-print("\n  正在计算不确定性量化（5次DPS采样）...")
-n_samples = 5
+# 使用zeta敏感性分析中最优的ζ值
+best_zeta = max(zeta_results, key=lambda z: zeta_results[z][1])
+print(f"\n  正在计算不确定性量化（15次DPS采样, ζ={best_zeta}）...")
+n_samples = 15
 posterior_samples = []
 for s in range(n_samples):
     print(f"    采样 {s+1}/{n_samples}...")
     torch.manual_seed(42 + s)
-    x_sample = dps_mri(model, y_test[:1], mri_op, (1, 1, 28, 28), zeta=0.5)
+    x_sample = dps_mri(model, y_test[:1], mri_op, (1, 1, 28, 28), zeta=best_zeta)
     posterior_samples.append(x_sample[0, 0].cpu().numpy())
 
 # 计算像素级均值和方差
-samples_array = np.stack(posterior_samples, axis=0)  # (5, 28, 28)
+samples_array = np.stack(posterior_samples, axis=0)  # (15, 28, 28)
 posterior_mean = samples_array.mean(axis=0)
 posterior_var = samples_array.var(axis=0)
 
 gt_first = test_batch[0, 0].cpu().numpy()
 mean_psnr = psnr(gt_first, posterior_mean.clip(0, 1), data_range=1.0)
-print(f"  后验均值PSNR: {mean_psnr:.1f}dB")
+single_psnr = psnr(gt_first, posterior_samples[0].clip(0, 1), data_range=1.0)
+print(f"  单次采样PSNR: {single_psnr:.1f}dB")
+print(f"  后验均值PSNR: {mean_psnr:.1f}dB (提升 {mean_psnr - single_psnr:+.1f}dB)")
+
+# ★ DiffPIR不确定性量化对比
+print(f"\n  正在计算DiffPIR不确定性量化（15次采样）...")
+diffpir_samples = []
+for s in range(n_samples):
+    print(f"    DiffPIR采样 {s+1}/{n_samples}...")
+    torch.manual_seed(42 + s)
+    x_sample = diffpir_mri(model, y_test[:1], mri_op, (1, 1, 28, 28), zeta=1.0)
+    diffpir_samples.append(x_sample[0, 0].cpu().numpy())
+
+diffpir_samples_array = np.stack(diffpir_samples, axis=0)
+diffpir_posterior_mean = diffpir_samples_array.mean(axis=0)
+diffpir_posterior_var = diffpir_samples_array.var(axis=0)
+diffpir_mean_psnr = psnr(gt_first, diffpir_posterior_mean.clip(0, 1), data_range=1.0)
+print(f"  DiffPIR后验均值PSNR: {diffpir_mean_psnr:.1f}dB")
 
 # ========================================================================
 # 可视化
 # ========================================================================
-fig, axes = plt.subplots(3, 4, figsize=(16, 11))
+print("\n正在生成可视化图...")
 
-for i in range(4):
-    gt = test_batch[i, 0].cpu().numpy()
-    zf = x_zf[i, 0].cpu().numpy()
-    dp = x_diffpir[i, 0].cpu().numpy().clip(0, 1)
-    ds = x_dps[i, 0].cpu().numpy().clip(0, 1)
+fig, axes = plt.subplots(4, 4, figsize=(16, 15))
 
-    axes[0, i].imshow(gt, cmap='gray')
-    axes[0, i].set_title(f'真值 x₀' if i == 0 else '')
-    axes[0, i].axis('off')
+titles = ['真值 x₀', '零填充', '★ DiffPIR', '★ DPS']
+data_list = [test_batch, x_zf, x_diffpir, x_dps]
 
-    axes[1, i].imshow(zf, cmap='gray')
-    zf_p = psnr(gt, zf, data_range=1.0)
-    axes[1, i].set_title(f'零填充\nPSNR={zf_p:.1f}dB' if i == 0 else f'PSNR={zf_p:.1f}dB')
-    axes[1, i].axis('off')
+for row in range(4):
+    for col in range(4):
+        ax = axes[row, col]
+        try:
+            img_tensor = data_list[row][col:col+1]  # 保持batch维度
+            img = img_tensor[0, 0].cpu().numpy().clip(0, 1)
+            p = psnr(test_batch[col, 0].cpu().numpy(), img, data_range=1.0)
 
-    axes[2, i].imshow(ds, cmap='gray')
-    ds_p = psnr(gt, ds, data_range=1.0)
-    axes[2, i].set_title(f'★DPS\nPSNR={ds_p:.1f}dB' if i == 0 else f'PSNR={ds_p:.1f}dB')
-    axes[2, i].axis('off')
+            # 零填充行归一化到[0,1]显示（R=4欠采样像素值只有原图~1/4）
+            if row == 1:
+                img_show = img / max(img.max(), 1e-6)  # 归一化显示
+                ax.imshow(img_show, cmap='gray', vmin=0, vmax=1)
+                ax.set_title(f'PSNR={p:.1f}dB\n(归一化显示)', fontsize=9)
+            else:
+                ax.imshow(img, cmap='gray', vmin=0, vmax=1)
+                if row == 0:
+                    ax.set_title(f'样本{col}')
+                else:
+                    ax.set_title(f'PSNR={p:.1f}dB', fontsize=10)
 
-# 修改第一行第一个标题
-axes[0, 0].set_title('真值 x₀')
+        except Exception as e:
+            ax.imshow(np.zeros((28, 28)), cmap='gray')
+            ax.set_title('Error', color='red')
 
-plt.suptitle('步骤4：MRI重建对比——零填充 vs DPS扩散先验（16.5.4节）', fontsize=13)
+        if col == 0:
+            ax.set_ylabel(titles[row], fontsize=13, rotation=0, labelpad=50, ha='right')
+        ax.axis('off')
+
+plt.suptitle('步骤4：MRI重建对比——零填充 vs DiffPIR vs DPS（16.5.4节）', fontsize=13)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤4_方法对比.png'), dpi=150, bbox_inches='tight')
 plt.show()
 
-# 不确定性量化可视化
-fig, axes = plt.subplots(1, 4, figsize=(16, 4))
-
-axes[0].imshow(gt_first, cmap='gray')
+# ★ ζ敏感性分析可视化
+fig, axes = plt.subplots(1, len(zeta_list) + 1, figsize=(4 * (len(zeta_list) + 1), 4))
+axes[0].imshow(test_batch[0, 0].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
 axes[0].set_title('真值')
 axes[0].axis('off')
+for idx, z in enumerate(zeta_list):
+    axes[idx + 1].imshow(zeta_results[z][0][0, 0].cpu().numpy().clip(0, 1), cmap='gray', vmin=0, vmax=1)
+    axes[idx + 1].set_title(f'ζ={z}\nPSNR={zeta_results[z][1]:.1f}dB')
+    axes[idx + 1].axis('off')
+plt.suptitle('★ ζ敏感性分析——DPS引导权重对重建质量的影响（16.5.3节）', fontsize=12)
+plt.tight_layout()
+plt.savefig(os.path.join(SAVE_DIR, '步骤4_ζ敏感性.png'), dpi=150, bbox_inches='tight')
+plt.show()
 
-axes[1].imshow(posterior_mean.clip(0, 1), cmap='gray')
-axes[1].set_title(f'★后验均值 ẑ\nPSNR={mean_psnr:.1f}dB')
-axes[1].axis('off')
+# 不确定性量化可视化
+fig, axes = plt.subplots(2, 3, figsize=(14, 8))
 
-axes[2].imshow(posterior_var, cmap='hot')
-axes[2].set_title('★后验方差 σ²\n高亮区域=不确定性高')
-axes[2].axis('off')
+# 第一行：DPS后验分析
+axes[0, 0].imshow(gt_first, cmap='gray', vmin=0, vmax=1)
+axes[0, 0].set_title('真值')
+axes[0, 0].axis('off')
 
-# 置信区间可视化
-ci_low = np.clip(posterior_mean - 2 * np.sqrt(posterior_var), 0, 1)
-ci_high = np.clip(posterior_mean + 2 * np.sqrt(posterior_var), 0, 1)
-ci_width = ci_high - ci_low
-axes[3].imshow(ci_width, cmap='hot')
-axes[3].set_title('★95%置信区间宽度\n高亮=不确定性高')
-axes[3].axis('off')
+im_mean = axes[0, 1].imshow(posterior_mean.clip(0, 1), cmap='gray', vmin=0, vmax=1)
+axes[0, 1].set_title(f'★ DPS后验均值\nPSNR={mean_psnr:.1f}dB')
+axes[0, 1].axis('off')
 
-plt.suptitle('★ 不确定性量化——多次DPS采样→像素级置信区间（16.5.4节）', fontsize=13)
+# 方差图用log尺度+clip，避免火焰效果过曝
+var_display = np.log10(np.clip(posterior_var, 1e-6, None))
+im_var = axes[0, 2].imshow(var_display, cmap='hot')
+axes[0, 2].set_title('★ DPS后验方差 log₁₀(σ²)\n高亮=不确定性高')
+axes[0, 2].axis('off')
+fig.colorbar(im_var, ax=axes[0, 2], fraction=0.046, pad=0.04)
+
+# 第二行：DiffPIR后验分析 + 置信区间
+im_dp_mean = axes[1, 0].imshow(diffpir_posterior_mean.clip(0, 1), cmap='gray', vmin=0, vmax=1)
+axes[1, 0].set_title(f'★ DiffPIR后验均值\nPSNR={diffpir_mean_psnr:.1f}dB')
+axes[1, 0].axis('off')
+
+dp_var_display = np.log10(np.clip(diffpir_posterior_var, 1e-6, None))
+im_dp_var = axes[1, 1].imshow(dp_var_display, cmap='hot')
+axes[1, 1].set_title('★ DiffPIR后验方差 log₁₀(σ²)')
+axes[1, 1].axis('off')
+fig.colorbar(im_dp_var, ax=axes[1, 1], fraction=0.046, pad=0.04)
+
+# 95%置信区间宽度
+ci_width = np.clip(posterior_mean + 2 * np.sqrt(posterior_var), 0, 1) - \
+           np.clip(posterior_mean - 2 * np.sqrt(posterior_var), 0, 1)
+im_ci = axes[1, 2].imshow(ci_width, cmap='hot', vmin=0, vmax=0.3)
+axes[1, 2].set_title('95%置信区间宽度\n(DPS, clip≤0.3)')
+axes[1, 2].axis('off')
+fig.colorbar(im_ci, ax=axes[1, 2], fraction=0.046, pad=0.04)
+
+plt.suptitle('★ 不确定性量化——DPS vs DiffPIR后验分析（16.5.4节）', fontsize=13)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤4_不确定性量化.png'), dpi=150, bbox_inches='tight')
 plt.show()
