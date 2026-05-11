@@ -75,6 +75,15 @@ np.random.seed(42)
 torch.manual_seed(42)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(42)
+
+_gdrive = '/content/drive/MyDrive'
+if os.path.isdir(_gdrive):
+    SAVE_DIR = os.path.join(_gdrive, '实验16_3_学习型重建')
+    os.makedirs(SAVE_DIR, exist_ok=True)
+    print(f"检测到 Google Drive，结果将保存至: {SAVE_DIR}")
+else:
+    SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
+    print(f"本地环境，结果将保存至: {SAVE_DIR}")
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"使用设备: {device}")
 
@@ -268,7 +277,7 @@ class LearnedGradDescent(nn.Module):
 # 数据加载
 # ========================================================================
 print("加载MNIST数据...")
-data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+data_dir = os.path.join(SAVE_DIR, 'data')
 dataset = datasets.MNIST(data_dir, train=True, download=True,  # 修复：自动下载，数据不存在时不再崩溃
                          transform=transforms.Compose([
                              transforms.Resize(28),
@@ -296,33 +305,57 @@ optimizer_unet = optim.Adam(unet.parameters(), lr=2e-4)
 n_epochs_unet = 20
 unet_losses = []
 
-for epoch in range(n_epochs_unet):
-    epoch_loss = 0
-    n_batches = 0
-    for batch_x, _ in loader:
-        batch_x = batch_x.to(device)  # (B, 1, 28, 28)
+# ★ Resume: 检测已有checkpoint，支持断点续训
+unet_ckpt_path = os.path.join(SAVE_DIR, 'unet_ckpt.pt')
+start_epoch_unet = 0
+if os.path.exists(unet_ckpt_path):
+    ckpt = torch.load(unet_ckpt_path, map_location=device)
+    unet.load_state_dict(ckpt['model_state'])
+    optimizer_unet.load_state_dict(ckpt['optimizer_state'])
+    start_epoch_unet = ckpt['epoch'] + 1
+    unet_losses = ckpt.get('losses', [])
+    print(f"  ↳ 检测到已有checkpoint，从第 {start_epoch_unet} 轮继续训练")
 
-        # 生成MRI测量
-        with torch.no_grad():
-            y = mri_op.A(batch_x)
-            x_zf = mri_op.zero_filled(y)  # 零填充重建
+if start_epoch_unet >= n_epochs_unet:
+    print("  UNet 模型已训练完毕，跳过。")
+else:
+    for epoch in range(start_epoch_unet, n_epochs_unet):
+        epoch_loss = 0
+        n_batches = 0
+        for batch_x, _ in loader:
+            batch_x = batch_x.to(device)  # (B, 1, 28, 28)
 
-        # UNet后处理: x_hat = UNet(x_zf)
-        # 不使用时间步（t=None）
-        x_pred = unet(x_zf, t=None)
+            # 生成MRI测量
+            with torch.no_grad():
+                y = mri_op.A(batch_x)
+                x_zf = mri_op.zero_filled(y)  # 零填充重建
 
-        loss = nn.functional.mse_loss(x_pred, batch_x)
-        optimizer_unet.zero_grad()
-        loss.backward()
-        optimizer_unet.step()
+            # UNet后处理: x_hat = UNet(x_zf)
+            # 不使用时间步（t=None）
+            x_pred = unet(x_zf, t=None)
 
-        epoch_loss += loss.item()
-        n_batches += 1
+            loss = nn.functional.mse_loss(x_pred, batch_x)
+            optimizer_unet.zero_grad()
+            loss.backward()
+            optimizer_unet.step()
 
-    avg_loss = epoch_loss / n_batches
-    unet_losses.append(avg_loss)
-    if (epoch + 1) % 5 == 0:
-        print(f"  UNet Epoch {epoch+1}/{n_epochs_unet}, Loss={avg_loss:.4f}")
+            epoch_loss += loss.item()
+            n_batches += 1
+
+        avg_loss = epoch_loss / n_batches
+        unet_losses.append(avg_loss)
+        if (epoch + 1) % 5 == 0:
+            print(f"  UNet Epoch {epoch+1}/{n_epochs_unet}, Loss={avg_loss:.4f}")
+
+        # 每5轮保存checkpoint
+        if (epoch + 1) % 5 == 0:
+            torch.save({
+                'epoch': epoch,
+                'model_state': unet.state_dict(),
+                'optimizer_state': optimizer_unet.state_dict(),
+                'losses': unet_losses,
+            }, unet_ckpt_path)
+            print(f"  ✓ checkpoint已保存 (epoch {epoch+1})")
 
 
 # ========================================================================
@@ -338,32 +371,56 @@ optimizer_lgd = optim.Adam(lgd.parameters(), lr=1e-3)
 n_epochs_lgd = 20
 lgd_losses = []
 
-for epoch in range(n_epochs_lgd):
-    epoch_loss = 0
-    n_batches = 0
-    for batch_x, _ in loader:
-        batch_x = batch_x.to(device)
+# ★ Resume: 检测已有checkpoint，支持断点续训
+lgd_ckpt_path = os.path.join(SAVE_DIR, 'lgd_ckpt.pt')
+start_epoch_lgd = 0
+if os.path.exists(lgd_ckpt_path):
+    ckpt = torch.load(lgd_ckpt_path, map_location=device)
+    lgd.load_state_dict(ckpt['model_state'])
+    optimizer_lgd.load_state_dict(ckpt['optimizer_state'])
+    start_epoch_lgd = ckpt['epoch'] + 1
+    lgd_losses = ckpt.get('losses', [])
+    print(f"  ↳ 检测到已有checkpoint，从第 {start_epoch_lgd} 轮继续训练")
 
-        # 生成MRI测量
-        with torch.no_grad():
-            y = mri_op.A(batch_x)
-            x_zf = mri_op.zero_filled(y)
+if start_epoch_lgd >= n_epochs_lgd:
+    print("  LGD 模型已训练完毕，跳过。")
+else:
+    for epoch in range(start_epoch_lgd, n_epochs_lgd):
+        epoch_loss = 0
+        n_batches = 0
+        for batch_x, _ in loader:
+            batch_x = batch_x.to(device)
 
-        # LGD重建
-        x_pred = lgd(x_zf, y, mri_op)
+            # 生成MRI测量
+            with torch.no_grad():
+                y = mri_op.A(batch_x)
+                x_zf = mri_op.zero_filled(y)
 
-        loss = nn.functional.mse_loss(x_pred, batch_x)
-        optimizer_lgd.zero_grad()
-        loss.backward()
-        optimizer_lgd.step()
+            # LGD重建
+            x_pred = lgd(x_zf, y, mri_op)
 
-        epoch_loss += loss.item()
-        n_batches += 1
+            loss = nn.functional.mse_loss(x_pred, batch_x)
+            optimizer_lgd.zero_grad()
+            loss.backward()
+            optimizer_lgd.step()
 
-    avg_loss = epoch_loss / n_batches
-    lgd_losses.append(avg_loss)
-    if (epoch + 1) % 5 == 0:
-        print(f"  LGD Epoch {epoch+1}/{n_epochs_lgd}, Loss={avg_loss:.4f}")
+            epoch_loss += loss.item()
+            n_batches += 1
+
+        avg_loss = epoch_loss / n_batches
+        lgd_losses.append(avg_loss)
+        if (epoch + 1) % 5 == 0:
+            print(f"  LGD Epoch {epoch+1}/{n_epochs_lgd}, Loss={avg_loss:.4f}")
+
+        # 每5轮保存checkpoint
+        if (epoch + 1) % 5 == 0:
+            torch.save({
+                'epoch': epoch,
+                'model_state': lgd.state_dict(),
+                'optimizer_state': optimizer_lgd.state_dict(),
+                'losses': lgd_losses,
+            }, lgd_ckpt_path)
+            print(f"  ✓ checkpoint已保存 (epoch {epoch+1})")
 
 # 打印LGD学到的步长
 for i, block in enumerate(lgd.blocks):
@@ -441,7 +498,7 @@ for row, (recon, name, psnr_list) in enumerate(methods):
 
 plt.suptitle('步骤3：MRI重建方法对比——零填充 vs UNet后处理 vs LGD算法展开', fontsize=13)
 plt.tight_layout()
-plt.savefig('步骤3_方法对比.png', dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, '步骤3_方法对比.png'), dpi=150, bbox_inches='tight')
 plt.show()
 
 # 训练曲线
@@ -460,7 +517,7 @@ ax2.grid(True)
 
 plt.suptitle('训练收敛曲线', fontsize=13)
 plt.tight_layout()
-plt.savefig('步骤3_训练曲线.png', dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, '步骤3_训练曲线.png'), dpi=150, bbox_inches='tight')
 plt.show()
 
 print("\n实验16.3完成！")
