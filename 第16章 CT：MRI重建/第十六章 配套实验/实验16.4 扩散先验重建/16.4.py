@@ -227,6 +227,10 @@ class MRIFourierOperator:
         return kspace * mask_2d
 
     def AT(self, y):
+        """A的伴随算子：AT(y) = real(ifft2(mask * y))
+        ★ mask不可省略：虽然A的输出y已是masked k-space，前向等价，
+        但autograd时mask会截断未采样位置的梯度，保证梯度只来自采样位置
+        """
         B, C, H, W = y.shape
         mask_2d = self.mask.view(1, 1, H, 1).expand(B, C, H, W).to(y.device)
         return torch.real(torch.fft.ifft2(y * mask_2d))
