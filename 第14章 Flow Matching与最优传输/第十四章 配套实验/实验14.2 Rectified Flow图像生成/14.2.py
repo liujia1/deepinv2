@@ -196,10 +196,9 @@ def flow_ode_sample(model, shape, n_steps=50):
     
     for step in range(n_steps):
         t_val = step / n_steps
-        t = torch.full((shape[0],), t_val, device=device, dtype=torch.long)
-        # 将[0,1]的连续时间映射到模型的整数时间嵌入
-        # 这里我们传入连续时间（0到T-1的整数代表0到1）
-        t_int = torch.full((shape[0],), int(t_val * (T - 1)), device=device, dtype=torch.long)
+        # ★ 修正：RF中t_val=0是噪声，DDPM中t_int=T-1是噪声
+        # 反转映射使正弦嵌入语义对齐
+        t_int = torch.full((shape[0],), int((1 - t_val) * (T - 1)), device=device, dtype=torch.long)
         v = model(x, t_int)
         x = x + v * dt
     
@@ -271,7 +270,11 @@ for epoch in range(num_epochs):
         
         # 采样t ~ U[0,1]（映射到整数时间步）
         t_continuous = torch.rand(batch, device=device)
-        t_int = (t_continuous * (T - 1)).long()  # 映射到[0, T-1]
+        # ★ 修正：RF中t_continuous=0是噪声，t_continuous=1是干净
+        # DDPM中t_int=0是干净，t_int=T-1是噪声
+        # 因此需要反转映射：t_int = (1 - t_continuous) * (T-1)
+        # 这样RF的"噪声时间"对应DDPM的"噪声时间"，正弦嵌入语义对齐
+        t_int = ((1 - t_continuous) * (T - 1)).long()
         
         # 线性插值: x_t = (1-t)z + t*x_0
         t_4d = t_continuous[:, None, None, None]
@@ -442,7 +445,8 @@ with torch.no_grad():
         dt = 1.0 / 50
         for step in range(50):
             t_val = step / 50
-            t_int = torch.full((x.shape[0],), int(t_val * (T - 1)), device=device, dtype=torch.long)
+            # ★ 修正：与flow_ode_sample一致的时间映射
+            t_int = torch.full((x.shape[0],), int((1 - t_val) * (T - 1)), device=device, dtype=torch.long)
             v = rf_model(x_t, t_int)
             x_t = x_t + v * dt
         reflow_pairs_z.append(z.cpu())
@@ -469,7 +473,8 @@ for epoch in range(num_epochs):
         batch = z_batch.shape[0]
         
         t_continuous = torch.rand(batch, device=device)
-        t_int = (t_continuous * (T - 1)).long()
+        # ★ 修正：与RF训练一致的反转映射
+        t_int = ((1 - t_continuous) * (T - 1)).long()
         t_4d = t_continuous[:, None, None, None]
         
         x_t = (1 - t_4d) * z_batch + t_4d * x0_batch

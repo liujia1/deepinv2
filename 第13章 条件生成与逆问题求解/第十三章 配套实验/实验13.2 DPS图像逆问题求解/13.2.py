@@ -78,7 +78,14 @@ torch.manual_seed(42)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(42)
 
-SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
+_gdrive = '/content/drive/MyDrive'
+if os.path.isdir(_gdrive):
+    SAVE_DIR = os.path.join(_gdrive, '实验13_2_DPS')
+    os.makedirs(SAVE_DIR, exist_ok=True)
+    print(f"检测到 Google Drive，结果将保存至: {SAVE_DIR}")
+else:
+    SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
+    print(f"本地环境，结果将保存至: {SAVE_DIR}")
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'使用设备: {device}')
 
@@ -207,7 +214,6 @@ def tweedie_x0_estimate(model, x_t, t):
 # ============================================================
 # DPS采样算法（13.3.2节）
 # ============================================================
-@torch.no_grad()
 def dps_sample(model, y, forward_op, sigma_y, shape, zeta=1.0, n_steps=None):
     """DPS后验采样算法
     
@@ -235,51 +241,48 @@ def dps_sample(model, y, forward_op, sigma_y, shape, zeta=1.0, n_steps=None):
     for t_idx in reversed(range(T)):
         t = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
         
-        # 第1步：先验得分 → ε̂_θ
-        eps_pred = model(x, t)
-        
-        # 第2步：Tweedie估计 x̂_{0|t}
-        ab_t = alpha_bars[t_idx]
         sqrt_ab_t = sqrt_alpha_bars[t_idx]
         sqrt_1mab_t = sqrt_one_minus_alpha_bars[t_idx]
-        x0_hat = (x - sqrt_1mab_t * eps_pred) / sqrt_ab_t
-        
-        # 第3步：计算一致性梯度（DPS核心）
-        # ∇_{x_t} ||y - A(x̂_{0|t})||^2 / (2σ_y^2)
-        # DPS近似: 用∇_{x̂_0}的梯度乘以∇_{x_t}x̂_{0|t}，但忽略Jacobian项
-        # 简化为: 指向减小||y-A(x̂_0)||^2的方向
+
+        # 第1步：先验得分 → ε̂_θ（无梯度）
+        with torch.no_grad():
+            eps_pred = model(x, t)
+
+        # 第2步：Tweedie估计 x̂_{0|t}（需要梯度以计算∇_{x_t}）
+        x = x.detach().requires_grad_(True)
+        eps_pred_grad = model(x, t)
+        x0_hat = (x - sqrt_1mab_t * eps_pred_grad) / sqrt_ab_t
+
+        # 第3步：计算DPS似然梯度 ∇_{x_t} ||y - A(x̂_0)||² 
+        # 通过autograd自动反向传播，正确处理任意正向算子A
         Ax0_hat = forward_op(x0_hat)
-        consistency_grad = (y - Ax0_hat) / (sigma_y**2)
-        
-        # 反向传播通过forward_op得到关于x̂_0的梯度
-        # 对于线性A: ∇_{x̂_0} ||y - Ax̂_0||^2 = -2A^T(y - Ax̂_0)
-        # 我们通过autograd实现通用版本
-        # 但为简化计算，对线性算子直接实现
-        # 这里使用近似: 似然梯度 ≈ (1/sqrt_ab_t) * A^T * consistency_grad
-        # 其中 1/sqrt_ab_t 来自 ∇_{x_t}x̂_{0|t} ≈ 1/sqrt_ab_t (主导项)
-        
-        # 简化DPS实现: 将一致性梯度映射回x_t空间
-        # ∇_{x_t} log p(y|x_t) ≈ (1 / (2 * sigma_y^2 * sqrt_ab_t)) * A^T(y - A(x̂_0))
-        # 对于去噪问题(A=I): 直接就是 consistency_grad / sqrt_ab_t
-        likelihood_grad = consistency_grad / sqrt_ab_t
-        
-        # 第4步：修正得分 = 先验得分 + ζ * 似然梯度
-        # 先验得分 = -ε̂_θ / √(1-ᾱ_t)
-        # 但在DDPM参数化中: 先验得分已经编码在ε̂_θ中
-        # 我们将似然梯度注入到ε̂_θ中:
-        # 修正后的ε̂_θ = ε̂_θ - ζ * √(1-ᾱ_t) * likelihood_grad
-        eps_corrected = eps_pred + zeta * sqrt_1mab_t * likelihood_grad
-        
-        # DDPM采样步（使用修正后的ε̂_θ）
-        model_mean = sqrt_recip_alphas[t_idx] * (
-            x - beta_over_sqrt_1m_ab[t_idx] * eps_corrected
-        )
-        
-        if t_idx == 0:
-            x = model_mean
-        else:
-            noise = torch.randn_like(x)
-            x = model_mean + torch.sqrt(posterior_var[t_idx]) * noise
+        likelihood_loss = torch.sum((y - Ax0_hat) ** 2)
+        likelihood_grad = torch.autograd.grad(likelihood_loss, x)[0]
+
+        # ★ 对梯度做归一化（DPS论文推荐），稳定不同时间步的修正幅度
+        grad_norm = likelihood_grad.norm()
+        if grad_norm > 1e-8:
+            likelihood_grad = likelihood_grad / grad_norm
+
+        x = x.detach()
+        eps_pred = eps_pred.detach()
+
+        # 第4步：修正ε̂_θ（正确符号：减去似然梯度方向）
+        # 修正后的ε̂ = ε̂_θ - ζ * √(1-ᾱ_t) * likelihood_grad
+        # 注意符号：似然梯度指向损失增大方向，DPS需要沿梯度"下降"方向修正ε
+        eps_corrected = eps_pred - zeta * sqrt_1mab_t * likelihood_grad
+
+        # 第5步：DDPM采样步（使用修正后的ε̂）
+        with torch.no_grad():
+            model_mean = sqrt_recip_alphas[t_idx] * (
+                x - beta_over_sqrt_1m_ab[t_idx] * eps_corrected
+            )
+            
+            if t_idx == 0:
+                x = model_mean
+            else:
+                noise = torch.randn_like(x)
+                x = model_mean + torch.sqrt(posterior_var[t_idx]) * noise
     
     return x.clamp(0, 1)
 
@@ -530,7 +533,7 @@ for i in range(4):
 plt.suptitle('步骤3：DPS去模糊 & ★ inpainting', fontsize=14, y=1.01)
 plt.tight_layout()
 fig_path2 = os.path.join(SAVE_DIR, '步骤2_DPS去模糊.png')
-plt.savefig(fig_path2, dpi=150, bbox_inches='tight')
+plt.savefig(fig_path2, dpi=150, bbox_inches=None)
 plt.close()
 print(f"图2已保存: {fig_path2}")
 
@@ -569,10 +572,10 @@ for zeta in zeta_values:
 fig, axes = plt.subplots(2, len(zeta_values), figsize=(20, 6))
 
 for idx, zeta in enumerate(zeta_values):
-    with torch.no_grad():
-        x_hat = dps_sample(model, y_single, identity_op, sigma_y_denoise,
-                            shape=single_img.shape, zeta=zeta)
-    
+    # 注意：不能用 with torch.no_grad(): 包裹 dps_sample，
+    # 因为函数内部需要 autograd 计算似然梯度
+    x_hat = dps_sample(model, y_single, identity_op, sigma_y_denoise,
+                        shape=single_img.shape, zeta=zeta)
     axes[0, idx].imshow(x_hat[0, 0].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
     axes[0, idx].axis('off')
     label = "无条件" if zeta == 0 else f"ζ={zeta}"
@@ -594,7 +597,7 @@ for i in range(1, len(zeta_values)):
 
 plt.tight_layout()
 fig_path3 = os.path.join(SAVE_DIR, '步骤3_引导权重对比.png')
-plt.savefig(fig_path3, dpi=150, bbox_inches='tight')
+plt.savefig(fig_path3, dpi=150, bbox_inches=None)
 plt.close()
 print(f"图3已保存: {fig_path3}")
 

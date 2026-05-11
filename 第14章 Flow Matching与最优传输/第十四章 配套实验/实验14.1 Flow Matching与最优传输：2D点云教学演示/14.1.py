@@ -123,14 +123,15 @@ def linear_interp(z, x0, t):
     """
     return (1 - t) * z + t * x0
 
-def diffusion_interp(z, x0, t, sigma_min=1e-4, sigma_max=1.0):
-    """扩散路径（14.3.4节/14.3.6节，DDPM前向过程）
-    x_t = α_t*x_0 + σ_t*ε, 其中α_t=1-t, σ_t=t
+def diffusion_interp(z, x0, t, beta_min=0.1, beta_max=20.0):
+    """★ 修正版：扩散路径（14.3.6节，VP-SDE条件路径）
+    x_t = sqrt(ᾱ_t) * x_0 + sqrt(1-ᾱ_t) * ε
+    使用cosine schedule: ᾱ_t = cos²(π/2 * (1-t))，t∈[0,1]
+    z作为噪声源ε
     """
-    alpha_t = 1 - t
-    sigma_t = t
-    eps = (z - alpha_t * x0) / (sigma_t + 1e-10)  # 从z恢复噪声
-    return alpha_t * x0 + sigma_t * z  # 退化形式：直接用z作为噪声源
+    alpha_bar_t = np.cos(np.pi / 2 * (1 - t)) ** 2
+    alpha_bar_t = max(alpha_bar_t, 1e-10)
+    return np.sqrt(alpha_bar_t) * x0 + np.sqrt(1 - alpha_bar_t) * z
 
 
 # ============================================================
@@ -374,66 +375,91 @@ print("""
   - OT-CFM: ~10步（甚至1步！）
 """)
 
-# 可视化三种路径
-fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+# 可视化三种路径（★ 修正：增加真正的扩散耦合路径）
+fig, axes = plt.subplots(1, 4, figsize=(24, 6))
 
 # 只画10条轨迹以避免过于密集
 n_show = 10
 t_vals = np.linspace(0, 1, 100)
 
-# (a) 扩散路径（模拟：用DDPM前向过程参数化）
+# (a) ★ 扩散耦合条件路径（VP-SDE，14.3.6节）
 ax = axes[0]
+for i in range(n_show):
+    path = np.array([diffusion_interp(source[i], target_ind[i], t) for t in t_vals])
+    ax.plot(path[:, 0], path[:, 1], 'red', alpha=0.4, lw=1.2)
+ax.scatter(source[:n_show, 0], source[:n_show, 1], c='blue', s=30, zorder=5)
+ax.scatter(target_ind[:n_show, 0], target_ind[:n_show, 1], c='red', s=30, zorder=5)
+ax.set_title('(a) 扩散耦合条件路径\n(VP-SDE, 弯曲)', fontsize=12)
+ax.set_xlim(-4, 4)
+ax.set_ylim(-4, 4)
+ax.grid(alpha=0.3)
+ax.set_aspect('equal')
+
+# (b) 独立耦合CFM路径（学习到的边际路径）
+ax = axes[1]
 for i in range(n_show):
     path = traj_ind[:101, i, :]  # 100步+1
     ax.plot(path[:, 0], path[:, 1], 'purple', alpha=0.4, lw=1.2)
 ax.scatter(z_test.numpy()[:n_show, 0], z_test.numpy()[:n_show, 1], c='blue', s=30, zorder=5)
 ax.scatter(traj_ind[-1, :n_show, 0], traj_ind[-1, :n_show, 1], c='red', s=30, zorder=5)
-ax.set_title('(a) 独立耦合CFM\n(路径弯曲交叉)', fontsize=12)
+ax.set_title('(b) 独立耦合CFM边际路径\n(弯曲交叉)', fontsize=12)
 ax.set_xlim(-4, 4)
 ax.set_ylim(-4, 4)
 ax.grid(alpha=0.3)
 ax.set_aspect('equal')
 
-# (b) OT-CFM路径
-ax = axes[1]
+# (c) OT-CFM路径
+ax = axes[2]
 for i in range(n_show):
     path = traj_ot[:101, i, :]
     ax.plot(path[:, 0], path[:, 1], 'green', alpha=0.4, lw=1.2)
 ax.scatter(z_test.numpy()[:n_show, 0], z_test.numpy()[:n_show, 1], c='blue', s=30, zorder=5)
 ax.scatter(traj_ot[-1, :n_show, 0], traj_ot[-1, :n_show, 1], c='red', s=30, zorder=5)
-ax.set_title('(b) OT-CFM\n(路径短且直)', fontsize=12)
+ax.set_title('(c) OT-CFM边际路径\n(短且直)', fontsize=12)
 ax.set_xlim(-4, 4)
 ax.set_ylim(-4, 4)
 ax.grid(alpha=0.3)
 ax.set_aspect('equal')
 
-# (c) 直线度对比
-ax = axes[2]
-def compute_straightness(trajectory):
-    """直线度 S ∈ [0,1]，1表示完全直线（14.4.2节）"""
-    z = trajectory[0]   # 起点
-    x0 = trajectory[-1] # 终点
-    # 理论路径长度（直线）
-    direct_dist = np.sqrt(np.sum((x0 - z)**2, axis=-1))
-    # 实际路径长度（累积距离）
-    diffs = np.diff(trajectory, axis=0)
-    actual_dist = np.sum(np.sqrt(np.sum(diffs**2, axis=-1)), axis=0)
-    straightness = direct_dist / (actual_dist + 1e-10)
-    return np.mean(straightness)
+# (d) 曲率对比
+ax = axes[3]
+# 计算扩散耦合条件路径的曲率
+diff_paths_curvature = []
+for i in range(n_show):
+    path = np.array([diffusion_interp(source[i], target_ind[i], t) for t in t_vals])
+    direct = np.sqrt(np.sum((path[-1] - path[0])**2))
+    diffs_p = np.diff(path, axis=0)
+    actual = np.sum(np.sqrt(np.sum(diffs_p**2, axis=-1)))
+    diff_paths_curvature.append(1.0 - direct / (actual + 1e-10))
+kappa_diff = np.mean(diff_paths_curvature)
+
+def compute_straightness(traj):
+    """计算轨迹的曲率指标 κ = 1 - 直线距离/路径实际长度
+    κ=0 表示完全直线，κ越大越弯曲
+    traj: (T+1, B, 2) 形状的轨迹数组
+    """
+    curvatures = []
+    for i in range(traj.shape[1]):
+        path = traj[:, i, :]  # (T+1, 2)
+        direct = np.sqrt(np.sum((path[-1] - path[0])**2))
+        diffs = np.diff(path, axis=0)
+        actual = np.sum(np.sqrt(np.sum(diffs**2, axis=-1)))
+        curvatures.append(1.0 - direct / (actual + 1e-10))
+    return np.mean(curvatures)
 
 S_ind = compute_straightness(traj_ind)
 S_ot = compute_straightness(traj_ot)
 
-labels = ['独立耦合CFM', 'OT-CFM']
-values = [S_ind, S_ot]
-colors = ['purple', 'green']
+labels = ['扩散耦合\n(条件路径)', '独立耦合CFM\n(边际路径)', 'OT-CFM\n(边际路径)']
+values = [kappa_diff, S_ind, S_ot]
+colors = ['red', 'purple', 'green']
 bars = ax.bar(labels, values, color=colors, alpha=0.7, width=0.5)
-ax.set_ylabel('直线度 S (1=完全直线)', fontsize=12)
-ax.set_title('(c) 路径直线度对比（14.4.2节）', fontsize=12)
-ax.set_ylim(0, 1.1)
+ax.set_ylabel('曲率 κ (0=完全直线)', fontsize=12)
+ax.set_title('(d) 路径曲率对比（14.4.2节）', fontsize=12)
+ax.set_ylim(0, max(values) * 1.3 + 0.01)
 for bar, val in zip(bars, values):
-    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02, f'{val:.3f}', 
-            ha='center', fontsize=12, fontweight='bold')
+    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.002, f'{val:.4f}', 
+            ha='center', fontsize=11, fontweight='bold')
 ax.grid(alpha=0.3, axis='y')
 
 plt.suptitle('步骤3：扩散耦合 vs OT耦合路径对比（14.3.5/14.3.6节）', fontsize=14, y=1.01)
@@ -442,8 +468,10 @@ fig_path2 = os.path.join(SAVE_DIR, '步骤2_路径对比.png')
 plt.savefig(fig_path2, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"图2已保存: {fig_path2}")
-print(f"  独立耦合CFM直线度: {S_ind:.4f}")
-print(f"  OT-CFM直线度:      {S_ot:.4f}")
+print(f"  扩散耦合条件路径曲率: {kappa_diff:.4f}")
+print(f"  独立耦合CFM边际路径曲率: {S_ind:.4f}")
+print(f"  OT-CFM边际路径曲率:      {S_ot:.4f}")
+print(f"  → 扩散耦合路径弯曲(κ大)，OT-CFM路径最直(κ小)")
 
 
 # ============================================================
@@ -554,7 +582,7 @@ for col, (traj, label, s_val, wd_val) in enumerate([
         ax.plot(path[:, 0], path[:, 1], alpha=0.4, lw=1.2, color=['purple', 'orange', 'green'][col])
     ax.scatter(z_test_rf.numpy()[:n_show, 0], z_test_rf.numpy()[:n_show, 1], c='blue', s=25, zorder=5)
     ax.scatter(traj[-1, :n_show, 0], traj[-1, :n_show, 1], c='red', s=25, zorder=5)
-    ax.set_title(f'{label}\n直线度S={s_val:.3f}', fontsize=12)
+    ax.set_title(f'{label}\n曲率κ={s_val:.3f}', fontsize=12)
     ax.set_xlim(-4, 4)
     ax.set_ylim(-4, 4)
     ax.grid(alpha=0.3)
@@ -566,9 +594,9 @@ labels = ['1-RF', '2-RF', '3-RF', 'OT-CFM']
 vals = [S_1rf, S_2rf, S_3rf, S_ot]
 colors = ['purple', 'orange', 'green', 'steelblue']
 bars = ax.bar(labels, vals, color=colors, alpha=0.7)
-ax.set_ylabel('直线度 S', fontsize=12)
-ax.set_title('(d) 直线度随Reflow提升', fontsize=12)
-ax.set_ylim(0, 1.1)
+ax.set_ylabel('曲率 κ (0=直线)', fontsize=12)
+ax.set_title('(d) 曲率随Reflow降低', fontsize=12)
+ax.set_ylim(0, max(vals) * 1.3 + 0.01)
 for bar, val in zip(bars, vals):
     ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02, f'{val:.3f}', 
             ha='center', fontsize=11, fontweight='bold')
@@ -610,13 +638,13 @@ plt.close()
 print(f"图3已保存: {fig_path3}")
 
 print(f"\nReflow效果总结:")
-print(f"  {'方法':<12s}  {'直线度S':>8s}  {'W1距离':>8s}")
+print(f"  {'方法':<12s}  {'曲率κ':>8s}  {'W1距离':>8s}")
 print(f"  {'-'*32}")
 print(f"  {'1-RF':<12s}  {S_1rf:8.4f}  {wd_1rf:8.4f}")
 print(f"  {'2-RF':<12s}  {S_2rf:8.4f}  {wd_2rf:8.4f}")
 print(f"  {'3-RF':<12s}  {S_3rf:8.4f}  {wd_3rf:8.4f}")
 print(f"  {'OT-CFM':<12s}  {S_ot:8.4f}  {wd_ot:8.4f}")
-print(f"\n  → Reflow逐步提升直线度和采样质量，趋近OT映射")
+print(f"\n  → Reflow逐步降低曲率（轨迹变直），趋近OT映射")
 
 
 # ============================================================
