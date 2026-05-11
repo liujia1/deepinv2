@@ -83,7 +83,11 @@ print(f"使用设备: {device}")
 # MRI正向算子定义
 # ========================================================================
 class MRIFourierOperator:
-    """MRI欠采样傅里叶算子: A = M_Ω * F, A^T = F^H * M_Ω^T"""
+    """MRI欠采样傅里叶算子: A = M_Ω * F, A^T = F^H * M_Ω^T
+    
+    注意：此处掩码沿行方向（dim=H）采样，是对真实MRI相位编码方向的简化模拟，
+    教学用途下合理，勿与实际扫描仪采样方向混淆。
+    """
     def __init__(self, mask):
         """mask: (H,) 1D采样掩码, 1=采样, 0=未采样"""
         self.mask = mask  # (H,)
@@ -106,18 +110,31 @@ class MRIFourierOperator:
         return self.AT(y)
 
 def create_mri_mask(n_rows, R, seed=42):
-    """创建可变密度1D采样掩码"""
+    """创建可变密度随机采样掩码（Variable Density Random Sampling）
+
+    CS-MRI 的核心思想之一：按中心加权的概率分布随机抽取相位编码行，
+    而非确定性地取概率最高的 top-k 行。
+    随机性产生非结构性走样（incoherent aliasing），是稀疏重建的必要条件。
+
+    采样策略：
+    - 概率密度：以 k 空间中心为峰值的多项式衰减，模拟临床 VDS
+    - 采样方式：torch.multinomial 按概率无放回随机抽行
+    - DC 分量（零频率行）强制保留，确保图像均值正确重建
+    """
     torch.manual_seed(seed)
     n_sample = max(n_rows // R, 1)
     prob = torch.zeros(n_rows)
     for i in range(n_rows):
         dist = abs(i - n_rows // 2) / (n_rows // 2)
         prob[i] = (1 - dist ** 2) ** 1.5 + 0.02
-    prob = prob / prob.sum() * n_sample
+    prob = prob / prob.sum()  # 归一化为真正的概率分布，供 multinomial 使用
+
     mask = torch.zeros(n_rows)
-    sorted_idx = torch.argsort(prob, descending=True)
-    mask[sorted_idx[:n_sample]] = 1
-    mask[n_rows // 2] = 1
+    # 修复：用随机采样替代 deterministic top-k，符合 CS-MRI 理论
+    # 原写法 argsort+[:n_sample] 永远选同一批中心行，丧失随机性
+    sampled = torch.multinomial(prob, n_sample, replacement=False)
+    mask[sampled] = 1
+    mask[n_rows // 2] = 1  # 强制保留 DC 分量（零频率行）
     return mask
 
 
@@ -141,15 +158,16 @@ class ConvBlock(nn.Module):
         super().__init__()
         self.conv1 = nn.Conv2d(in_ch, out_ch, 3, padding=1)
         self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
-        self.norm = nn.GroupNorm(4, out_ch)
+        self.norm1 = nn.GroupNorm(4, out_ch)  # 修复：两次卷积各用独立的 norm，避免参数共享
+        self.norm2 = nn.GroupNorm(4, out_ch)
         self.time_mlp = nn.Linear(time_dim, out_ch)
         self.act = nn.SiLU()
 
     def forward(self, x, t_emb=None):
-        h = self.act(self.norm(self.conv1(x)))
+        h = self.act(self.norm1(self.conv1(x)))
         if t_emb is not None:
             h = h + self.time_mlp(self.act(t_emb))[:, :, None, None]
-        h = self.act(self.norm(self.conv2(h)))
+        h = self.act(self.norm2(self.conv2(h)))
         return h
 
 
@@ -236,11 +254,13 @@ class LearnedGradDescent(nn.Module):
     def forward(self, x0, y, mri_op):
         """x0: 初始重建, y: 测量数据, mri_op: MRI正向算子"""
         x = x0
-        for block in self.blocks:
+        for i, block in enumerate(self.blocks):
             Ax = mri_op.A(x)
             data_grad = mri_op.AT(Ax - y)
             x = block(x, data_grad)
-            x = torch.clamp(x, 0, 1)
+            # 修复：仅在最后一步 clamp，避免中间截断破坏梯度流
+            if i == self.K - 1:
+                x = torch.clamp(x, 0, 1)
         return x
 
 
@@ -249,7 +269,7 @@ class LearnedGradDescent(nn.Module):
 # ========================================================================
 print("加载MNIST数据...")
 data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
-dataset = datasets.MNIST(data_dir, train=True, download=False,
+dataset = datasets.MNIST(data_dir, train=True, download=True,  # 修复：自动下载，数据不存在时不再崩溃
                          transform=transforms.Compose([
                              transforms.Resize(28),
                              transforms.ToTensor(),
@@ -371,14 +391,15 @@ unet.eval()
 lgd.eval()
 
 # 取测试样本
-test_dataset = datasets.MNIST(data_dir, train=False, download=False,
+test_dataset = datasets.MNIST(data_dir, train=False, download=True,  # 修复：同上
                                transform=transforms.Compose([
                                    transforms.Resize(28),
                                    transforms.ToTensor(),
                                ]))
-test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=8, shuffle=False)
+test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=500, shuffle=False)  # 修复：从8改为500张，统计更可靠
 test_batch, _ = next(iter(test_loader))
 test_batch = test_batch.to(device)
+N_test = test_batch.shape[0]  # 实际加载到的样本数
 
 with torch.no_grad():
     y_test = mri_op.A(test_batch)
@@ -386,9 +407,9 @@ with torch.no_grad():
     x_unet_test = unet(x_zf_test, t=None)
     x_lgd_test = lgd(x_zf_test, y_test, mri_op)
 
-# PSNR计算
+# PSNR计算（修复：覆盖全部 N_test 张样本）
 psnr_zf, psnr_unet, psnr_lgd = [], [], []
-for i in range(8):
+for i in range(N_test):
     gt = test_batch[i, 0].cpu().numpy()
     zf = x_zf_test[i, 0].cpu().numpy()
     un = x_unet_test[i, 0].cpu().numpy().clip(0, 1)
@@ -401,20 +422,20 @@ print(f"  零填充:  PSNR={np.mean(psnr_zf):.1f}±{np.std(psnr_zf):.1f}dB")
 print(f"  UNet:    PSNR={np.mean(psnr_unet):.1f}±{np.std(psnr_unet):.1f}dB")
 print(f"  LGD:     PSNR={np.mean(psnr_lgd):.1f}±{np.std(psnr_lgd):.1f}dB")
 
-# 可视化
-fig, axes = plt.subplots(3, 8, figsize=(20, 7))
+# 可视化：取前8张展示（评估已覆盖全部 N_test 张）
+n_show = 8
+fig, axes = plt.subplots(3, n_show, figsize=(20, 7))
 methods = [(x_zf_test, '零填充', psnr_zf),
            (x_unet_test, 'UNet后处理', psnr_unet),
            (x_lgd_test, '★LGD算法展开', psnr_lgd)]
 
 for row, (recon, name, psnr_list) in enumerate(methods):
-    for col in range(8):
+    for col in range(n_show):
         img = recon[col, 0].cpu().numpy().clip(0, 1)
         axes[row, col].imshow(img, cmap='gray')
         if col == 0:
             axes[row, col].set_ylabel(name, fontsize=11)
         if row == 0:
-            gt = test_batch[col, 0].cpu().numpy()
             axes[0, col].set_title(f'PSNR\n{psnr_list[col]:.1f}', fontsize=9)
         axes[row, col].axis('off')
 
