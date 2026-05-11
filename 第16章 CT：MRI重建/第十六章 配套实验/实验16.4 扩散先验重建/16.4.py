@@ -25,7 +25,6 @@ import torch.optim as optim
 from torchvision import datasets, transforms
 import matplotlib.pyplot as plt
 from skimage.metrics import peak_signal_noise_ratio as psnr
-from skimage.metrics import structural_similarity as ssim
 import matplotlib as mpl
 import warnings
 import logging
@@ -80,6 +79,15 @@ np.random.seed(42)
 torch.manual_seed(42)
 if torch.cuda.is_available():
     torch.cuda.manual_seed(42)
+
+_gdrive = '/content/drive/MyDrive'
+if os.path.isdir(_gdrive):
+    SAVE_DIR = os.path.join(_gdrive, '实验16_4_扩散先验重建')
+    os.makedirs(SAVE_DIR, exist_ok=True)
+    print(f"检测到 Google Drive，结果将保存至: {SAVE_DIR}")
+else:
+    SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
+    print(f"本地环境，结果将保存至: {SAVE_DIR}")
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"使用设备: {device}")
 
@@ -119,24 +127,27 @@ class SinusoidalTimeEmbedding(nn.Module):
     def forward(self, t):
         half = self.dim // 2
         freqs = torch.exp(-torch.log(torch.tensor(10000.0)) * torch.arange(half, device=t.device) / half)
-        args = t.float() * freqs
+        args = t[:, None].float() * freqs[None, :]
         return torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
 
 
 class ConvBlock(nn.Module):
     def __init__(self, in_ch, out_ch, time_dim=64):
         super().__init__()
+        gn_groups = min(4, out_ch)
         self.conv1 = nn.Conv2d(in_ch, out_ch, 3, padding=1)
         self.conv2 = nn.Conv2d(out_ch, out_ch, 3, padding=1)
-        self.norm = nn.GroupNorm(4, out_ch)
+        self.norm1 = nn.GroupNorm(gn_groups, out_ch)
+        self.norm2 = nn.GroupNorm(gn_groups, out_ch)
         self.time_mlp = nn.Linear(time_dim, out_ch)
         self.act = nn.SiLU()
+        self.shortcut = nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else nn.Identity()
 
     def forward(self, x, t_emb):
-        h = self.act(self.norm(self.conv1(x)))
+        h = self.act(self.norm1(self.conv1(x)))
         h = h + self.time_mlp(self.act(t_emb))[:, :, None, None]
-        h = self.act(self.norm(self.conv2(h)))
-        return h
+        h = self.act(self.norm2(self.conv2(h)))
+        return h + self.shortcut(x)
 
 
 class SmallUNet(nn.Module):
@@ -230,8 +241,8 @@ print("=" * 60)
 print("步骤1：DDPM训练（回顾第11章）")
 print("=" * 60)
 
-data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
-dataset = datasets.MNIST(data_dir, train=True, download=False,
+data_dir = os.path.join(SAVE_DIR, 'data')
+dataset = datasets.MNIST(data_dir, train=True, download=True,
                          transform=transforms.Compose([
                              transforms.Resize(28),
                              transforms.ToTensor(),
@@ -244,38 +255,62 @@ optimizer = optim.Adam(model.parameters(), lr=2e-4)
 n_epochs = 30
 train_losses = []
 
-for epoch in range(n_epochs):
-    epoch_loss = 0
-    n_batches = 0
-    for batch_x, _ in loader:
-        batch_x = batch_x.to(device)
-        B = batch_x.shape[0]
+# ★ Resume: 检测已有checkpoint，支持断点续训
+ddpm_ckpt_path = os.path.join(SAVE_DIR, 'ddpm_ckpt.pt')
+start_epoch = 0
+if os.path.exists(ddpm_ckpt_path):
+    ckpt = torch.load(ddpm_ckpt_path, map_location=device)
+    model.load_state_dict(ckpt['model_state'])
+    optimizer.load_state_dict(ckpt['optimizer_state'])
+    start_epoch = ckpt['epoch'] + 1
+    train_losses = ckpt.get('losses', [])
+    print(f"  ↳ 检测到已有checkpoint，从第 {start_epoch} 轮继续训练")
 
-        # 随机采样时间步
-        t = torch.randint(0, T, (B,), device=device)
+if start_epoch >= n_epochs:
+    print("  DDPM 模型已训练完毕，跳过。")
+else:
+    for epoch in range(start_epoch, n_epochs):
+        epoch_loss = 0
+        n_batches = 0
+        for batch_x, _ in loader:
+            batch_x = batch_x.to(device)
+            B = batch_x.shape[0]
 
-        # 前向过程: x_t = sqrt(ᾱ_t) * x_0 + sqrt(1-ᾱ_t) * ε
-        noise = torch.randn_like(batch_x)
-        x_t = (sqrt_alpha_bars[t].view(B, 1, 1, 1) * batch_x +
-               sqrt_one_minus_alpha_bars[t].view(B, 1, 1, 1) * noise)
+            # 随机采样时间步
+            t = torch.randint(0, T, (B,), device=device)
 
-        # 预测噪声
-        pred_noise = model(x_t, t)
-        loss = F.mse_loss(pred_noise, noise)
+            # 前向过程: x_t = sqrt(ᾱ_t) * x_0 + sqrt(1-ᾱ_t) * ε
+            noise = torch.randn_like(batch_x)
+            x_t = (sqrt_alpha_bars[t].view(B, 1, 1, 1) * batch_x +
+                   sqrt_one_minus_alpha_bars[t].view(B, 1, 1, 1) * noise)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            # 预测噪声
+            pred_noise = model(x_t, t)
+            loss = F.mse_loss(pred_noise, noise)
 
-        epoch_loss += loss.item()
-        n_batches += 1
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-    avg_loss = epoch_loss / n_batches
-    train_losses.append(avg_loss)
-    if (epoch + 1) % 10 == 0:
-        print(f"  Epoch {epoch+1}/{n_epochs}, Loss={avg_loss:.4f}")
+            epoch_loss += loss.item()
+            n_batches += 1
 
-print(f"  DDPM训练完成，最终Loss={train_losses[-1]:.4f}")
+        avg_loss = epoch_loss / n_batches
+        train_losses.append(avg_loss)
+        if (epoch + 1) % 10 == 0:
+            print(f"  Epoch {epoch+1}/{n_epochs}, Loss={avg_loss:.4f}")
+
+        # 每10轮保存checkpoint
+        if (epoch + 1) % 10 == 0:
+            torch.save({
+                'epoch': epoch,
+                'model_state': model.state_dict(),
+                'optimizer_state': optimizer.state_dict(),
+                'losses': train_losses,
+            }, ddpm_ckpt_path)
+            print(f"  ✓ checkpoint已保存 (epoch {epoch+1})")
+
+    print(f"  DDPM训练完成，最终Loss={train_losses[-1]:.4f}")
 
 
 # ========================================================================
@@ -303,11 +338,16 @@ def ddpm_sample(model, shape):
 # Tweedie预测
 # ========================================================================
 def tweedie_predict(x_t, t_idx):
-    """从x_t和噪声预测预测x_0: x̂_0 = (x_t - √(1-ᾱ_t)·ε̂) / √ᾱ_t"""
+    """从x_t和噪声预测预测x_0: x̂_0 = (x_t - √(1-ᾱ_t)·ε̂) / √ᾱ_t
+    
+    Returns:
+        x0_hat: Tweedie估计的干净图像
+        pred_noise: 模型预测的噪声（可复用，避免重复前向）
+    """
     t = torch.full((x_t.shape[0],), t_idx, device=device, dtype=torch.long)
     pred_noise = model(x_t, t)
     x0_hat = (x_t - sqrt_one_minus_alpha_bars[t_idx] * pred_noise) / sqrt_alpha_bars[t_idx]
-    return x0_hat
+    return x0_hat, pred_noise
 
 
 # ========================================================================
@@ -337,7 +377,7 @@ def diffpir_mri(model, y, mri_op, shape, zeta=1.0):
         t = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
 
         # 1. 预测干净图像（Tweedie公式）
-        x0_hat = tweedie_predict(x, t_idx)
+        x0_hat, _ = tweedie_predict(x, t_idx)
         x0_hat = x0_hat.clamp(0, 1)
 
         # 2. 数据一致性步
@@ -367,7 +407,7 @@ print("=" * 60)
 def dps_mri(model, y, mri_op, shape, zeta=0.5):
     """
     DPS算法 for MRI:
-    对 t = T, T-1, ..., 1:
+    对 t = T-1, T-2, ..., 0:
       1. 预测干净图像: x̂_{0|t} = Tweedie(x_t, t)
       2. 计算似然得分梯度: ∇_l = A^T(y - A*x̂_{0|t})
       3. 修正得分: s_corrected = s_θ(x_t, t) + ζ * ∇_l
@@ -379,8 +419,8 @@ def dps_mri(model, y, mri_op, shape, zeta=0.5):
     for t_idx in reversed(range(T)):
         t = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
 
-        # 1. 预测干净图像
-        x0_hat = tweedie_predict(x, t_idx)
+        # 1. 预测干净图像（同时获取噪声预测，复用避免重复前向）
+        x0_hat, pred_noise = tweedie_predict(x, t_idx)
 
         # 2. 似然得分梯度（Laplace近似）
         Ax0_hat = mri_op.A(x0_hat.clamp(0, 1))
@@ -390,10 +430,7 @@ def dps_mri(model, y, mri_op, shape, zeta=0.5):
         if grad_norm > 1e-8:
             grad_likelihood = grad_likelihood / grad_norm
 
-        # 3. 获取无条件得分
-        pred_noise = model(x, t)
-
-        # 4. 条件反向SDE步进（修正均值）
+        # 3. 条件反向SDE步进（直接复用tweedie_predict返回的pred_noise）
         # μ_θ = (1/√α_t)(x_t - β_t/√(1-ᾱ_t)·ε̂) + ζ * ∇_l * g^2
         model_mean = sqrt_recip_alphas[t_idx] * (x - beta_over_sqrt_1m_ab[t_idx] * pred_noise)
         # 加入似然修正
@@ -420,7 +457,7 @@ mri_mask = create_mri_mask(28, R=4, seed=42).to(device)
 mri_op = MRIFourierOperator(mri_mask)
 
 # 取测试样本
-test_dataset = datasets.MNIST(data_dir, train=False, download=False,
+test_dataset = datasets.MNIST(data_dir, train=False, download=True,
                                transform=transforms.Compose([
                                    transforms.Resize(28),
                                    transforms.ToTensor(),
@@ -500,7 +537,7 @@ axes[0, 0].set_title('真值 x₀')
 
 plt.suptitle('步骤4：MRI重建对比——零填充 vs DPS扩散先验（16.5.4节）', fontsize=13)
 plt.tight_layout()
-plt.savefig('步骤4_方法对比.png', dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, '步骤4_方法对比.png'), dpi=150, bbox_inches='tight')
 plt.show()
 
 # 不确定性量化可视化
@@ -528,7 +565,7 @@ axes[3].axis('off')
 
 plt.suptitle('★ 不确定性量化——多次DPS采样→像素级置信区间（16.5.4节）', fontsize=13)
 plt.tight_layout()
-plt.savefig('步骤4_不确定性量化.png', dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, '步骤4_不确定性量化.png'), dpi=150, bbox_inches='tight')
 plt.show()
 
 # 训练曲线
@@ -538,7 +575,7 @@ plt.xlabel('Epoch')
 plt.ylabel('MSE Loss')
 plt.title('DDPM训练收敛曲线')
 plt.grid(True)
-plt.savefig('DDPM训练曲线.png', dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, 'DDPM训练曲线.png'), dpi=150, bbox_inches='tight')
 plt.show()
 
 print("\n实验16.4完成！")
