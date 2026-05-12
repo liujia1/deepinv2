@@ -80,15 +80,17 @@ h_B = gaussian_psf(n, sigma_B)  # "真实"模型
 # ---- 2. 生成观测数据 ----
 noise_sigma = 0.01  # 噪声水平
 
-# (a) Inverse Crime 数据：用 h_A 生成
-y_IC = blur(x, h_A) + noise_sigma * np.random.randn(n, n)
+# 固定噪声实现，确保 IC/非IC 对比仅受模型差异影响
+noise = noise_sigma * np.random.randn(n, n)
 
-# (b) 非 Inverse Crime 数据：用 h_B 生成
-y_noIC = blur(x, h_B) + noise_sigma * np.random.randn(n, n)
+# (a) Inverse Crime 数据：用 h_A 生成
+y_IC = blur(x, h_A) + noise
+
+# (b) 非 Inverse Crime 数据：用 h_B 生成（使用相同噪声）
+y_noIC = blur(x, h_B) + noise
 
 # ---- 3. 朴素逆重建（频域直接除法）----
 H_A = np.fft.fft2(h_A)
-eps_reg = 1e-15  # 无正则化
 
 def naive_deconv(y, H, eps=1e-15):
     """频域直接反卷积：x = F^{-1}(F(y)/H)"""
@@ -108,17 +110,28 @@ from skimage.metrics import peak_signal_noise_ratio
 y_clean = blur(x, h_A)
 x_naive_clean = naive_deconv(y_clean, H_A)
 
+# 含噪直接反卷积
+x_naive_noisy = naive_deconv(y_IC, H_A)
+
 # Inverse Crime：同模型生成+重建
-x_naive_IC = naive_deconv(y_IC, H_A)
 x_tikh_IC = tikhonov_deconv(y_IC, H_A, lam=1e-2)
 
 # 非 Inverse Crime：异模型生成+重建
-x_naive_noIC = naive_deconv(y_noIC, H_A)
 x_tikh_noIC = tikhonov_deconv(y_noIC, H_A, lam=1e-2)
 
-# ---- 6. 可视化 ----
-fig, axes = plt.subplots(2, 4, figsize=(18, 9))
+# ---- 6. PSNR vs 建模偏差曲线 ----
+sigma_B_list = [5.0, 5.3, 5.5, 6.0, 7.0, 8.0, 10.0]
+psnr_curve = []
+for sb in sigma_B_list:
+    h_tmp = gaussian_psf(n, sb)
+    y_tmp = blur(x, h_tmp) + noise
+    x_tmp = tikhonov_deconv(y_tmp, H_A, lam=1e-2)
+    psnr_curve.append(peak_signal_noise_ratio(x, np.clip(x_tmp, 0, 1)))
 
+# ---- 7. 可视化：图像对比 ----
+fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+
+# 上排：逆问题与不适定性
 axes[0, 0].imshow(x, cmap='gray')
 axes[0, 0].set_title('原始图像 x')
 axes[0, 0].axis('off')
@@ -127,38 +140,60 @@ axes[0, 1].imshow(y_IC, cmap='gray')
 axes[0, 1].set_title('观测 y = Ax + ε\n(噪声 σ=0.01)')
 axes[0, 1].axis('off')
 
-axes[0, 2].imshow(np.clip(x_naive_clean, 0, 1), cmap='gray')
-axes[0, 2].set_title(f'无噪声直接反卷积\nPSNR={peak_signal_noise_ratio(x, np.clip(x_naive_clean,0,1)):.1f}dB ✓')
+psnr_naive = peak_signal_noise_ratio(x, np.clip(x_naive_noisy, 0, 1))
+axes[0, 2].imshow(np.clip(x_naive_noisy, 0, 1), cmap='gray')
+axes[0, 2].set_title(f'含噪直接反卷积\nPSNR={psnr_naive:.1f}dB ✗')
 axes[0, 2].axis('off')
 
-axes[0, 3].imshow(np.clip(x_naive_IC, 0, 1), cmap='gray')
-psnr_naive = peak_signal_noise_ratio(x, np.clip(x_naive_IC, 0, 1))
-axes[0, 3].set_title(f'含噪直接反卷积\nPSNR={psnr_naive:.1f}dB ✗')
-axes[0, 3].axis('off')
+# 下排：正则化与 Inverse Crime
+psnr_clean = peak_signal_noise_ratio(x, np.clip(x_naive_clean, 0, 1))
+psnr_tikh_IC = peak_signal_noise_ratio(x, np.clip(x_tikh_IC, 0, 1))
+psnr_tikh_noIC = peak_signal_noise_ratio(x, np.clip(x_tikh_noIC, 0, 1))
 
-axes[1, 0].imshow(np.clip(x_tikh_IC, 0, 1), cmap='gray')
-axes[1, 0].set_title(f'Tikhonov (IC数据)\nPSNR={peak_signal_noise_ratio(x, np.clip(x_tikh_IC,0,1)):.1f}dB')
+axes[1, 0].imshow(np.clip(x_naive_clean, 0, 1), cmap='gray')
+axes[1, 0].set_title(f'无噪声直接反卷积\nPSNR={psnr_clean:.1f}dB ✓')
 axes[1, 0].axis('off')
 
-axes[1, 1].imshow(np.clip(x_tikh_noIC, 0, 1), cmap='gray')
-axes[1, 1].set_title(f'Tikhonov (非IC数据)\nPSNR={peak_signal_noise_ratio(x, np.clip(x_tikh_noIC,0,1)):.1f}dB')
+axes[1, 1].imshow(np.clip(x_tikh_IC, 0, 1), cmap='gray')
+axes[1, 1].set_title(f'Tikhonov (IC: σ={sigma_A})\nPSNR={psnr_tikh_IC:.1f}dB')
 axes[1, 1].axis('off')
 
-# Inverse Crime 对比：朴素重建
-axes[1, 2].imshow(np.clip(naive_deconv(y_IC, H_A, eps=1e-3), 0, 1), cmap='gray')
-axes[1, 2].set_title(f'IC: 同模型生成+重建\n(截断ε=1e-3)\nPSNR={peak_signal_noise_ratio(x, np.clip(naive_deconv(y_IC, H_A, eps=1e-3),0,1)):.1f}dB')
+axes[1, 2].imshow(np.clip(x_tikh_noIC, 0, 1), cmap='gray')
+axes[1, 2].set_title(f'Tikhonov (非IC: σ={sigma_B})\nPSNR={psnr_tikh_noIC:.1f}dB')
 axes[1, 2].axis('off')
-
-axes[1, 3].imshow(np.clip(naive_deconv(y_noIC, H_A, eps=1e-3), 0, 1), cmap='gray')
-axes[1, 3].set_title(f'非IC: 异模型生成+重建\n(截断ε=1e-3)\nPSNR={peak_signal_noise_ratio(x, np.clip(naive_deconv(y_noIC, H_A, eps=1e-3),0,1)):.1f}dB')
-axes[1, 3].axis('off')
 
 plt.suptitle('朴素逆重建与 Inverse Crime 对比', fontsize=14)
 plt.tight_layout()
 plt.savefig('实验1_5_不适定性与InverseCrime.png', dpi=150, bbox_inches='tight')
 plt.show()
 
+# ---- 8. 可视化：PSNR vs 建模偏差曲线 ----
+fig2, ax2 = plt.subplots(figsize=(8, 5))
+deviations = [sb - sigma_A for sb in sigma_B_list]
+ax2.plot(deviations, psnr_curve, 'bo-', markersize=8, linewidth=2, label='Tikhonov 重建 PSNR')
+ax2.axvline(x=0, color='r', linestyle='--', alpha=0.7, label=f'IC 点 (σ_真实=σ_模型={sigma_A})')
+ax2.set_xlabel('建模偏差 Δσ = σ_真实 − σ_模型', fontsize=12)
+ax2.set_ylabel('PSNR (dB)', fontsize=12)
+ax2.set_title('Inverse Crime 警示：重建质量随建模偏差的系统退化', fontsize=13)
+ax2.legend(fontsize=11)
+ax2.grid(True, alpha=0.3)
+
+# 标注每个数据点的 PSNR 值
+for d, p in zip(deviations, psnr_curve):
+    ax2.annotate(f'{p:.1f}dB', (d, p), textcoords="offset points",
+                 xytext=(0, 12), ha='center', fontsize=9)
+
+plt.tight_layout()
+plt.savefig('实验1_5_PSNR_vs_建模偏差.png', dpi=150, bbox_inches='tight')
+plt.show()
+
+# ---- 9. 打印结果 ----
 print("\n=== Inverse Crime 警示 ===")
-print(f"同模型(σ={sigma_A})生成 + 重建 → PSNR={peak_signal_noise_ratio(x, np.clip(x_tikh_IC,0,1)):.1f}dB")
-print(f"异模型(σ={sigma_B})生成 + 重建 → PSNR={peak_signal_noise_ratio(x, np.clip(x_tikh_noIC,0,1)):.1f}dB")
-print("PSNR 差异来自建模误差（PSF 宽度仅差 0.3），这正是 Inverse Crime 掩盖的真相！")
+print(f"同模型(σ={sigma_A})生成 + 重建 → PSNR={psnr_tikh_IC:.1f}dB")
+print(f"异模型(σ={sigma_B})生成 + 重建 → PSNR={psnr_tikh_noIC:.1f}dB")
+print(f"PSNR 差异: {psnr_tikh_IC - psnr_tikh_noIC:.2f} dB")
+print(f"\n--- PSNR 随建模偏差变化 ---")
+for sb, p in zip(sigma_B_list, psnr_curve):
+    marker = " ← IC" if sb == sigma_A else ""
+    print(f"  σ_真实={sb:.1f} (偏差 Δσ={sb-sigma_A:.1f}) → PSNR={p:.2f} dB{marker}")
+print("\n建模偏差越大，重建质量系统性地越低——IC 条件下测得的性能不可靠！")
