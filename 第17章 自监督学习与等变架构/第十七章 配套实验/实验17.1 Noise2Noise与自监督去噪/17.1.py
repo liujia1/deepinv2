@@ -238,11 +238,27 @@ print("Step 2: Noise2Noise原理验证")
 print("="*70)
 
 def train_model(model, loss_fn, train_loader, n_epochs=N_EPOCHS, tag=""):
-    """通用训练循环"""
+    """通用训练循环（支持断点续训）"""
     optimizer = optim.Adam(model.parameters(), lr=LR)
-    model.train()
+    ckpt_path = os.path.join(SAVE_DIR, f'ckpt_{tag}.pt') if tag else None
+    start_epoch = 0
     losses = []
-    for epoch in range(n_epochs):
+
+    # ★ Resume: 检测已有checkpoint
+    if ckpt_path and os.path.exists(ckpt_path):
+        ckpt = torch.load(ckpt_path, map_location=device)
+        model.load_state_dict(ckpt['model_state'])
+        optimizer.load_state_dict(ckpt['optimizer_state'])
+        start_epoch = ckpt['epoch'] + 1
+        losses = ckpt.get('losses', [])
+        print(f"  [{tag}] 检测到已有checkpoint，从第 {start_epoch+1} 轮继续训练")
+
+    if start_epoch >= n_epochs:
+        print(f"  [{tag}] 模型已训练完毕，跳过。")
+        return losses
+
+    model.train()
+    for epoch in range(start_epoch, n_epochs):
         epoch_loss = 0
         n_batch = 0
         for batch_x, _ in train_loader:
@@ -260,6 +276,15 @@ def train_model(model, loss_fn, train_loader, n_epochs=N_EPOCHS, tag=""):
         losses.append(avg_loss)
         if (epoch + 1) % 10 == 0:
             print(f"  [{tag}] Epoch {epoch+1}/{n_epochs}, Loss: {avg_loss:.6f}")
+        # 每10轮保存checkpoint
+        if ckpt_path and (epoch + 1) % 10 == 0:
+            torch.save({
+                'epoch': epoch,
+                'model_state': model.state_dict(),
+                'optimizer_state': optimizer.state_dict(),
+                'losses': losses,
+            }, ckpt_path)
+            print(f"  [{tag}] ✓ checkpoint已保存 (epoch {epoch+1})")
     return losses
 
 def evaluate_psnr(model, test_loader, sigma=SIGMA):
@@ -465,28 +490,51 @@ print("\n  训练Neighbor2Neighbor...")
 model_n2nb = SmallUNet().to(device)
 optimizer_n2nb = optim.Adam(model_n2nb.parameters(), lr=LR)
 losses_n2nb = []
+n2nb_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_N2B.pt')
+n2nb_start = 0
 
-model_n2nb.train()
-for epoch in range(N_EPOCHS):
-    epoch_loss = 0
-    n_batch = 0
-    for batch_x, _ in train_loader:
-        batch_x = batch_x.to(device)
-        y = add_noise(batch_x, SIGMA)
-        # 从单帧y构造伪配对
-        sub1, sub2 = neighbor_split(y)
-        optimizer_n2nb.zero_grad()
-        pred1 = model_n2nb(sub1)
-        # ★ N2B核心：用sub2作为sub1的"噪声标签"
-        loss = nn.MSELoss()(pred1, sub2.detach())
-        loss.backward()
-        optimizer_n2nb.step()
-        epoch_loss += loss.item()
-        n_batch += 1
-    avg_loss = epoch_loss / n_batch
-    losses_n2nb.append(avg_loss)
-    if (epoch + 1) % 10 == 0:
-        print(f"  [N2B] Epoch {epoch+1}/{N_EPOCHS}, Loss: {avg_loss:.6f}")
+# ★ Resume: 检测已有checkpoint
+if os.path.exists(n2nb_ckpt_path):
+    ckpt = torch.load(n2nb_ckpt_path, map_location=device)
+    model_n2nb.load_state_dict(ckpt['model_state'])
+    optimizer_n2nb.load_state_dict(ckpt['optimizer_state'])
+    n2nb_start = ckpt['epoch'] + 1
+    losses_n2nb = ckpt.get('losses', [])
+    print(f"  [N2B] 检测到已有checkpoint，从第 {n2nb_start+1} 轮继续训练")
+
+if n2nb_start >= N_EPOCHS:
+    print("  [N2B] 模型已训练完毕，跳过。")
+else:
+    model_n2nb.train()
+    for epoch in range(n2nb_start, N_EPOCHS):
+        epoch_loss = 0
+        n_batch = 0
+        for batch_x, _ in train_loader:
+            batch_x = batch_x.to(device)
+            y = add_noise(batch_x, SIGMA)
+            # 从单帧y构造伪配对
+            sub1, sub2 = neighbor_split(y)
+            optimizer_n2nb.zero_grad()
+            pred1 = model_n2nb(sub1)
+            # ★ N2B核心：用sub2作为sub1的"噪声标签"
+            loss = nn.MSELoss()(pred1, sub2.detach())
+            loss.backward()
+            optimizer_n2nb.step()
+            epoch_loss += loss.item()
+            n_batch += 1
+        avg_loss = epoch_loss / n_batch
+        losses_n2nb.append(avg_loss)
+        if (epoch + 1) % 10 == 0:
+            print(f"  [N2B] Epoch {epoch+1}/{N_EPOCHS}, Loss: {avg_loss:.6f}")
+        # 每10轮保存checkpoint
+        if (epoch + 1) % 10 == 0:
+            torch.save({
+                'epoch': epoch,
+                'model_state': model_n2nb.state_dict(),
+                'optimizer_state': optimizer_n2nb.state_dict(),
+                'losses': losses_n2nb,
+            }, n2nb_ckpt_path)
+            print(f"  [N2B] ✓ checkpoint已保存 (epoch {epoch+1})")
 
 # 评估N2B：对完整尺寸输入去噪
 model_n2nb.eval()
@@ -514,7 +562,6 @@ psnr_n2nb = np.mean(psnr_n2nb_vals)
 print(f"  Neighbor2Neighbor PSNR = {psnr_n2nb:.2f} dB")
 
 # --- 可视化四种方法对比 ---
-fig, axes = plt.subplots(2, 3, figsize=(12, 8))
 vis_imgs, _ = next(iter(test_loader))
 vis_imgs = vis_imgs[:3].to(device)
 vis_noisy = add_noise(vis_imgs, SIGMA)

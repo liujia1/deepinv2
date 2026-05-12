@@ -254,24 +254,37 @@ print("="*70)
 print("\n  训练朴素自监督 (仅MC损失)...")
 model_naive = SmallUNet().to(device)
 optimizer_naive = optim.Adam(model_naive.parameters(), lr=LR)
-
-for epoch in range(N_EPOCHS):
-    model_naive.train()
-    for batch_x, _ in train_loader:
-        batch_x = batch_x.to(device)
-        # 用随机掩码做inpainting
-        masks = create_random_mask_batch(batch_x.shape[0], IMG_SIZE, IMG_SIZE, KEEP_RATIO).to(device)
-        y = batch_x * masks + SIGMA * torch.randn_like(batch_x) * masks  # 噪声仅在观测像素上
+naive_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_Naive.pt')
+naive_start = 0
+if os.path.exists(naive_ckpt_path):
+    ckpt = torch.load(naive_ckpt_path, map_location=device)
+    model_naive.load_state_dict(ckpt['model_state'])
+    optimizer_naive.load_state_dict(ckpt['optimizer_state'])
+    naive_start = ckpt['epoch'] + 1
+    print(f"  [Naive] 检测到已有checkpoint，从第 {naive_start+1} 轮继续训练")
+if naive_start >= N_EPOCHS:
+    print("  [Naive] 模型已训练完毕，跳过。")
+else:
+    for epoch in range(naive_start, N_EPOCHS):
+        model_naive.train()
+        for batch_x, _ in train_loader:
+            batch_x = batch_x.to(device)
+            # 用随机掩码做inpainting
+            masks = create_random_mask_batch(batch_x.shape[0], IMG_SIZE, IMG_SIZE, KEEP_RATIO).to(device)
+            y = batch_x * masks + SIGMA * torch.randn_like(batch_x) * masks  # 噪声仅在观测像素上
+            
+            optimizer_naive.zero_grad()
+            f_y = model_naive(y)
+            # ★ 朴素MC损失：仅在被观测像素上计算
+            loss = ((y - f_y * masks) ** 2 * masks).sum() / masks.sum()
+            loss.backward()
+            optimizer_naive.step()
         
-        optimizer_naive.zero_grad()
-        f_y = model_naive(y)
-        # ★ 朴素MC损失：仅在被观测像素上计算
-        loss = ((y - f_y * masks) ** 2 * masks).sum() / masks.sum()
-        loss.backward()
-        optimizer_naive.step()
-    
-    if (epoch + 1) % 10 == 0:
-        print(f"    Epoch {epoch+1}/{N_EPOCHS}")
+        if (epoch + 1) % 10 == 0:
+            print(f"    Epoch {epoch+1}/{N_EPOCHS}")
+            torch.save({'epoch': epoch, 'model_state': model_naive.state_dict(),
+                        'optimizer_state': optimizer_naive.state_dict()}, naive_ckpt_path)
+            print(f"  [Naive] ✓ checkpoint已保存 (epoch {epoch+1})")
 
 # 评估
 def evaluate_inpainting(model, test_loader, mask, sigma=SIGMA):
@@ -374,33 +387,46 @@ print("\n  训练EI模型 (MC + EI)...")
 model_ei = SmallUNet().to(device)
 optimizer_ei = optim.Adam(model_ei.parameters(), lr=LR)
 lambda_ei = 0.5
-
-for epoch in range(N_EPOCHS):
-    model_ei.train()
-    for batch_x, _ in train_loader:
-        batch_x = batch_x.to(device)
-        masks = create_random_mask_batch(batch_x.shape[0], IMG_SIZE, IMG_SIZE, KEEP_RATIO).to(device)
-        y = batch_x * masks + SIGMA * torch.randn_like(batch_x) * masks
+ei_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_EI.pt')
+ei_start = 0
+if os.path.exists(ei_ckpt_path):
+    ckpt = torch.load(ei_ckpt_path, map_location=device)
+    model_ei.load_state_dict(ckpt['model_state'])
+    optimizer_ei.load_state_dict(ckpt['optimizer_state'])
+    ei_start = ckpt['epoch'] + 1
+    print(f"  [EI] 检测到已有checkpoint，从第 {ei_start+1} 轮继续训练")
+if ei_start >= N_EPOCHS:
+    print("  [EI] 模型已训练完毕，跳过。")
+else:
+    for epoch in range(ei_start, N_EPOCHS):
+        model_ei.train()
+        for batch_x, _ in train_loader:
+            batch_x = batch_x.to(device)
+            masks = create_random_mask_batch(batch_x.shape[0], IMG_SIZE, IMG_SIZE, KEEP_RATIO).to(device)
+            y = batch_x * masks + SIGMA * torch.randn_like(batch_x) * masks
+            
+            optimizer_ei.zero_grad()
+            
+            # MC损失
+            f_y = model_ei(y)
+            loss_mc = ((y - f_y * masks) ** 2 * masks).sum() / masks.sum()
+            
+            # EI损失
+            def A_fn(x):
+                """用当前batch的掩码做正向测量"""
+                return x * masks
+            
+            loss_ei = ei_loss(model_ei, y, A_fn, n_transforms=4)
+            
+            loss = loss_mc + lambda_ei * loss_ei
+            loss.backward()
+            optimizer_ei.step()
         
-        optimizer_ei.zero_grad()
-        
-        # MC损失
-        f_y = model_ei(y)
-        loss_mc = ((y - f_y * masks) ** 2 * masks).sum() / masks.sum()
-        
-        # EI损失
-        def A_fn(x):
-            """用当前batch的掩码做正向测量"""
-            return x * masks
-        
-        loss_ei = ei_loss(model_ei, y, A_fn, n_transforms=4)
-        
-        loss = loss_mc + lambda_ei * loss_ei
-        loss.backward()
-        optimizer_ei.step()
-    
-    if (epoch + 1) % 10 == 0:
-        print(f"    Epoch {epoch+1}/{N_EPOCHS}")
+        if (epoch + 1) % 10 == 0:
+            print(f"    Epoch {epoch+1}/{N_EPOCHS}")
+            torch.save({'epoch': epoch, 'model_state': model_ei.state_dict(),
+                        'optimizer_state': optimizer_ei.state_dict()}, ei_ckpt_path)
+            print(f"  [EI] ✓ checkpoint已保存 (epoch {epoch+1})")
 
 psnr_ei = evaluate_inpainting(model_ei, test_loader, test_mask)
 print(f"  EI (MC+EI) PSNR = {psnr_ei:.2f} dB")
@@ -418,23 +444,36 @@ print("="*70)
 print("\n  训练增强MC模型...")
 model_mc = SmallUNet().to(device)
 optimizer_mc = optim.Adam(model_mc.parameters(), lr=LR)
-
-for epoch in range(N_EPOCHS):
-    model_mc.train()
-    for batch_x, _ in train_loader:
-        batch_x = batch_x.to(device)
-        masks = create_random_mask_batch(batch_x.shape[0], IMG_SIZE, IMG_SIZE, KEEP_RATIO).to(device)
-        y = batch_x * masks + SIGMA * torch.randn_like(batch_x) * masks
+mc_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_MC.pt')
+mc_start = 0
+if os.path.exists(mc_ckpt_path):
+    ckpt = torch.load(mc_ckpt_path, map_location=device)
+    model_mc.load_state_dict(ckpt['model_state'])
+    optimizer_mc.load_state_dict(ckpt['optimizer_state'])
+    mc_start = ckpt['epoch'] + 1
+    print(f"  [MC] 检测到已有checkpoint，从第 {mc_start+1} 轮继续训练")
+if mc_start >= N_EPOCHS:
+    print("  [MC] 模型已训练完毕，跳过。")
+else:
+    for epoch in range(mc_start, N_EPOCHS):
+        model_mc.train()
+        for batch_x, _ in train_loader:
+            batch_x = batch_x.to(device)
+            masks = create_random_mask_batch(batch_x.shape[0], IMG_SIZE, IMG_SIZE, KEEP_RATIO).to(device)
+            y = batch_x * masks + SIGMA * torch.randn_like(batch_x) * masks
+            
+            optimizer_mc.zero_grad()
+            f_y = model_mc(y)
+            # 增强MC：在所有像素上计算（包括缺失位置的零填充）
+            loss = nn.MSELoss()(f_y * masks, y * masks)
+            loss.backward()
+            optimizer_mc.step()
         
-        optimizer_mc.zero_grad()
-        f_y = model_mc(y)
-        # 增强MC：在所有像素上计算（包括缺失位置的零填充）
-        loss = nn.MSELoss()(f_y * masks, y * masks)
-        loss.backward()
-        optimizer_mc.step()
-    
-    if (epoch + 1) % 10 == 0:
-        print(f"    Epoch {epoch+1}/{N_EPOCHS}")
+        if (epoch + 1) % 10 == 0:
+            print(f"    Epoch {epoch+1}/{N_EPOCHS}")
+            torch.save({'epoch': epoch, 'model_state': model_mc.state_dict(),
+                        'optimizer_state': optimizer_mc.state_dict()}, mc_ckpt_path)
+            print(f"  [MC] ✓ checkpoint已保存 (epoch {epoch+1})")
 
 psnr_mc = evaluate_inpainting(model_mc, test_loader, test_mask)
 print(f"  纯MC PSNR = {psnr_mc:.2f} dB")
@@ -453,19 +492,33 @@ print("="*70)
 print("\n  训练监督基线...")
 model_sup = SmallUNet().to(device)
 optimizer_sup = optim.Adam(model_sup.parameters(), lr=LR)
-
-for epoch in range(N_EPOCHS):
-    model_sup.train()
-    for batch_x, _ in train_loader:
-        batch_x = batch_x.to(device)
-        masks = create_random_mask_batch(batch_x.shape[0], IMG_SIZE, IMG_SIZE, KEEP_RATIO).to(device)
-        y = batch_x * masks + SIGMA * torch.randn_like(batch_x) * masks
-        
-        optimizer_sup.zero_grad()
-        f_y = model_sup(y)
-        loss = nn.MSELoss()(f_y, batch_x)  # ★监督：知道干净x
-        loss.backward()
-        optimizer_sup.step()
+sup_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_Supervised.pt')
+sup_start = 0
+if os.path.exists(sup_ckpt_path):
+    ckpt = torch.load(sup_ckpt_path, map_location=device)
+    model_sup.load_state_dict(ckpt['model_state'])
+    optimizer_sup.load_state_dict(ckpt['optimizer_state'])
+    sup_start = ckpt['epoch'] + 1
+    print(f"  [Supervised] 检测到已有checkpoint，从第 {sup_start+1} 轮继续训练")
+if sup_start >= N_EPOCHS:
+    print("  [Supervised] 模型已训练完毕，跳过。")
+else:
+    for epoch in range(sup_start, N_EPOCHS):
+        model_sup.train()
+        for batch_x, _ in train_loader:
+            batch_x = batch_x.to(device)
+            masks = create_random_mask_batch(batch_x.shape[0], IMG_SIZE, IMG_SIZE, KEEP_RATIO).to(device)
+            y = batch_x * masks + SIGMA * torch.randn_like(batch_x) * masks
+            
+            optimizer_sup.zero_grad()
+            f_y = model_sup(y)
+            loss = nn.MSELoss()(f_y, batch_x)  # ★监督：知道干净x
+            loss.backward()
+            optimizer_sup.step()
+        if (epoch + 1) % 10 == 0:
+            torch.save({'epoch': epoch, 'model_state': model_sup.state_dict(),
+                        'optimizer_state': optimizer_sup.state_dict()}, sup_ckpt_path)
+            print(f"  [Supervised] ✓ checkpoint已保存 (epoch {epoch+1})")
 
 psnr_sup = evaluate_inpainting(model_sup, test_loader, test_mask)
 print(f"  监督 PSNR = {psnr_sup:.2f} dB")

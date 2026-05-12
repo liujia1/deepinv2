@@ -287,28 +287,55 @@ losses_sure = []
 residuals_history = []
 correction_history = []
 
-for epoch in range(N_EPOCHS):
-    model_sure.train()
-    epoch_loss = 0
-    n_batch = 0
-    epoch_res = 0
-    epoch_cor = 0
-    for batch_x, _ in train_loader:
-        batch_x = batch_x.to(device)
-        y = add_noise(batch_x, SIGMA)
-        optimizer_sure.zero_grad()
-        sure_val, res_val, cor_val = sure_loss_mc(model_sure, y, SIGMA, n_mc=1)
-        sure_val.backward()
-        optimizer_sure.step()
-        epoch_loss += sure_val.item()
-        epoch_res += res_val
-        epoch_cor += cor_val
-        n_batch += 1
-    losses_sure.append(epoch_loss / n_batch)
-    residuals_history.append(epoch_res / n_batch)
-    correction_history.append(epoch_cor / n_batch)
-    if (epoch + 1) % 10 == 0:
-        print(f"  [SURE] Epoch {epoch+1}/{N_EPOCHS}, Loss: {epoch_loss/n_batch:.6f}")
+sure_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_SURE.pt')
+sure_start = 0
+# ★ Resume: 检测已有checkpoint
+if os.path.exists(sure_ckpt_path):
+    ckpt = torch.load(sure_ckpt_path, map_location=device)
+    model_sure.load_state_dict(ckpt['model_state'])
+    optimizer_sure.load_state_dict(ckpt['optimizer_state'])
+    sure_start = ckpt['epoch'] + 1
+    losses_sure = ckpt.get('losses', [])
+    residuals_history = ckpt.get('residuals', [])
+    correction_history = ckpt.get('corrections', [])
+    print(f"  [SURE] 检测到已有checkpoint，从第 {sure_start+1} 轮继续训练")
+
+if sure_start >= N_EPOCHS:
+    print("  [SURE] 模型已训练完毕，跳过。")
+else:
+    for epoch in range(sure_start, N_EPOCHS):
+        model_sure.train()
+        epoch_loss = 0
+        n_batch = 0
+        epoch_res = 0
+        epoch_cor = 0
+        for batch_x, _ in train_loader:
+            batch_x = batch_x.to(device)
+            y = add_noise(batch_x, SIGMA)
+            optimizer_sure.zero_grad()
+            sure_val, res_val, cor_val = sure_loss_mc(model_sure, y, SIGMA, n_mc=1)
+            sure_val.backward()
+            optimizer_sure.step()
+            epoch_loss += sure_val.item()
+            epoch_res += res_val
+            epoch_cor += cor_val
+            n_batch += 1
+        losses_sure.append(epoch_loss / n_batch)
+        residuals_history.append(epoch_res / n_batch)
+        correction_history.append(epoch_cor / n_batch)
+        if (epoch + 1) % 10 == 0:
+            print(f"  [SURE] Epoch {epoch+1}/{N_EPOCHS}, Loss: {epoch_loss/n_batch:.6f}")
+        # 每10轮保存checkpoint
+        if (epoch + 1) % 10 == 0:
+            torch.save({
+                'epoch': epoch,
+                'model_state': model_sure.state_dict(),
+                'optimizer_state': optimizer_sure.state_dict(),
+                'losses': losses_sure,
+                'residuals': residuals_history,
+                'corrections': correction_history,
+            }, sure_ckpt_path)
+            print(f"  [SURE] ✓ checkpoint已保存 (epoch {epoch+1})")
 
 # 评估
 def evaluate_psnr(model, test_loader, sigma=SIGMA):
@@ -344,32 +371,62 @@ ax1.grid(True, alpha=0.3)
 print("\n  训练朴素MSE对比模型...")
 model_naive = SmallUNet().to(device)
 optimizer_naive = optim.Adam(model_naive.parameters(), lr=LR)
-for epoch in range(N_EPOCHS):
-    model_naive.train()
-    for batch_x, _ in train_loader:
-        batch_x = batch_x.to(device)
-        y = add_noise(batch_x, SIGMA)
-        optimizer_naive.zero_grad()
-        pred = model_naive(y)
-        loss = nn.MSELoss()(pred, y)
-        loss.backward()
-        optimizer_naive.step()
+naive_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_Naive.pt')
+naive_start = 0
+if os.path.exists(naive_ckpt_path):
+    ckpt = torch.load(naive_ckpt_path, map_location=device)
+    model_naive.load_state_dict(ckpt['model_state'])
+    optimizer_naive.load_state_dict(ckpt['optimizer_state'])
+    naive_start = ckpt['epoch'] + 1
+    print(f"  [Naive] 检测到已有checkpoint，从第 {naive_start+1} 轮继续训练")
+if naive_start >= N_EPOCHS:
+    print("  [Naive] 模型已训练完毕，跳过。")
+else:
+    for epoch in range(naive_start, N_EPOCHS):
+        model_naive.train()
+        for batch_x, _ in train_loader:
+            batch_x = batch_x.to(device)
+            y = add_noise(batch_x, SIGMA)
+            optimizer_naive.zero_grad()
+            pred = model_naive(y)
+            loss = nn.MSELoss()(pred, y)
+            loss.backward()
+            optimizer_naive.step()
+        if (epoch + 1) % 10 == 0:
+            torch.save({'epoch': epoch, 'model_state': model_naive.state_dict(),
+                        'optimizer_state': optimizer_naive.state_dict()}, naive_ckpt_path)
+            print(f"  [Naive] ✓ checkpoint已保存 (epoch {epoch+1})")
 psnr_naive = evaluate_psnr(model_naive, test_loader)
 
 # 监督基线
 print("  训练监督基线...")
 model_sup = SmallUNet().to(device)
 optimizer_sup = optim.Adam(model_sup.parameters(), lr=LR)
-for epoch in range(N_EPOCHS):
-    model_sup.train()
-    for batch_x, _ in train_loader:
-        batch_x = batch_x.to(device)
-        y = add_noise(batch_x, SIGMA)
-        optimizer_sup.zero_grad()
-        pred = model_sup(y)
-        loss = nn.MSELoss()(pred, batch_x)
-        loss.backward()
-        optimizer_sup.step()
+sup_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_Supervised.pt')
+sup_start = 0
+if os.path.exists(sup_ckpt_path):
+    ckpt = torch.load(sup_ckpt_path, map_location=device)
+    model_sup.load_state_dict(ckpt['model_state'])
+    optimizer_sup.load_state_dict(ckpt['optimizer_state'])
+    sup_start = ckpt['epoch'] + 1
+    print(f"  [Supervised] 检测到已有checkpoint，从第 {sup_start+1} 轮继续训练")
+if sup_start >= N_EPOCHS:
+    print("  [Supervised] 模型已训练完毕，跳过。")
+else:
+    for epoch in range(sup_start, N_EPOCHS):
+        model_sup.train()
+        for batch_x, _ in train_loader:
+            batch_x = batch_x.to(device)
+            y = add_noise(batch_x, SIGMA)
+            optimizer_sup.zero_grad()
+            pred = model_sup(y)
+            loss = nn.MSELoss()(pred, batch_x)
+            loss.backward()
+            optimizer_sup.step()
+        if (epoch + 1) % 10 == 0:
+            torch.save({'epoch': epoch, 'model_state': model_sup.state_dict(),
+                        'optimizer_state': optimizer_sup.state_dict()}, sup_ckpt_path)
+            print(f"  [Supervised] ✓ checkpoint已保存 (epoch {epoch+1})")
 psnr_sup = evaluate_psnr(model_sup, test_loader)
 
 methods = ['监督', 'SURE', '朴素‖y-f(y)‖²']
@@ -496,23 +553,40 @@ print("\n  训练R2R去噪器...")
 model_r2r = SmallUNet().to(device)
 optimizer_r2r = optim.Adam(model_r2r.parameters(), lr=LR)
 losses_r2r = []
+r2r_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_R2R.pt')
+r2r_start = 0
+if os.path.exists(r2r_ckpt_path):
+    ckpt = torch.load(r2r_ckpt_path, map_location=device)
+    model_r2r.load_state_dict(ckpt['model_state'])
+    optimizer_r2r.load_state_dict(ckpt['optimizer_state'])
+    r2r_start = ckpt['epoch'] + 1
+    losses_r2r = ckpt.get('losses', [])
+    print(f"  [R2R] 检测到已有checkpoint，从第 {r2r_start+1} 轮继续训练")
 
-for epoch in range(N_EPOCHS):
-    model_r2r.train()
-    epoch_loss = 0
-    n_batch = 0
-    for batch_x, _ in train_loader:
-        batch_x = batch_x.to(device)
-        y = add_noise(batch_x, SIGMA)
-        optimizer_r2r.zero_grad()
-        loss = r2r_loss(model_r2r, y, SIGMA, alpha=0.1)
-        loss.backward()
-        optimizer_r2r.step()
-        epoch_loss += loss.item()
-        n_batch += 1
-    losses_r2r.append(epoch_loss / n_batch)
-    if (epoch + 1) % 10 == 0:
-        print(f"  [R2R] Epoch {epoch+1}/{N_EPOCHS}, Loss: {epoch_loss/n_batch:.6f}")
+if r2r_start >= N_EPOCHS:
+    print("  [R2R] 模型已训练完毕，跳过。")
+else:
+    for epoch in range(r2r_start, N_EPOCHS):
+        model_r2r.train()
+        epoch_loss = 0
+        n_batch = 0
+        for batch_x, _ in train_loader:
+            batch_x = batch_x.to(device)
+            y = add_noise(batch_x, SIGMA)
+            optimizer_r2r.zero_grad()
+            loss = r2r_loss(model_r2r, y, SIGMA, alpha=0.1)
+            loss.backward()
+            optimizer_r2r.step()
+            epoch_loss += loss.item()
+            n_batch += 1
+        losses_r2r.append(epoch_loss / n_batch)
+        if (epoch + 1) % 10 == 0:
+            print(f"  [R2R] Epoch {epoch+1}/{N_EPOCHS}, Loss: {epoch_loss/n_batch:.6f}")
+        if (epoch + 1) % 10 == 0:
+            torch.save({'epoch': epoch, 'model_state': model_r2r.state_dict(),
+                        'optimizer_state': optimizer_r2r.state_dict(),
+                        'losses': losses_r2r}, r2r_ckpt_path)
+            print(f"  [R2R] ✓ checkpoint已保存 (epoch {epoch+1})")
 
 psnr_r2r = evaluate_psnr(model_r2r, test_loader)
 print(f"  R2R PSNR = {psnr_r2r:.2f} dB")
@@ -520,21 +594,48 @@ print(f"  R2R PSNR = {psnr_r2r:.2f} dB")
 # 不同α值对比
 print("\n  R2R α敏感性分析...")
 alpha_results = {}
+alpha_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_alpha_results.pt')
+if os.path.exists(alpha_ckpt_path):
+    alpha_results = torch.load(alpha_ckpt_path, map_location='cpu')
+    print(f"  [α扫描] 检测到已有checkpoint，已完成 {len(alpha_results)} 个α值")
 for alpha in [0.01, 0.05, 0.1, 0.5, 1.0]:
+    alpha_key = f'{alpha:.2f}'
+    if alpha_key in alpha_results:
+        print(f"    α={alpha_key}: PSNR={alpha_results[alpha_key]:.2f} dB (已缓存)")
+        continue
     model_a = SmallUNet().to(device)
     opt_a = optim.Adam(model_a.parameters(), lr=LR)
-    for epoch in range(N_EPOCHS):
-        model_a.train()
-        for batch_x, _ in train_loader:
-            batch_x = batch_x.to(device)
-            y = add_noise(batch_x, SIGMA)
-            opt_a.zero_grad()
-            loss = r2r_loss(model_a, y, SIGMA, alpha=alpha)
-            loss.backward()
-            opt_a.step()
+    # 单个α的checkpoint
+    a_ckpt_path = os.path.join(SAVE_DIR, f'ckpt_alpha_{alpha_key}.pt')
+    a_start = 0
+    if os.path.exists(a_ckpt_path):
+        ckpt = torch.load(a_ckpt_path, map_location=device)
+        model_a.load_state_dict(ckpt['model_state'])
+        opt_a.load_state_dict(ckpt['optimizer_state'])
+        a_start = ckpt['epoch'] + 1
+        print(f"    α={alpha_key}: 从第 {a_start+1} 轮继续训练")
+    if a_start < N_EPOCHS:
+        for epoch in range(a_start, N_EPOCHS):
+            model_a.train()
+            for batch_x, _ in train_loader:
+                batch_x = batch_x.to(device)
+                y = add_noise(batch_x, SIGMA)
+                opt_a.zero_grad()
+                loss = r2r_loss(model_a, y, SIGMA, alpha=alpha)
+                loss.backward()
+                opt_a.step()
+            if (epoch + 1) % 10 == 0:
+                torch.save({'epoch': epoch, 'model_state': model_a.state_dict(),
+                            'optimizer_state': opt_a.state_dict()}, a_ckpt_path)
+                print(f"    α={alpha_key}: epoch {epoch+1}/{N_EPOCHS} ✓")
     p = evaluate_psnr(model_a, test_loader)
-    alpha_results[alpha] = p
-    print(f"    α={alpha:.2f}: PSNR={p:.2f} dB")
+    alpha_results[alpha_key] = p
+    print(f"    α={alpha_key}: PSNR={p:.2f} dB")
+    # 每完成一个α就保存结果
+    torch.save(alpha_results, alpha_ckpt_path)
+    # 训练完成后删除单α的中间checkpoint
+    if os.path.exists(a_ckpt_path):
+        os.remove(a_ckpt_path)
 
 # 可视化
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
@@ -552,8 +653,8 @@ ax1.set_title('Step 3a: SURE vs R2R 去噪效果')
 ax1.grid(True, alpha=0.3, axis='y')
 
 # α敏感性
-alphas_plot = sorted(alpha_results.keys())
-psnrs_plot = [alpha_results[a] for a in alphas_plot]
+alphas_plot = sorted(float(k) for k in alpha_results.keys())
+psnrs_plot = [alpha_results[f'{a:.2f}'] for a in alphas_plot]
 ax2.plot(alphas_plot, psnrs_plot, 'o-', linewidth=2, markersize=8, color='#9C27B0')
 ax2.axhline(y=psnr_sure, color='#4CAF50', linestyle='--', label=f'SURE={psnr_sure:.1f}dB')
 ax2.axhline(y=psnr_sup, color='#2196F3', linestyle='--', label=f'监督={psnr_sup:.1f}dB')
@@ -585,25 +686,42 @@ print("\n  训练盲点网络 (Blind-Spot UNet)...")
 model_bs = BlindSpotUNet().to(device)
 optimizer_bs = optim.Adam(model_bs.parameters(), lr=LR)
 losses_bs = []
+bs_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_BlindSpot.pt')
+bs_start = 0
+if os.path.exists(bs_ckpt_path):
+    ckpt = torch.load(bs_ckpt_path, map_location=device)
+    model_bs.load_state_dict(ckpt['model_state'])
+    optimizer_bs.load_state_dict(ckpt['optimizer_state'])
+    bs_start = ckpt['epoch'] + 1
+    losses_bs = ckpt.get('losses', [])
+    print(f"  [BlindSpot] 检测到已有checkpoint，从第 {bs_start+1} 轮继续训练")
 
-for epoch in range(N_EPOCHS):
-    model_bs.train()
-    epoch_loss = 0
-    n_batch = 0
-    for batch_x, _ in train_loader:
-        batch_x = batch_x.to(device)
-        y = add_noise(batch_x, SIGMA)
-        optimizer_bs.zero_grad()
-        pred = model_bs(y)
-        # 盲点网络只需‖y-f(y)‖²——因为∂f_i/∂y_i=0，修正项恒为零
-        loss = nn.MSELoss()(pred, y)
-        loss.backward()
-        optimizer_bs.step()
-        epoch_loss += loss.item()
-        n_batch += 1
-    losses_bs.append(epoch_loss / n_batch)
-    if (epoch + 1) % 10 == 0:
-        print(f"  [BlindSpot] Epoch {epoch+1}/{N_EPOCHS}, Loss: {epoch_loss/n_batch:.6f}")
+if bs_start >= N_EPOCHS:
+    print("  [BlindSpot] 模型已训练完毕，跳过。")
+else:
+    for epoch in range(bs_start, N_EPOCHS):
+        model_bs.train()
+        epoch_loss = 0
+        n_batch = 0
+        for batch_x, _ in train_loader:
+            batch_x = batch_x.to(device)
+            y = add_noise(batch_x, SIGMA)
+            optimizer_bs.zero_grad()
+            pred = model_bs(y)
+            # 盲点网络只需‖y-f(y)‖²——因为∂f_i/∂y_i=0，修正项恒为零
+            loss = nn.MSELoss()(pred, y)
+            loss.backward()
+            optimizer_bs.step()
+            epoch_loss += loss.item()
+            n_batch += 1
+        losses_bs.append(epoch_loss / n_batch)
+        if (epoch + 1) % 10 == 0:
+            print(f"  [BlindSpot] Epoch {epoch+1}/{N_EPOCHS}, Loss: {epoch_loss/n_batch:.6f}")
+        if (epoch + 1) % 10 == 0:
+            torch.save({'epoch': epoch, 'model_state': model_bs.state_dict(),
+                        'optimizer_state': optimizer_bs.state_dict(),
+                        'losses': losses_bs}, bs_ckpt_path)
+            print(f"  [BlindSpot] ✓ checkpoint已保存 (epoch {epoch+1})")
 
 psnr_bs = evaluate_psnr(model_bs, test_loader)
 print(f"  盲点网络 PSNR = {psnr_bs:.2f} dB")

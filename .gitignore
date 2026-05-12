@@ -43,6 +43,11 @@ checkpoints/
 *.npz
 data/cache/
 
+# Large files (>100MB)
+*.zip
+*.pt
+*.pth
+
 # Logs
 *.log
 logs/
