@@ -74,7 +74,32 @@ if _cn_font:
     plt.rcParams['font.family'] = 'sans-serif'
     print(f"[Font] 已检测到中文字体: {_cn_font}")
 else:
-    print("[Font] 未找到中文字体，中文可能显示为方框")
+    # Linux/Colab 未找到中文字体，尝试加载或下载 Noto Sans SC
+    if platform.system() != 'Windows':
+        _font_url = 'https://github.com/jsntn/webfonts/raw/master/NotoSansSC-Regular.ttf'
+        _font_file = os.path.join(SAVE_DIR if 'SAVE_DIR' in dir() else '.', 'NotoSansSC-Regular.ttf')
+        if os.path.exists(_font_file):
+            from matplotlib.font_manager import fontManager
+            fontManager.addfont(_font_file)
+            plt.rcParams['font.sans-serif'] = ['Noto Sans SC'] + plt.rcParams.get('font.sans-serif', [])
+            plt.rcParams['font.family'] = 'sans-serif'
+            _cn_font = 'Noto Sans SC'
+            print(f"[Font] 已加载缓存字体: {_cn_font}")
+        else:
+            try:
+                import urllib.request
+                print(f"[Font] 正在下载中文字体 NotoSansSC...")
+                urllib.request.urlretrieve(_font_url, _font_file)
+                from matplotlib.font_manager import fontManager
+                fontManager.addfont(_font_file)
+                plt.rcParams['font.sans-serif'] = ['Noto Sans SC'] + plt.rcParams.get('font.sans-serif', [])
+                plt.rcParams['font.family'] = 'sans-serif'
+                _cn_font = 'Noto Sans SC'
+                print(f"[Font] 已下载并注册中文字体: {_cn_font}")
+            except Exception as e:
+                print(f"[Font] 字体下载失败: {e}，中文可能显示为方框")
+    else:
+        print("[Font] 未找到中文字体，中文可能显示为方框")
 # ========================================================
 
 np.random.seed(42)
