@@ -285,8 +285,9 @@ mnist_train = datasets.MNIST(root=os.path.join(SAVE_DIR, 'mnist_data'),
 mnist_test = datasets.MNIST(root=os.path.join(SAVE_DIR, 'mnist_data'),
                              train=False, download=True, transform=transform)
 
-train_loader = DataLoader(mnist_train, batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
-test_loader = DataLoader(mnist_test, batch_size=BATCH_SIZE, shuffle=False, num_workers=2)
+num_workers = 0 if platform.system() == 'Windows' else 2
+train_loader = DataLoader(mnist_train, batch_size=BATCH_SIZE, shuffle=True, num_workers=num_workers)
+test_loader = DataLoader(mnist_test, batch_size=BATCH_SIZE, shuffle=False, num_workers=num_workers)
 
 # 固定测试掩码（在device确定后创建）
 test_mask = create_inpainting_mask(IMG_SIZE, IMG_SIZE, KEEP_RATIO).to(device)
@@ -343,6 +344,7 @@ else:
 def evaluate_inpainting(model, test_loader, mask, sigma=SIGMA, device=None):
     """评估inpainting性能
     ★修复：添加device参数，统一设备管理
+    ★修复：固定随机种子，确保评估结果可重复
     """
     model.eval()
     psnr_vals = []
@@ -351,6 +353,7 @@ def evaluate_inpainting(model, test_loader, mask, sigma=SIGMA, device=None):
     else:
         mask_dev = mask
     with torch.no_grad():
+        torch.manual_seed(0)
         for batch_x, _ in test_loader:
             batch_x = batch_x.to(mask_dev.device)
             mask_2d = mask_dev.unsqueeze(0).unsqueeze(0).expand_as(batch_x)
@@ -412,18 +415,17 @@ def random_shift(x, max_shift=8):
     dx = torch.randint(-max_shift, max_shift+1, (1,)).item()
     return torch.roll(x, shifts=(dy, dx), dims=(2, 3))
 
-def ei_loss(model, y, A_fn, n_transforms=4, keep_ratio=KEEP_RATIO, sigma=SIGMA):
+def ei_loss(model, y, n_transforms=4, keep_ratio=KEEP_RATIO, sigma=SIGMA):
     """等变成像损失
     对应17.5.4节：Chen, Tachella & Davies (ICCV 2021)
     
     L_EI = (1/G) Σ_g ‖T_g x̂ - f(A T_g x̂)‖²
     
     其中 x̂ = f(y) 是参考重建
-    A_fn: 正向算子函数（当前实现未使用，见下方说明）
     T_g: 随机平移变换
     
     ★原创实现：简化版EI损失，使用平移变换
-    ★修复：移除未使用的device参数，统一从输入y推断设备
+    ★修复：移除未使用的A_fn参数，统一从输入y推断设备
     修复：虚拟样本使用独立采样的掩码，而非当前batch的掩码
     
     参数说明：
@@ -436,11 +438,11 @@ def ei_loss(model, y, A_fn, n_transforms=4, keep_ratio=KEEP_RATIO, sigma=SIGMA):
     
     ⚠️ 教学简化说明：
     ─────────────────────────────────────────
-    1. A_fn参数未使用：
-       - 理论上：y_virtual = A_fn(T_g x̂) + noise
+    1. 针对Inpainting算子简化：
+       - 理论上：y_virtual = A(T_g x̂) + noise
        - 当前实现：y_virtual = T_g x̂ * mask（直接掩码乘法）
-       - 原因：对于inpainting，A_fn就是掩码乘法，两者等价
-       - 通用性：如需支持其他算子（如MRI），应改为调用A_fn
+       - 原因：对于inpainting，A就是掩码乘法，两者等价
+       - 通用性：如需支持其他算子（如MRI），应添加A_fn参数
     
     2. 虚拟样本未添加噪声：
        - 理论上：y_virtual = A(T_g x̂) + ε，ε ~ N(0, σ²)
@@ -530,7 +532,7 @@ else:
             loss_mc = ((masks * (y - f_y)) ** 2).sum() / masks.sum()
             
             # EI损失（修复：虚拟掩码在ei_loss内部独立生成）
-            loss_ei = ei_loss(model_ei, y, None, n_transforms=4)
+            loss_ei = ei_loss(model_ei, y, n_transforms=4)
             
             loss = loss_mc + lambda_ei * loss_ei
             loss.backward()
@@ -603,6 +605,7 @@ methods = {
 def evaluate_combined(model, test_loader, mask, sigma=SIGMA, device=None):
     """合并评估：一次推理计算所有PSNR指标
     ★修复：添加device参数，统一设备管理
+    ★修复：固定随机种子，确保评估结果可重复
     """
     model.eval()
     if device is not None:
@@ -615,6 +618,7 @@ def evaluate_combined(model, test_loader, mask, sigma=SIGMA, device=None):
     miss_psnr_vals = []
     
     with torch.no_grad():
+        torch.manual_seed(0)
         for batch_x, _ in test_loader:
             batch_x = batch_x.to(mask_dev.device)
             mask_2d = mask_dev.unsqueeze(0).unsqueeze(0).expand_as(batch_x)
@@ -691,7 +695,7 @@ plt.close()
 print("  已保存: step3_mc_ei_complement.png")
 
 # 重建结果可视化
-fig, axes = plt.subplots(4, 6, figsize=(15, 10))
+fig, axes = plt.subplots(5, 6, figsize=(15, 12))
 vis_imgs, _ = next(iter(test_loader))
 vis_imgs = vis_imgs[:6].to(device)
 mask_vis = test_mask.unsqueeze(0).unsqueeze(0).expand_as(vis_imgs)  # ★修复：test_mask已在device上
@@ -734,7 +738,7 @@ print("\n" + "="*70)
 print("Step 4: 算子-等变性对照实验")
 print("="*70)
 
-def check_equivariance_shift(A_fn, x, n_tests=10):
+def check_equivariance_shift(A_fn, x, n_tests=5):
     """检查算子A是否关于平移变换等变
     对应17.5.3节：AT_g = T_g A ?
     
@@ -752,6 +756,12 @@ def check_equivariance_shift(A_fn, x, n_tests=10):
     如果 test_mask 的随机分布不均匀（例如某块区域全黑），那么计算出的
     相对误差可能会有较大的随机波动。这并非实验设计错误，而是反映了
     Inpainting算子本身对平移的非等变性——不同平移量会导致不同的误差。
+    
+    参数说明：
+        n_tests: 测试不同平移量的次数（默认5次）
+            - 由于 test_x 固定，不同平移量产生的误差差异较大
+            - 多次测试取均值可减少偶然性，但稳定性有限
+            - 建议值 3-5，过多无意义
     
     返回 (绝对误差, 相对误差百分比)
     """
@@ -779,30 +789,25 @@ def check_equivariance_shift(A_fn, x, n_tests=10):
     rel_err = abs_err / (np.mean(Ax_norms) + 1e-8)
     return abs_err, rel_err
 
-def check_equivariance_rotate(A_fn, x, angle=90, n_tests=10):
+def check_equivariance_rotate(A_fn, x, angle=90):
     """检查算子A是否关于旋转变换等变
+    
+    ★修复：旋转是确定性变换，无需多次测试，去掉无意义的循环
     
     返回 (绝对误差, 相对误差百分比)
     """
-    errors = []
-    Ax_norms = []
-    for _ in range(n_tests):
-        # 固定旋转角度
-        Tg = lambda x: torch.rot90(x, k=angle//90, dims=[2, 3])
-        
-        # AT_g x
-        ATg_x = A_fn(Tg(x))
-        
-        # T_g A x
-        Ax = A_fn(x)
-        TgAx = Tg(Ax)
-        
-        # 差异
-        err = ((ATg_x - TgAx) ** 2).mean().sqrt().item()
-        errors.append(err)
-        Ax_norms.append(Ax.abs().mean().item())
-    abs_err = np.mean(errors)
-    rel_err = abs_err / (np.mean(Ax_norms) + 1e-8)
+    Tg = lambda x: torch.rot90(x, k=angle//90, dims=[2, 3])
+    
+    # AT_g x
+    ATg_x = A_fn(Tg(x))
+    
+    # T_g A x
+    Ax = A_fn(x)
+    TgAx = Tg(Ax)
+    
+    # 差异
+    abs_err = ((ATg_x - TgAx) ** 2).mean().sqrt().item()
+    rel_err = abs_err / (Ax.abs().mean().item() + 1e-8)
     return abs_err, rel_err
 
 # 测试图像（★修复：显式指定设备，避免设备不一致）
@@ -817,11 +822,6 @@ def inpainting_A(x):
         mask_2d = test_mask.unsqueeze(0).unsqueeze(0).expand_as(x)
     return x * mask_2d
 
-def shift_fn(x, max_shift=5):
-    dy = torch.randint(-max_shift, max_shift+1, (1,)).item()
-    dx = torch.randint(-max_shift, max_shift+1, (1,)).item()
-    return torch.roll(x, shifts=(dy, dx), dims=(2, 3))
-
 # 2. MRI欠采样 + 平移 (多种采样模式对比)
 def mri_A(x, sampling_mode='vertical'):
     """MRI正向：FFT + 不同采样模式
@@ -834,6 +834,8 @@ def mri_A(x, sampling_mode='vertical'):
     - cartesian: 规律性网格采样（非等变）
     
     目的：展示不同采样模式对等变性的影响
+    
+    ⚠️ 注意：random模式使用固定种子，确保等变性测试时掩码一致
     """
     kspace = torch.fft.fft2(x)
     H, W = x.shape[2], x.shape[3]
@@ -841,18 +843,23 @@ def mri_A(x, sampling_mode='vertical'):
     if sampling_mode == 'vertical':
         # 原版：垂直条带采样（近似等变）
         center = H // 4
-        mask = torch.zeros(H, device=x.device)  # ★修复：直接使用x.device
+        mask = torch.zeros(H, device=x.device)
         mask[:center] = 1.0
         mask[-center:] = 1.0
         
     elif sampling_mode == 'random':
         # 随机采样（非等变）
+        # ★修复：固定种子，确保等变性测试时两次调用生成相同掩码
+        # 否则测出的误差是"掩码不同"而非"平移非等变"
+        state = torch.get_rng_state()
+        torch.manual_seed(42)
         mask = torch.rand(H, device=x.device) < 0.25  # 25%采样率
+        torch.set_rng_state(state)
         
     elif sampling_mode == 'cartesian':
         # Cartesian网格采样（非等变）
-        mask = torch.zeros(H, device=x.device)  # ★修复：直接使用x.device
-        mask[::4] = 1.0  # 每4行采样1行（修复：mask是1D张量，不能用2D索引）
+        mask = torch.zeros(H, device=x.device)
+        mask[::4] = 1.0  # 每4行采样1行
         
     else:
         raise ValueError(f"Unknown sampling mode: {sampling_mode}")
@@ -875,11 +882,6 @@ def blur_A(x):
     ★修复：使用预初始化的_blur_kernel（已在device上），避免每次调用都.to(device)
     """
     return torch.nn.functional.conv2d(x, _blur_kernel, padding=_kernel_size//2)
-
-# 4. MRI + 旋转
-def rotate_fn(x, angle=90):
-    """90度旋转"""
-    return torch.rot90(x, k=angle//90, dims=[2, 3])
 
 # 运行等变性检查
 results = {}
@@ -959,10 +961,11 @@ print("  已保存: step4_equivariance_check.png")
 
 print("\n  结论:")
 print("  - 高斯模糊+平移: 相对误差≈0% → 等变 → EI无法利用平移对称性(与17.5.3节一致)")
-print("  - Inpainting+平移: 相对误差较大 → 非等变 → EI可利用平移对称性")
-print("  - Inpainting+旋转: 非等变 → EI可利用旋转对称性")
+print("  - Inpainting(固定掩码)+平移: 相对误差较大 → 非等变 → EI可利用平移对称性")
+print("  - Inpainting(固定掩码)+旋转: 非等变 → EI可利用旋转对称性")
 print("  - MRI+平移: 相对误差较小 → 近似等变 → EI难以利用平移对称性")
 print("  - MRI+旋转: 非等变 → EI可利用旋转对称性(与17.5.6节FastMRI结果一致)")
+print("  注: Inpainting测试使用固定掩码，若使用随机掩码行为会不同")
 
 
 # ========================================================================

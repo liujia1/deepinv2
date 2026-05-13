@@ -274,10 +274,26 @@ print("  说明: 设定1-3需要干净数据x，设定4仅需要噪声观测y—
 print("\n  快速训练对比四种设定的性能差异（各训练5个epoch）...")
 
 def quick_train(model, loss_fn, n_epochs=5, tag=""):
-    """快速训练用于对比"""
+    """快速训练用于对比（支持resume）"""
     optimizer = optim.Adam(model.parameters(), lr=LR)
+    ckpt_path = os.path.join(SAVE_DIR, f'ckpt_quick_{tag}.pt') if tag else None
+    start_epoch = 0
+    
+    # ★ Resume: 检测已有checkpoint
+    if ckpt_path and os.path.exists(ckpt_path):
+        ckpt = torch.load(ckpt_path, map_location=device)
+        model.load_state_dict(ckpt['model_state'])
+        optimizer.load_state_dict(ckpt['optimizer_state'])
+        start_epoch = ckpt['epoch'] + 1
+        print(f"  [{tag}] 检测到已有checkpoint，从第 {start_epoch+1} 轮继续训练")
+    
+    if start_epoch >= n_epochs:
+        print(f"  [{tag}] 模型已训练完毕，跳过。")
+        psnr_val, ssim_val = evaluate_psnr(model, test_loader)
+        return psnr_val, ssim_val
+    
     model.train()
-    for epoch in range(n_epochs):
+    for epoch in range(start_epoch, n_epochs):
         for batch_x, _ in train_loader:
             batch_x = batch_x.to(device)
             y = add_noise(batch_x, SIGMA)
@@ -286,6 +302,14 @@ def quick_train(model, loss_fn, n_epochs=5, tag=""):
             loss = loss_fn(pred, batch_x, y)
             loss.backward()
             optimizer.step()
+        # 保存checkpoint
+        if ckpt_path:
+            torch.save({
+                'epoch': epoch,
+                'model_state': model.state_dict(),
+                'optimizer_state': optimizer.state_dict(),
+            }, ckpt_path)
+    
     psnr_val, ssim_val = evaluate_psnr(model, test_loader)
     return psnr_val, ssim_val
 
@@ -297,8 +321,24 @@ psnr_s1, ssim_s1 = quick_train(model_s1, lambda p, x, y: nn.MSELoss()(p, x), tag
 # 注意：这里对每个batch独立采样两次噪声
 def train_synthetic_pair(model, n_epochs=5):
     optimizer = optim.Adam(model.parameters(), lr=LR)
+    ckpt_path = os.path.join(SAVE_DIR, 'ckpt_quick_设定2-合成配对.pt')
+    start_epoch = 0
+    
+    # ★ Resume: 检测已有checkpoint
+    if os.path.exists(ckpt_path):
+        ckpt = torch.load(ckpt_path, map_location=device)
+        model.load_state_dict(ckpt['model_state'])
+        optimizer.load_state_dict(ckpt['optimizer_state'])
+        start_epoch = ckpt['epoch'] + 1
+        print(f"  [设定2-合成配对] 检测到已有checkpoint，从第 {start_epoch+1} 轮继续训练")
+    
+    if start_epoch >= n_epochs:
+        print(f"  [设定2-合成配对] 模型已训练完毕，跳过。")
+        psnr_val, ssim_val = evaluate_psnr(model, test_loader)
+        return psnr_val, ssim_val
+    
     model.train()
-    for epoch in range(n_epochs):
+    for epoch in range(start_epoch, n_epochs):
         for batch_x, _ in train_loader:
             batch_x = batch_x.to(device)
             y1 = add_noise(batch_x, SIGMA)
@@ -308,6 +348,13 @@ def train_synthetic_pair(model, n_epochs=5):
             loss = nn.MSELoss()(pred, y2.detach())
             loss.backward()
             optimizer.step()
+        # 保存checkpoint
+        torch.save({
+            'epoch': epoch,
+            'model_state': model.state_dict(),
+            'optimizer_state': optimizer.state_dict(),
+        }, ckpt_path)
+    
     psnr_val, ssim_val = evaluate_psnr(model, test_loader)
     return psnr_val, ssim_val
 
