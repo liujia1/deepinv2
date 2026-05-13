@@ -184,8 +184,20 @@ test_loader = DataLoader(mnist_test, batch_size=BATCH_SIZE, shuffle=False, num_w
 
 
 def add_noise(x, sigma=SIGMA):
-    """给干净图像添加高斯噪声"""
-    return x + sigma * torch.randn_like(x)
+    """给干净图像添加高斯噪声并 clamp 到 [0,1]
+
+    ★ 关于 clamp 对 N2N 理论假设的影响（重要说明）：
+    - N2N 的理论保证依赖于 E[y'|x] = x，即噪声是零均值的
+    - clamp 操作会在边界处（接近 0 或 1 的像素）引入截断偏差，
+      使得 E[clamp(x+ε)|x] ≠ x，破坏了严格的零均值假设
+    - 当 σ=0.3 时，MNIST 中接近 0 的背景区域受截断影响较大
+    - 本实验选择 clamp 的原因：
+      1. 保持训练/评估分布一致（PSNR 要求 data_range=1.0）
+      2. 避免负值或超 1 的像素导致可视化异常
+      3. 教学实验中，clamp 带来的偏差对定性结论影响有限
+    - 严谨的论文实验中应讨论此偏差，或使用更小的 σ 减小截断影响
+    """
+    return (x + sigma * torch.randn_like(x)).clamp(0, 1)
 
 
 def evaluate_psnr(model, test_loader, sigma=SIGMA):
