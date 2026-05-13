@@ -188,12 +188,29 @@ def add_noise(x, sigma=SIGMA):
     return x + sigma * torch.randn_like(x)
 
 
+def evaluate_psnr(model, test_loader, sigma=SIGMA):
+    """在测试集上评估PSNR"""
+    model.eval()
+    psnr_vals = []
+    with torch.no_grad():
+        for batch_x, _ in test_loader:
+            batch_x = batch_x.to(device)
+            y = add_noise(batch_x, sigma)
+            pred = model(y)
+            pred_np = pred.cpu().numpy().clip(0, 1)
+            x_np = batch_x.cpu().numpy()
+            for i in range(pred_np.shape[0]):
+                psnr_vals.append(psnr(x_np[i, 0], pred_np[i, 0], data_range=1.0))
+    return np.mean(psnr_vals)
+
+
 # ========================================================================
-# Step 1: 四种学习设定的数据构造与对比
+# Step 1: 四种学习设定的数据构造与性能差异对比
 # 对应17.1.2节：监督 / 合成配对 / 无监督-x / 无监督-y
+# ★修正：除了展示数据，还训练轻量模型对比不同设定的性能差异
 # ========================================================================
 print("\n" + "="*70)
-print("Step 1: 四种学习设定的数据构造与对比")
+print("Step 1: 四种学习设定的数据构造与性能差异对比")
 print("="*70)
 
 # 取一批测试图像做可视化
@@ -201,32 +218,121 @@ test_imgs, _ = next(iter(test_loader))
 test_imgs = test_imgs[:8].to(device)
 test_noisy = add_noise(test_imgs, SIGMA)
 
+# --- 1a. 数据可视化 ---
 fig, axes = plt.subplots(4, 8, figsize=(16, 8))
-titles = ['设定1: 监督 (x,y)', '设定2: 合成配对 (x+合成噪声)',
+titles = ['设定1: 监督 (x,y)', '设定2: 合成配对 (y,y\')',
           '设定3: 无监督-x (仅x)', '设定4: 无监督-y (仅y)']
 for i in range(8):
-    # 设定1: 配对 (x, y)
+    # 设定1: 监督学习 - 有配对的干净x和噪声y
     axes[0, i].imshow(test_imgs[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
     axes[0, i].axis('off')
-    # 设定2: 合成配对 (从x合成y)
+    # 设定2: 合成配对 - 有两次独立噪声观测y, y'
     axes[1, i].imshow(test_noisy[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
     axes[1, i].axis('off')
-    # 设定3: 仅干净图像
+    # 设定3: 无监督-x - 仅有干净图像（无噪声配对，无法训练去噪）
     axes[2, i].imshow(test_imgs[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
     axes[2, i].axis('off')
-    # 设定4: 仅噪声观测
+    # 设定4: 无监督-y - 仅需要噪声观测（本章核心挑战）
     axes[3, i].imshow(test_noisy[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
     axes[3, i].axis('off')
 
 for r in range(4):
     axes[r, 0].set_ylabel(titles[r], fontsize=9, rotation=0, labelpad=100)
 
-fig.suptitle('Step 1: 四种学习设定的数据对比 (σ=%.1f)' % SIGMA, fontsize=14)
+fig.suptitle('Step 1a: 四种学习设定的数据对比 (σ=%.1f)' % SIGMA, fontsize=14)
 plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, 'step1_four_settings.png'), dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, 'step1a_four_settings_data.png'), dpi=150, bbox_inches='tight')
 plt.close()
-print("  已保存: step1_four_settings.png")
+print("  已保存: step1a_four_settings_data.png")
 print("  说明: 设定1-3需要干净数据x，设定4仅需要噪声观测y——本章的核心挑战")
+
+# --- 1b. 四种设定的可行性与性能对比实验 ---
+# 设定3（仅x）无法训练去噪模型，因为去噪需要学习从y到x的映射
+# 这里我们对比设定1、2、4的训练效果
+
+print("\n  快速训练对比四种设定的性能差异（各训练5个epoch）...")
+
+def quick_train(model, loss_fn, n_epochs=5, tag=""):
+    """快速训练用于对比"""
+    optimizer = optim.Adam(model.parameters(), lr=LR)
+    model.train()
+    for epoch in range(n_epochs):
+        for batch_x, _ in train_loader:
+            batch_x = batch_x.to(device)
+            y = add_noise(batch_x, SIGMA)
+            optimizer.zero_grad()
+            pred = model(y)
+            loss = loss_fn(pred, batch_x, y)
+            loss.backward()
+            optimizer.step()
+    return evaluate_psnr(model, test_loader)
+
+# 设定1: 监督学习 (有配对的x和y)
+model_s1 = SmallUNet().to(device)
+psnr_s1 = quick_train(model_s1, lambda p, x, y: nn.MSELoss()(p, x), tag="设定1-监督")
+
+# 设定2: 合成配对 (有两次独立噪声观测，即N2N)
+# 注意：这里对每个batch独立采样两次噪声
+def train_synthetic_pair(model, n_epochs=5):
+    optimizer = optim.Adam(model.parameters(), lr=LR)
+    model.train()
+    for epoch in range(n_epochs):
+        for batch_x, _ in train_loader:
+            batch_x = batch_x.to(device)
+            y1 = add_noise(batch_x, SIGMA)
+            y2 = add_noise(batch_x, SIGMA)  # 第二次独立采样
+            optimizer.zero_grad()
+            pred = model(y1)
+            loss = nn.MSELoss()(pred, y2.detach())
+            loss.backward()
+            optimizer.step()
+    return evaluate_psnr(model, test_loader)
+
+model_s2 = SmallUNet().to(device)
+psnr_s2 = train_synthetic_pair(model_s2)
+
+# 设定3: 无监督-x (仅干净图像) - 无法训练去噪
+# 解释：去噪需要学习f: y→x，但没有y，无法训练
+psnr_s3 = None  # 不可行
+
+# 设定4: 无监督-y (仅噪声观测) - 朴素方法
+model_s4 = SmallUNet().to(device)
+psnr_s4 = quick_train(model_s4, lambda p, x, y: nn.MSELoss()(p, y), tag="设定4-朴素")
+
+print(f"\n  四种设定的快速训练结果（5 epochs）:")
+print(f"    设定1 (监督):     PSNR = {psnr_s1:.2f} dB")
+print(f"    设定2 (合成配对): PSNR = {psnr_s2:.2f} dB")
+print(f"    设定3 (仅x):      不可行 - 缺少噪声输入，无法训练去噪模型")
+print(f"    设定4 (仅y-朴素): PSNR = {psnr_s4:.2f} dB")
+
+# 可视化对比
+fig, axes = plt.subplots(1, 4, figsize=(14, 3))
+vis_img = test_imgs[:1]
+vis_noisy = add_noise(vis_img, SIGMA)
+
+with torch.no_grad():
+    pred_s1 = model_s1(vis_noisy).cpu().clip(0, 1)
+    pred_s2 = model_s2(vis_noisy).cpu().clip(0, 1)
+    pred_s4 = model_s4(vis_noisy).cpu().clip(0, 1)
+
+methods = [
+    (f'设定1: 监督\n{psnr_s1:.1f}dB', pred_s1[0,0], '#2196F3'),
+    (f'设定2: 合成配对\n{psnr_s2:.1f}dB', pred_s2[0,0], '#4CAF50'),
+    (f'设定3: 仅x\n不可行', vis_img[0,0].cpu(), '#9E9E9E'),
+    (f'设定4: 仅y-朴素\n{psnr_s4:.1f}dB', pred_s4[0,0], '#FF9800'),
+]
+
+for ax, (title, img, color) in zip(axes, methods):
+    ax.imshow(img, cmap='gray', vmin=0, vmax=1)
+    ax.set_title(title, fontsize=10, color=color if '不可行' not in title else 'gray')
+    ax.axis('off')
+
+fig.suptitle('Step 1b: 四种学习设定的性能对比 (σ=%.1f, 5 epochs)' % SIGMA, fontsize=13)
+plt.tight_layout()
+plt.savefig(os.path.join(SAVE_DIR, 'step1b_four_settings_comparison.png'), dpi=150, bbox_inches='tight')
+plt.close()
+print("  已保存: step1b_four_settings_comparison.png")
+print("  核心发现: 设定4（仅y）的朴素方法PSNR最低，需要更聪明的自监督策略（N2N/SURE）")
 
 
 # ========================================================================
@@ -287,21 +393,6 @@ def train_model(model, loss_fn, train_loader, n_epochs=N_EPOCHS, tag=""):
             print(f"  [{tag}] ✓ checkpoint已保存 (epoch {epoch+1})")
     return losses
 
-def evaluate_psnr(model, test_loader, sigma=SIGMA):
-    """在测试集上评估PSNR"""
-    model.eval()
-    psnr_vals = []
-    with torch.no_grad():
-        for batch_x, _ in test_loader:
-            batch_x = batch_x.to(device)
-            y = add_noise(batch_x, sigma)
-            pred = model(y)
-            pred_np = pred.cpu().numpy().clip(0, 1)
-            x_np = batch_x.cpu().numpy()
-            for i in range(pred_np.shape[0]):
-                psnr_vals.append(psnr(x_np[i, 0], pred_np[i, 0], data_range=1.0))
-    return np.mean(psnr_vals)
-
 # --- 2a. 监督基线：loss = ‖x - f(y)‖² ---
 print("\n  训练监督基线 (Supervised)...")
 model_sup = SmallUNet().to(device)
@@ -315,14 +406,61 @@ psnr_sup = evaluate_psnr(model_sup, test_loader)
 print(f"  监督基线 PSNR = {psnr_sup:.2f} dB")
 
 # --- 2b. Noise2Noise：loss = ‖y' - f(y)‖² ---
+# ★修正：真正的N2N要求对同一批数据独立采样两次噪声观测，不使用干净数据x
 print("\n  训练Noise2Noise...")
+
+def train_n2n_model(model, train_loader, n_epochs=N_EPOCHS, tag="N2N"):
+    """N2N专用训练循环：对每个batch独立采样两次噪声"""
+    optimizer = optim.Adam(model.parameters(), lr=LR)
+    ckpt_path = os.path.join(SAVE_DIR, f'ckpt_{tag}.pt')
+    start_epoch = 0
+    losses = []
+
+    if ckpt_path and os.path.exists(ckpt_path):
+        ckpt = torch.load(ckpt_path, map_location=device)
+        model.load_state_dict(ckpt['model_state'])
+        optimizer.load_state_dict(ckpt['optimizer_state'])
+        start_epoch = ckpt['epoch'] + 1
+        losses = ckpt.get('losses', [])
+        print(f"  [{tag}] 检测到已有checkpoint，从第 {start_epoch+1} 轮继续训练")
+
+    if start_epoch >= n_epochs:
+        print(f"  [{tag}] 模型已训练完毕，跳过。")
+        return losses
+
+    model.train()
+    for epoch in range(start_epoch, n_epochs):
+        epoch_loss = 0
+        n_batch = 0
+        for batch_x, _ in train_loader:
+            batch_x = batch_x.to(device)
+            # ★核心修正：对同一批干净图像独立采样两次噪声，模拟两次独立观测
+            y1 = add_noise(batch_x, SIGMA)  # 第一次噪声观测
+            y2 = add_noise(batch_x, SIGMA)  # 第二次独立噪声观测
+            optimizer.zero_grad()
+            pred = model(y1)
+            # N2N损失：用y2作为target，不使用x
+            loss = nn.MSELoss()(pred, y2.detach())  # ★ detach防止梯度回传到y2
+            loss.backward()
+            optimizer.step()
+            epoch_loss += loss.item()
+            n_batch += 1
+        avg_loss = epoch_loss / n_batch
+        losses.append(avg_loss)
+        if (epoch + 1) % 10 == 0:
+            print(f"  [{tag}] Epoch {epoch+1}/{n_epochs}, Loss: {avg_loss:.6f}")
+        if ckpt_path and (epoch + 1) % 10 == 0:
+            torch.save({
+                'epoch': epoch,
+                'model_state': model.state_dict(),
+                'optimizer_state': optimizer.state_dict(),
+                'losses': losses,
+            }, ckpt_path)
+            print(f"  [{tag}] ✓ checkpoint已保存 (epoch {epoch+1})")
+    return losses
+
 model_n2n = SmallUNet().to(device)
-losses_n2n = train_model(
-    model_n2n,
-    loss_fn=lambda pred, x, y: nn.MSELoss()(pred, add_noise(x, SIGMA)),  # ★用y'作target
-    train_loader=train_loader,
-    tag="N2N"
-)
+losses_n2n = train_n2n_model(model_n2n, train_loader, tag="N2N")
 psnr_n2n = evaluate_psnr(model_n2n, test_loader)
 print(f"  Noise2Noise PSNR = {psnr_n2n:.2f} dB")
 
@@ -454,11 +592,19 @@ print("="*70)
 
 def neighbor_split(y):
     """将噪声图像按棋盘格分成两个子图像
-    ★原创简化实现：将2×2块内的像素分配到两个子图
-    参考: Huang et al. (2021) Neighbor2Neighbor
     
     原理：空间独立的噪声在相邻像素间也独立，
     因此两个子图可近似作为同一信号的配对噪声观测
+    
+    分割方式（基于2×2块）：
+        每个2×2块中：
+        (0,0)为子图1，(0,1)为子图2
+        (1,0)为子图2，(1,1)为子图1（完整棋盘格时）
+    
+    ★简化实现：取每个2×2块的(0,0)作为子图1，(0,1)作为子图2
+    这样两个子图的像素空间相邻，噪声独立，满足N2B核心假设
+    
+    参考: Huang et al. (2021) Neighbor2Neighbor
     """
     B, C, H, W = y.shape
     # 确保 H, W 为偶数
@@ -467,21 +613,29 @@ def neighbor_split(y):
     if W % 2 != 0:
         y = y[:, :, :, :-1]
     B, C, H, W = y.shape
-    # 重塑为 2×2 块
+    
+    # 重塑为2×2块结构
     y_blocks = y.reshape(B, C, H//2, 2, W//2, 2)
-    # 子图1: 取每个2×2块的 (0,0) 和 (1,1) 像素
-    # 子图2: 取每个2×2块的 (0,1) 和 (1,0) 像素
-    sub1 = y_blocks[:, :, :, 0, :, 0]  # (B, C, H/2, W/2)
-    sub2 = y_blocks[:, :, :, 0, :, 1]  # (B, C, H/2, W/2)
+    
+    # 子图1：每个2×2块的(0,0)位置
+    sub1 = y_blocks[:, :, :, 0, :, 0]  # shape: (B, C, H//2, W//2)
+    # 子图2：每个2×2块的(0,1)位置（相邻像素，噪声独立）
+    sub2 = y_blocks[:, :, :, 0, :, 1]  # shape: (B, C, H//2, W//2)
+    
     return sub1, sub2
 
 def neighbor_merge(sub1, sub2, H, W):
-    """将两个子图合并回原始尺寸"""
-    B, C, h, w = sub1.shape
-    out = torch.zeros(B, C, h*2, w*2, device=sub1.device)
-    out[:, :, 0::2, 0::2] = sub1
-    out[:, :, 0::2, 1::2] = sub2
-    out[:, :, 1::2, 0::2] = sub2  # 缺失位置用邻域填充
+    """将两个子图合并回原始尺寸
+    
+    ★说明：由于split时只取了每个2×2块的(0,0)和(0,1)位置，
+    merge时奇数行用邻近值填充，这是一种近似恢复
+    """
+    B, C, h, w = sub1.shape  # h=H//2, w=W//2
+    out = torch.zeros(B, C, H, W, device=sub1.device)
+    # 将子图填回对应位置
+    out[:, :, 0::2, 0::2] = sub1  # 填回偶数行偶数列
+    out[:, :, 0::2, 1::2] = sub2  # 填回偶数行奇数列
+    out[:, :, 1::2, 0::2] = sub2  # 奇数行用邻近值填充
     out[:, :, 1::2, 1::2] = sub1
     return out
 
@@ -547,10 +701,8 @@ with torch.no_grad():
         sub1, sub2 = neighbor_split(y)
         pred_sub1 = model_n2nb(sub1).clip(0, 1)
         pred_sub2 = model_n2nb(sub2).clip(0, 1)
-        # 上采样回原始尺寸
+        # 合并回原始尺寸
         pred_full = neighbor_merge(pred_sub1, pred_sub2, IMG_SIZE, IMG_SIZE)
-        # 裁剪到正确尺寸
-        pred_full = pred_full[:, :, :IMG_SIZE, :IMG_SIZE]
         pred_np = pred_full.cpu().numpy()
         x_np = batch_x.cpu().numpy()
         for i in range(min(pred_np.shape[0], x_np.shape[0])):
@@ -561,7 +713,7 @@ with torch.no_grad():
 psnr_n2nb = np.mean(psnr_n2nb_vals)
 print(f"  Neighbor2Neighbor PSNR = {psnr_n2nb:.2f} dB")
 
-# --- 可视化四种方法对比 ---
+# --- 可视化五种方法对比（★修正：删除混乱的5行版，只保留完整6行版） ---
 vis_imgs, _ = next(iter(test_loader))
 vis_imgs = vis_imgs[:3].to(device)
 vis_noisy = add_noise(vis_imgs, SIGMA)
@@ -574,18 +726,14 @@ with torch.no_grad():
     sub1_v, sub2_v = neighbor_split(vis_noisy)
     pred_s1 = model_n2nb(sub1_v).clip(0, 1)
     pred_s2 = model_n2nb(sub2_v).clip(0, 1)
-    pred_n2b_vis = neighbor_merge(pred_s1, pred_s2, IMG_SIZE, IMG_SIZE)[:, :, :IMG_SIZE, :IMG_SIZE]
+    pred_n2b_vis = neighbor_merge(pred_s1, pred_s2, IMG_SIZE, IMG_SIZE).cpu()
 
-methods_vis = [
-    ('噪声输入', vis_noisy.cpu()),
-    ('监督', pred_sup_vis),
-    ('N2N', pred_n2n_vis),
-    ('朴素‖y-f(y)‖²', pred_naive_vis),
-]
-# 综合对比图
-fig, axes = plt.subplots(5, 3, figsize=(10, 14))
-row_labels = ['干净图像x', '噪声输入y', f'监督 ({psnr_sup:.1f}dB)',
-              f'N2N ({psnr_n2n:.1f}dB)', f'朴素 ({psnr_naive:.1f}dB)']
+# ★修正：完整对比图（6行：干净图像、噪声输入、监督、N2N、朴素、N2B）
+fig, axes = plt.subplots(6, 3, figsize=(10, 18))
+row_labels = ['干净图像x', '噪声输入y', 
+              f'监督 ({psnr_sup:.1f}dB)', f'N2N ({psnr_n2n:.1f}dB)', 
+              f'朴素 ({psnr_naive:.1f}dB)', f'N2B ({psnr_n2nb:.1f}dB)']
+
 for i in range(3):
     axes[0, i].imshow(vis_imgs[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
     axes[0, i].axis('off')
@@ -597,11 +745,14 @@ for i in range(3):
     axes[3, i].axis('off')
     axes[4, i].imshow(pred_naive_vis[i, 0], cmap='gray', vmin=0, vmax=1)
     axes[4, i].axis('off')
+    # N2B行
+    axes[5, i].imshow(pred_n2b_vis[i, 0], cmap='gray', vmin=0, vmax=1)
+    axes[5, i].axis('off')
 
 for r, label in enumerate(row_labels):
     axes[r, 0].set_ylabel(label, fontsize=10, rotation=0, labelpad=80)
 
-fig.suptitle('Step 4: Noise2Noise等价性验证与朴素方法偏差', fontsize=13)
+fig.suptitle('Step 4: 五种去噪方法完整对比', fontsize=13)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, 'step4_comparison.png'), dpi=150, bbox_inches='tight')
 plt.close()
