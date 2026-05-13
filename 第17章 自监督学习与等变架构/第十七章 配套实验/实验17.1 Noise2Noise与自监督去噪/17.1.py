@@ -27,6 +27,7 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Dataset
 import matplotlib.pyplot as plt
 from skimage.metrics import peak_signal_noise_ratio as psnr
+from skimage.metrics import structural_similarity as ssim
 import matplotlib as mpl
 import warnings
 import logging
@@ -201,9 +202,16 @@ def add_noise(x, sigma=SIGMA):
 
 
 def evaluate_psnr(model, test_loader, sigma=SIGMA):
-    """在测试集上评估PSNR"""
+    """在测试集上评估PSNR和SSIM
+    
+    ★为什么同时使用PSNR和SSIM：
+    - PSNR反映像素级均方误差，但与人眼感知不完全一致
+    - SSIM考虑亮度、对比度、结构信息，更符合人眼对图像质量的感知
+    - 自监督方法（尤其是N2B）可能产生轻微模糊，SSIM能更好地反映结构完整性
+    """
     model.eval()
     psnr_vals = []
+    ssim_vals = []
     with torch.no_grad():
         for batch_x, _ in test_loader:
             batch_x = batch_x.to(device)
@@ -213,7 +221,8 @@ def evaluate_psnr(model, test_loader, sigma=SIGMA):
             x_np = batch_x.cpu().numpy()
             for i in range(pred_np.shape[0]):
                 psnr_vals.append(psnr(x_np[i, 0], pred_np[i, 0], data_range=1.0))
-    return np.mean(psnr_vals)
+                ssim_vals.append(ssim(x_np[i, 0], pred_np[i, 0], data_range=1.0))
+    return np.mean(psnr_vals), np.mean(ssim_vals)
 
 
 # ========================================================================
@@ -277,11 +286,12 @@ def quick_train(model, loss_fn, n_epochs=5, tag=""):
             loss = loss_fn(pred, batch_x, y)
             loss.backward()
             optimizer.step()
-    return evaluate_psnr(model, test_loader)
+    psnr_val, ssim_val = evaluate_psnr(model, test_loader)
+    return psnr_val, ssim_val
 
 # 设定1: 监督学习 (有配对的x和y)
 model_s1 = SmallUNet().to(device)
-psnr_s1 = quick_train(model_s1, lambda p, x, y: nn.MSELoss()(p, x), tag="设定1-监督")
+psnr_s1, ssim_s1 = quick_train(model_s1, lambda p, x, y: nn.MSELoss()(p, x), tag="设定1-监督")
 
 # 设定2: 合成配对 (有两次独立噪声观测，即N2N)
 # 注意：这里对每个batch独立采样两次噪声
@@ -298,24 +308,26 @@ def train_synthetic_pair(model, n_epochs=5):
             loss = nn.MSELoss()(pred, y2.detach())
             loss.backward()
             optimizer.step()
-    return evaluate_psnr(model, test_loader)
+    psnr_val, ssim_val = evaluate_psnr(model, test_loader)
+    return psnr_val, ssim_val
 
 model_s2 = SmallUNet().to(device)
-psnr_s2 = train_synthetic_pair(model_s2)
+psnr_s2, ssim_s2 = train_synthetic_pair(model_s2)
 
 # 设定3: 无监督-x (仅干净图像) - 无法训练去噪
 # 解释：去噪需要学习f: y→x，但没有y，无法训练
-psnr_s3 = None  # 不可行
+psnr_s3 = None
+ssim_s3 = None
 
 # 设定4: 无监督-y (仅噪声观测) - 朴素方法
 model_s4 = SmallUNet().to(device)
-psnr_s4 = quick_train(model_s4, lambda p, x, y: nn.MSELoss()(p, y), tag="设定4-朴素")
+psnr_s4, ssim_s4 = quick_train(model_s4, lambda p, x, y: nn.MSELoss()(p, y), tag="设定4-朴素")
 
 print(f"\n  四种设定的快速训练结果（5 epochs）:")
-print(f"    设定1 (监督):     PSNR = {psnr_s1:.2f} dB")
-print(f"    设定2 (合成配对): PSNR = {psnr_s2:.2f} dB")
+print(f"    设定1 (监督):     PSNR = {psnr_s1:.2f} dB, SSIM = {ssim_s1:.4f}")
+print(f"    设定2 (合成配对): PSNR = {psnr_s2:.2f} dB, SSIM = {ssim_s2:.4f}")
 print(f"    设定3 (仅x):      不可行 - 缺少噪声输入，无法训练去噪模型")
-print(f"    设定4 (仅y-朴素): PSNR = {psnr_s4:.2f} dB")
+print(f"    设定4 (仅y-朴素): PSNR = {psnr_s4:.2f} dB, SSIM = {ssim_s4:.4f}")
 
 # 可视化对比
 fig, axes = plt.subplots(1, 4, figsize=(14, 3))
@@ -414,8 +426,8 @@ losses_sup = train_model(
     train_loader=train_loader,
     tag="Supervised"
 )
-psnr_sup = evaluate_psnr(model_sup, test_loader)
-print(f"  监督基线 PSNR = {psnr_sup:.2f} dB")
+psnr_sup, ssim_sup = evaluate_psnr(model_sup, test_loader)
+print(f"  监督基线 PSNR = {psnr_sup:.2f} dB, SSIM = {ssim_sup:.4f}")
 
 # --- 2b. Noise2Noise：loss = ‖y' - f(y)‖² ---
 # ★修正：真正的N2N要求对同一批数据独立采样两次噪声观测，不使用干净数据x
@@ -473,8 +485,8 @@ def train_n2n_model(model, train_loader, n_epochs=N_EPOCHS, tag="N2N"):
 
 model_n2n = SmallUNet().to(device)
 losses_n2n = train_n2n_model(model_n2n, train_loader, tag="N2N")
-psnr_n2n = evaluate_psnr(model_n2n, test_loader)
-print(f"  Noise2Noise PSNR = {psnr_n2n:.2f} dB")
+psnr_n2n, ssim_n2n = evaluate_psnr(model_n2n, test_loader)
+print(f"  Noise2Noise PSNR = {psnr_n2n:.2f} dB, SSIM = {ssim_n2n:.4f}")
 
 # 可视化对比
 fig, axes = plt.subplots(3, 6, figsize=(15, 7))
@@ -530,8 +542,8 @@ losses_naive = train_model(
     train_loader=train_loader,
     tag="Naive"
 )
-psnr_naive = evaluate_psnr(model_naive, test_loader)
-print(f"  朴素自监督 PSNR = {psnr_naive:.2f} dB")
+psnr_naive, ssim_naive = evaluate_psnr(model_naive, test_loader)
+print(f"  朴素自监督 PSNR = {psnr_naive:.2f} dB, SSIM = {ssim_naive:.4f}")
 
 # --- 3b. 计算散度项分析偏差 ---
 def compute_divergence_mc(model, y, n_samples=5, alpha=1e-3):
@@ -563,7 +575,7 @@ print(f"  偏差 = 2σ²·div f ≈ {2*SIGMA**2*div_naive:.4f}")
 print(f"  这解释了为什么‖y-f(y)‖²低估真实风险")
 
 # --- 3c. 三种方法训练曲线对比 ---
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
 
 ax1.plot(losses_sup, label='监督: ‖x-f(y)‖²', linewidth=2)
 ax1.plot(losses_n2n, label='N2N: ‖y\'-f(y)‖²', linewidth=2)
@@ -577,7 +589,9 @@ ax1.grid(True, alpha=0.3)
 # PSNR柱状图
 methods = ['监督', 'N2N', '朴素‖y-f(y)‖²']
 psnrs = [psnr_sup, psnr_n2n, psnr_naive]
+ssims = [ssim_sup, ssim_n2n, ssim_naive]
 colors = ['#2196F3', '#4CAF50', '#FF9800']
+
 bars = ax2.bar(methods, psnrs, color=colors, width=0.5)
 for bar, v in zip(bars, psnrs):
     ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.3,
@@ -585,6 +599,15 @@ for bar, v in zip(bars, psnrs):
 ax2.set_ylabel('PSNR (dB)')
 ax2.set_title('Step 3b: 去噪PSNR对比')
 ax2.grid(True, alpha=0.3, axis='y')
+
+# SSIM柱状图
+bars = ax3.bar(methods, ssims, color=colors, width=0.5)
+for bar, v in zip(bars, ssims):
+    ax3.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+             f'{v:.3f}', ha='center', fontsize=11)
+ax3.set_ylabel('SSIM')
+ax3.set_title('Step 3c: 去噪SSIM对比')
+ax3.grid(True, alpha=0.3, axis='y')
 
 fig.suptitle('Step 3: 朴素自监督损失‖y-f(y)‖²有偏——低估真实风险', fontsize=13)
 plt.tight_layout()
@@ -653,6 +676,28 @@ def neighbor_merge(sub1, sub2, H, W):
 
 # --- 训练Neighbor2Neighbor ---
 print("\n  训练Neighbor2Neighbor...")
+
+"""
+★ Neighbor2Neighbor 的分辨率问题与伪影风险（重要说明）：
+
+1. 分辨率减半：
+   - neighbor_split 后，图像从 32×32 变为 16×16
+   - 模型在半分辨率下训练，感受野相对变大
+   
+2. 尺度不匹配风险：
+   - 测试时直接用全分辨率输入可能导致纹理偏移
+   - 本实验通过 neighbor_merge 将预测结果合并回全分辨率来缓解
+   
+3. 实践中的改进策略（论文推荐）：
+   - 正则项：添加 ‖f(sub1) - sub1‖² 或类似约束，防止过度平滑
+   - 数据增强：随机翻转/旋转子图对，增强泛化能力
+   - 多尺度训练：混合不同下采样比例
+   
+4. 本实验的简化处理：
+   - 为教学目的，本实验未添加额外正则项
+   - 实际应用中建议参考原论文的完整实现
+"""
+
 model_n2nb = SmallUNet().to(device)
 optimizer_n2nb = optim.Adam(model_n2nb.parameters(), lr=LR)
 losses_n2nb = []
@@ -705,6 +750,7 @@ else:
 # 评估N2B：对完整尺寸输入去噪
 model_n2nb.eval()
 psnr_n2nb_vals = []
+ssim_n2nb_vals = []
 with torch.no_grad():
     for batch_x, _ in test_loader:
         batch_x = batch_x.to(device)
@@ -721,11 +767,155 @@ with torch.no_grad():
             h = min(pred_np.shape[2], x_np.shape[2])
             w = min(pred_np.shape[3], x_np.shape[3])
             psnr_n2nb_vals.append(psnr(x_np[i, 0, :h, :w], pred_np[i, 0, :h, :w], data_range=1.0))
+            ssim_n2nb_vals.append(ssim(x_np[i, 0, :h, :w], pred_np[i, 0, :h, :w], data_range=1.0))
 
 psnr_n2nb = np.mean(psnr_n2nb_vals)
-print(f"  Neighbor2Neighbor PSNR = {psnr_n2nb:.2f} dB")
+ssim_n2nb = np.mean(ssim_n2nb_vals)
+print(f"  Neighbor2Neighbor PSNR = {psnr_n2nb:.2f} dB, SSIM = {ssim_n2nb:.4f}")
 
-# --- 可视化五种方法对比（★修正：删除混乱的5行版，只保留完整6行版） ---
+# --- Step 4b: 改进版N2B（保持分辨率）---
+print("\n  训练改进版N2B（保持分辨率，消除合并误差）...")
+
+def get_subgrid_indices(H, W, device):
+    """获取棋盘格子图位置的索引
+    
+    子图1：偶数行偶数列 (i%2==0, j%2==0)
+    子图2：偶数行奇数列 (i%2==0, j%2==1)
+    
+    返回：
+        idx_sub1: 子图1位置的扁平索引
+        idx_sub2: 子图2位置的扁平索引
+    
+    ★ 与原始N2B下采样方案的对比：
+    ─────────────────────────────────────────
+    原始方案（neighbor_split）：
+      - 物理下采样：32×32 → 16×16 子图
+      - 模型在低分辨率上训练
+      - 测试时需neighbor_merge合并，引入近似误差
+    
+    本方案（保持分辨率）：
+      - 逻辑下采样：仅提取子图位置的索引
+      - 模型在全分辨率上训练，损失只在子图位置计算
+      - 测试时直接推理，无需合并，消除近似误差
+    ─────────────────────────────────────────
+    """
+    idx_sub1 = []
+    idx_sub2 = []
+    
+    for i in range(0, H, 2):
+        for j in range(0, W, 2):
+            idx_sub1.append(i * W + j)
+            if j + 1 < W:
+                idx_sub2.append(i * W + (j + 1))
+            else:
+                idx_sub2.append(i * W + j)
+    
+    return (torch.tensor(idx_sub1, device=device), 
+            torch.tensor(idx_sub2, device=device))
+
+def train_n2b_fullres(model, train_loader, n_epochs=N_EPOCHS, tag="N2B_FullRes"):
+    """保持分辨率的N2B训练
+    
+    核心思想：
+    - 模型在全分辨率上训练：f: R^{H×W} → R^{H×W}
+    - 损失只在子图位置计算，用相邻像素作为target
+    - 测试时直接在原图上推理，无需合并
+    
+    优点：
+    1. 消除neighbor_merge引入的近似误差
+    2. 训练和测试分辨率一致
+    3. 模型学习全分辨率特征，泛化性更好
+    """
+    optimizer = optim.Adam(model.parameters(), lr=LR)
+    ckpt_path = os.path.join(SAVE_DIR, f'ckpt_{tag}.pt')
+    start_epoch = 0
+    losses = []
+    
+    if os.path.exists(ckpt_path):
+        ckpt = torch.load(ckpt_path, map_location=device)
+        model.load_state_dict(ckpt['model_state'])
+        optimizer.load_state_dict(ckpt['optimizer_state'])
+        start_epoch = ckpt['epoch'] + 1
+        losses = ckpt.get('losses', [])
+        print(f"  [{tag}] 检测到已有checkpoint，从第 {start_epoch+1} 轮继续训练")
+    
+    if start_epoch >= n_epochs:
+        print(f"  [{tag}] 模型已训练完毕，跳过。")
+        return losses
+    
+    model.train()
+    for epoch in range(start_epoch, n_epochs):
+        epoch_loss = 0
+        n_batch = 0
+        for batch_x, _ in train_loader:
+            batch_x = batch_x.to(device)
+            y = add_noise(batch_x, SIGMA)
+            B, C, H, W = y.shape
+            
+            pred = model(y)
+            
+            idx_sub1, idx_sub2 = get_subgrid_indices(H, W, device)
+            
+            pred_flat = pred.view(B, C, -1)
+            y_flat = y.view(B, C, -1)
+            
+            pred_sub1 = pred_flat[:, :, idx_sub1]
+            y_sub2 = y_flat[:, :, idx_sub2]
+            
+            loss = ((pred_sub1 - y_sub2.detach()) ** 2).mean()
+            
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            epoch_loss += loss.item()
+            n_batch += 1
+        
+        avg_loss = epoch_loss / n_batch
+        losses.append(avg_loss)
+        if (epoch + 1) % 10 == 0:
+            print(f"  [{tag}] Epoch {epoch+1}/{n_epochs}, Loss: {avg_loss:.6f}")
+        if (epoch + 1) % 10 == 0:
+            torch.save({
+                'epoch': epoch,
+                'model_state': model.state_dict(),
+                'optimizer_state': optimizer.state_dict(),
+                'losses': losses,
+            }, ckpt_path)
+            print(f"  [{tag}] ✓ checkpoint已保存 (epoch {epoch+1})")
+    
+    return losses
+
+model_n2b_fullres = SmallUNet().to(device)
+losses_n2b_fullres = train_n2b_fullres(model_n2b_fullres, train_loader)
+
+model_n2b_fullres.eval()
+psnr_n2b_fullres_vals = []
+ssim_n2b_fullres_vals = []
+with torch.no_grad():
+    for batch_x, _ in test_loader:
+        batch_x = batch_x.to(device)
+        y = add_noise(batch_x, SIGMA)
+        pred = model_n2b_fullres(y).clip(0, 1)
+        pred_np = pred.cpu().numpy()
+        x_np = batch_x.cpu().numpy()
+        for i in range(pred_np.shape[0]):
+            psnr_n2b_fullres_vals.append(psnr(x_np[i, 0], pred_np[i, 0], data_range=1.0))
+            ssim_n2b_fullres_vals.append(ssim(x_np[i, 0], pred_np[i, 0], data_range=1.0))
+
+psnr_n2b_fullres = np.mean(psnr_n2b_fullres_vals)
+ssim_n2b_fullres = np.mean(ssim_n2b_fullres_vals)
+print(f"  改进版N2B PSNR = {psnr_n2b_fullres:.2f} dB, SSIM = {ssim_n2b_fullres:.4f}")
+
+print(f"\n  ★ N2B两种实现对比：")
+print(f"    下采样+合并版：PSNR = {psnr_n2nb:.2f} dB, SSIM = {ssim_n2nb:.4f}")
+print(f"    保持分辨率版：  PSNR = {psnr_n2b_fullres:.2f} dB, SSIM = {ssim_n2b_fullres:.4f}")
+if psnr_n2b_fullres > psnr_n2nb:
+    print(f"    改进版提升：    +{psnr_n2b_fullres - psnr_n2nb:.2f} dB")
+else:
+    print(f"    性能差异：      {psnr_n2b_fullres - psnr_n2nb:.2f} dB")
+
+# --- 可视化六种方法对比 ---
 vis_imgs, _ = next(iter(test_loader))
 vis_imgs = vis_imgs[:3].to(device)
 vis_noisy = add_noise(vis_imgs, SIGMA)
@@ -734,17 +924,21 @@ with torch.no_grad():
     pred_sup_vis = model_sup(vis_noisy).cpu().clip(0, 1)
     pred_n2n_vis = model_n2n(vis_noisy).cpu().clip(0, 1)
     pred_naive_vis = model_naive(vis_noisy).cpu().clip(0, 1)
-    # N2B
+    # N2B 下采样+合并版
     sub1_v, sub2_v = neighbor_split(vis_noisy)
     pred_s1 = model_n2nb(sub1_v).clip(0, 1)
     pred_s2 = model_n2nb(sub2_v).clip(0, 1)
     pred_n2b_vis = neighbor_merge(pred_s1, pred_s2, IMG_SIZE, IMG_SIZE).cpu()
+    # N2B 保持分辨率版
+    pred_n2b_fullres_vis = model_n2b_fullres(vis_noisy).cpu().clip(0, 1)
 
-# ★修正：完整对比图（6行：干净图像、噪声输入、监督、N2N、朴素、N2B）
-fig, axes = plt.subplots(6, 3, figsize=(10, 18))
+fig, axes = plt.subplots(7, 3, figsize=(10, 21))
 row_labels = ['干净图像x', '噪声输入y', 
-              f'监督 ({psnr_sup:.1f}dB)', f'N2N ({psnr_n2n:.1f}dB)', 
-              f'朴素 ({psnr_naive:.1f}dB)', f'N2B ({psnr_n2nb:.1f}dB)']
+              f'监督 ({psnr_sup:.1f}dB, SSIM={ssim_sup:.3f})', 
+              f'N2N ({psnr_n2n:.1f}dB, SSIM={ssim_n2n:.3f})', 
+              f'朴素 ({psnr_naive:.1f}dB, SSIM={ssim_naive:.3f})', 
+              f'N2B下采样 ({psnr_n2nb:.1f}dB, SSIM={ssim_n2nb:.3f})',
+              f'N2B全分辨率 ({psnr_n2b_fullres:.1f}dB, SSIM={ssim_n2b_fullres:.3f})']
 
 for i in range(3):
     axes[0, i].imshow(vis_imgs[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
@@ -757,31 +951,61 @@ for i in range(3):
     axes[3, i].axis('off')
     axes[4, i].imshow(pred_naive_vis[i, 0], cmap='gray', vmin=0, vmax=1)
     axes[4, i].axis('off')
-    # N2B行
+    # N2B下采样版
     axes[5, i].imshow(pred_n2b_vis[i, 0], cmap='gray', vmin=0, vmax=1)
     axes[5, i].axis('off')
+    # N2B全分辨率版
+    axes[6, i].imshow(pred_n2b_fullres_vis[i, 0], cmap='gray', vmin=0, vmax=1)
+    axes[6, i].axis('off')
 
 for r, label in enumerate(row_labels):
     axes[r, 0].set_ylabel(label, fontsize=10, rotation=0, labelpad=80)
 
-fig.suptitle('Step 4: 五种去噪方法完整对比', fontsize=13)
+fig.suptitle('Step 4: 六种去噪方法完整对比', fontsize=13)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, 'step4_comparison.png'), dpi=150, bbox_inches='tight')
 plt.close()
 print("  已保存: step4_comparison.png")
 
-# --- PSNR汇总 ---
+# --- PSNR/SSIM汇总 ---
 print("\n" + "="*70)
 print("实验17.1 总结")
 print("="*70)
-print(f"  方法                  PSNR (dB)    说明")
-print(f"  ─────────────────────────────────────────────")
-print(f"  监督 ‖x-f(y)‖²       {psnr_sup:.2f}       基线（需要配对数据）")
-print(f"  N2N  ‖y'-f(y)‖²      {psnr_n2n:.2f}       等价于监督（需配对噪声）")
-print(f"  朴素 ‖y-f(y)‖²       {psnr_naive:.2f}       有偏——低估风险")
-print(f"  N2B  邻域伪配对        {psnr_n2nb:.2f}       从单帧构造伪配对")
+print(f"  方法                  PSNR (dB)    SSIM       说明")
+print(f"  ─────────────────────────────────────────────────────────")
+print(f"  监督 ‖x-f(y)‖²       {psnr_sup:.2f}       {ssim_sup:.4f}    基线（需要配对数据）")
+print(f"  N2N  ‖y'-f(y)‖²      {psnr_n2n:.2f}       {ssim_n2n:.4f}    等价于监督（需配对噪声）")
+print(f"  朴素 ‖y-f(y)‖²       {psnr_naive:.2f}       {ssim_naive:.4f}    有偏——低估风险")
+print(f"  N2B  下采样+合并      {psnr_n2nb:.2f}       {ssim_n2nb:.4f}    从单帧构造伪配对")
+print(f"  N2B  保持分辨率        {psnr_n2b_fullres:.2f}       {ssim_n2b_fullres:.4f}    消除合并误差")
 print(f"\n  核心结论:")
 print(f"  1. N2N ≈ 监督 → 验证了零均值噪声下 E[y'|x]=x 的等价性")
 print(f"  2. 朴素MSE偏低 → ‖y-f(y)‖²系统低估真实风险(散度偏差)")
 print(f"  3. N2B ≈ N2N-δ → 空间独立性假设下的近似配对，PSNR略低")
-print(f"  4. 下一步：SURE通过自由度修正项消除偏差(实验17.2)")
+print(f"\n  ★ N2B两种实现对比（教学要点）：")
+print(f"  ─────────────────────────────────────────────────────────")
+print(f"  下采样+合并版：")
+print(f"    - 优点：实现直观，子图作为独立图像处理")
+print(f"    - 缺点：分辨率减半(32×32→16×16)，合并引入近似误差")
+print(f"  保持分辨率版：")
+print(f"    - 优点：训练测试分辨率一致，无合并误差")
+print(f"    - 实现：损失只在子图位置计算，用相邻像素作为target")
+print(f"  性能差异：{psnr_n2b_fullres - psnr_n2nb:+.2f} dB（保持分辨率版）")
+print(f"  ─────────────────────────────────────────────────────────")
+print(f"\n  ★ 从N2N到SURE的逻辑演进（关键发现）：")
+print(f"  ─────────────────────────────────────────────────────────")
+print(f"  本实验Step 3量化了朴素MSE的偏差来源：")
+print(f"    偏差 = 2σ²·div f(y) ≈ {2*SIGMA**2*div_naive:.4f}")
+print(f"  ")
+print(f"  核心洞察：如果把这个偏差项\"加回去\"，即：")
+print(f"    L_SURE = ‖y-f(y)‖² + 2σ²·div f(y)")
+print(f"  我们不需要 y₂（配对噪声），也能达到N2N的效果！")
+print(f"  这正是实验17.2 SURE的核心思想。")
+print(f"  ─────────────────────────────────────────────────────────")
+print(f"\n  ★ 关于SSIM指标：")
+print(f"     - SSIM更关注结构相似性，能更好反映人眼感知质量")
+print(f"     - N2B的SSIM通常略低于PSNR差距，说明结构保持较好")
+print(f"\n  ★ 关于收敛曲线（建议学生观察）：")
+print(f"     - N2N和N2B的收敛速度通常慢于监督学习")
+print(f"     - 可尝试增加EPOCHS观察不同方法的最终收敛性能")
+print(f"     - 朴素方法的损失下降最快但PSNR最低——这是有偏估计的典型特征")

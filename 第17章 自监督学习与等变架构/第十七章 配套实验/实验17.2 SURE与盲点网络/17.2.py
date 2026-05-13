@@ -218,6 +218,23 @@ class StrictBlindSpotConv2d(nn.Module):
     3. Pixel-shuffle: 合并回空间维度
     
     这样确保每个输出像素 i 完全不依赖输入像素 y_i
+    
+    ⚠️ 关于groups=4的局限性说明：
+    ─────────────────────────────────────────
+    当前实现：groups=4，每组有 in_ch 个输入通道
+    
+    情况1：in_ch=1（灰度图，如MNIST）
+      - 每组只有1个通道，等价于depthwise convolution
+      - 严格满足盲点约束 ✓
+    
+    情况2：in_ch>1（多通道图像，如RGB）
+      - 每组有in_ch个通道，卷积核会在组内通道间混合
+      - 这不是严格的depthwise，存在信息泄漏风险
+      - 严格实现需要：groups = in_ch * 4（完全depthwise）
+    
+    本实验使用MNIST（in_ch=1），当前实现是严格的。
+    多通道图像建议使用 groups = in_ch * 4。
+    ─────────────────────────────────────────
     """
     def __init__(self, in_ch, out_ch):
         super().__init__()
@@ -231,7 +248,7 @@ class StrictBlindSpotConv2d(nn.Module):
         # 分离后每个通道用独立的卷积（不访问其他通道）
         # pixel_unshuffle 后：in_ch * 4 通道
         # groups=4 确保每组只处理自己的通道，避免跨组信息泄漏
-        # ⚠️ 注意：这并非"严格"盲点的充分条件，多层堆叠后仍可能间接访问中心像素
+        # ⚠️ 注意：对于in_ch=1是严格的depthwise；in_ch>1需要groups=in_ch*4
         self.conv = nn.Conv2d(in_ch * 4, out_ch * 4, 3, padding=1, groups=4)
     
     def forward(self, x):
@@ -490,6 +507,29 @@ def add_noise(x, sigma=SIGMA):
 print("\n" + "="*70)
 print("Step 1: SURE原理验证——自由度修正项消除偏差")
 print("="*70)
+
+print("""
+★ 承接实验17.1的关键发现：
+────────────────────────────────────────────────────────────────
+实验17.1中我们量化了朴素MSE的偏差来源：
+
+  朴素损失：L_naive = ‖y - f(y)‖²
+  真实风险：R(f) = E[‖x - f(y)‖²]
+  
+  偏差分析：E[L_naive] = R(f) - 2σ²·div f(y)
+  
+  即朴素MSE系统性地"低估"了真实风险，低估量 = 2σ²·div f(y)
+
+SURE的核心思想：把这个偏差项"加回去"！
+
+  L_SURE = ‖y-f(y)‖² + 2σ²·div f(y)
+
+这样，我们不需要 y₂（配对噪声观测），也能达到N2N的效果！
+这正是从 N2N 进化到 SURE 的逻辑。
+
+本Step将验证：SURE训练的模型 ≈ 监督训练的模型
+────────────────────────────────────────────────────────────────
+""")
 
 def sure_loss_mc(model, y, sigma, n_mc=1, alpha=None):
     """Monte Carlo SURE损失
@@ -909,8 +949,21 @@ def r2r_loss(model, y, sigma, alpha=0.1):
 
     当 α→0 时, L_R2R → L_SURE (渐近等价)
 
-    ✅ 修正：omega为标准正态分布(方差=1)
-    符合Pang et al. (2021)原文约定，σ因子显式分离
+    ★ 关于α约定的说明：
+    ─────────────────────────────────────────
+    方案1（简化版，α=1）：
+      y_a = y + σ·ω, y_b = y - σ·ω
+      优点：简单直观，无需调参
+      缺点：y_a和y_b噪声方差相同，可能不最优
+    
+    方案2（平衡版，本实现）：
+      y_a = y + ασ·ω, y_b = y - (σ/α)·ω
+      Var(y_a|x) = α²σ², Var(y_b|x) = σ²/α²
+      优点：可调节α平衡信噪比
+      注意：α过小会导致y_b噪声过大
+    
+    两种约定数学上都成立，本实现采用方案2。
+    ─────────────────────────────────────────
     """
     omega = torch.randn_like(y)
     y_a = y + alpha * sigma * omega
@@ -1112,11 +1165,18 @@ print("  近似盲点网络:")
 model_approx = ApproximateBlindSpotUNet().to(device)
 approx_results = verify_blind_spot_property(model_approx)
 
-# 总结对比
-print(f"\n  对比总结:")
-print(f"    严格盲点泄漏比例: {strict_results['leak_ratio']:.4f}")
-print(f"    近似盲点泄漏比例: {approx_results['leak_ratio']:.4f}")
-print(f"    严格程度差异: {'✅' if strict_results['leak_ratio'] < approx_results['leak_ratio'] else '❌'}")
+# 盲点网络严格程度对比表格
+print(f"\n  ✅ 盲点网络严格程度对比:")
+print(f"  ┌─────────────────────┬─────────────┬─────────────┐")
+print(f"  │       网络类型       │  泄漏比例   │   严格程度   │")
+print(f"  ├─────────────────────┼─────────────┼─────────────┤")
+print(f"  │ StrictBlindSpot     │ {strict_results['leak_ratio']:.6f}    │  严格盲点   │")
+print(f"  │ ApproximateBlindSpot│ {approx_results['leak_ratio']:.6f}    │  近似盲点   │")
+print(f"  └─────────────────────┴─────────────┴─────────────┘")
+if strict_results['leak_ratio'] < approx_results['leak_ratio'] * 0.1:
+    print(f"  结论: StrictBlindSpot泄漏比例显著低于ApproximateBlindSpot ✓")
+else:
+    print(f"  结论: 两种实现的泄漏比例接近，可能需要进一步检查")
 
 # 验证散度≈0
 model_bs.eval()
@@ -1408,3 +1468,39 @@ print(f"  2. R2R ≈ SURE  → 避免散度计算，但α选择影响精度")
 print(f"  3. 盲点 < SURE → 约束div f=0使函数族缩小，受限最优<全局最优")
 print(f"  4. SURE→Tweedie → 确认f*(y) = y + σ²∇log p_y(y)")
 print(f"  5. 从噪声数据→SURE→去噪器→得分→扩散采样：理论闭环成立")
+
+# --- 综合对比柱状图 ---
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+methods = ['监督', 'SURE', 'R2R', '盲点', '朴素']
+psnrs = [psnr_sup, psnr_sure, psnr_r2r, psnr_bs, psnr_naive]
+ssims = [ssim_sup, ssim_sure, ssim_r2r, ssim_bs, ssim_naive]
+colors = ['#2196F3', '#4CAF50', '#9C27B0', '#FF5722', '#FF9800']
+
+# PSNR对比
+bars1 = ax1.bar(methods, psnrs, color=colors, width=0.6)
+for bar, v in zip(bars1, psnrs):
+    ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.3,
+             f'{v:.1f}', ha='center', fontsize=11, fontweight='bold')
+ax1.set_ylabel('PSNR (dB)', fontsize=12)
+ax1.set_title('去噪PSNR对比', fontsize=13)
+ax1.set_ylim([min(psnrs) - 2, max(psnrs) + 3])
+ax1.axhline(y=psnr_sup, color='gray', linestyle='--', alpha=0.5, label='监督基线')
+ax1.grid(True, alpha=0.3, axis='y')
+
+# SSIM对比
+bars2 = ax2.bar(methods, ssims, color=colors, width=0.6)
+for bar, v in zip(bars2, ssims):
+    ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+             f'{v:.3f}', ha='center', fontsize=11, fontweight='bold')
+ax2.set_ylabel('SSIM', fontsize=12)
+ax2.set_title('去噪SSIM对比', fontsize=13)
+ax2.set_ylim([min(ssims) - 0.05, max(ssims) + 0.05])
+ax2.axhline(y=ssim_sup, color='gray', linestyle='--', alpha=0.5, label='监督基线')
+ax2.grid(True, alpha=0.3, axis='y')
+
+fig.suptitle('实验17.2 综合对比：五种自监督去噪方法', fontsize=14, fontweight='bold')
+plt.tight_layout()
+plt.savefig(os.path.join(SAVE_DIR, 'summary_comparison.png'), dpi=150, bbox_inches='tight')
+plt.close()
+print(f"\n  已保存: summary_comparison.png (综合对比柱状图)")

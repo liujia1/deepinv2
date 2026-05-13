@@ -247,7 +247,15 @@ def create_random_mask_batch(batch_size, H, W, keep_ratio=0.5, device=None):
     """为每个batch样本创建不同的随机掩码
     ★原创：每张图用不同掩码（模拟MOI场景）
     ★修复：添加device参数，避免调用方手动.to(device)
+    
+    参数说明：
+        keep_ratio: 保留像素比例，默认0.5
+            - 较大的keep_ratio（如0.7）：更多观测像素，MC约束更强
+            - 较小的keep_ratio（如0.3）：更少观测像素，零空间更大
+            - 在EI损失中，虚拟样本可使用不同的keep_ratio以增强正则化
     """
+    if device is None:
+        device = torch.device('cpu')
     masks = torch.zeros(batch_size, 1, H, W, device=device)
     n_keep = int(H * W * keep_ratio)
     for i in range(batch_size):
@@ -404,19 +412,42 @@ def random_shift(x, max_shift=8):
     dx = torch.randint(-max_shift, max_shift+1, (1,)).item()
     return torch.roll(x, shifts=(dy, dx), dims=(2, 3))
 
-def ei_loss(model, y, A_fn, n_transforms=4):
+def ei_loss(model, y, A_fn, n_transforms=4, keep_ratio=KEEP_RATIO, sigma=SIGMA):
     """等变成像损失
     对应17.5.4节：Chen, Tachella & Davies (ICCV 2021)
     
     L_EI = (1/G) Σ_g ‖T_g x̂ - f(A T_g x̂)‖²
     
     其中 x̂ = f(y) 是参考重建
-    A_fn: 正向算子函数
+    A_fn: 正向算子函数（当前实现未使用，见下方说明）
     T_g: 随机平移变换
     
     ★原创实现：简化版EI损失，使用平移变换
     ★修复：移除未使用的device参数，统一从输入y推断设备
     修复：虚拟样本使用独立采样的掩码，而非当前batch的掩码
+    
+    参数说明：
+        keep_ratio: 虚拟样本的掩码保留比例
+            - 默认使用全局KEEP_RATIO=0.5
+            - 可调参数：不同keep_ratio可能产生更好的正则化效果
+            - 例如：虚拟样本使用更稀疏的掩码（keep_ratio=0.3）可增强零空间约束
+            - 或使用更密集的掩码（keep_ratio=0.7）可增强值空间约束
+        sigma: 虚拟样本的噪声水平（默认使用全局SIGMA）
+    
+    ⚠️ 教学简化说明：
+    ─────────────────────────────────────────
+    1. A_fn参数未使用：
+       - 理论上：y_virtual = A_fn(T_g x̂) + noise
+       - 当前实现：y_virtual = T_g x̂ * mask（直接掩码乘法）
+       - 原因：对于inpainting，A_fn就是掩码乘法，两者等价
+       - 通用性：如需支持其他算子（如MRI），应改为调用A_fn
+    
+    2. 虚拟样本未添加噪声：
+       - 理论上：y_virtual = A(T_g x̂) + ε，ε ~ N(0, σ²)
+       - 当前实现：y_virtual = A(T_g x̂)（无噪声）
+       - 原因：教学简化，EI主要约束零空间，噪声影响较小
+       - 影响：定性结论不变，定量结果可能略有差异
+    ─────────────────────────────────────────
     """
     # 参考重建
     x_hat = model(y)
@@ -457,7 +488,7 @@ def ei_loss(model, y, A_fn, n_transforms=4):
         
         # 修复：为虚拟样本独立生成掩码，使用统一的device参数
         B, C, H, W = x_hat_shifted.shape
-        virtual_masks = create_random_mask_batch(B, H, W, KEEP_RATIO, device=x_hat_shifted.device)
+        virtual_masks = create_random_mask_batch(B, H, W, keep_ratio, device=x_hat_shifted.device)
         y_virtual = x_hat_shifted * virtual_masks
         
         # 重建虚拟测量
@@ -561,7 +592,7 @@ print(f"  监督 PSNR = {psnr_sup:.2f} dB")
 
 
 # 各方法在观测/缺失像素的PSNR
-NAIVE_KEY = '朴素MC\n(Step1复用)'
+NAIVE_KEY = '朴素MC'  # 简化标签，避免柱状图x轴拥挤
 methods = {
     '监督': model_sup,
     'MC+EI': model_ei,
@@ -951,3 +982,21 @@ print(f"  2. MC约束值空间(Af(y)≈y)，EI约束零空间(等变性)")
 print(f"  3. MC+EI互补: MC保证观测一致性，EI利用对称性填补缺失")
 print(f"  4. 算子非等变→EI有效: 随机inpainting关于平移/旋转非等变")
 print(f"  5. 算子等变→EI无效: 高斯模糊关于平移等变(无法提供新信息)")
+
+# 三部曲逻辑链条
+print(f"""
+  ╔═══════════════════════════════════════════════════════════════════╗
+  ║           实验17.1-17.3 三部曲逻辑链条                              ║
+  ╠═══════════════════════════════════════════════════════════════════╣
+  ║  实验    │   核心问题          │   解决方法      │   连接点         ║
+  ╠═══════════════════════════════════════════════════════════════════╣
+  ║  17.1    │   朴素MSE有偏       │   N2N / N2B     │   配对噪声/空间配对 ║
+  ║  17.2    │   需要配对噪声      │   SURE (修正项)  │   从N2N进化到SURE  ║
+  ║  17.3    │   A≠I时SURE只约束值空间 │ EI (等变约束) │   SURE+EI=完整约束 ║
+  ╠═══════════════════════════════════════════════════════════════════╣
+  ║  17.1：当 y = x + ε（噪声）时，问：如何自监督？                     ║
+  ║  17.2：当 y = x + ε 且 A = I 时，答：SURE修正偏差                   ║
+  ║  17.3：当 A ≠ I（inpainting/MRI）时，问：SURE失效怎么办？           ║
+  ║        答：EI加约束，利用对称性约束零空间                            ║
+  ╚═══════════════════════════════════════════════════════════════════╝
+""")
