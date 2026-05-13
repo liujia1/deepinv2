@@ -200,7 +200,7 @@ class MultiViewPhysics(LinearPhysics):
         for j in range(J):
             # 构造仿射网格
             theta_j = transf[j:j+1].to(x.device).float()  # (1, 2, 3)
-            grid = F.affine_grid(theta_j.expand(B, -1, -1, -1),
+            grid = F.affine_grid(theta_j.expand(B, -1, -1),  # ✅ (B, 2, 3)
                                   size=(B, C, H, W),
                                   align_corners=False)
             x_transformed = F.grid_sample(x, grid, align_corners=False)
@@ -223,7 +223,7 @@ class MultiViewPhysics(LinearPhysics):
         B, J, C, H_prime, W_prime = y.shape
         # 从base_physics推断原始尺寸
         if hasattr(self.base_physics, 'img_size'):
-            _, _, H_full, W_full = self.base_physics.img_size
+            _, H_full, W_full = self.base_physics.img_size  # ✅ img_size是(C, H, W)三元组
         else:
             factor = self.base_physics.factor if hasattr(self.base_physics, 'factor') else 4
             H_full = H_prime * factor
@@ -235,19 +235,18 @@ class MultiViewPhysics(LinearPhysics):
             y_j = y[:, j]  # (B, C, H', W')
             # A^T: 上采样（伴随下采样）
             x_up = self.base_physics.A_adjoint(y_j)  # (B, C, H, W)
-            # T_j^T: 反向仿射变换（求完整2×3仿射矩阵的逆）
+            # T_j^T: 伴随仿射变换（内积意义下用转置而非逆）
+            # 对于仿射变换 T(x) = Ax + t，其伴随 T^T 满足 <Tx, y> = <x, T^T y>
+            # 在 grid_sample 坐标系下，T^T 对应矩阵转置（不是逆）
             theta_2x3 = transf[j].to(y.device).float()  # (2, 3)
             A_2x2 = theta_2x3[:, :2]  # (2, 2) 旋转+缩放部分
             t_2x1 = theta_2x3[:, 2:3]  # (2, 1) 平移部分
-            try:
-                A_inv = torch.inverse(A_2x2)
-                t_inv = -A_inv @ t_2x1  # 逆变换的平移: t' = -A^{-1} t
-                theta_inv_full = torch.cat([A_inv, t_inv], dim=1).unsqueeze(0)  # (1, 2, 3)
-            except RuntimeError:
-                # 矩阵不可逆时用转置近似（退化情况）
-                theta_inv_full = theta_2x3.unsqueeze(0)
+            # ✅ 矩阵转置和乘法不会失败，直接计算伴随变换
+            A_T = A_2x2.T  # 伴随算子对应矩阵转置
+            t_T = -A_T @ t_2x1  # 伴随变换的平移: t^T = -A^T t
+            theta_adj_full = torch.cat([A_T, t_T], dim=1).unsqueeze(0)  # (1, 2, 3)
             
-            grid = F.affine_grid(theta_inv_full.expand(B, -1, -1, -1),
+            grid = F.affine_grid(theta_adj_full.expand(B, -1, -1),  # ✅ (B, 2, 3)
                                   size=(B, C, H_full, W_full),
                                   align_corners=False)
             # 累加: A^T y = Σ_j T_j^T A^T y_j （堆叠算子的伴随是各子伴随之和，
@@ -266,7 +265,7 @@ def generate_random_transforms(J, scale=0.8, max_angle=np.pi/8, max_shift=0.05):
     """生成J个随机仿射变换矩阵（旋转+缩放+平移）"""
     transf = torch.zeros(J, 2, 3)
     for i in range(J):
-        angle = torch.rand(1) * max_angle
+        angle = (torch.rand(1) * 2 - 1) * max_angle  # ✅ [-max_angle, max_angle]，双向旋转
         transf[i, 0, 0] = torch.cos(angle) * scale
         transf[i, 0, 1] = -torch.sin(angle) * scale
         transf[i, 1, 0] = torch.sin(angle) * scale
@@ -309,12 +308,16 @@ deepinv 提供:
 
 
 def detailed_adjointness_test(physics, x, n_tests=5):
-    """多次随机测试伴随的精度，返回均值和标准差"""
+    """多次随机测试伴随的精度，返回均值和标准差
+    
+    注意：使用 physics.A(x) 而非 physics(x)，避免噪声模型的随机性影响
+    """
     errors = []
     for i in range(n_tests):
         torch.manual_seed(100 + i)
-        y_rand = torch.randn_like(physics(x))
-        lhs = (physics(x) * y_rand).sum().item()
+        Ax = physics.A(x)  # ✅ 确定性的前向算子，不加噪声
+        y_rand = torch.randn_like(Ax)
+        lhs = (Ax * y_rand).sum().item()
         rhs = (x * physics.A_adjoint(y_rand)).sum().item()
         rel_err = abs(lhs - rhs) / (abs(lhs) + abs(rhs) + 1e-10)
         errors.append(rel_err)
@@ -378,7 +381,7 @@ try:
 except Exception as e:
     print(f"  算子范数计算失败: {e}")
 
-# --- Step 3 可视化 ---
+# --- Step 2 可视化（多视角前向结果）---
 fig, axes = plt.subplots(1, 4, figsize=(16, 4))
 # 原始图像
 axes[0].imshow(x_true[0].cpu().permute(1, 2, 0).clamp(0, 1))
@@ -392,11 +395,11 @@ for i in range(3):
     axes[i+1].set_title(f'视角 {i+1}\n旋转≈{angle_deg:.1f}°', fontsize=11)
     axes[i+1].axis('off')
 
-fig.suptitle('Step 3: 多视角下采样算子的前向结果', fontsize=14)
+fig.suptitle('Step 2: 多视角下采样算子的前向结果', fontsize=14)
 plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, 'step3_multiview_forward.png'), dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, 'step2_multiview_forward.png'), dpi=150, bbox_inches='tight')
 plt.close()
-print("  已保存: step3_multiview_forward.png")
+print("  已保存: step2_multiview_forward.png")
 
 
 # ========================================================================
@@ -483,7 +486,8 @@ for i, (title, img) in enumerate(zip(titles, images)):
     if i > 0:
         residual = (img - y_clean)[0].cpu().permute(1, 2, 0)
         axes[1, i].imshow(residual.clamp(-0.1, 0.1) + 0.5, vmin=0, vmax=1)
-        axes[1, i].set_title(f'残差 (MAE={images[i].abs().mean():.4f})', fontsize=10)
+        mae_value = (images[i] - y_clean).abs().mean().item()
+        axes[1, i].set_title(f'残差 (MAE={mae_value:.4f})', fontsize=10)
     else:
         axes[1, i].text(0.5, 0.5, '(原始观测)', ha='center', va='center', fontsize=12)
     axes[1, i].axis('off')
@@ -533,6 +537,9 @@ print("""
 # 5a. 自定义模糊核
 print("\n--- 5a. 自定义运动模糊核 ---")
 
+# 初始化所有flag，避免后续逻辑混乱
+has_blur = has_composite = has_mri = False
+
 def create_motion_blur_kernel(length=15, angle=45):
     """创建运动模糊核"""
     kernel = np.zeros((length, length))
@@ -549,12 +556,22 @@ def create_motion_blur_kernel(length=15, angle=45):
 
 # 创建两种模糊核
 motion_kernel = create_motion_blur_kernel(length=15, angle=30)
-gauss_kernel = torch.tensor(
-    dinv.physics.blur.gaussian_blur(sigma=(2.0, 2.0)).numpy() 
-    if hasattr(dinv.physics.blur, 'gaussian_blur') else 
-    np.zeros((1, 1, 15, 15)),
-    dtype=torch.float32
-)
+# 尝试获取高斯核，fallback使用手动构造的单位冲激核（避免全零导致的问题）
+try:
+    if hasattr(dinv.physics.blur, 'gaussian_blur'):
+        gauss_kernel_np = dinv.physics.blur.gaussian_blur(sigma=(2.0, 2.0)).numpy()
+    else:
+        raise AttributeError("gaussian_blur not available")
+except Exception:
+    # Fallback: 手动构造简单的高斯核或单位冲激核
+    size = 15
+    center = size // 2
+    gauss_kernel_np = np.zeros((1, 1, size, size))
+    # 使用单位冲激（中心为1，其余为0）作为最安全的fallback
+    gauss_kernel_np[0, 0, center, center] = 1.0
+    print("  [Warning] 使用单位冲激核作为gaussian_blur的fallback")
+
+gauss_kernel = torch.tensor(gauss_kernel_np, dtype=torch.float32)
 
 # 使用deepinv的Blur算子
 try:
@@ -573,15 +590,14 @@ try:
     has_blur = True
 except Exception as e:
     print(f"  Blur算子创建失败: {e}，跳过模糊部分")
-    has_blur = False
-    has_composite = False
 
 # 5b. ★ 组合算子：模糊 → 下采样
 if has_blur:
     print("\n--- 5b. ★ 组合算子: 模糊 → 下采样 ---")
     try:
-        # deepinv 支持算子乘法组合
-        composite_phys = blur_phys * Downsampling(factor=4, img_size=(3, 256, 256), device=device)
+        # 组合算子: y = D(K(x))，即先模糊再下采样
+        # deepinv中用乘法表示算子组合，执行顺序从右到左: D * K 表示先应用K再应用D
+        composite_phys = Downsampling(factor=4, img_size=(3, 256, 256), device=device) * blur_phys
         y_composite = composite_phys(x_true)
         adj_err_composite = composite_phys.adjointness_test(x_true)
         print(f"  组合算子(模糊+下采样)伴随误差: {adj_err_composite:.2e}")
@@ -598,8 +614,8 @@ try:
     
     # 创建4倍加速的MRI物理模型
     mri_phys = MRI(img_size=(256, 256), device=device, acceleration=4)
-    # MRI通常是单通道，将RGB转灰度
-    x_gray = x_true.mean(dim=1, keepdim=True)  # (1, 1, 256, 256)
+    # MRI通常是单通道，将RGB转灰度（ITU-R BT.709标准）
+    x_gray = 0.2126*x_true[:,0:1] + 0.7152*x_true[:,1:2] + 0.0722*x_true[:,2:3]
     y_mri = mri_phys(x_gray)
     
     adj_err_mri = mri_phys.adjointness_test(x_gray)
@@ -643,7 +659,7 @@ else:
     axes[1, 0].axis('off')
 
 if has_mri:
-    # 零填充重建
+    # 零填充重建（伪逆）：x* = A^T y，非最优但快速
     x_adj_mri = mri_phys.A_adjoint(y_mri)
     axes[1, 1].imshow(x_adj_mri[0, 0].cpu(), cmap='gray')
     axes[1, 1].set_title('MRI零填充重建', fontsize=12)
@@ -665,14 +681,21 @@ for c in range(3):
     axes[2, c].axis('off')
 
 summary_text = "伴随验证汇总:\n\n"
-summary_text += f"下采样算子:       {adj_err_down:.2e}\n"
-summary_text += f"MultiViewPhysics: {adj_err_multi:.2e}\n"
-if has_blur:
-    summary_text += f"运动模糊:         {adj_err_blur:.2e}\n"
-if has_composite:
-    summary_text += f"模糊+下采样:      {adj_err_composite:.2e}\n"
-if has_mri:
-    summary_text += f"MRI子采样:        {adj_err_mri:.2e}\n"
+# 下采样算子
+status_down = "✓ PASS" if adj_err_down < 1e-3 else "✗ FAIL"
+summary_text += f"下采样算子:       {adj_err_down:.2e} {status_down}\n"
+# MultiViewPhysics
+status_multi = "✓ PASS" if adj_err_multi < 1e-3 else "✗ FAIL"
+summary_text += f"MultiViewPhysics: {adj_err_multi:.2e} {status_multi}\n"
+if has_blur and 'adj_err_blur' in locals():
+    status_blur = "✓ PASS" if adj_err_blur < 1e-3 else "✗ FAIL"
+    summary_text += f"运动模糊:         {adj_err_blur:.2e} {status_blur}\n"
+if has_composite and 'adj_err_composite' in locals():
+    status_composite = "✓ PASS" if adj_err_composite < 1e-3 else "✗ FAIL"
+    summary_text += f"模糊+下采样:      {adj_err_composite:.2e} {status_composite}\n"
+if has_mri and 'adj_err_mri' in locals():
+    status_mri = "✓ PASS" if adj_err_mri < 1e-3 else "✗ FAIL"
+    summary_text += f"MRI子采样:        {adj_err_mri:.2e} {status_mri}\n"
 summary_text += "\n阈值: < 1e-3 通过"
 axes[2, 0].text(0.1, 0.5, summary_text, fontsize=11, family='monospace',
                 verticalalignment='center', transform=axes[2, 0].transAxes)
@@ -694,6 +717,31 @@ plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, 'step5_custom_operators.png'), dpi=150, bbox_inches='tight')
 plt.close()
 print("  已保存: step5_custom_operators.png")
+
+# 5e. ★ 性能基准测试
+print("\n--- 5e. ★ 算子性能基准测试 ---")
+import time
+benchmark_ops = []
+if has_blur:
+    benchmark_ops.append(('Blur', blur_phys))
+if has_composite:
+    benchmark_ops.append(('Composite', composite_phys))
+if has_mri:
+    benchmark_ops.append(('MRI', mri_phys))
+
+for name, phys in benchmark_ops:
+    try:
+        # 预热
+        _ = phys(x_true if name != 'MRI' else x_gray)
+        # 正式测试
+        t0 = time.perf_counter()
+        n_iters = 10
+        for _ in range(n_iters):
+            _ = phys(x_true if name != 'MRI' else x_gray)
+        elapsed_ms = (time.perf_counter() - t0) / n_iters * 1000
+        print(f"  {name:10s}: {elapsed_ms:7.2f} ms/iter")
+    except Exception as e:
+        print(f"  {name:10s}: 测试失败 ({e})")
 
 
 # ========================================================================
