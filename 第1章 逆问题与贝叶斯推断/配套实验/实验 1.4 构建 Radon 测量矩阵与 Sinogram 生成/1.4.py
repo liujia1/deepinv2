@@ -122,7 +122,9 @@ def plot_fourier_sampling(ax, theta, title, highlight_missing=False, missing_ran
         # 绘制missing wedge区域（红色扇形）
         # 注意：由于θ≡θ+180°对称性，缺失区域是对称的两个楔形
         # limited-angle只覆盖某些方向，缺失的是其"法向量"方向
-        wedge1 = plt.matplotlib.patches.Wedge((0, 0), 1, missing_range[1], missing_range[0], 
+        # Wedge参数: (center, r, theta1, theta2) 从theta1逆时针画到theta2
+        # missing_range=(60,180) 表示缺失60°到180°的区域
+        wedge1 = plt.matplotlib.patches.Wedge((0, 0), 1, missing_range[0], missing_range[1], 
                                                alpha=0.3, color='red', label='缺失区域')
         wedge2 = plt.matplotlib.patches.Wedge((0, 0), 1, missing_range[0]+180, missing_range[1]+180, 
                                                alpha=0.3, color='red')
@@ -216,10 +218,11 @@ error_combined[:, n+10:] = error_limited
 
 axes[2, 3].imshow(error_combined, cmap='hot', extent=[0, 2, n, 0])
 axes[2, 3].axvline(x=1, color='white', linewidth=2, linestyle='--')
-axes[2, 3].text(0.5, -0.08, '稀疏角度误差', fontsize=9, ha='center', transform=axes[2, 3].transAxes)
-axes[2, 3].text(0.5, -0.16, '(全方向条纹)', fontsize=8, ha='center', transform=axes[2, 3].transAxes, color='gray')
-axes[2, 3].text(1.5, -0.08, '有限角度误差', fontsize=9, ha='center', transform=axes[2, 3].transAxes)
-axes[2, 3].text(1.5, -0.16, '(方向性拉伸)', fontsize=8, ha='center', transform=axes[2, 3].transAxes, color='gray')
+# 使用 transAxes，x 坐标控制在 [0,1] 内，y 放在图格下方，避免被裁剪
+axes[2, 3].text(0.25, -0.05, '稀疏角度误差', fontsize=9, ha='center', transform=axes[2, 3].transAxes)
+axes[2, 3].text(0.25, -0.10, '(全方向条纹)', fontsize=8, ha='center', color='gray', transform=axes[2, 3].transAxes)
+axes[2, 3].text(0.75, -0.05, '有限角度误差', fontsize=9, ha='center', transform=axes[2, 3].transAxes)
+axes[2, 3].text(0.75, -0.10, '(方向性拉伸)', fontsize=8, ha='center', color='gray', transform=axes[2, 3].transAxes)
 axes[2, 3].set_title('误差对比：条纹伪影类型差异', fontsize=10)
 axes[2, 3].axis('off')
 
