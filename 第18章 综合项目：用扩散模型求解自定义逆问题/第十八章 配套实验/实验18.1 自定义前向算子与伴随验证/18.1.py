@@ -159,8 +159,15 @@ deepinv Physics 类体系的设计三原则：
 
 # 加载示例图像
 x_true = load_example("celeba_example.jpg", img_size=(256, 256), resize_mode='resize')
-x_true = x_true.unsqueeze(0).to(device)  # (1, 3, 256, 256)
-print(f"示例图像 shape: {x_true.shape}")
+print(f"load_example 返回 shape: {x_true.shape}, ndim: {x_true.ndim}")
+# 确保是4D张量 (B, C, H, W)
+if x_true.ndim == 3:
+    x_true = x_true.unsqueeze(0)  # (C, H, W) -> (1, C, H, W)
+elif x_true.ndim == 5:
+    # 可能是 (1, 1, C, H, W)，需要squeeze
+    x_true = x_true.squeeze(0) if x_true.shape[0] == 1 else x_true[0]
+x_true = x_true.to(device)
+print(f"处理后 x_true shape: {x_true.shape}")
 
 
 # ========================================================================
@@ -192,6 +199,15 @@ class MultiViewPhysics(LinearPhysics):
         if transf is None:
             raise ValueError("需要提供变换矩阵 transf")
         
+        # 确保输入是4D张量 (B, C, H, W)
+        if x.ndim == 3:
+            x = x.unsqueeze(0)  # (C, H, W) -> (1, C, H, W)
+        elif x.ndim == 5:
+            # 可能是 (B, 1, C, H, W) 或其他5D格式，取第一个batch
+            x = x.squeeze(1) if x.shape[1] == 1 else x[:, 0]
+        elif x.ndim != 4:
+            raise ValueError(f"期望输入为3D或4D张量，但得到 {x.ndim}D，shape={x.shape}")
+        
         B, C, H, W = x.shape
         J = transf.shape[0]
         
@@ -222,8 +238,14 @@ class MultiViewPhysics(LinearPhysics):
         
         B, J, C, H_prime, W_prime = y.shape
         # 从base_physics推断原始尺寸
-        if hasattr(self.base_physics, 'img_size'):
-            _, H_full, W_full = self.base_physics.img_size  # ✅ img_size是(C, H, W)三元组
+        if hasattr(self.base_physics, 'img_size') and self.base_physics.img_size is not None:
+            img_size = self.base_physics.img_size
+            if len(img_size) == 3:
+                _, H_full, W_full = img_size  # ✅ img_size是(C, H, W)三元组
+            elif len(img_size) == 4:
+                _, _, H_full, W_full = img_size  # (B, C, H, W)
+            else:
+                raise ValueError(f"不支持的img_size格式: {img_size}")
         else:
             factor = self.base_physics.factor if hasattr(self.base_physics, 'factor') else 4
             H_full = H_prime * factor
@@ -357,7 +379,26 @@ try:
         """使用autograd自动计算伴随的版本"""
         def A_adjoint(self, y, **kwargs):
             # 利用autograd自动计算A^T
-            adj_fn = adjoint_function(self.A, y.shape, device=y.device)
+            # 注意：adjoint_function 需要的是输入 x 的形状，不是输出 y 的形状
+            # 从 base_physics 推断原始图像尺寸
+            if hasattr(self.base_physics, 'img_size') and self.base_physics.img_size is not None:
+                img_size = self.base_physics.img_size
+                if len(img_size) == 3:
+                    _, H_full, W_full = img_size
+                elif len(img_size) == 4:
+                    _, _, H_full, W_full = img_size
+                else:
+                    raise ValueError(f"不支持的img_size格式: {img_size}")
+            else:
+                factor = self.base_physics.factor if hasattr(self.base_physics, 'factor') else 4
+                H_full = y.shape[-2] * factor
+                W_full = y.shape[-1] * factor
+            
+            B = y.shape[0]
+            C = y.shape[2] if y.ndim == 5 else y.shape[1]
+            x_shape = (B, C, H_full, W_full)
+            
+            adj_fn = adjoint_function(self.A, x_shape, device=y.device)
             return adj_fn(y)
     
     multi_physics_auto = MultiViewPhysicsAutoAdj(base_physics, transf=transf, device=device)
@@ -558,10 +599,19 @@ def create_motion_blur_kernel(length=15, angle=45):
 motion_kernel = create_motion_blur_kernel(length=15, angle=30)
 # 尝试获取高斯核，fallback使用手动构造的单位冲激核（避免全零导致的问题）
 try:
-    if hasattr(dinv.physics.blur, 'gaussian_blur'):
-        gauss_kernel_np = dinv.physics.blur.gaussian_blur(sigma=(2.0, 2.0)).numpy()
-    else:
-        raise AttributeError("gaussian_blur not available")
+    # 使用新的API路径
+    try:
+        from deepinv.physics.functional import gaussian_blur as gauss_blur_func
+        gauss_kernel_np = gauss_blur_func(sigma=(2.0, 2.0)).numpy()
+    except ImportError:
+        # 兼容旧版本
+        if hasattr(dinv.physics.blur, 'gaussian_blur'):
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                gauss_kernel_np = dinv.physics.blur.gaussian_blur(sigma=(2.0, 2.0)).numpy()
+        else:
+            raise AttributeError("gaussian_blur not available")
 except Exception:
     # Fallback: 手动构造简单的高斯核或单位冲激核
     size = 15
@@ -595,9 +645,15 @@ except Exception as e:
 if has_blur:
     print("\n--- 5b. ★ 组合算子: 模糊 → 下采样 ---")
     try:
+        # 注意：Blur算子可能会改变图像尺寸（边界效应），需要确保尺寸匹配
+        # 方案1：使用padding='same'保持尺寸（如果Blur支持）
+        # 方案2：先检查模糊后的尺寸，再创建Downsampling
+        y_blurred_test = blur_phys(x_true)
+        _, _, H_blur, W_blur = y_blurred_test.shape
+        
         # 组合算子: y = D(K(x))，即先模糊再下采样
         # deepinv中用乘法表示算子组合，执行顺序从右到左: D * K 表示先应用K再应用D
-        composite_phys = Downsampling(factor=4, img_size=(3, 256, 256), device=device) * blur_phys
+        composite_phys = Downsampling(factor=4, img_size=(3, H_blur, W_blur), device=device) * blur_phys
         y_composite = composite_phys(x_true)
         adj_err_composite = composite_phys.adjointness_test(x_true)
         print(f"  组合算子(模糊+下采样)伴随误差: {adj_err_composite:.2e}")
@@ -616,9 +672,16 @@ try:
     mri_phys = MRI(img_size=(256, 256), device=device, acceleration=4)
     # MRI通常是单通道，将RGB转灰度（ITU-R BT.709标准）
     x_gray = 0.2126*x_true[:,0:1] + 0.7152*x_true[:,1:2] + 0.0722*x_true[:,2:3]
-    y_mri = mri_phys(x_gray)
     
-    adj_err_mri = mri_phys.adjointness_test(x_gray)
+    # MRI算子期望输入是复数格式，需要将实数图像转换为复数
+    # 方法：将灰度图作为实部，虚部为0
+    x_gray_complex = torch.view_as_complex(
+        torch.stack([x_gray.squeeze(1), torch.zeros_like(x_gray.squeeze(1))], dim=-1)
+    ).unsqueeze(1)  # (B, 1, H, W) complex64
+    
+    y_mri = mri_phys(x_gray_complex)
+    
+    adj_err_mri = mri_phys.adjointness_test(x_gray_complex)
     print(f"  MRI算子伴随误差: {adj_err_mri:.2e}")
     print(f"  MRI观测 shape: {y_mri.shape}")
     has_mri = True

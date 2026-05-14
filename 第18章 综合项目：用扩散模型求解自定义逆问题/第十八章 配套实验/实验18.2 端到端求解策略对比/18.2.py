@@ -171,7 +171,15 @@ print("="*70)
 
 # 加载测试图像
 x_true = load_example("celeba_example.jpg", img_size=(256, 256), resize_mode='resize')
-x_true = x_true.unsqueeze(0).to(device)
+print(f"load_example 返回 shape: {x_true.shape}, ndim: {x_true.ndim}")
+# 确保是4D张量 (B, C, H, W)
+if x_true.ndim == 3:
+    x_true = x_true.unsqueeze(0)  # (C, H, W) -> (1, C, H, W)
+elif x_true.ndim == 5:
+    # 可能是 (1, 1, C, H, W)，需要squeeze
+    x_true = x_true.squeeze(0) if x_true.shape[0] == 1 else x_true[0]
+x_true = x_true.to(device)
+print(f"处理后 x_true shape: {x_true.shape}")
 print(f"测试图像 shape: {x_true.shape}")
 
 # 定义退化场景
@@ -180,14 +188,25 @@ scenarios = {}
 # 1a. 去模糊场景
 print("\n构造去模糊场景...")
 try:
+    # 使用新的API路径，避免DeprecationWarning
+    try:
+        from deepinv.physics.functional import gaussian_blur as gauss_blur_func
+        light_kernel = gauss_blur_func(sigma=(1.5, 1.5))
+        heavy_kernel = gauss_blur_func(sigma=(3.0, 3.0))
+    except ImportError:
+        # 兼容旧版本
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            light_kernel = dinv.physics.blur.gaussian_blur(sigma=(1.5, 1.5))
+            heavy_kernel = dinv.physics.blur.gaussian_blur(sigma=(3.0, 3.0))
+    
     # 轻度模糊
-    light_blur = Blur(filter=dinv.physics.blur.gaussian_blur(sigma=(1.5, 1.5)),
-                      device=device)
+    light_blur = Blur(filter=light_kernel, device=device)
     light_blur.set_noise_model(GaussianNoise(sigma=0.01))
     
     # 重度模糊
-    heavy_blur = Blur(filter=dinv.physics.blur.gaussian_blur(sigma=(3.0, 3.0)),
-                      device=device)
+    heavy_blur = Blur(filter=heavy_kernel, device=device)
     heavy_blur.set_noise_model(GaussianNoise(sigma=0.05))
     
     y_light_blur = light_blur(x_true)
@@ -205,11 +224,19 @@ except Exception as e:
 # 1b. 超分辨率场景
 print("\n构造超分辨率场景...")
 try:
-    sr4 = Downsampling(factor=4, img_size=(3, 256, 256), device=device)
+    # 注意：filter参数是必需的，否则prox_l2会因Fh=None而失败
+    # bicubic是推荐的默认选择，提供抗混叠滤波
+    sr2 = Downsampling(factor=2, filter='bicubic', img_size=(3, 256, 256), device=device)
+    sr2.set_noise_model(GaussianNoise(sigma=0.01))
+    
+    sr4 = Downsampling(factor=4, filter='bicubic', img_size=(3, 256, 256), device=device)
     sr4.set_noise_model(GaussianNoise(sigma=0.01))
     
+    y_sr2 = sr2(x_true)
     y_sr4 = sr4(x_true)
+    scenarios['2倍超分'] = {'physics': sr2, 'y': y_sr2}
     scenarios['4倍超分'] = {'physics': sr4, 'y': y_sr4}
+    print(f"  2×超分: 观测shape={y_sr2.shape}, PSNR={compute_psnr(x_true, sr2.A_adjoint(y_sr2)):.2f} dB")
     print(f"  4×超分: 观测shape={y_sr4.shape}, PSNR={compute_psnr(x_true, sr4.A_adjoint(y_sr4)):.2f} dB")
     has_sr_scenario = True
 except Exception as e:
@@ -238,9 +265,19 @@ except Exception as e:
 
 # Step 1 可视化
 fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-axes[0, 0].imshow(x_true[0].cpu().permute(1, 2, 0).clamp(0, 1))
-axes[0, 0].set_title('原始图像', fontsize=13)
-axes[0, 0].axis('off')
+# 安全地显示图像，处理不同维度的情况
+def safe_imshow(ax, img_tensor, title):
+    """安全显示图像，自动处理3D/4D/5D张量"""
+    if img_tensor.ndim == 5:
+        img_tensor = img_tensor[0]  # (1, C, H, W) -> (C, H, W)
+    if img_tensor.ndim == 4:
+        img_tensor = img_tensor[0]  # (B, C, H, W) -> (C, H, W)
+    # 现在是 (C, H, W)，permute to (H, W, C)
+    ax.imshow(img_tensor.cpu().permute(1, 2, 0).clamp(0, 1))
+    ax.set_title(title, fontsize=13)
+    ax.axis('off')
+
+safe_imshow(axes[0, 0], x_true, '原始图像')
 
 vis_items = []
 if has_blur_scenario:
@@ -323,49 +360,79 @@ for scenario_name, scenario_data in scenarios.items():
         print(f"  Tikhonov求解失败: {e}")
 
     # 2b. TV正则化
+    # 教学说明：TV正则化求解 min_x ||Ax-y||² + λ||∇x||₁
+    #   - 旧版deepinv使用PDIteration（Primal-Dual原始-对偶迭代）
+    #   - 新版deepinv重构了优化框架，提供optim_builder/ADMM/PGD等新接口
+    #   - 本代码采用"新API优先+手动实现保底"的策略，兼容各版本
     try:
         from deepinv.optim import TVPrior, L2 as DataFidelity_L2
-
+        
         # TV: min_x ||Ax-y||² + λ||∇x||_1
         lambda_tv = 0.05  # TV正则化参数
-
-        prior_tv = TVPrior(def_crit=1e-8, n_it_max=500)
+        
+        prior_tv = TVPrior(def_crit=1e-4, n_it_max=50)  # 平衡精度与速度的教学参数
         data_fidelity_tv = DataFidelity_L2()
-
-        # 使用deepinv优化框架求解TV正则化问题
+        
+        # 尝试使用新版deepinv的优化器（优先方案）
         t_start = time.time()
-        from deepinv.optim import BaseOptim, OptimIterator
-        from deepinv.optim.optim_iterators import PDIteration
-
-        # 构建Primal-Dual迭代求解TV正则化
-        iterator = PDIteration()
-        model_tv = BaseOptim(
-            iterator=iterator,
-            data_fidelity=data_fidelity_tv,
-            prior=prior_tv,
-            params_algo={'lambda': lambda_tv, 'stepsize': 1.0},
-            max_iter=100,
-            early_stop=True,
-            crit_conv='residual',
-            thres_conv=1e-4,
-        )
-        x_tv = model_tv(y, physics)
+        
+        # 方案1: 尝试使用 optim_builder（如果可用）
+        try:
+            from deepinv.optim import optim_builder
+            optimizer = optim_builder(
+                'PGD',  # Proximal Gradient Descent
+                data_fidelity=data_fidelity_tv,
+                prior=prior_tv,
+                params={'stepsize': 0.1, 'lambda': lambda_tv},
+                max_iter=100
+            )
+            x_tv = optimizer(y, physics)
+            print("  ✓ 使用 optim_builder (PGD)")
+        except ImportError:
+            # 方案2: 尝试使用 ADMM
+            try:
+                from deepinv.optim import ADMM
+                optimizer = ADMM(
+                    data_fidelity=data_fidelity_tv,
+                    prior=prior_tv,
+                    max_iter=100,
+                    params_algo={'lambda': lambda_tv}
+                )
+                x_tv = optimizer(y, physics)
+                print("  ✓ 使用 ADMM 优化器")
+            except ImportError:
+                # 方案3: 尝试使用 PGD 类
+                try:
+                    from deepinv.optim import PGD
+                    optimizer = PGD(
+                        data_fidelity=data_fidelity_tv,
+                        prior=prior_tv,
+                        max_iter=100,
+                        params_algo={'stepsize': 0.1, 'lambda': lambda_tv}
+                    )
+                    x_tv = optimizer(y, physics)
+                    print("  ✓ 使用 PGD 优化器")
+                except ImportError:
+                    raise ImportError("新版优化器均不可用")
+        
         t_tv = time.time() - t_start
-
         psnr_tv = compute_psnr(x_true, x_tv)
         ssim_tv = compute_ssim(x_true, x_tv)
         results[scenario_name]['TV正则化'] = {
             'psnr': psnr_tv, 'ssim': ssim_tv, 'time': t_tv, 'img': x_tv, 'lambda': lambda_tv
         }
-        print(f"  TV正则化:   PSNR={psnr_tv:.2f} dB, SSIM={ssim_tv:.4f}, 耗时={t_tv:.3f}s, λ={lambda_tv}")
+        print(f"  TV(新优化器): PSNR={psnr_tv:.2f} dB, SSIM={ssim_tv:.4f}, 耗时={t_tv:.3f}s, λ={lambda_tv}")
+        
     except Exception as e:
-        print(f"  TV正则化求解失败: {e}")
+        print(f"  TV正则化(新优化器)失败: {e}")
+        print("  回退到手动TV梯度下降...")
+        print("  [教学提示] 手动实现虽然较慢，但能清晰展示TV优化的核心思想")
         # 备用方案：手动梯度下降 + TV近端算子
         try:
             print("  尝试手动TV梯度下降...")
             lambda_tv = 0.05
             lr_tv = 0.01
-            n_tv_iter = 200
+            n_tv_iter = 100  # 减少迭代次数
             x_tv = physics.A_adjoint(y).clone().detach().requires_grad_(False)
             t_start = time.time()
             for it in range(n_tv_iter):
@@ -388,6 +455,8 @@ for scenario_name, scenario_data in scenarios.items():
                 tv_grad = tv_grad_x + tv_grad_y  # (B,C,H,W)
                 x_tv = x_tv - lr_tv * (grad_data + lambda_tv * tv_grad)
                 x_tv = x_tv.clamp(0, 1)
+                if (it + 1) % 25 == 0:
+                    print(f"    TV迭代 {it+1}/{n_tv_iter} 完成")
             t_tv = time.time() - t_start
 
             psnr_tv = compute_psnr(x_true, x_tv)
@@ -397,7 +466,9 @@ for scenario_name, scenario_data in scenarios.items():
             }
             print(f"  TV手动:     PSNR={psnr_tv:.2f} dB, SSIM={ssim_tv:.4f}, 耗时={t_tv:.3f}s, λ={lambda_tv}")
         except Exception as e2:
+            import traceback
             print(f"  手动TV也失败: {e2}")
+            traceback.print_exc()
 
     # 2c. 伴随重建（零填充）
     try:
@@ -443,17 +514,46 @@ except Exception as e:
     has_dpir = False
 
 if has_dpir:
+    # 教学说明：DPIR (Deep Plug-and-Play Image Restoration)
+    #   - 核心思想：将优化问题的近端算子替换为预训练去噪器
+    #   - 旧版deepinv使用DPIR类封装PnP-ADMM/HQS算法
+    #   - 新版deepinv可能重构了接口，本代码采用"新API优先+手动实现保底"
     for scenario_name, scenario_data in scenarios.items():
         physics = scenario_data['physics']
         y = scenario_data['y']
         print(f"\n--- 场景: {scenario_name} ---")
         
+        # 根据场景确定噪声水平（DPIR需要此参数来设置迭代参数）
+        if '重度' in scenario_name:
+            noise_sigma = 0.05
+        elif '80%' in scenario_name:
+            noise_sigma = 0.01
+        else:
+            noise_sigma = 0.01
+        
         try:
-            from deepinv.optim import DPIR
+            from deepinv.optim.optimizers import optim_builder
+            from deepinv.optim.prior import PnP
+            from deepinv.optim.data_fidelity import L2
+            from deepinv.optim.dpir import get_DPIR_params
+            
+            # 使用 optim_builder 方式创建 DPIR（更稳定）
+            sigma_denoiser, stepsize, max_iter = get_DPIR_params(noise_sigma, device=device)
+            params_algo = {"stepsize": stepsize, "g_param": sigma_denoiser}
+            prior = PnP(denoiser=denoiser_drunet)
+            data_fidelity = L2()
             
             t_start = time.time()
-            model_dpir = DPIR(denoiser=denoiser_drunet)
-            x_dpir = model_dpir(y, physics)
+            model = optim_builder(
+                iteration="HQS",
+                prior=prior,
+                data_fidelity=data_fidelity,
+                early_stop=False,
+                max_iter=max_iter,
+                verbose=False,
+                params_algo=params_algo,
+            )
+            x_dpir = model(y, physics)
             t_dpir = time.time() - t_start
             
             psnr_dpir = compute_psnr(x_true, x_dpir)
@@ -463,18 +563,21 @@ if has_dpir:
             }
             print(f"  DPIR:  PSNR={psnr_dpir:.2f} dB, SSIM={ssim_dpir:.4f}, 耗时={t_dpir:.3f}s")
         except Exception as e:
-            print(f"  DPIR求解失败: {e}")
-            # 尝试手动实现PnP迭代
+            import traceback
+            print(f"  DPIR(新API)求解失败: {e}")
+            print(f"  [调试信息] physics类型: {type(physics).__name__}")
+            print(f"  [调试信息] y shape: {y.shape if hasattr(y, 'shape') else 'N/A'}")
+            traceback.print_exc()
+            print("  回退到手动PnP-HQS实现...")
             try:
                 print("  尝试手动PnP-HQS实现...")
-                from deepinv.optim.data_fidelity import L2
-                data_fidelity = L2()
                 
                 # PnP-HQS: x_{k+1} = denoiser(prox_{data}(x_k))
+                # 教学提示：手动实现清晰展示了PnP的核心思想
                 x_pnp = physics.A_adjoint(y).clone()
-                n_iter = 30
-                sigma_pnp = 0.1  # 初始噪声水平
-                step_size = 1.0
+                n_iter = 20  # 减少迭代次数，加快演示
+                sigma_pnp = noise_sigma * 2  # 初始噪声水平
+                step_size = 0.5  # 适中的步长
                 t_start = time.time()
                 
                 for it in range(n_iter):
@@ -485,6 +588,8 @@ if has_dpir:
                     sigma_cur = max(sigma_pnp * (1 - it / n_iter), 0.01)
                     noise_level = torch.tensor([sigma_cur]).to(device)
                     x_pnp = denoiser_drunet(x_pnp, noise_level)
+                    if (it + 1) % 5 == 0:
+                        print(f"    迭代 {it+1}/{n_iter} 完成")
                 
                 t_pnp = time.time() - t_start
                 psnr_pnp = compute_psnr(x_true, x_pnp)
@@ -494,7 +599,9 @@ if has_dpir:
                 }
                 print(f"  PnP-HQS:  PSNR={psnr_pnp:.2f} dB, SSIM={ssim_pnp:.4f}, 耗时={t_pnp:.3f}s")
             except Exception as e2:
+                import traceback
                 print(f"  手动PnP也失败: {e2}")
+                traceback.print_exc()
 
 
 # ========================================================================
@@ -525,6 +632,10 @@ except Exception as e:
     has_diffpir = False
 
 if has_diffpir:
+    # 教学说明：DiffPIR (Diffusion Plug-and-Play Image Restoration)
+    #   - 核心思想：将扩散模型作为PnP去噪器，结合数据保真项
+    #   - 旧版deepinv使用DiffPIR类封装扩散采样算法
+    #   - 新版deepinv可能重构了接口，本代码采用"新API优先+DDRM备选"
     # 选择代表性场景测试扩散方法（较慢，不全测）
     diff_scenarios = list(scenarios.keys())[:3]  # 最多测3个场景
     for scenario_name in diff_scenarios:
@@ -558,8 +669,8 @@ if has_diffpir:
             }
             print(f"  DiffPIR:  PSNR={psnr_diffpir:.2f} dB, SSIM={ssim_diffpir:.4f}, 耗时={t_diffpir:.3f}s")
         except Exception as e:
-            print(f"  DiffPIR求解失败: {e}")
-            # 尝试使用DDRM
+            print(f"  DiffPIR(新API)求解失败: {e}")
+            print("  回退到DDRM算法...")
             try:
                 print("  尝试DDRM算法...")
                 from deepinv.sampling import DDRM
@@ -667,20 +778,14 @@ demo_scenario = list(results.keys())[0] if results else None
 if demo_scenario:
     fig, axes = plt.subplots(1, min(len(results[demo_scenario]) + 2, 5), figsize=(4 * min(len(results[demo_scenario]) + 2, 5), 4))
     
-    axes[0].imshow(x_true[0].cpu().permute(1, 2, 0).clamp(0, 1))
-    axes[0].set_title('真值', fontsize=12)
-    axes[0].axis('off')
+    safe_imshow(axes[0], x_true, '真值')
     
-    axes[1].imshow(scenarios[demo_scenario]['y'][0].cpu().permute(1, 2, 0).clamp(0, 1))
-    axes[1].set_title(f'观测\n({demo_scenario})', fontsize=11)
-    axes[1].axis('off')
+    safe_imshow(axes[1], scenarios[demo_scenario]['y'], f'观测\n({demo_scenario})')
     
     for idx, (method_name, metrics) in enumerate(results[demo_scenario].items()):
         if idx + 2 < len(axes):
             img = metrics['img']
-            axes[idx+2].imshow(img[0].cpu().permute(1, 2, 0).clamp(0, 1))
-            axes[idx+2].set_title(f'{method_name}\nPSNR={metrics["psnr"]:.1f}dB, SSIM={metrics.get("ssim", 0):.3f}', fontsize=10)
-            axes[idx+2].axis('off')
+            safe_imshow(axes[idx+2], img, f'{method_name}\nPSNR={metrics["psnr"]:.1f}dB, SSIM={metrics.get("ssim", 0):.3f}')
     
     fig.suptitle(f'重建对比: {demo_scenario}', fontsize=14)
     plt.tight_layout()

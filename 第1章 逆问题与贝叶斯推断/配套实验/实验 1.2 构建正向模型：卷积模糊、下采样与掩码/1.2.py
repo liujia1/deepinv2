@@ -2,7 +2,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from skimage.data import astronaut
 from skimage.color import rgb2gray
-from skimage.transform import resize
 import matplotlib as mpl
 import warnings
 import logging
@@ -16,7 +15,7 @@ warnings.filterwarnings("ignore", message=".*glyph.*")
 plt.rcParams['axes.unicode_minus'] = False
 
 import platform
-from matplotlib.font_manager import FontManager, FontProperties
+from matplotlib.font_manager import FontManager
 
 def _find_chinese_font():
     """自动检测系统中可用的中文字体，兼容 Windows / Linux"""
@@ -103,14 +102,27 @@ y_ds = downsample_average(x, factor=4)
 y_mask, mask = apply_mask(x, keep_ratio=0.5)
 
 # ---- 6. DFT 域直接反卷积（去模糊）----
-# 无噪声版本：x_hat = F^{-1}(F(y)/F(h))
+# 教学说明：为什么无噪声和含噪声需要不同的正则化策略？
+#
+# 无噪声情况：y_blur = H * X（精确的频域关系）
+#   - 即使 |H(k)| ≈ 0（高频衰减），分子 F(y_blur)(k) 也同时趋近于 0
+#   - 所以 0/0 的极限有意义，添加 1e-15 仅为了避免除以零错误
+#   - 结果：反卷积能完美恢复原始图像
+#
+# 含噪声情况：y_blur_noisy = H * X + noise
+#   - 在高频处：|H(k)| ≈ 0，但 noise(k) 不为零
+#   - 导致 noise(k) / (H(k) + ε) ≈ noise(k) / ε → ∞ （如果 ε 太小）
+#   - 结果：噪声被极度放大，重建失败
+#   - 解决方案：增大分母稳定项或使用 Wiener 滤波
+
 y_blur_noisy = y_blur + 0.01 * np.random.randn(*y_blur.shape)
 
-# 无噪声直接反卷积
+# 无噪声直接反卷积：分母极小也没问题，因为 y_blur 本身就在 H 的值域内
 H = np.fft.fft2(h)
 x_deconv_clean = np.real(np.fft.ifft2(np.fft.fft2(y_blur) / (H + 1e-15)))
 
-# 含噪直接反卷积
+# 含噪直接反卷积：同样的分母会让高频噪声被 1/H 极度放大
+# 这里故意使用相同的 1e-15，以展示"为什么需要正则化"
 x_deconv_noisy = np.real(np.fft.ifft2(np.fft.fft2(y_blur_noisy) / (H + 1e-15)))
 
 # ---- 7. 可视化 ----
@@ -145,11 +157,9 @@ axes[1, 2].imshow(np.log10(np.abs(np.fft.fftshift(H)) + 1e-15), cmap='hot')
 axes[1, 2].set_title('PSF 频谱 |H(k)|\n高频趋零→1/H爆炸')
 axes[1, 2].axis('off')
 
-# 掩码零填充上采样
-x_zero_fill = np.zeros_like(x)
-x_zero_fill[mask] = y_mask[mask]
-axes[1, 3].imshow(x_zero_fill, cmap='gray')
-axes[1, 3].set_title('掩码零填充\n缺失信息无法恢复')
+# 掩码可视化：展示哪些位置的像素丢失了（教学意义更强）
+axes[1, 3].imshow(mask.astype(float), cmap='gray')
+axes[1, 3].set_title('掩码图案 (50%保留)\n白色=保留, 黑色=丢失')
 axes[1, 3].axis('off')
 
 plt.tight_layout()

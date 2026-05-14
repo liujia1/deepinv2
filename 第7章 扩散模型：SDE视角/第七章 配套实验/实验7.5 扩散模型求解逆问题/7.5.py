@@ -255,11 +255,13 @@ if HAS_DEEPINV:
             model = model_cls(pretrained=None, **kwargs)
             ckpt = torch.load(local_path, map_location=lambda storage, loc: storage, weights_only=False)
             model.load_state_dict(ckpt, strict=True)
-            # NCSNpp预训练模型需要额外设置
+            # NCSNpp预训练模型需要额外设置（与deepinv官方pretrained='download'行为一致）
+            # 这些属性控制推理时的值域处理，若deepinv版本更新导致属性名变化，值域检查会报警告
             if model_name == "NCSNpp":
                 model.precondition_type = "edm"
                 model.pixel_std = 0.5
                 model._was_trained_on_minus_one_one = True
+                print(f"  -> NCSNpp属性已设置: precondition_type=edm, pixel_std=0.5, _was_trained_on_minus_one_one=True")
             model.eval()
             return model
         else:
@@ -267,32 +269,25 @@ if HAS_DEEPINV:
             return model_cls(pretrained="download", **kwargs)
     
     def _load_blur_kernel(device):
-        """加载模糊核：优先从models/目录本地加载Levin09.npy，不存在则用高斯核替代"""
+        """加载模糊核：从models/目录本地加载Levin09.npy"""
         levin_path = os.path.join(_MODELS_DIR, "Levin09.npy")
         if os.path.isfile(levin_path):
             print(f"  -> 从本地加载模糊核: {levin_path}")
             kernels = np.load(levin_path, allow_pickle=True)
-            # Levin09.npy存储为object数组，包含8个不同大小的模糊核
-            # 取index=1（17x17的运动模糊核），与deepinv默认一致
             kernel = np.array(kernels[1], dtype=np.float32)
             return torch.tensor(kernel, dtype=torch.float32, device=device)
         else:
-            # 尝试从deepinv下载（可能在有网络的环境下可用）
             try:
                 from deepinv.utils.demo import load_degradation
                 print(f"  -> 本地无Levin09.npy，尝试从deepinv下载...")
                 kernel = load_degradation("Levin09.npy", "kernels", index=1)
                 return torch.tensor(kernel, dtype=torch.float32, device=device)
-            except Exception:
-                # 最后的回退：用高斯模糊核
-                print(f"  -> 本地无Levin09.npy且无法下载，使用高斯模糊核替代")
-                print(f"     （建议将Levin09.npy放入models/目录以获得更真实的运动模糊效果）")
-                size, sigma = 15, 1.5
-                coords = np.arange(size) - size // 2
-                g = np.exp(-(coords**2) / (2 * sigma**2))
-                kernel = np.outer(g, g)
-                kernel = (kernel / kernel.sum()).astype(np.float32)
-                return torch.tensor(kernel, dtype=torch.float32, device=device)
+            except Exception as e:
+                raise FileNotFoundError(
+                    f"无法加载模糊核 Levin09.npy。\n"
+                    f"请将 Levin09.npy 放入 models/ 目录，或确保网络可访问。\n"
+                    f"原始错误: {e}"
+                )
     
     if device.type == "cuda":
         try:
@@ -310,8 +305,17 @@ if HAS_DEEPINV:
                 noise_model=dinv.physics.GaussianNoise(sigma=0.02)
             )
             
-            # 使用随机图像作为测试（避免从网络下载数据集）
-            x_test = torch.rand(1, 3, 64, 64, device=device)
+            # 加载真实测试图像
+            try:
+                x_test = dinv.utils.load_url_image(
+                    url="https://deepinv-data.s3.amazonaws.com/demo_images/face.png",
+                    img_size=64
+                ).to(device)
+                print(f"测试图像加载成功: shape={x_test.shape}")
+            except Exception as e:
+                print(f"无法从网络加载测试图像: {e}")
+                print("使用本地备用图像...")
+                x_test = torch.rand(1, 3, 64, 64, device=device)
             
             # 生成观测
             y = physics(x_test)
@@ -320,7 +324,11 @@ if HAS_DEEPINV:
             dps_fidelity = DPSDataFidelity(denoiser=denoiser)
             
             # VE-SDE
-            sde = VarianceExplodingDiffusion(sigma_min=0.01, sigma_max=1346, device=device)
+            sde = VarianceExplodingDiffusion(
+                sigma_min=0.01,
+                sigma_max=1346,  # NCSNpp官方FFHQ训练参数，与预训练模型匹配
+                device=device
+            )
             # EulerSolver需要传入timestep tensor（deepinv 0.4.0+不支持整数）
             n_steps = 250
             timesteps = torch.linspace(sde.T, 0, n_steps + 1, device=device)
@@ -340,6 +348,15 @@ if HAS_DEEPINV:
             x_hat, trajectory = model(y, physics, seed=42, get_trajectory=True, denoise_output=True)
             
             print(f"重建结果: shape={x_hat.shape}, min={x_hat.min():.3f}, max={x_hat.max():.3f}")
+            
+            # 输出范围检查：正常人脸重建应在[0,1]附近，不应整体偏向某一端
+            x_hat_min, x_hat_max = x_hat.min().item(), x_hat.max().item()
+            if x_hat_min < -0.5 or x_hat_max > 1.5:
+                print(f"  ⚠️ 警告: 重建值域异常 [{x_hat_min:.3f}, {x_hat_max:.3f}]，可能存在值域处理问题")
+            elif x_hat_min > 0.3 and x_hat_max < 0.7:
+                print(f"  ⚠️ 警告: 重建值域过窄 [{x_hat_min:.3f}, {x_hat_max:.3f}]，输出可能偏灰白")
+            else:
+                print(f"  ✓ 重建值域正常: [{x_hat_min:.3f}, {x_hat_max:.3f}]")
             
             # 保存结果
             fig, axes = plt.subplots(1, 3, figsize=(12, 4))
@@ -416,7 +433,7 @@ if HAS_DEEPINV and torch.cuda.is_available():
         axes[0].set_title('观测 y=Ax+n')
         axes[0].axis('off')
         
-        if 'x_hat' in dir():
+        if 'x_hat' in locals():
             x_dps_vis = x_hat[0].cpu().permute(1, 2, 0).numpy().clip(0, 1)
             axes[1].imshow(x_dps_vis)
             axes[1].set_title('DPS重建')
@@ -474,14 +491,19 @@ axes[0].legend()
 axes[0].grid(alpha=0.3)
 axes[0].set_xlim(-6, 6)
 
-# 后验得分 = 先验得分 + 似然梯度
+# 后验得分 = 先验得分 + 似然梯度（DPS近似）
 t_demo = 0.3
+mean_t, std_t = vp_marginal(t_demo)
 prior_s = vp_score_analytic(x_grid, t_demo)
-like_s = (y_obs - x_grid) / sigma_obs**2  # 似然梯度（简化）
-axes[1].plot(x_grid, prior_s, 'b-', lw=2, label='Prior score ∇log p(x)')
-axes[1].plot(x_grid, like_s, 'r--', lw=2, label='Likelihood grad ∇log p(y|x)')
-axes[1].plot(x_grid, prior_s + like_s * vp_marginal(t_demo)[0], 'g-', lw=2, label='Posterior score (approx)')
-axes[1].set_title(f'得分分解 (t={t_demo})')
+
+# DPS似然梯度：用Tweedie估计x̂_0，然后计算梯度
+x0_hat = (x_grid + std_t**2 * prior_s) / (mean_t + 1e-10)
+like_s_dps = mean_t / sigma_obs**2 * (y_obs - x0_hat)
+
+axes[1].plot(x_grid, prior_s, 'b-', lw=2, label='Prior score ∇log p(x_t)')
+axes[1].plot(x_grid, like_s_dps, 'r--', lw=2, label='Likelihood grad (DPS)')
+axes[1].plot(x_grid, prior_s + like_s_dps, 'g-', lw=2, label='Posterior score')
+axes[1].set_title(f'得分分解 (t={t_demo:.1f})')
 axes[1].legend()
 axes[1].grid(alpha=0.3)
 axes[1].set_xlim(-6, 6)

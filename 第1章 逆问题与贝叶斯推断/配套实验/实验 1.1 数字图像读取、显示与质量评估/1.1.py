@@ -1,14 +1,12 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from skimage.data import astronaut, shepp_logan_phantom
+from skimage.data import astronaut
 from skimage.color import rgb2gray
-from skimage.transform import resize
 from skimage.metrics import (
     mean_squared_error,
     peak_signal_noise_ratio,
     structural_similarity,
 )
-from skimage.util import random_noise
 import warnings
 import logging
 
@@ -67,7 +65,12 @@ x_color = astronaut()
 x = rgb2gray(x_color)  # 转为灰度，值域 [0, 1]
 
 # ---- 2. 添加不同水平的高斯噪声 ----
+# 注意：图像值域为 [0, 1]，σ=0.40 表示噪声幅度达到信号幅度的 40%，属于极强噪声
 noise_levels = [0.01, 0.03, 0.05, 0.10, 0.20, 0.40]
+print(f"图像值域: [{x.min():.2f}, {x.max():.2f}]，噪声标准差 σ 相对于信号幅度的比例:")
+for sigma in noise_levels:
+    print(f"  σ={sigma:.2f} → 噪声占信号幅度的 {sigma*100:.0f}%")
+
 noisy_images = []
 for sigma in noise_levels:
     y = x + sigma * np.random.randn(*x.shape)
@@ -115,14 +118,17 @@ axes[1, 2].set_title('SSIM vs 噪声水平')
 axes[1, 2].grid(True)
 
 # 对比三种度量的归一化趋势
+# 注意：MSE 越大图像越差，PSNR/SSIM 越大图像越好
+# 为统一语义（值越高=质量越好），对 MSE 做反转：1 - mse_norm
 mse_norm = (np.array(mse_vals) - min(mse_vals)) / (max(mse_vals) - min(mse_vals) + 1e-10)
+mse_norm = 1 - mse_norm  # 反转：MSE越小质量越好，反转后越大越好
 psnr_norm = (np.array(psnr_vals) - min(psnr_vals)) / (max(psnr_vals) - min(psnr_vals) + 1e-10)
 ssim_norm = (np.array(ssim_vals) - min(ssim_vals)) / (max(ssim_vals) - min(ssim_vals) + 1e-10)
-axes[1, 3].plot(noise_levels, mse_norm, 'o-', label='MSE (归一化)')
+axes[1, 3].plot(noise_levels, mse_norm, 'o-', label='MSE (反转归一化)')
 axes[1, 3].plot(noise_levels, psnr_norm, 's-', label='PSNR (归一化)')
 axes[1, 3].plot(noise_levels, ssim_norm, '^-', label='SSIM (归一化)')
 axes[1, 3].set_xlabel('噪声标准差 σ')
-axes[1, 3].set_ylabel('归一化度量值')
+axes[1, 3].set_ylabel('归一化度量值（越高越好）')
 axes[1, 3].set_title('三种度量归一化对比')
 axes[1, 3].legend()
 axes[1, 3].grid(True)

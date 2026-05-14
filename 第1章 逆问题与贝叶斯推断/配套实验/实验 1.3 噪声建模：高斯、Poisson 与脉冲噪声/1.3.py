@@ -4,7 +4,6 @@ from skimage.data import shepp_logan_phantom
 from skimage.transform import resize
 from skimage.util import random_noise
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
-import matplotlib as mpl
 import warnings
 import logging
 
@@ -17,7 +16,7 @@ warnings.filterwarnings("ignore", message=".*glyph.*")
 plt.rcParams['axes.unicode_minus'] = False
 
 import platform
-from matplotlib.font_manager import FontManager, FontProperties
+from matplotlib.font_manager import FontManager
 
 def _find_chinese_font():
     """自动检测系统中可用的中文字体，兼容 Windows / Linux"""
@@ -59,7 +58,8 @@ np.random.seed(42)
 
 # ---- 1. 加载图像（使用 Shepp-Logan 幻影，含亮区和暗区）----
 n = 256
-x = resize(shepp_logan_phantom(), (n, n), order=0, preserve_range=True, anti_aliasing=True)
+# 最近邻插值：保留幻影的硬边缘，不需要抗锯齿
+x = resize(shepp_logan_phantom(), (n, n), order=0, preserve_range=True, anti_aliasing=False)
 x = x / x.max()  # 归一化到 [0, 1]
 
 # ---- 2. 添加三种噪声 ----
@@ -72,6 +72,8 @@ y_gauss = np.clip(y_gauss, 0, 1)
 # 调节 gain 使 PSNR 与高斯噪声大致相当
 gain = 0.01
 y_poisson = np.random.poisson(x / gain).astype(np.float64) * gain
+# 注意：clip 操作会截断高亮度区域的噪声，导致实测 σ 在高亮度处低于理论值
+# 这是因为当 x 接近 1 时，λ = x/gain = 100，方差较大，部分样本会被 clip 到 1
 y_poisson = np.clip(y_poisson, 0, 1)
 
 # (c) 脉冲噪声（椒盐噪声）：随机像素被替换为 0 或 1
@@ -102,7 +104,8 @@ for i, (y, name) in enumerate(zip(noisy_list, names)):
 
     # 噪声图像 = y - x
     noise = y - x
-    vmax = max(np.abs(noise).max() * 0.8, 0.1)
+    # 使用完整范围显示噪声，避免截断导致的教学误解
+    vmax = max(np.abs(noise).max(), 0.1)
     axes[i, 1].imshow(noise, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
     axes[i, 1].set_title(f'噪声分量 (y - x)\nmax|ε|={np.abs(noise).max():.3f}')
     axes[i, 1].axis('off')
