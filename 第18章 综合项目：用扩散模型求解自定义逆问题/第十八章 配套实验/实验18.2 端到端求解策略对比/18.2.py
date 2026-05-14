@@ -207,13 +207,13 @@ try:
             light_kernel = dinv.physics.blur.gaussian_blur(sigma=(1.5, 1.5))
             heavy_kernel = dinv.physics.blur.gaussian_blur(sigma=(3.0, 3.0))
     
-    # 使用 "constant" padding 确保卷积输出与输入同尺寸
-    # deepinv 支持的 padding: "valid"/"circular"/"replicate"/"reflect"/"constant"/"zeros"
-    light_blur = Blur(filter=light_kernel, padding="constant", device=device)
+    # 使用 "circular" padding 确保卷积输出与输入同尺寸
+    # 注意：constant/valid padding 会导致输出尺寸变小，无法与原图比较PSNR
+    light_blur = Blur(filter=light_kernel, padding="circular", device=device)
     light_blur.set_noise_model(GaussianNoise(sigma=0.01))
     
     # 重度模糊
-    heavy_blur = Blur(filter=heavy_kernel, padding="constant", device=device)
+    heavy_blur = Blur(filter=heavy_kernel, padding="circular", device=device)
     heavy_blur.set_noise_model(GaussianNoise(sigma=0.05))
     
     y_light_blur = light_blur(x_true)
@@ -405,10 +405,26 @@ for scenario_name, scenario_data in scenarios.items():
     if scenario_name in skip_step2_scenarios:
         print(f"\n--- 场景: {scenario_name} --- (缓存已加载，跳过)")
         continue
-    physics = scenario_data['physics']
-    y = scenario_data['y']
-    print(f"\n--- 场景: {scenario_name} ---")
+        physics = scenario_data['physics']
+        y = scenario_data['y']
+        print(f"\n--- 场景: {scenario_name} ---")
+        
+        # ★ 对超分场景，用双线性插值代替 A_adjoint 作为初始化
+        import torch.nn.functional as F
+        from deepinv.physics import Downsampling as _Downsampling
+        if isinstance(physics, _Downsampling):
+            x_init = F.interpolate(y, size=x_true.shape[-2:], mode='bilinear', align_corners=False)
+        else:
+            x_init = physics.A_adjoint(y)
     results[scenario_name] = {}
+    
+    # ★ 对超分场景，用双线性插值代替 A_adjoint 作为初始化（零填充上采样极暗）
+    import torch.nn.functional as F
+    from deepinv.physics import Downsampling
+    if isinstance(physics, Downsampling):
+        x_init = F.interpolate(y, size=x_true.shape[-2:], mode='bilinear', align_corners=False)
+    else:
+        x_init = physics.A_adjoint(y)
     
     # 2a. Tikhonov正则化 (L2正则化)
     try:
@@ -428,7 +444,7 @@ for scenario_name, scenario_data in scenarios.items():
         lr_tik = 1.0 / (op_norm_sq.item() + lambda_reg)
 
         t_start = time.time()
-        x_tikhonov = physics.A_adjoint(y).clone()
+        x_tikhonov = x_init.clone()
         for _ in range(n_tik_iter):
             # 梯度: ∇(||Ax-y||² + λ||x||²) = A^T(Ax-y) + λx
             grad = physics.A_adjoint(physics.A(x_tikhonov) - y) + lambda_reg * x_tikhonov
@@ -519,7 +535,7 @@ for scenario_name, scenario_data in scenarios.items():
             lambda_tv = 0.05
             lr_tv = 0.01
             n_tv_iter = 100  # 减少迭代次数
-            x_tv = physics.A_adjoint(y).clone().detach().requires_grad_(False)
+            x_tv = x_init.clone().detach().requires_grad_(False)
             t_start = time.time()
             for it in range(n_tv_iter):
                 # 数据保真项梯度
@@ -556,10 +572,10 @@ for scenario_name, scenario_data in scenarios.items():
             print(f"  手动TV也失败: {e2}")
             traceback.print_exc()
 
-    # 2c. 伴随重建（零填充）
+    # 2c. 伴随重建（超分场景用双线性插值，其他场景用A_adjoint）
     try:
         t_start = time.time()
-        x_adj = physics.A_adjoint(y)
+        x_adj = x_init.clone()
         t_adj = time.time() - t_start
         
         psnr_adj = compute_psnr(x_true, x_adj)
@@ -717,6 +733,7 @@ if has_dpir and not skip_step3:
                 params_algo=params_algo,
             )
             x_dpir = model(y, physics)
+            x_dpir = x_dpir.clamp(0, 1)  # ★ 确保输出在[0,1]范围
             t_dpir = time.time() - t_start
             
             psnr_dpir = compute_psnr(x_true, x_dpir)
@@ -737,7 +754,7 @@ if has_dpir and not skip_step3:
                 
                 # PnP-HQS: x_{k+1} = denoiser(prox_{data}(x_k))
                 # 教学提示：手动实现清晰展示了PnP的核心思想
-                x_pnp = physics.A_adjoint(y).clone()
+                x_pnp = x_init.clone()
                 n_iter = 20  # 减少迭代次数，加快演示
                 sigma_pnp = noise_sigma * 2  # 初始噪声水平
                 step_size = 0.5  # 适中的步长
@@ -751,6 +768,7 @@ if has_dpir and not skip_step3:
                     sigma_cur = max(sigma_pnp * (1 - it / n_iter), 0.01)
                     noise_level = torch.tensor([sigma_cur]).to(device)
                     x_pnp = denoiser_drunet(x_pnp, noise_level)
+                    x_pnp = x_pnp.clamp(0, 1)  # ★ 确保输出在[0,1]范围
                     if (it + 1) % 5 == 0:
                         print(f"    迭代 {it+1}/{n_iter} 完成")
                 
@@ -876,7 +894,7 @@ if has_diffpir and not skip_step4:
     #   - 旧版deepinv使用DiffPIR类封装扩散采样算法
     #   - 新版deepinv可能重构了接口，本代码采用"新API优先+DDRM备选"
     # 选择代表性场景测试扩散方法（较慢，不全测）
-    diff_scenarios = list(scenarios.keys())[:3]  # 最多测3个场景
+    diff_scenarios = list(scenarios.keys())[:4]  # 最多测4个场景（含2倍和4倍超分）
     for scenario_name in diff_scenarios:
         # ★ 跳过已有缓存结果的场景
         if scenario_name in skip_step4_scenarios:
@@ -903,6 +921,7 @@ if has_diffpir and not skip_step4:
                 device=device,
             )
             x_diffpir = model_diffpir(y, physics)
+            x_diffpir = x_diffpir.clamp(0, 1)  # ★ 确保输出在[0,1]范围，避免显示过暗或过亮
             t_diffpir = time.time() - t_start
             
             psnr_diffpir = compute_psnr(x_true, x_diffpir)
@@ -924,6 +943,7 @@ if has_diffpir and not skip_step4:
                     verbose=show_progress
                 )
                 x_ddrm = model_ddrm(y, physics)
+                x_ddrm = x_ddrm.clamp(0, 1)  # ★ 确保输出在[0,1]范围
                 t_ddrm = time.time() - t_start
                 
                 psnr_ddrm = compute_psnr(x_true, x_ddrm)
@@ -946,6 +966,7 @@ if has_diffpir and not skip_step4:
                         verbose=show_progress
                     )
                     x_dps = model_dps(y, physics)
+                    x_dps = x_dps.clamp(0, 1)  # ★ 确保输出在[0,1]范围
                     t_dps = time.time() - t_start
                     
                     psnr_dps = compute_psnr(x_true, x_dps)
