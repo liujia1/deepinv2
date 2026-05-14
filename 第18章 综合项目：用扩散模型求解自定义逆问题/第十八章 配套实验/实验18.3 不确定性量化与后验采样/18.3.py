@@ -6,13 +6,13 @@
 实验内容：
 Step 1: 从点估计到分布 —— 单次重建 vs 多次后验采样
 Step 2: 后验采样实现 —— PnP-ULA与扩散采样
-Step 3: 不确定性地图计算 —— 像素级标准差、95%置信区间
+Step 3: 不确定性地图计算 —— 像素级标准差、经验分位数区间（S=8，需S≥30才可靠）
 Step 4: ★ 校准检验 —— 覆盖率与可靠性分析
-Step 5: ★ 加速策略对比 —— DDIM采样 vs 完整扩散采样
+Step 5: ★ 样本数对不确定性估计的影响
 
 ★原创设计：
-- Step 4的校准检验：验证95%置信区间是否真的覆盖95%真值像素
-- Step 5的DDIM加速对比：量化加速采样对不确定性的影响
+- Step 4的校准检验：验证经验分位数区间覆盖率（⚠️ S=8时结果仅供参考）
+- Step 5的样本数对比：量化样本数对不确定性估计的影响
 - 不确定性地图按问题类型(去模糊/超分/修复)分类解读
 
 素材来源：18.5节后验采样代码、deepinv sampling API
@@ -145,15 +145,6 @@ def compute_psnr(img1, img2):
         return float('inf')
     return 10 * np.log10(1.0 / mse)
 
-def compute_ssim_simple(img1, img2):
-    """简化SSIM"""
-    try:
-        from skimage.metrics import structural_similarity as ssim
-        img1_np = img1.squeeze().cpu().permute(1, 2, 0).numpy().clip(0, 1)
-        img2_np = img2.squeeze().cpu().permute(1, 2, 0).numpy().clip(0, 1)
-        return ssim(img1_np, img2_np, channel_axis=2, data_range=1.0)
-    except ImportError:
-        return 0.0
 
 
 # ========================================================================
@@ -200,7 +191,11 @@ print("\n" + "="*70)
 print("Step 2: 后验采样实现")
 print("="*70)
 
-S = 8  # 采样数量（减少以适应计算资源，理想值=30）
+ula_method = None  # 在文件开头初始化，避免后续JSON保存时NameError
+
+S = 8  # 采样数量（默认8以适应计算资源）
+# ⚠️ 注意: S=8 对于校准检验偏少，仅能可靠估计 ≤75% 置信水平
+#    如果有 GPU 资源，建议调高到 S=30 以获得更准确的95%置信区间估计
 print(f"后验采样数量: S={S}")
 
 all_samples = []  # 存储所有后验样本
@@ -293,7 +288,7 @@ if len(all_samples) == 0:
             x_pnp = physics_inp.A_adjoint(y_inp) + 0.05 * torch.randn_like(x_true)
             
             # PnP-HQS迭代
-            n_iter = 10
+            n_iter = 30
             for it in range(n_iter):
                 grad = physics_inp.A_adjoint(physics_inp.A(x_pnp) - y_inp)
                 x_pnp = x_pnp - 0.5 * grad
@@ -338,10 +333,16 @@ posterior_mean = samples_tensor.mean(dim=0)  # (1, 3, 256, 256)
 posterior_std = samples_tensor.std(dim=0)    # (1, 3, 256, 256)
 posterior_var = samples_tensor.var(dim=0)
 
-# 95%置信区间
+# 经验分位数区间（注意：S=8时估计不可靠，仅供参考）
+# ⚠️ 严格来说这不是真正的95%置信区间，因为S=8不足以可靠估计极端分位数
 q025 = samples_tensor.quantile(0.025, dim=0)
 q975 = samples_tensor.quantile(0.975, dim=0)
 ci_width = q975 - q025
+
+# 75%置信区间 (S=8 可靠范围内最高置信水平)
+q125 = samples_tensor.quantile(0.125, dim=0)
+q875 = samples_tensor.quantile(0.875, dim=0)
+ci_width_75 = q875 - q125
 
 # 统计量
 psnr_mean = compute_psnr(x_true, posterior_mean)
@@ -352,7 +353,8 @@ mean_ci_width = ci_width.mean().item()
 print(f"后验均值 PSNR: {psnr_mean:.2f} dB")
 print(f"平均像素标准差: {mean_std:.4f}")
 print(f"最大像素标准差: {max_std:.4f}")
-print(f"平均95%CI宽度:  {mean_ci_width:.4f}")
+print(f"平均经验分位数区间宽度(S={S}):  {mean_ci_width:.4f}")
+print(f"⚠️ 注意: S={S} 时区间估计不可靠，建议 S≥30")
 
 # 各样本的PSNR分布
 sample_psnrs = [compute_psnr(x_true, s) for s in all_samples]
@@ -397,7 +399,7 @@ plt.colorbar(im12, ax=ax12, fraction=0.046, pad=0.04)
 ax13 = fig.add_subplot(gs[1, 3])
 ci_map = ci_width[0].cpu().mean(dim=0).numpy()
 im13 = ax13.imshow(ci_map, cmap='hot', vmin=0, vmax=ci_map.max())
-ax13.set_title('95%置信区间宽度', fontsize=11)
+ax13.set_title(f'经验分位数区间宽度\n(S={S}, 需S≥30才可靠)', fontsize=10)
 ax13.axis('off')
 plt.colorbar(im13, ax=ax13, fraction=0.046, pad=0.04)
 
@@ -409,14 +411,14 @@ ax20.set_title('重建误差地图', fontsize=11)
 ax20.axis('off')
 plt.colorbar(im20, ax=ax20, fraction=0.046, pad=0.04)
 
-# ★ 95%CI覆盖图
+# ★ 经验分位数覆盖图（S=8时覆盖率估计不准确）
 ax21 = fig.add_subplot(gs[2, 1])
-# 检查真值是否在95%CI内
+# 检查真值是否在经验分位数区间内
 in_ci = ((x_true >= q025) & (x_true <= q975)).float()
 coverage_map = in_ci[0].cpu().mean(dim=0).numpy()
 im21 = ax21.imshow(coverage_map, cmap='RdYlGn', vmin=0, vmax=1)
 overall_coverage = in_ci.mean().item()
-ax21.set_title(f'★ 95%CI覆盖图\n总体覆盖率={overall_coverage:.1%}', fontsize=11)
+ax21.set_title(f'★ 经验分位数覆盖图\n(S={S}, 覆盖率={overall_coverage:.1%})', fontsize=10)
 ax21.axis('off')
 plt.colorbar(im21, ax=ax21, fraction=0.046, pad=0.04)
 
@@ -455,15 +457,20 @@ print("="*70)
 
 print("""
 ★ 校准检验原理:
-  如果后验分布p(x|y)是"正确校准"的，那么:
-  - 95%置信区间应该覆盖约95%的真值像素
+  如果后验分布p(x|y)是“正确校准”的，那么:
+  - 经验分位数区间应该覆盖对应比例的真值像素
   - 覆盖率 ≈ 名义覆盖率 → 校准良好
   - 覆盖率 > 名义覆盖率 → 过于保守（区间太宽）
   - 覆盖率 < 名义覆盖率 → 过于自信（区间太窄）
+  
+  ⚠️ 注意: S=8 时覆盖率估计不准确，结果仅供参考
+     要获得可靠的95%置信区间校准检验，需要 S≥30
 """)
 
 # 对不同置信水平计算覆盖率
-confidence_levels = [0.50, 0.68, 0.80, 0.90, 0.95, 0.99]
+# 注意: S=8 时，最高可区分的分位数为 1 - 2/S = 75%，更高置信水平的估计是粗略的
+# （8个点无法区分95%和99%分位数，曲线会出现阶梯状跳变）。需 S≥30 才可可靠估计高置信水平。
+confidence_levels = [0.50, 0.60, 0.68, 0.75]  # 限制在 S=8 可靠范围内
 coverages = []
 
 for cl in confidence_levels:
@@ -503,7 +510,7 @@ for i in range(len(bins) - 1):
         coverage_by_intensity.append(np.nan)
 
 axes[1].bar(bin_centers, coverage_by_intensity, width=0.08, color='steelblue', alpha=0.8)
-axes[1].axhline(0.95, color='red', linestyle='--', label='95%名义覆盖率')
+axes[1].axhline(0.75, color='red', linestyle='--', label='75%名义覆盖率')
 axes[1].set_xlabel('像素强度', fontsize=12)
 axes[1].set_ylabel('实际覆盖率', fontsize=12)
 axes[1].set_title('★ 按像素强度的覆盖率', fontsize=13)
@@ -518,20 +525,21 @@ print("已保存: step4_calibration.png")
 
 
 # ========================================================================
-# Step 5: ★ 加速策略对比
-# 对应18.5节知识点：加速采样与一致性模型
+# Step 5: ★ 样本数对不确定性估计的影响
+# 对应18.5节知识点：采样数量与不确定性估计精度
 # ========================================================================
 print("\n" + "="*70)
-print("Step 5: ★ 加速策略对比")
+print("Step 5: ★ 样本数对不确定性估计的影响")
 print("="*70)
 
 print("""
-★ 扩散采样加速策略:
-  1. DDIM采样: 将1000步压缩到20-50步，确定性轨迹
-  2. 共享早期步骤: 多个样本共享前K步，从K步后分叉
-  3. 一致性模型: 1-2步直接生成（需额外训练）
+★ 样本数对不确定性估计的影响:
+  样本数 S 直接决定后验统计量的估计精度:
+  - S过少: 标准差估计偏差大，置信区间不可靠
+  - S适中(≥8): 均值和标准差趋于稳定
+  - S较多(≥30): 高置信水平分位数也可可靠估计
 
-本步骤对比: 完整采样 vs 减少样本数(S=4)对不确定性的影响
+本步骤对比: S=4 vs S=8 样本数对不确定性的影响
 """)
 
 # 减少样本数的不确定性对比
@@ -591,7 +599,7 @@ if len(all_samples) >= 4:
     axes[1, 2].set_title('★ 后验均值PSNR vs 样本数', fontsize=11)
     axes[1, 2].grid(alpha=0.3)
     
-    fig.suptitle('Step 5: ★ 加速策略对比（样本数影响）', fontsize=14)
+    fig.suptitle('Step 5: ★ 样本数对不确定性估计的影响', fontsize=14)
     plt.tight_layout()
     plt.savefig(os.path.join(SAVE_DIR, 'step5_acceleration.png'), dpi=150, bbox_inches='tight')
     plt.close()
@@ -633,8 +641,8 @@ uq_results = {
     '后验均值PSNR': round(psnr_mean, 2),
     '平均像素std': round(mean_std, 4),
     '最大像素std': round(max_std, 4),
-    '平均95%CI宽度': round(mean_ci_width, 4),
-    '95%CI覆盖率': round(overall_coverage, 4),
+    f'平均经验分位数区间宽度(S={S})': round(mean_ci_width, 4),
+    f'经验分位数区间覆盖率(S={S},仅供参考)': round(overall_coverage, 4),
     '样本PSNR范围': [round(min(sample_psnrs), 2), round(max(sample_psnrs), 2)],
     '校准数据': {str(cl): round(cov, 4) for cl, cov in zip(confidence_levels, coverages)}
 }
@@ -664,17 +672,17 @@ print(f"""
 3. 不确定性量化 ✓
    - 后验均值: 最优点估计
    - 像素级标准差: 不确定性地图
-   - 95%置信区间: 覆盖真值的概率范围
+   - 经验分位数区间: 覆盖真值的概率范围（⚠️ S=8时仅供参考）
 
 4. ★ 校准检验 ✓
-   - 覆盖率 vs 名义覆盖率
+   - 覆盖率 vs 名义覆盖率（⚠️ S=8时结果不准确）
    - 按像素强度的覆盖率分析
    - 过度自信 vs 过度保守
 
-5. ★ 加速策略 ✓
+5. ★ 样本数影响 ✓
    - 样本数S对不确定性估计的影响
    - 后验均值PSNR随S收敛
-   - DDIM/一致性模型加速思路
+   - S≥8可获得稳定不确定性估计
 
 关键发现:
 - 采样方法: {ula_method}

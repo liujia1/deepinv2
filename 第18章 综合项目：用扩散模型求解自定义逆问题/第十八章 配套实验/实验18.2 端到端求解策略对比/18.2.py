@@ -121,6 +121,9 @@ print(f"使用设备: {device}")
 if device.type == 'cpu':
     print("⚠ 警告: 扩散模型推理在CPU上会非常慢，建议使用GPU")
 
+# ====== 实验参数配置 ======
+n_diffusion_steps = 100  # 扩散采样步数: 100(快速), 300(平衡), 1000(高质量)
+
 # 安装deepinv
 try:
     import deepinv
@@ -154,8 +157,8 @@ def compute_ssim(img1, img2):
         img2_np = img2.squeeze().cpu().permute(1, 2, 0).numpy().clip(0, 1)
         return ssim(img1_np, img2_np, channel_axis=2, data_range=1.0)
     except ImportError:
-        # fallback: 用PSNR近似
-        return compute_psnr(img1, img2) / 40.0  # 粗略归一化
+        # skimage不可用时返回NaN，避免不可比的近似值误导结果
+        return float('nan')
 
 
 # ========================================================================
@@ -286,35 +289,128 @@ for scenario_name, scenario_data in scenarios.items():
     
     # 2a. Tikhonov正则化 (L2正则化)
     try:
-        from deepinv.optim import L2, TikhonovGradientDescent
-        
-        # Tikhonov: min_x ||Ax-y||² + λ||x||²
-        data_fidelity = L2()
-        
-        # 使用迭代求解
+        # Tikhonov正则化: min_x ||Ax-y||² + λ||x||²
+        # 使用梯度下降迭代求解（deepinv的physics是函数式API，不能直接访问矩阵A）
+        lambda_reg = 0.1  # 正则化参数
+        n_tik_iter = 100  # 迭代次数
+
+        # 自适应步长: 用power iteration估计||A||²，保证收敛 lr < 2/(||A||²+λ)
+        x_tmp = torch.randn_like(x_true)
+        for _ in range(10):
+            x_tmp = physics.A_adjoint(physics.A(x_tmp))
+            norm_tmp = x_tmp.norm()
+            if norm_tmp > 0:
+                x_tmp = x_tmp / norm_tmp
+        op_norm_sq = (physics.A(x_tmp)**2).sum() / (x_tmp**2).sum()
+        lr_tik = 1.0 / (op_norm_sq.item() + lambda_reg)
+
         t_start = time.time()
-        x_tikhonov = physics.A_dagger(y)  # 伪逆作为Tikhonov解
+        x_tikhonov = physics.A_adjoint(y).clone()
+        for _ in range(n_tik_iter):
+            # 梯度: ∇(||Ax-y||² + λ||x||²) = A^T(Ax-y) + λx
+            grad = physics.A_adjoint(physics.A(x_tikhonov) - y) + lambda_reg * x_tikhonov
+            x_tikhonov = x_tikhonov - lr_tik * grad
+            x_tikhonov = x_tikhonov.clamp(0, 1)
         t_tikh = time.time() - t_start
         
         psnr_tikh = compute_psnr(x_true, x_tikhonov)
-        results[scenario_name]['伪逆(Tikhonov)'] = {
-            'psnr': psnr_tikh, 'time': t_tikh, 'img': x_tikhonov
+        ssim_tikh = compute_ssim(x_true, x_tikhonov)
+        results[scenario_name]['Tikhonov'] = {
+            'psnr': psnr_tikh, 'ssim': ssim_tikh, 'time': t_tikh, 'img': x_tikhonov, 'lambda': lambda_reg
         }
-        print(f"  伪逆:       PSNR={psnr_tikh:.2f} dB, 耗时={t_tikh:.3f}s")
+        print(f"  Tikhonov:   PSNR={psnr_tikh:.2f} dB, SSIM={ssim_tikh:.4f}, 耗时={t_tikh:.3f}s, λ={lambda_reg}")
     except Exception as e:
         print(f"  Tikhonov求解失败: {e}")
-    
-    # 2b. 伴随重建（零填充）
+
+    # 2b. TV正则化
+    try:
+        from deepinv.optim import TVPrior, L2 as DataFidelity_L2
+
+        # TV: min_x ||Ax-y||² + λ||∇x||_1
+        lambda_tv = 0.05  # TV正则化参数
+
+        prior_tv = TVPrior(def_crit=1e-8, n_it_max=500)
+        data_fidelity_tv = DataFidelity_L2()
+
+        # 使用deepinv优化框架求解TV正则化问题
+        t_start = time.time()
+        from deepinv.optim import BaseOptim, OptimIterator
+        from deepinv.optim.optim_iterators import PDIteration
+
+        # 构建Primal-Dual迭代求解TV正则化
+        iterator = PDIteration()
+        model_tv = BaseOptim(
+            iterator=iterator,
+            data_fidelity=data_fidelity_tv,
+            prior=prior_tv,
+            params_algo={'lambda': lambda_tv, 'stepsize': 1.0},
+            max_iter=100,
+            early_stop=True,
+            crit_conv='residual',
+            thres_conv=1e-4,
+        )
+        x_tv = model_tv(y, physics)
+        t_tv = time.time() - t_start
+
+        psnr_tv = compute_psnr(x_true, x_tv)
+        ssim_tv = compute_ssim(x_true, x_tv)
+        results[scenario_name]['TV正则化'] = {
+            'psnr': psnr_tv, 'ssim': ssim_tv, 'time': t_tv, 'img': x_tv, 'lambda': lambda_tv
+        }
+        print(f"  TV正则化:   PSNR={psnr_tv:.2f} dB, SSIM={ssim_tv:.4f}, 耗时={t_tv:.3f}s, λ={lambda_tv}")
+    except Exception as e:
+        print(f"  TV正则化求解失败: {e}")
+        # 备用方案：手动梯度下降 + TV近端算子
+        try:
+            print("  尝试手动TV梯度下降...")
+            lambda_tv = 0.05
+            lr_tv = 0.01
+            n_tv_iter = 200
+            x_tv = physics.A_adjoint(y).clone().detach().requires_grad_(False)
+            t_start = time.time()
+            for it in range(n_tv_iter):
+                # 数据保真项梯度
+                grad_data = physics.A_adjoint(physics.A(x_tv) - y)
+                # TV梯度（各向异性TV，含正确边界项）
+                # 梯度 = ∂/∂x Σ|∇x|₁ ≈ sign(∇x) 的散度
+                dx = torch.diff(x_tv, dim=-1)  # (B,C,H,W-1)
+                dy = torch.diff(x_tv, dim=-2)  # (B,C,H-1,W)
+                s_x = torch.sign(dx)
+                s_y = torch.sign(dy)
+                # 水平方向: 左边界=-s[0]，中间=s[j-1]-s[j]，右边界=s[-1]
+                tv_grad_x = torch.cat([-s_x[..., :1],
+                                        s_x[..., :-1] - s_x[..., 1:],
+                                        s_x[..., -1:]], dim=-1)  # (B,C,H,W)
+                # 垂直方向: 上边界=-s[0]，中间=s[i-1]-s[i]，下边界=s[-1]
+                tv_grad_y = torch.cat([-s_y[..., :1, :],
+                                        s_y[..., :-1, :] - s_y[..., 1:, :],
+                                        s_y[..., -1:, :]], dim=-2)  # (B,C,H,W)
+                tv_grad = tv_grad_x + tv_grad_y  # (B,C,H,W)
+                x_tv = x_tv - lr_tv * (grad_data + lambda_tv * tv_grad)
+                x_tv = x_tv.clamp(0, 1)
+            t_tv = time.time() - t_start
+
+            psnr_tv = compute_psnr(x_true, x_tv)
+            ssim_tv = compute_ssim(x_true, x_tv)
+            results[scenario_name]['TV正则化(手动)'] = {
+                'psnr': psnr_tv, 'ssim': ssim_tv, 'time': t_tv, 'img': x_tv, 'lambda': lambda_tv
+            }
+            print(f"  TV手动:     PSNR={psnr_tv:.2f} dB, SSIM={ssim_tv:.4f}, 耗时={t_tv:.3f}s, λ={lambda_tv}")
+        except Exception as e2:
+            print(f"  手动TV也失败: {e2}")
+
+    # 2c. 伴随重建（零填充）
     try:
         t_start = time.time()
         x_adj = physics.A_adjoint(y)
         t_adj = time.time() - t_start
         
         psnr_adj = compute_psnr(x_true, x_adj)
+        ssim_adj = compute_ssim(x_true, x_adj)
         results[scenario_name]['伴随重建'] = {
-            'psnr': psnr_adj, 'time': t_adj, 'img': x_adj
+            'psnr': psnr_adj, 'ssim': ssim_adj, 'time': t_adj, 'img': x_adj
         }
-        print(f"  伴随重建:   PSNR={psnr_adj:.2f} dB, 耗时={t_adj:.3f}s")
+        print(f"  伴随重建:   PSNR={psnr_adj:.2f} dB, SSIM={ssim_adj:.4f}, 耗时={t_adj:.3f}s")
     except Exception as e:
         print(f"  伴随重建失败: {e}")
 
@@ -361,10 +457,11 @@ if has_dpir:
             t_dpir = time.time() - t_start
             
             psnr_dpir = compute_psnr(x_true, x_dpir)
+            ssim_dpir = compute_ssim(x_true, x_dpir)
             results[scenario_name]['DPIR(PnP)'] = {
-                'psnr': psnr_dpir, 'time': t_dpir, 'img': x_dpir
+                'psnr': psnr_dpir, 'ssim': ssim_dpir, 'time': t_dpir, 'img': x_dpir
             }
-            print(f"  DPIR:  PSNR={psnr_dpir:.2f} dB, 耗时={t_dpir:.3f}s")
+            print(f"  DPIR:  PSNR={psnr_dpir:.2f} dB, SSIM={ssim_dpir:.4f}, 耗时={t_dpir:.3f}s")
         except Exception as e:
             print(f"  DPIR求解失败: {e}")
             # 尝试手动实现PnP迭代
@@ -375,7 +472,7 @@ if has_dpir:
                 
                 # PnP-HQS: x_{k+1} = denoiser(prox_{data}(x_k))
                 x_pnp = physics.A_adjoint(y).clone()
-                n_iter = 10
+                n_iter = 30
                 sigma_pnp = 0.1  # 初始噪声水平
                 step_size = 1.0
                 t_start = time.time()
@@ -391,10 +488,11 @@ if has_dpir:
                 
                 t_pnp = time.time() - t_start
                 psnr_pnp = compute_psnr(x_true, x_pnp)
+                ssim_pnp = compute_ssim(x_true, x_pnp)
                 results[scenario_name]['PnP-HQS(手动)'] = {
-                    'psnr': psnr_pnp, 'time': t_pnp, 'img': x_pnp
+                    'psnr': psnr_pnp, 'ssim': ssim_pnp, 'time': t_pnp, 'img': x_pnp
                 }
-                print(f"  PnP-HQS:  PSNR={psnr_pnp:.2f} dB, 耗时={t_pnp:.3f}s")
+                print(f"  PnP-HQS:  PSNR={psnr_pnp:.2f} dB, SSIM={ssim_pnp:.4f}, 耗时={t_pnp:.3f}s")
             except Exception as e2:
                 print(f"  手动PnP也失败: {e2}")
 
@@ -415,6 +513,7 @@ DiffPIR算法核心思路:
   劣势: 采样步数多（~1000步），推理较慢
 """)
 
+
 # 加载预训练DiffUNet
 try:
     from deepinv.models import DiffUNet
@@ -433,36 +532,48 @@ if has_diffpir:
         physics = scenario_data['physics']
         y = scenario_data['y']
         print(f"\n--- 场景: {scenario_name} ---")
-        
+
         try:
-            from deepinv.optim import DiffPIR as DiffPIR_algo
-            
+            from deepinv.sampling import DiffPIR as DiffPIR_algo
+            from deepinv.optim import L2 as DiffL2
+
             t_start = time.time()
-            model_diffpir = DiffPIR_algo(denoiser=denoiser_diffunet)
+            model_diffpir = DiffPIR_algo(
+                model=denoiser_diffunet,
+                data_fidelity=DiffL2(),
+                max_iter=n_diffusion_steps,
+                sigma=0.05,
+                zeta=0.1,
+                lambda_=7.0,
+                verbose=False,
+                device=device,
+            )
             x_diffpir = model_diffpir(y, physics)
             t_diffpir = time.time() - t_start
             
             psnr_diffpir = compute_psnr(x_true, x_diffpir)
+            ssim_diffpir = compute_ssim(x_true, x_diffpir)
             results[scenario_name]['DiffPIR(扩散)'] = {
-                'psnr': psnr_diffpir, 'time': t_diffpir, 'img': x_diffpir
+                'psnr': psnr_diffpir, 'ssim': ssim_diffpir, 'time': t_diffpir, 'img': x_diffpir
             }
-            print(f"  DiffPIR:  PSNR={psnr_diffpir:.2f} dB, 耗时={t_diffpir:.3f}s")
+            print(f"  DiffPIR:  PSNR={psnr_diffpir:.2f} dB, SSIM={ssim_diffpir:.4f}, 耗时={t_diffpir:.3f}s")
         except Exception as e:
             print(f"  DiffPIR求解失败: {e}")
             # 尝试使用DDRM
             try:
                 print("  尝试DDRM算法...")
-                from deepinv.optim import DDRM
+                from deepinv.sampling import DDRM
                 t_start = time.time()
                 model_ddrm = DDRM(denoiser=denoiser_diffunet)
                 x_ddrm = model_ddrm(y, physics)
                 t_ddrm = time.time() - t_start
                 
                 psnr_ddrm = compute_psnr(x_true, x_ddrm)
+                ssim_ddrm = compute_ssim(x_true, x_ddrm)
                 results[scenario_name]['DDRM(扩散)'] = {
-                    'psnr': psnr_ddrm, 'time': t_ddrm, 'img': x_ddrm
+                    'psnr': psnr_ddrm, 'ssim': ssim_ddrm, 'time': t_ddrm, 'img': x_ddrm
                 }
-                print(f"  DDRM:  PSNR={psnr_ddrm:.2f} dB, 耗时={t_ddrm:.3f}s")
+                print(f"  DDRM:  PSNR={psnr_ddrm:.2f} dB, SSIM={ssim_ddrm:.4f}, 耗时={t_ddrm:.3f}s")
             except Exception as e2:
                 print(f"  DDRM也失败: {e2}")
 
@@ -476,13 +587,14 @@ print("Step 5: ★ 方法对比与决策指南")
 print("="*70)
 
 # 5a. 汇总表格
-print("\n--- 5a. PSNR对比表格 ---")
-print(f"{'场景':<12} {'方法':<16} {'PSNR(dB)':<10} {'耗时(s)':<10}")
-print("-" * 50)
+print("\n--- 5a. PSNR/SSIM对比表格 ---")
+print(f"{'场景':<12} {'方法':<16} {'PSNR(dB)':<10} {'SSIM':<10} {'耗时(s)':<10}")
+print("-" * 60)
 for scenario_name, methods in results.items():
     for method_name, metrics in methods.items():
-        print(f"{scenario_name:<12} {method_name:<16} {metrics['psnr']:<10.2f} {metrics['time']:<10.3f}")
-    print("-" * 50)
+        ssim_val = metrics.get('ssim', float('nan'))
+        print(f"{scenario_name:<12} {method_name:<16} {metrics['psnr']:<10.2f} {ssim_val:<10.4f} {metrics['time']:<10.3f}")
+    print("-" * 60)
 
 # 5b. ★ 决策指南可视化
 print("\n--- 5b. ★ 决策指南可视化 ---")
@@ -567,7 +679,7 @@ if demo_scenario:
         if idx + 2 < len(axes):
             img = metrics['img']
             axes[idx+2].imshow(img[0].cpu().permute(1, 2, 0).clamp(0, 1))
-            axes[idx+2].set_title(f'{method_name}\nPSNR={metrics["psnr"]:.1f}dB', fontsize=10)
+            axes[idx+2].set_title(f'{method_name}\nPSNR={metrics["psnr"]:.1f}dB, SSIM={metrics.get("ssim", 0):.3f}', fontsize=10)
             axes[idx+2].axis('off')
     
     fig.suptitle(f'重建对比: {demo_scenario}', fontsize=14)
@@ -617,7 +729,8 @@ print(f"""
    - 修复（50%/80%缺失）
 
 2. 优化方法 ✓
-   - 伪逆/Tikhonov: 最快但质量有限
+   - Tikhonov: L2正则化，速度快
+   - TV正则化: 保边缘，轻度退化效果好
    - 伴随重建: 零填充基线
 
 3. PnP方法 ✓
@@ -625,7 +738,7 @@ print(f"""
    - PnP-HQS手动实现（备用方案）
 
 4. 扩散方法 ✓
-   - DiffPIR: DiffUNet+数据一致性
+   - DiffPIR: DiffUNet+数据一致性 (采样步数={n_diffusion_steps})
    - DDRM: 备选扩散求解器
 
 5. ★ 方法对比与决策 ✓
@@ -649,6 +762,7 @@ for s_name, methods in results.items():
     for m_name, m_data in methods.items():
         results_summary[s_name][m_name] = {
             'psnr': round(m_data['psnr'], 2),
+            'ssim': round(m_data.get('ssim', 0), 4),
             'time': round(m_data['time'], 3)
         }
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

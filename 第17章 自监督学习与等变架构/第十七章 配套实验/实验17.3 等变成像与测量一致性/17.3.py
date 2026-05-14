@@ -177,7 +177,7 @@ class SmallUNet(nn.Module):
         self.up2 = nn.ConvTranspose2d(base*2, base, 2, stride=2)
         # 修复：正确的UNet skip connection设计
         self.dec3 = DoubleConv(base*2 + base*2, base*2)  # up3(e3) + e2
-        self.dec2 = DoubleConv(base*2 + base, base)      # d3 + e1
+        self.dec2 = DoubleConv(base + base, base)        # up2(d3) + e1
         self.out_conv = nn.Conv2d(base, out_ch, 1)
 
     def forward(self, x):

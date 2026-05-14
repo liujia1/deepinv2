@@ -596,7 +596,7 @@ sure_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_SURE.pt')
 sure_start = 0
 # ★ Resume: 检测已有checkpoint
 if os.path.exists(sure_ckpt_path):
-    ckpt = torch.load(sure_ckpt_path, map_location=device)
+    ckpt = torch.load(sure_ckpt_path, map_location=device, weights_only=False)
     model_sure.load_state_dict(ckpt['model_state'])
     optimizer_sure.load_state_dict(ckpt['optimizer_state'])
     sure_start = ckpt['epoch'] + 1
@@ -698,7 +698,7 @@ optimizer_naive = optim.Adam(model_naive.parameters(), lr=LR)
 naive_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_Naive.pt')
 naive_start = 0
 if os.path.exists(naive_ckpt_path):
-    ckpt = torch.load(naive_ckpt_path, map_location=device)
+    ckpt = torch.load(naive_ckpt_path, map_location=device, weights_only=False)
     model_naive.load_state_dict(ckpt['model_state'])
     optimizer_naive.load_state_dict(ckpt['optimizer_state'])
     naive_start = ckpt['epoch'] + 1
@@ -730,7 +730,7 @@ optimizer_sup = optim.Adam(model_sup.parameters(), lr=LR)
 sup_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_Supervised.pt')
 sup_start = 0
 if os.path.exists(sup_ckpt_path):
-    ckpt = torch.load(sup_ckpt_path, map_location=device)
+    ckpt = torch.load(sup_ckpt_path, map_location=device, weights_only=False)
     model_sup.load_state_dict(ckpt['model_state'])
     optimizer_sup.load_state_dict(ckpt['optimizer_state'])
     sup_start = ckpt['epoch'] + 1
@@ -853,7 +853,7 @@ optimizer_mc = optim.Adam(model_mc.parameters(), lr=LR)
 mc_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_MC_Compare.pt')
 mc_start = 0
 if os.path.exists(mc_ckpt_path):
-    ckpt = torch.load(mc_ckpt_path, map_location=device)
+    ckpt = torch.load(mc_ckpt_path, map_location=device, weights_only=False)
     model_mc.load_state_dict(ckpt['model_state'])
     optimizer_mc.load_state_dict(ckpt['optimizer_state'])
     mc_start = ckpt['epoch'] + 1
@@ -881,7 +881,7 @@ optimizer_autodiff = optim.Adam(model_autodiff.parameters(), lr=LR)
 autodiff_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_Autodiff_Compare.pt')
 autodiff_start = 0
 if os.path.exists(autodiff_ckpt_path):
-    ckpt = torch.load(autodiff_ckpt_path, map_location=device)
+    ckpt = torch.load(autodiff_ckpt_path, map_location=device, weights_only=False)
     model_autodiff.load_state_dict(ckpt['model_state'])
     optimizer_autodiff.load_state_dict(ckpt['optimizer_state'])
     autodiff_start = ckpt['epoch'] + 1
@@ -1009,7 +1009,7 @@ losses_r2r = []
 r2r_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_R2R.pt')
 r2r_start = 0
 if os.path.exists(r2r_ckpt_path):
-    ckpt = torch.load(r2r_ckpt_path, map_location=device)
+    ckpt = torch.load(r2r_ckpt_path, map_location=device, weights_only=False)
     model_r2r.load_state_dict(ckpt['model_state'])
     optimizer_r2r.load_state_dict(ckpt['optimizer_state'])
     r2r_start = ckpt['epoch'] + 1
@@ -1050,7 +1050,7 @@ print("\n  R2R α敏感性分析...")
 alpha_results = {}
 alpha_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_alpha_results.pt')
 if os.path.exists(alpha_ckpt_path):
-    alpha_results = torch.load(alpha_ckpt_path, map_location='cpu')
+    alpha_results = torch.load(alpha_ckpt_path, map_location='cpu', weights_only=False)
     print(f"  [α扫描] 检测到已有checkpoint，已完成 {len(alpha_results)} 个α值")
 for alpha in [0.01, 0.05, 0.1, 0.5, 1.0]:
     alpha_key = f'{alpha:.2f}'
@@ -1063,7 +1063,7 @@ for alpha in [0.01, 0.05, 0.1, 0.5, 1.0]:
     a_ckpt_path = os.path.join(SAVE_DIR, f'ckpt_alpha_{alpha_key}.pt')
     a_start = 0
     if os.path.exists(a_ckpt_path):
-        ckpt = torch.load(a_ckpt_path, map_location=device)
+        ckpt = torch.load(a_ckpt_path, map_location=device, weights_only=False)
         model_a.load_state_dict(ckpt['model_state'])
         opt_a.load_state_dict(ckpt['optimizer_state'])
         a_start = ckpt['epoch'] + 1
@@ -1145,7 +1145,7 @@ losses_bs = []
 bs_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_StrictBlindSpot.pt')
 bs_start = 0
 if os.path.exists(bs_ckpt_path):
-    ckpt = torch.load(bs_ckpt_path, map_location=device)
+    ckpt = torch.load(bs_ckpt_path, map_location=device, weights_only=False)
     model_bs.load_state_dict(ckpt['model_state'])
     optimizer_bs.load_state_dict(ckpt['optimizer_state'])
     bs_start = ckpt['epoch'] + 1
@@ -1269,7 +1269,7 @@ def train_gaussian_denoiser(sigma, base=16, epochs=20):
     start_epoch = 0
     
     if os.path.exists(ckpt_path):
-        ckpt = torch.load(ckpt_path, map_location=device)
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
         model.load_state_dict(ckpt['model_state'])
         optimizer.load_state_dict(ckpt['optimizer_state'])
         start_epoch = ckpt['epoch'] + 1
@@ -1290,7 +1290,7 @@ def train_gaussian_denoiser(sigma, base=16, epochs=20):
         for _ in range(100):  # 每轮100个batch
             # 生成人工高斯数据
             x_clean = torch.full((batch_size, 1, 32, 32), simple_mean, device=device)
-            x_clean += torch.sqrt(simple_var) * torch.randn_like(x_clean)
+            x_clean += torch.sqrt(torch.tensor(simple_var, device=device)) * torch.randn_like(x_clean)
             y = x_clean + sigma * torch.randn_like(x_clean)
             
             optimizer.zero_grad()
@@ -1333,7 +1333,7 @@ def verify_tweedie(model, x_clean, sigma, n_samples=50):
     gaussian_model = train_gaussian_denoiser(sigma, base=16, epochs=15)
     
     # 生成测试数据
-    x_simple = torch.full_like(x_clean, simple_mean) + torch.sqrt(simple_var) * torch.randn_like(x_clean)
+    x_simple = torch.full_like(x_clean, simple_mean) + torch.sqrt(torch.tensor(simple_var, device=device)) * torch.randn_like(x_clean)
     y_simple = x_simple + sigma * torch.randn_like(x_simple)
     
     with torch.no_grad():
