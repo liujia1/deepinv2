@@ -29,6 +29,7 @@ from matplotlib.gridspec import GridSpec
 import matplotlib as mpl
 import warnings
 import logging
+import pickle  # ★ 用于缓存结果
 
 # ====== 解决中文乱码的核心代码（Windows + Linux 自动适配）======
 logging.getLogger('matplotlib').setLevel(logging.ERROR)
@@ -123,6 +124,9 @@ if device.type == 'cpu':
 
 # ====== 实验参数配置 ======
 n_diffusion_steps = 100  # 扩散采样步数: 100(快速), 300(平衡), 1000(高质量)
+show_progress = True  # 是否显示扩散采样进度条
+use_cache = True  # ★ 是否启用结果缓存（避免重复计算）
+cache_file = os.path.join(SAVE_DIR, 'experiment_cache.pkl')  # ★ 缓存文件路径
 
 # 安装deepinv
 try:
@@ -188,9 +192,11 @@ scenarios = {}
 # 1a. 去模糊场景
 print("\n构造去模糊场景...")
 try:
+    # ★ 修复：deepinv 的 gaussian_blur 只接受 sigma 参数，kernel_size 是自动计算的
     # 使用新的API路径，避免DeprecationWarning
     try:
         from deepinv.physics.functional import gaussian_blur as gauss_blur_func
+        # ★ 注意：gaussian_blur 只接受 sigma 参数，不接受 kernel_size
         light_kernel = gauss_blur_func(sigma=(1.5, 1.5))
         heavy_kernel = gauss_blur_func(sigma=(3.0, 3.0))
     except ImportError:
@@ -201,12 +207,13 @@ try:
             light_kernel = dinv.physics.blur.gaussian_blur(sigma=(1.5, 1.5))
             heavy_kernel = dinv.physics.blur.gaussian_blur(sigma=(3.0, 3.0))
     
-    # 轻度模糊
-    light_blur = Blur(filter=light_kernel, device=device)
+    # 使用 "constant" padding 确保卷积输出与输入同尺寸
+    # deepinv 支持的 padding: "valid"/"circular"/"replicate"/"reflect"/"constant"/"zeros"
+    light_blur = Blur(filter=light_kernel, padding="constant", device=device)
     light_blur.set_noise_model(GaussianNoise(sigma=0.01))
     
     # 重度模糊
-    heavy_blur = Blur(filter=heavy_kernel, device=device)
+    heavy_blur = Blur(filter=heavy_kernel, padding="constant", device=device)
     heavy_blur.set_noise_model(GaussianNoise(sigma=0.05))
     
     y_light_blur = light_blur(x_true)
@@ -219,6 +226,8 @@ try:
     has_blur_scenario = True
 except Exception as e:
     print(f"  模糊场景创建失败: {e}")
+    import traceback
+    traceback.print_exc()  # ★ 打印详细错误信息，便于调试
     has_blur_scenario = False
 
 # 1b. 超分辨率场景
@@ -264,7 +273,29 @@ except Exception as e:
     has_inp_scenario = False
 
 # Step 1 可视化
-fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+# ★ 动态调整子图数量：根据实际可用的场景数量决定布局
+num_scenarios = sum([
+    2 if has_blur_scenario else 0,  # 轻度+重度模糊
+    1 if has_sr_scenario else 0,    # 4x超分
+    2 if has_inp_scenario else 0,   # 50%+80%修复
+])
+total_images = 1 + num_scenarios  # 1个原始图像 + 退化场景
+
+# 根据图片数量选择合适的布局
+if total_images <= 4:
+    nrows, ncols = 2, 2
+elif total_images <= 6:
+    nrows, ncols = 2, 3
+else:
+    nrows, ncols = 3, 3
+
+fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 4 * nrows))
+# 如果只有一个子图，axes不是数组，需要特殊处理
+if total_images == 1:
+    axes = np.array([[axes]])
+elif nrows == 1 or ncols == 1:
+    axes = axes.reshape(nrows, ncols)
+
 # 安全地显示图像，处理不同维度的情况
 def safe_imshow(ax, img_tensor, title):
     """安全显示图像，自动处理3D/4D/5D张量"""
@@ -289,15 +320,17 @@ if has_inp_scenario:
     vis_items.append(('50%修复', y_inp50))
     vis_items.append(('80%修复', y_inp80))
 
-for idx, (title, img) in enumerate(vis_items[:5]):
-    row, col = (idx + 1) // 3, (idx + 1) % 3
-    axes[row, col].imshow(img[0].cpu().permute(1, 2, 0).clamp(0, 1))
-    axes[row, col].set_title(title, fontsize=12)
-    axes[row, col].axis('off')
+# 填充退化场景图像
+for idx, (title, img) in enumerate(vis_items):
+    if idx + 1 < nrows * ncols:  # 确保不超出子图范围
+        row, col = (idx + 1) // ncols, (idx + 1) % ncols
+        axes[row, col].imshow(img[0].cpu().permute(1, 2, 0).clamp(0, 1))
+        axes[row, col].set_title(title, fontsize=12)
+        axes[row, col].axis('off')
 
 # 隐藏多余的子图
-for idx in range(len(vis_items) + 1, 6):
-    row, col = idx // 3, idx % 3
+for idx in range(len(vis_items) + 1, nrows * ncols):
+    row, col = idx // ncols, idx % ncols
     axes[row, col].axis('off')
 
 fig.suptitle('Step 1: 三种退化场景', fontsize=14)
@@ -315,10 +348,63 @@ print("\n" + "="*70)
 print("Step 2: 优化方法求解（Tikhonov / TV）")
 print("="*70)
 
-results = {}  # {scenario_name: {method: {psnr, ssim, time}}}
+# ★ 加载缓存（如果启用）
+skip_step2_scenarios = set()  # ★ 只跳过已有缓存结果的场景
+if use_cache and os.path.exists(cache_file):
+    try:
+        with open(cache_file, 'rb') as f:
+            cached_data = pickle.load(f)
+        print(f"✓ 检测到缓存文件: {cache_file}")
+        
+        # 检查缓存中是否有 Step 2 的结果
+        if 'step2_results' in cached_data:
+            # ★ 从缓存恢复结果字典结构
+            cached_step2 = cached_data['step2_results']
+            results = {}
+            for scenario_name, methods in cached_step2.items():
+                results[scenario_name] = {}
+                for method_name, metrics in methods.items():
+                    # ★ 确保所有值都是 Python float 类型
+                    results[scenario_name][method_name] = {
+                        'psnr': float(metrics['psnr']),
+                        'ssim': float(metrics.get('ssim', float('nan'))),
+                        'time': float(metrics['time']),
+                        'img': None  # 缓存中不保存图像，标记为 None
+                    }
+                skip_step2_scenarios.add(scenario_name)  # ★ 标记已有缓存结果的场景
+            
+            cached_s2 = list(skip_step2_scenarios)
+            missing_s2 = [s for s in scenarios if s not in skip_step2_scenarios]
+            print(f"✓ 从缓存加载了 Step 2 的优化方法结果: {cached_s2}")
+            if missing_s2:
+                print(f"  需要补算的场景: {missing_s2}")
+            
+            # 打印缓存的结果摘要
+            for scenario_name, methods in results.items():
+                print(f"  [{scenario_name}] 已有 {len(methods)} 个方法的结果")
+            print("→ 如需重新计算，请设置 use_cache = False 或删除缓存文件")
+            skip_step2 = len(missing_s2) == 0  # ★ 只有所有场景都有缓存时才完全跳过
+        else:
+            skip_step2 = False
+            print("缓存中未找到 Step 2 结果，将执行计算...")
+    except Exception as e:
+        print(f"⚠ 缓存加载失败: {e}，将重新计算")
+        skip_step2 = False
+else:
+    skip_step2 = False
+    if use_cache:
+        print("未检测到缓存文件，将执行完整计算...")
+
+if not skip_step2:
+    if not skip_step2_scenarios:
+        results = {}  # 全部重新计算时才清空
 
 # 对每种场景，用优化方法求解
 for scenario_name, scenario_data in scenarios.items():
+    # ★ 跳过已有缓存结果的场景
+    if scenario_name in skip_step2_scenarios:
+        print(f"\n--- 场景: {scenario_name} --- (缓存已加载，跳过)")
+        continue
     physics = scenario_data['physics']
     y = scenario_data['y']
     print(f"\n--- 场景: {scenario_name} ---")
@@ -370,7 +456,7 @@ for scenario_name, scenario_data in scenarios.items():
         # TV: min_x ||Ax-y||² + λ||∇x||_1
         lambda_tv = 0.05  # TV正则化参数
         
-        prior_tv = TVPrior(def_crit=1e-4, n_it_max=50)  # 平衡精度与速度的教学参数
+        prior_tv = TVPrior(def_crit=1e-3, n_it_max=10)  # 教学参数：减少内层迭代，避免耗时过长
         data_fidelity_tv = DataFidelity_L2()
         
         # 尝试使用新版deepinv的优化器（优先方案）
@@ -384,7 +470,7 @@ for scenario_name, scenario_data in scenarios.items():
                 data_fidelity=data_fidelity_tv,
                 prior=prior_tv,
                 params={'stepsize': 0.1, 'lambda': lambda_tv},
-                max_iter=100
+                max_iter=30  # 减少外层迭代：30次足以收敛到合理结果
             )
             x_tv = optimizer(y, physics)
             print("  ✓ 使用 optim_builder (PGD)")
@@ -395,7 +481,7 @@ for scenario_name, scenario_data in scenarios.items():
                 optimizer = ADMM(
                     data_fidelity=data_fidelity_tv,
                     prior=prior_tv,
-                    max_iter=100,
+                    max_iter=30,
                     params_algo={'lambda': lambda_tv}
                 )
                 x_tv = optimizer(y, physics)
@@ -407,7 +493,7 @@ for scenario_name, scenario_data in scenarios.items():
                     optimizer = PGD(
                         data_fidelity=data_fidelity_tv,
                         prior=prior_tv,
-                        max_iter=100,
+                        max_iter=30,
                         params_algo={'stepsize': 0.1, 'lambda': lambda_tv}
                     )
                     x_tv = optimizer(y, physics)
@@ -485,7 +571,46 @@ for scenario_name, scenario_data in scenarios.items():
     except Exception as e:
         print(f"  伴随重建失败: {e}")
 
-print("\n优化方法求解完成")
+    print("\n优化方法求解完成")
+    
+    # ★ 保存 Step 2 结果到缓存
+    if use_cache:
+        try:
+            # ★ 注意：不保存 scenarios（包含不可序列化的 physics 对象）
+            # 只保存计算结果（纯数据，可序列化）
+            cached_data = {}
+            if os.path.exists(cache_file):
+                try:
+                    with open(cache_file, 'rb') as f:
+                        cached_data = pickle.load(f)
+                except:
+                    cached_data = {}  # 如果加载失败，从头开始
+            
+            # 更新 Step 2 结果（只保存指标，不保存图像张量以减小文件大小）
+            step2_data = {}
+            for scenario_name, methods in results.items():
+                step2_data[scenario_name] = {}
+                for method_name, metrics in methods.items():
+                    # ★ 关键：确保所有值都是 Python 原生类型，不是 numpy 或 torch 类型
+                    psnr_val = float(metrics['psnr']) if hasattr(metrics['psnr'], 'item') else metrics['psnr']
+                    ssim_val = float(metrics.get('ssim', float('nan'))) if hasattr(metrics.get('ssim', 0), 'item') else metrics.get('ssim', float('nan'))
+                    time_val = float(metrics['time']) if hasattr(metrics['time'], 'item') else metrics['time']
+                    
+                    step2_data[scenario_name][method_name] = {
+                        'psnr': psnr_val,
+                        'ssim': ssim_val,
+                        'time': time_val
+                    }
+
+            cached_data['step2_results'] = step2_data
+            
+            with open(cache_file, 'wb') as f:
+                pickle.dump(cached_data, f)
+            print(f"✓ Step 2 结果已保存到缓存: {cache_file}")
+        except Exception as e:
+            print(f"⚠ 缓存保存失败: {e}")
+else:
+    print("\n✓ 使用缓存的优化方法结果，跳过 Step 2 计算")
 
 
 # ========================================================================
@@ -495,6 +620,40 @@ print("\n优化方法求解完成")
 print("\n" + "="*70)
 print("Step 3: PnP方法求解 —— DPIR (DRUNet去噪器)")
 print("="*70)
+
+# ★ 检查是否需要执行 Step 3
+skip_step3 = False
+skip_step3_scenarios = set()  # ★ 只跳过已有缓存结果的场景
+if use_cache and os.path.exists(cache_file):
+    try:
+        with open(cache_file, 'rb') as f:
+            cached_data = pickle.load(f)
+        if 'step3_results' in cached_data:
+            # 合并 Step 3 的结果到 results
+            for scenario_name, methods in cached_data['step3_results'].items():
+                if scenario_name not in results:
+                    results[scenario_name] = {}
+                for method_name, metrics in methods.items():
+                    results[scenario_name][method_name] = {
+                        'psnr': float(metrics['psnr']),
+                        'ssim': float(metrics.get('ssim', float('nan'))),
+                        'time': float(metrics['time']),
+                        'img': None  # 缓存中不保存图像
+                    }
+                skip_step3_scenarios.add(scenario_name)  # ★ 标记已有缓存结果的场景
+            cached_s3 = list(skip_step3_scenarios)
+            missing_s3 = [s for s in scenarios if s not in skip_step3_scenarios]
+            print(f"✓ 从缓存加载了 Step 3 的 PnP 方法结果: {cached_s3}")
+            if missing_s3:
+                print(f"  需要补算的场景: {missing_s3}")
+            skip_step3 = len(missing_s3) == 0  # ★ 只有所有场景都有缓存时才完全跳过
+        else:
+            print("缓存中未找到 Step 3 结果，将执行计算...")
+    except Exception as e:
+        print(f"⚠ 缓存加载失败: {e}，将重新计算")
+else:
+    if use_cache:
+        print("未检测到缓存文件，将执行完整计算...")
 
 print("""
 DPIR算法核心思路:
@@ -513,12 +672,16 @@ except Exception as e:
     print(f"DRUNet加载失败: {e}")
     has_dpir = False
 
-if has_dpir:
+if has_dpir and not skip_step3:
     # 教学说明：DPIR (Deep Plug-and-Play Image Restoration)
     #   - 核心思想：将优化问题的近端算子替换为预训练去噪器
     #   - 旧版deepinv使用DPIR类封装PnP-ADMM/HQS算法
     #   - 新版deepinv可能重构了接口，本代码采用"新API优先+手动实现保底"
     for scenario_name, scenario_data in scenarios.items():
+        # ★ 跳过已有缓存结果的场景
+        if scenario_name in skip_step3_scenarios:
+            print(f"\n--- 场景: {scenario_name} --- (缓存已加载，跳过)")
+            continue
         physics = scenario_data['physics']
         y = scenario_data['y']
         print(f"\n--- 场景: {scenario_name} ---")
@@ -603,6 +766,46 @@ if has_dpir:
                 print(f"  手动PnP也失败: {e2}")
                 traceback.print_exc()
 
+    # ★ 保存 Step 3 结果到缓存
+    if use_cache and not skip_step3:
+        try:
+            # 读取现有缓存
+            cached_data = {}
+            if os.path.exists(cache_file):
+                try:
+                    with open(cache_file, 'rb') as f:
+                        cached_data = pickle.load(f)
+                except:
+                    cached_data = {}
+            
+            # 提取 Step 3 的结果（只包含 PnP 相关方法，只保存指标）
+            step3_results = {}
+            for scenario_name, methods in results.items():
+                pnp_methods = {k: v for k, v in methods.items() if 'DPIR' in k or 'PnP' in k}
+                if pnp_methods:
+                    step3_results[scenario_name] = {}
+                    for method_name, metrics in pnp_methods.items():
+                        # ★ 确保所有值都是 Python 原生类型
+                        psnr_val = float(metrics['psnr']) if hasattr(metrics['psnr'], 'item') else metrics['psnr']
+                        ssim_val = float(metrics.get('ssim', float('nan'))) if hasattr(metrics.get('ssim', 0), 'item') else metrics.get('ssim', float('nan'))
+                        time_val = float(metrics['time']) if hasattr(metrics['time'], 'item') else metrics['time']
+                        
+                        step3_results[scenario_name][method_name] = {
+                            'psnr': psnr_val,
+                            'ssim': ssim_val,
+                            'time': time_val
+                        }
+
+            cached_data['step3_results'] = step3_results
+            
+            with open(cache_file, 'wb') as f:
+                pickle.dump(cached_data, f)
+            print(f"✓ Step 3 结果已保存到缓存: {cache_file}")
+        except Exception as e:
+            print(f"⚠ 缓存保存失败: {e}")
+elif skip_step3:
+    print("\n✓ 使用缓存的 PnP 方法结果，跳过 Step 3 计算")
+
 
 # ========================================================================
 # Step 4: 扩散方法求解 —— DiffPIR
@@ -612,12 +815,48 @@ print("\n" + "="*70)
 print("Step 4: 扩散方法求解 —— DiffPIR (DiffUNet)")
 print("="*70)
 
+# ★ 检查是否需要执行 Step 4
+skip_step4 = False
+skip_step4_scenarios = set()  # ★ 只跳过已有缓存结果的场景
+if use_cache and os.path.exists(cache_file):
+    try:
+        with open(cache_file, 'rb') as f:
+            cached_data = pickle.load(f)
+        if 'step4_results' in cached_data:
+            # 合并 Step 4 的结果到 results
+            for scenario_name, methods in cached_data['step4_results'].items():
+                if scenario_name not in results:
+                    results[scenario_name] = {}
+                for method_name, metrics in methods.items():
+                    results[scenario_name][method_name] = {
+                        'psnr': float(metrics['psnr']),
+                        'ssim': float(metrics.get('ssim', float('nan'))),
+                        'time': float(metrics['time']),
+                        'img': None  # 缓存中不保存图像
+                    }
+                skip_step4_scenarios.add(scenario_name)  # ★ 标记已有缓存结果的场景
+            cached_s4 = list(skip_step4_scenarios)
+            missing_s4 = [s for s in scenarios if s not in skip_step4_scenarios]
+            print(f"✓ 从缓存加载了 Step 4 的扩散方法结果: {cached_s4}")
+            if missing_s4:
+                print(f"  需要补算的场景: {missing_s4}")
+            skip_step4 = len(missing_s4) == 0  # ★ 只有所有场景都有缓存时才完全跳过
+        else:
+            print("缓存中未找到 Step 4 结果，将执行计算...")
+    except Exception as e:
+        print(f"⚠ 缓存加载失败: {e}，将重新计算")
+else:
+    if use_cache:
+        print("未检测到缓存文件，将执行完整计算...")
+
 print("""
 DiffPIR算法核心思路:
   在扩散采样过程中融入数据保真约束
   每个去噪步骤后，用数据一致性步骤将采样引导向观测一致
   优势: 自然图像先验更强，对重度退化效果更好
-  劣势: 采样步数多（~1000步），推理较慢
+  劣势: 采样步数多（可配置100-1000步），推理较慢
+  
+★ 当前配置: 采样步数={n_diffusion_steps}，进度条={'开启' if show_progress else '关闭'}
 """)
 
 
@@ -631,7 +870,7 @@ except Exception as e:
     print(f"DiffUNet加载失败: {e}")
     has_diffpir = False
 
-if has_diffpir:
+if has_diffpir and not skip_step4:
     # 教学说明：DiffPIR (Diffusion Plug-and-Play Image Restoration)
     #   - 核心思想：将扩散模型作为PnP去噪器，结合数据保真项
     #   - 旧版deepinv使用DiffPIR类封装扩散采样算法
@@ -639,6 +878,10 @@ if has_diffpir:
     # 选择代表性场景测试扩散方法（较慢，不全测）
     diff_scenarios = list(scenarios.keys())[:3]  # 最多测3个场景
     for scenario_name in diff_scenarios:
+        # ★ 跳过已有缓存结果的场景
+        if scenario_name in skip_step4_scenarios:
+            print(f"\n--- 场景: {scenario_name} --- (缓存已加载，跳过)")
+            continue
         scenario_data = scenarios[scenario_name]
         physics = scenario_data['physics']
         y = scenario_data['y']
@@ -656,7 +899,7 @@ if has_diffpir:
                 sigma=0.05,
                 zeta=0.1,
                 lambda_=7.0,
-                verbose=False,
+                verbose=show_progress,  # ★ 启用进度条
                 device=device,
             )
             x_diffpir = model_diffpir(y, physics)
@@ -670,12 +913,16 @@ if has_diffpir:
             print(f"  DiffPIR:  PSNR={psnr_diffpir:.2f} dB, SSIM={ssim_diffpir:.4f}, 耗时={t_diffpir:.3f}s")
         except Exception as e:
             print(f"  DiffPIR(新API)求解失败: {e}")
-            print("  回退到DDRM算法...")
+            # 回退方案：先尝试DDRM，再尝试DPS（不需要SVD，适合Blur场景）
             try:
-                print("  尝试DDRM算法...")
+                print("  回退到DDRM算法...")
                 from deepinv.sampling import DDRM
                 t_start = time.time()
-                model_ddrm = DDRM(denoiser=denoiser_diffunet)
+                model_ddrm = DDRM(
+                    denoiser=denoiser_diffunet,
+                    sigmas=np.linspace(1, 0, n_diffusion_steps),
+                    verbose=show_progress
+                )
                 x_ddrm = model_ddrm(y, physics)
                 t_ddrm = time.time() - t_start
                 
@@ -687,6 +934,69 @@ if has_diffpir:
                 print(f"  DDRM:  PSNR={psnr_ddrm:.2f} dB, SSIM={ssim_ddrm:.4f}, 耗时={t_ddrm:.3f}s")
             except Exception as e2:
                 print(f"  DDRM也失败: {e2}")
+                # ★ DPS (Diffusion Posterior Sampling) 不需要SVD分解，适合Blur等无SVD的场景
+                try:
+                    print("  回退到DPS算法（无需SVD，适合Blur场景）...")
+                    from deepinv.sampling import DPS
+                    t_start = time.time()
+                    model_dps = DPS(
+                        model=denoiser_diffunet,
+                        data_fidelity=DiffL2(),
+                        max_iter=n_diffusion_steps,
+                        verbose=show_progress
+                    )
+                    x_dps = model_dps(y, physics)
+                    t_dps = time.time() - t_start
+                    
+                    psnr_dps = compute_psnr(x_true, x_dps)
+                    ssim_dps = compute_ssim(x_true, x_dps)
+                    results[scenario_name]['DPS(扩散)'] = {
+                        'psnr': psnr_dps, 'ssim': ssim_dps, 'time': t_dps, 'img': x_dps
+                    }
+                    print(f"  DPS:  PSNR={psnr_dps:.2f} dB, SSIM={ssim_dps:.4f}, 耗时={t_dps:.3f}s")
+                except Exception as e3:
+                    print(f"  DPS也失败: {e3}")
+                    print(f"  [提示] 场景 '{scenario_name}' 的所有扩散方法均失败，Step 5可视化中将缺少扩散方法子图")
+
+    # ★ 保存 Step 4 结果到缓存
+    if use_cache and not skip_step4:
+        try:
+            # 读取现有缓存
+            cached_data = {}
+            if os.path.exists(cache_file):
+                try:
+                    with open(cache_file, 'rb') as f:
+                        cached_data = pickle.load(f)
+                except:
+                    cached_data = {}
+            
+            # 提取 Step 4 的结果（只包含扩散相关方法，只保存指标）
+            step4_results = {}
+            for scenario_name, methods in results.items():
+                diff_methods = {k: v for k, v in methods.items() if 'DiffPIR' in k or 'DDRM' in k or 'DPS' in k}
+                if diff_methods:
+                    step4_results[scenario_name] = {}
+                    for method_name, metrics in diff_methods.items():
+                        # ★ 确保所有值都是 Python 原生类型
+                        psnr_val = float(metrics['psnr']) if hasattr(metrics['psnr'], 'item') else metrics['psnr']
+                        ssim_val = float(metrics.get('ssim', float('nan'))) if hasattr(metrics.get('ssim', 0), 'item') else metrics.get('ssim', float('nan'))
+                        time_val = float(metrics['time']) if hasattr(metrics['time'], 'item') else metrics['time']
+                        
+                        step4_results[scenario_name][method_name] = {
+                            'psnr': psnr_val,
+                            'ssim': ssim_val,
+                            'time': time_val
+                        }
+
+            cached_data['step4_results'] = step4_results
+            
+            with open(cache_file, 'wb') as f:
+                pickle.dump(cached_data, f)
+            print(f"✓ Step 4 结果已保存到缓存: {cache_file}")
+        except Exception as e:
+            print(f"⚠ 缓存保存失败: {e}")
+elif skip_step4:
+    print("\n✓ 使用缓存的扩散方法结果，跳过 Step 4 计算")
 
 
 # ========================================================================
@@ -773,25 +1083,92 @@ if len(plot_scenarios) >= 1:
 
 # 5c. 重建结果可视化
 print("\n--- 5c. 重建结果可视化 ---")
-# 选择一个代表性场景展示重建对比
-demo_scenario = list(results.keys())[0] if results else None
-if demo_scenario:
-    fig, axes = plt.subplots(1, min(len(results[demo_scenario]) + 2, 5), figsize=(4 * min(len(results[demo_scenario]) + 2, 5), 4))
+# ★ 为每个场景都生成重建对比图
+for scenario_name, scenario_methods in results.items():
+    num_methods = len(scenario_methods)
+    if num_methods == 0:
+        print(f"  场景 '{scenario_name}' 无结果，跳过")
+        continue
+
+    # ★ 调试：打印场景方法概况
+    no_img_methods = [m for m, v in scenario_methods.items() if v.get('img') is None]
+    has_img_methods = [m for m, v in scenario_methods.items() if v.get('img') is not None]
+    print(f"  场景 '{scenario_name}': {num_methods} 个方法, 有图={has_img_methods}, 无图={no_img_methods}")
+    print(f"    scenario_name in scenarios: {scenario_name in scenarios}")
+
+    # 动态调整子图数量：真值 + 观测 + 所有方法的结果
+    total_subplots = 2 + num_methods
+    ncols = min(total_subplots, 5)
+    nrows = (total_subplots + ncols - 1) // ncols
     
-    safe_imshow(axes[0], x_true, '真值')
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 4 * nrows))
+    if total_subplots == 1:
+        axes = np.array([[axes]])
+    elif nrows == 1 or ncols == 1:
+        axes = axes.reshape(nrows, ncols)
     
-    safe_imshow(axes[1], scenarios[demo_scenario]['y'], f'观测\n({demo_scenario})')
+    axes_flat = axes.flatten()
     
-    for idx, (method_name, metrics) in enumerate(results[demo_scenario].items()):
-        if idx + 2 < len(axes):
-            img = metrics['img']
-            safe_imshow(axes[idx+2], img, f'{method_name}\nPSNR={metrics["psnr"]:.1f}dB, SSIM={metrics.get("ssim", 0):.3f}')
+    # 显示真值
+    safe_imshow(axes_flat[0], x_true, '真值')
     
-    fig.suptitle(f'重建对比: {demo_scenario}', fontsize=14)
+    # 显示观测图像（如果场景存在）
+    if scenario_name in scenarios:
+        safe_imshow(axes_flat[1], scenarios[scenario_name]['y'], f'观测\n({scenario_name})')
+    else:
+        axes_flat[1].text(0.5, 0.5, '观测数据\n不可用', ha='center', va='center', fontsize=12)
+        axes_flat[1].axis('off')
+    
+    # 显示各方法的重建结果
+    for idx, (method_name, metrics) in enumerate(scenario_methods.items()):
+        ax_idx = idx + 2
+        if ax_idx < len(axes_flat):
+            img = metrics.get('img')
+            if img is not None:
+                safe_imshow(axes_flat[ax_idx], img, f'{method_name}\nPSNR={metrics["psnr"]:.1f}dB, SSIM={metrics.get("ssim", 0):.3f}')
+            else:
+                # img 为 None（缓存加载）：逐级降级显示
+                displayed = False
+                if scenario_name in scenarios:
+                    physics = scenarios[scenario_name]['physics']
+                    y_obs = scenarios[scenario_name]['y']
+                    # ★ 对超分场景，A_adjoint 是零填充（极暗），改用双线性插值
+                    try:
+                        from deepinv.physics import Downsampling
+                        if isinstance(physics, Downsampling):
+                            import torch.nn.functional as F
+                            target_h, target_w = x_true.shape[-2], x_true.shape[-1]
+                            adj = F.interpolate(y_obs, size=(target_h, target_w), mode='bilinear', align_corners=False)
+                        else:
+                            adj = physics.A_adjoint(y_obs)
+                        safe_imshow(axes_flat[ax_idx], adj, f'{method_name}\nPSNR={metrics["psnr"]:.1f}dB (伴随)')
+                        displayed = True
+                    except Exception:
+                        pass
+                # 尝试直接显示观测图
+                if not displayed and scenario_name in scenarios and 'y' in scenarios[scenario_name]:
+                    safe_imshow(axes_flat[ax_idx], scenarios[scenario_name]['y'], f'{method_name}\nPSNR={metrics["psnr"]:.1f}dB (观测)')
+                    displayed = True
+                # 文字占位
+                if not displayed:
+                    axes_flat[ax_idx].text(0.5, 0.5, f'{method_name}\nPSNR={metrics["psnr"]:.1f}dB\n(图像未保存)', 
+                                          ha='center', va='center', fontsize=10)
+                    axes_flat[ax_idx].axis('off')
+    
+    # 隐藏多余的子图
+    for idx in range(2 + num_methods, len(axes_flat)):
+        axes_flat[idx].axis('off')
+    
+    fig.suptitle(f'重建对比: {scenario_name}', fontsize=14)
     plt.tight_layout()
-    plt.savefig(os.path.join(SAVE_DIR, f'step5_reconstruction_{demo_scenario}.png'), dpi=150, bbox_inches='tight')
+    # 文件名中替换特殊字符
+    safe_name = scenario_name.replace('×', 'x').replace('=', '_')
+    plt.savefig(os.path.join(SAVE_DIR, f'step5_reconstruction_{safe_name}.png'), dpi=150, bbox_inches='tight')
     plt.close()
-    print(f"已保存: step5_reconstruction_{demo_scenario}.png")
+    print(f"已保存: step5_reconstruction_{safe_name}.png")
+
+if not results:
+    print("  ⚠ 没有可用的结果进行可视化")
 
 # 5d. 决策树文字输出
 print("""
@@ -816,6 +1193,16 @@ print("""
    ├─ 严格（<1s）→ 优化方法
    ├─ 中等（1-10s）→ PnP
    └─ 宽松（>10s）→ 扩散方法
+   
+★ 扩散采样配置建议：
+   - 采样步数 (n_diffusion_steps): 
+     * 100步：快速预览，适合调试和初步实验
+     * 300步：平衡质量和速度，推荐日常使用
+     * 1000步：最高质量，适合最终结果生成
+   - 进度条 (show_progress): 
+     * True：显示tqdm进度条，实时了解采样进度
+     * False：静默模式，减少输出干扰
+   - 当前设置: n_diffusion_steps={n_diffusion_steps}, show_progress={show_progress}
 """)
 
 
@@ -856,6 +1243,13 @@ print(f"""
 - PnP方法: 速度与质量平衡最佳
 - 扩散方法: 质量最高但推理慢
 
+★ 结果缓存功能:
+- 缓存文件: {cache_file if use_cache else '未启用'}
+- 缓存状态: {'已启用' if use_cache else '已禁用'}
+- 优势: 避免重复计算，加速调试和实验迭代
+- 使用: 设置 use_cache = False 可强制重新计算
+- 清理: 删除缓存文件即可清除所有缓存结果
+
 所有图像已保存至: {SAVE_DIR}
 """)
 
@@ -866,9 +1260,9 @@ for s_name, methods in results.items():
     results_summary[s_name] = {}
     for m_name, m_data in methods.items():
         results_summary[s_name][m_name] = {
-            'psnr': round(m_data['psnr'], 2),
-            'ssim': round(m_data.get('ssim', 0), 4),
-            'time': round(m_data['time'], 3)
+            'psnr': float(round(m_data['psnr'], 2)),  # ★ 转换为 Python float
+            'ssim': float(round(m_data.get('ssim', 0), 4)),  # ★ 转换为 Python float
+            'time': float(round(m_data['time'], 3))  # ★ 转换为 Python float
         }
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
     json.dump(results_summary, f, ensure_ascii=False, indent=2)
