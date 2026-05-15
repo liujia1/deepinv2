@@ -1,8 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from skimage.data import shepp_logan_phantom
-from skimage.transform import resize, radon, iradon
-import matplotlib as mpl
+from skimage.transform import resize
 import warnings
 import logging
 
@@ -15,7 +14,7 @@ warnings.filterwarnings("ignore", message=".*glyph.*")
 plt.rcParams['axes.unicode_minus'] = False
 
 import platform
-from matplotlib.font_manager import FontManager, FontProperties
+from matplotlib.font_manager import FontManager
 
 def _find_chinese_font():
     """自动检测系统中可用的中文字体，兼容 Windows / Linux"""
@@ -55,37 +54,11 @@ else:
 
 np.random.seed(42)
 
-# ---- 1. 准备图像和算子 ----
+# ---- 1. 准备图像和模糊算子 ----
 n = 64
-phantom = resize(shepp_logan_phantom(), (n, n), order=0, preserve_range=True, anti_aliasing=False)
+phantom = resize(shepp_logan_phantom(), (n, n), order=3, preserve_range=True, anti_aliasing=True)
 x = phantom / phantom.max()
 
-# 使用 Radon 变换作为正向算子（稀疏角度，使零空间更大）
-theta = np.linspace(0, 180, 30, endpoint=False)
-y = radon(x, theta=theta, circle=True)
-
-# ---- 2. 构造"幽灵"图像 ----
-# 方法：在 A 的零空间中构造一个向量，加到原始图像上
-# 利用 FBP 重建的残差作为零空间方向的近似
-
-from skimage.transform import iradon
-
-# 先做 FBP 重建
-x_fbp = iradon(y, theta=theta, circle=True, filter_name='ramp')
-
-# 构造一个与 x 视觉不同的图像（例如另一个幻影变体）
-from skimage.data import binary_blobs
-x_alt = resize(binary_blobs(length=n).astype(float), (n, n), order=0, preserve_range=True, anti_aliasing=False)
-
-# 将 x_alt 投影到 A 的近似零空间
-y_alt = radon(x_alt, theta=theta, circle=True)
-
-# 使用 FBP 重建 x_alt，残差近似在零空间
-x_alt_fbp = iradon(y_alt, theta=theta, circle=True, filter_name='ramp')
-ghost_component = x_alt - x_alt_fbp  # 这个分量被 A 近似"抹去"
-
-# 更直接的方法：构造高频振荡图案（高频被模糊/低通算子压制）
-# 使用模糊算子来演示（更直观）
 def gaussian_psf(size, sigma):
     ax = np.concatenate((np.arange(0, size // 2), np.arange(-size // 2, 0)))
     xx, yy = np.meshgrid(ax, ax)
@@ -97,10 +70,27 @@ def blur(x, h):
 
 h = gaussian_psf(n, sigma=3.0)
 
-# 构造一个高频振荡图像（在 A 的近似零空间中）
+# ---- 2. 构造"幽灵"图像 ----
+# 高频振荡图案落在模糊算子的近似零空间中
+# 物理解释：高斯模糊在傅里叶域是低通滤波器，高频分量被强烈衰减
+# - 高频分量对应模糊算子的小奇异值方向（与实验 1.7 呼应）
+# - 频率越高 → 傅里叶域衰减越强 → 越接近零空间
+
 xx, yy = np.meshgrid(np.arange(n), np.arange(n))
-# 高频正弦图案：频率越高，模糊后衰减越多
-d = 0.5 * np.sin(2 * np.pi * 15 * xx / n) * np.cos(2 * np.pi * 15 * yy / n)
+
+# 扫描不同频率，展示衰减规律
+frequencies = [5, 10, 15, 20, 25, 30, 32]
+attenuations = []
+
+for freq in frequencies:
+    d_test = np.sin(2 * np.pi * freq * xx / n)
+    Ad_test = blur(d_test, h)
+    attenuation = np.linalg.norm(Ad_test) / np.linalg.norm(d_test)
+    attenuations.append(attenuation)
+
+# 使用频率 15 作为幽灵分量（中等衰减，视觉效果明显）
+freq = 15
+d = 0.5 * np.sin(2 * np.pi * freq * xx / n)  # 纯水平频率
 
 # 构造"幽灵"图像
 x_prime = x + d * x.max()
@@ -114,32 +104,49 @@ rel_meas_err = np.linalg.norm(Ad) / np.linalg.norm(Ax)
 rel_img_err = np.linalg.norm(d * x.max()) / np.linalg.norm(x)
 
 # ---- 4. 可视化 ----
-fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+fig, axes = plt.subplots(2, 4, figsize=(18, 9))
 
-axes[0, 0].imshow(x, cmap='gray')
+axes[0, 0].imshow(x, cmap='gray', vmin=0, vmax=1)
 axes[0, 0].set_title('图像 x')
 axes[0, 0].axis('off')
 
-axes[0, 1].imshow(x_prime, cmap='gray')
+axes[0, 1].imshow(x_prime, cmap='gray', vmin=0, vmax=1)
 axes[0, 1].set_title(f"图像 x'（x + 幽灵分量）\n‖x-x'‖/‖x‖ = {rel_img_err:.1%}")
 axes[0, 1].axis('off')
 
 axes[0, 2].imshow(d * x.max(), cmap='RdBu_r', vmin=-0.3, vmax=0.3)
-axes[0, 2].set_title('差异 d = x\' - x\n（落在 A 的近似零空间中）')
+axes[0, 2].set_title('差异 d = x\' - x\n（高频分量，落在近似零空间）')
 axes[0, 2].axis('off')
 
-axes[1, 0].imshow(Ax, cmap='gray')
+axes[0, 3].plot(frequencies, attenuations, 'o-', linewidth=2, markersize=8)
+axes[0, 3].axvline(freq, color='red', linestyle='--', alpha=0.8,
+                   label=f'选用频率={freq}')
+axes[0, 3].set_xlabel('空间频率')
+axes[0, 3].set_ylabel('衰减因子 ‖Ad‖/‖d‖')
+axes[0, 3].set_title('频率-衰减规律\n频率越高→越接近零空间')
+axes[0, 3].legend(fontsize=9)
+axes[0, 3].grid(True)
+
+ax_vmin, ax_vmax = Ax.min(), Ax.max()
+axes[1, 0].imshow(Ax, cmap='gray', vmin=ax_vmin, vmax=ax_vmax)
 axes[1, 0].set_title('Ax（x 的观测）')
 axes[1, 0].axis('off')
 
-axes[1, 1].imshow(Ax_prime, cmap='gray')
-axes[1, 1].set_title(f"Ax'（x' 的观测）\n‖Ax-Ax'‖/‖Ax‖ = {rel_meas_err:.3%}")
+axes[1, 1].imshow(Ax_prime, cmap='gray', vmin=ax_vmin, vmax=ax_vmax)
+axes[1, 1].set_title(f"Ax'（x' 的观测）")
 axes[1, 1].axis('off')
 
-vmax = max(np.abs(Ad).max() * 0.5, 1e-6)
-axes[1, 2].imshow(Ad, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
-axes[1, 2].set_title(f'A(x\'-x) = Ad\n‖Ad‖/‖Ax‖ = {rel_meas_err:.3%}\n测量几乎相同！')
+Ax_diff = Ax_prime - Ax
+vmax_diff = max(np.abs(Ax_diff).max(), 1e-6)
+axes[1, 2].imshow(Ax_diff, cmap='RdBu_r', vmin=-vmax_diff, vmax=vmax_diff)
+axes[1, 2].set_title(f"Ax' - Ax（观测差异）\n‖Ax'-Ax‖/‖Ax‖ = {rel_meas_err:.3%}\n（colorscale max={vmax_diff:.2e}）")
 axes[1, 2].axis('off')
+
+axes[1, 3].text(0.5, 0.5, 
+    f'验证线性性:\n‖(Ax\'−Ax) − Ad‖\n= {np.linalg.norm(Ax_diff - Ad):.2e}',
+    ha='center', va='center', fontsize=13, transform=axes[1, 3].transAxes)
+axes[1, 3].set_title('线性性验证')
+axes[1, 3].axis('off')
 
 plt.suptitle('"几乎幽灵"现象\n两个视觉截然不同的图像，其观测几乎相同', fontsize=14)
 plt.tight_layout()
@@ -150,4 +157,10 @@ print(f"\n=== 几乎幽灵验证 ===")
 print(f"图像相对差异: ‖x - x'‖/‖x‖ = {rel_img_err:.1%}")
 print(f"测量相对差异: ‖Ax - Ax'‖/‖Ax‖ = {rel_meas_err:.3%}")
 print(f"放大因子: 图像差异/测量差异 = {rel_img_err / rel_meas_err:.0f} 倍")
+print("\n=== 物理解释 ===")
+print("高斯模糊在傅里叶域是低通滤波器，高频分量被强烈衰减")
+print("高频幽灵分量对应模糊算子的小奇异值方向（与实验 1.7 呼应）")
 print("→ 算子 A 抹去了幽灵方向上的信息，不适定性是问题本身的内在性质！")
+print("\n=== 频率 vs 衰减 ===")
+for f, a in zip(frequencies, attenuations):
+    print(f"频率 {f:2d}: 衰减因子 = {a:.4f}")

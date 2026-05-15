@@ -2,7 +2,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from skimage.data import astronaut
 from skimage.color import rgb2gray
-from skimage.transform import resize
 import matplotlib as mpl
 import warnings
 import logging

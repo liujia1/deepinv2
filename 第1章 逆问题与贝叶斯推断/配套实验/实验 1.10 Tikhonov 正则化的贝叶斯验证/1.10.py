@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from skimage.data import shepp_logan_phantom
 from skimage.transform import resize
-import matplotlib as mpl
+from skimage.metrics import peak_signal_noise_ratio
 import warnings
 import logging
 
@@ -15,7 +15,7 @@ warnings.filterwarnings("ignore", message=".*glyph.*")
 plt.rcParams['axes.unicode_minus'] = False
 
 import platform
-from matplotlib.font_manager import FontManager, FontProperties
+from matplotlib.font_manager import FontManager
 
 def _find_chinese_font():
     """自动检测系统中可用的中文字体，兼容 Windows / Linux"""
@@ -57,7 +57,7 @@ np.random.seed(42)
 
 # ---- 1. 准备小尺寸问题 ----
 n = 32  # 小尺寸以便计算闭式解
-phantom = resize(shepp_logan_phantom(), (n, n), order=0, preserve_range=True, anti_aliasing=False)
+phantom = resize(shepp_logan_phantom(), (n, n), order=3, preserve_range=True, anti_aliasing=True)
 x = phantom / phantom.max()
 x_vec = x.ravel()
 N = n * n
@@ -90,13 +90,15 @@ y = A @ x_vec + sigma_noise * np.random.randn(N)
 sigma_prior = 0.5  # 先验标准差
 lam = sigma_noise ** 2 / sigma_prior ** 2  # λ = σ²/σ_x²
 
-# 闭式解
+# 闭式解（使用特征分解，避免重复求逆）
 AtA = A.T @ A
 Aty = A.T @ y
+eigenvalues, eigenvectors = np.linalg.eigh(AtA)  # 一次 O(N³)
+Qty = eigenvectors.T @ Aty
 
 # μ_post = (A^T A / σ² + I/σ_x²)^{-1} A^T y / σ²
-Sigma_post = np.linalg.inv(AtA / sigma_noise ** 2 + np.eye(N) / sigma_prior ** 2)
-mu_post = Sigma_post @ (Aty / sigma_noise ** 2)
+# 利用特征分解：μ = V @ diag(1/(λ_i + λ)) @ (V^T @ Aty) / σ²
+mu_post = eigenvectors @ (Qty / (eigenvalues + lam))
 
 # ---- 5. 梯度下降验证 ----
 def tikhonov_objective(x_vec, A, y, lam):
@@ -105,23 +107,27 @@ def tikhonov_objective(x_vec, A, y, lam):
 def tikhonov_gradient(x_vec, A, y, lam):
     return A.T @ (A @ x_vec - y) + lam * x_vec
 
-# 梯度下降
+# 梯度下降（使用最优学习率）
 x_gd = np.zeros(N)
-lr = 1e-4
-for it in range(5000):
+lr = 1.0  # 最优步长约 2/L_max ≈ 2/1.01 ≈ 1.98，取 1.0 保证稳定收敛
+n_iter = 1000  # 1000 步足够收敛
+for it in range(n_iter):
     grad = tikhonov_gradient(x_gd, A, y, lam)
     x_gd = x_gd - lr * grad
+    if (it + 1) % 200 == 0:
+        obj_val = tikhonov_objective(x_gd, A, y, lam)
+        print(f"  GD迭代 {it+1}/{n_iter}, 目标函数值: {obj_val:.4e}")
 
 # ---- 6. λ 扫描：过拟合 vs 过正则化 ----
-lambdas = [1e-4, 1e-3, 1e-2, lam, 1e-1, 1.0, 10.0]
+# 注意：扫描不同的 λ 等价于改变先验方差 σ_x² = σ²/λ
+# 利用特征分解，每个 λ 只需 O(N²)
+lambdas = [1e-4, 1e-3, lam, 1e-1, 1.0, 10.0]  # lam=0.01，避免与 1e-2 重复
 recons = {}
 for l in lambdas:
-    Sigma_l = np.linalg.inv(AtA / sigma_noise ** 2 + l * np.eye(N) / sigma_noise ** 2)
-    mu_l = Sigma_l @ (Aty / sigma_noise ** 2)
+    mu_l = eigenvectors @ (Qty / (eigenvalues + l))
     recons[l] = mu_l
 
 # ---- 7. 可视化 ----
-from skimage.metrics import peak_signal_noise_ratio
 
 fig, axes = plt.subplots(2, 4, figsize=(18, 9))
 
@@ -147,7 +153,8 @@ axes[0, 3].set_title(f'梯度下降解\nPSNR={psnr_gd:.1f}dB\n与闭式解一致
 axes[0, 3].axis('off')
 
 # 后验不确定性图
-post_var = np.diag(Sigma_post).reshape(n, n)
+# 利用特征分解计算后验方差：diag(Σ_post) = σ² · sum_j (V_ij² / (λ_j + λ))
+post_var = sigma_noise ** 2 * np.sum(eigenvectors ** 2 / (eigenvalues + lam), axis=1).reshape(n, n)
 im = axes[1, 0].imshow(post_var, cmap='hot')
 axes[1, 0].set_title('后验方差 diag(Σ_post)\n不确定性量化')
 axes[1, 0].axis('off')
@@ -168,11 +175,13 @@ plt.savefig('实验1_10_Tikhonov贝叶斯验证.png', dpi=150, bbox_inches='tigh
 plt.show()
 
 # ---- 8. λ vs PSNR 曲线 ----
+# 重要说明：贝叶斯最优 λ = σ²/σ_x² 最小化期望风险（MSE的期望）
+# 而 PSNR 最大值对应单次噪声实现的最好重建，两者不完全等价
+# 因此贝叶斯最优 λ 附近 PSNR 最高，但不一定精确重合
 lambdas_sweep = np.logspace(-5, 2, 50)
 psnrs = []
 for l in lambdas_sweep:
-    Sigma_l = np.linalg.inv(AtA / sigma_noise ** 2 + l * np.eye(N) / sigma_noise ** 2)
-    mu_l = Sigma_l @ (Aty / sigma_noise ** 2)
+    mu_l = eigenvectors @ (Qty / (eigenvalues + l))
     psnrs.append(peak_signal_noise_ratio(x, np.clip(mu_l.reshape(n, n), 0, 1)))
 
 plt.figure(figsize=(8, 4))
