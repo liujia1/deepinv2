@@ -19,7 +19,7 @@ Step 5: ★ 样本数对不确定性估计的影响
 运行前提：需GPU（Colab T4即可），需下载预训练模型(DRUNet/DiffUNet)
 """
 
-import os, sys, time, copy
+import os, sys, time, copy, pickle
 import numpy as np
 import torch
 import torch.nn as nn
@@ -109,6 +109,11 @@ else:
         print("[Font] 未找到中文字体，中文可能显示为方框")
 # ========================================================
 
+# ★ 缓存配置
+use_cache = True
+cache_file = os.path.join(SAVE_DIR, 'experiment_cache.pkl')
+print(f"缓存配置: use_cache={use_cache}")
+
 # 固定随机种子
 np.random.seed(42)
 torch.manual_seed(42)
@@ -118,7 +123,7 @@ if torch.cuda.is_available():
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"使用设备: {device}")
 if device.type == 'cpu':
-    print("⚠ 警告: 扩散采样在CPU上会非常慢，强烈建议使用GPU")
+    print("[警告] 扩散采样在CPU上会非常慢，强烈建议使用GPU")
 
 # 安装deepinv
 try:
@@ -157,7 +162,7 @@ print("="*70)
 
 print("""
 点估计的局限性:
-  单次重建 x̂ = f(y) 只给出一个解，无法量化可靠性
+  单次重建 x^ = f(y) 只给出一个解，无法量化可靠性
   对于欠定逆问题（如80%修复），不同先验可能给出完全不同的解
 
 后验分布的价值:
@@ -170,7 +175,12 @@ print("""
 
 # 加载测试图像
 x_true = load_example("celeba_example.jpg", img_size=(256, 256), resize_mode='resize')
-x_true = x_true.unsqueeze(0).to(device)
+# 确保是4D张量 (B, C, H, W)
+if x_true.ndim == 3:
+    x_true = x_true.unsqueeze(0)  # (C, H, W) -> (1, C, H, W)
+elif x_true.ndim == 5:
+    x_true = x_true.squeeze(0) if x_true.shape[0] == 1 else x_true[0]
+x_true = x_true.to(device)
 
 # 创建退化模型（修复场景，50%缺失——欠定程度适中）
 torch.manual_seed(42)
@@ -191,127 +201,275 @@ print("\n" + "="*70)
 print("Step 2: 后验采样实现")
 print("="*70)
 
-ula_method = None  # 在文件开头初始化，避免后续JSON保存时NameError
+ula_method = None
 
-S = 8  # 采样数量（默认8以适应计算资源）
-# ⚠️ 注意: S=8 对于校准检验偏少，仅能可靠估计 ≤75% 置信水平
-#    如果有 GPU 资源，建议调高到 S=30 以获得更准确的95%置信区间估计
+S = 8
 print(f"后验采样数量: S={S}")
 
-all_samples = []  # 存储所有后验样本
+all_samples = []
 sample_times = []
 
-# 2a. 尝试PnP-ULA采样
-print("\n--- 2a. PnP-ULA 后验采样 ---")
-try:
-    from deepinv.models import DRUNet
-    denoiser = DRUNet(pretrained='download').to(device)
-    print("DRUNet加载成功")
-    has_drunet = True
-except Exception as e:
-    print(f"DRUNet加载失败: {e}")
-    has_drunet = False
+import traceback
 
-if has_drunet:
+cached_samples = []
+cached_method = None
+if use_cache and os.path.exists(cache_file):
     try:
-        from deepinv.sampling import ULA
-        
-        # 创建ULA采样器
-        ula = ULA(denoiser=denoiser, max_iter=100, burnin_ratio=0.1, thinning=5)
-        
-        print(f"开始ULA采样 (S={S})...")
-        for s in range(S):
-            torch.manual_seed(42 + s)
-            t_start = time.time()
-            x_sample = ula(y_inp, physics_inp)
-            t_sample = time.time() - t_start
-            all_samples.append(x_sample.detach())
-            sample_times.append(t_sample)
-            if (s + 1) % 4 == 0:
-                print(f"  完成 {s+1}/{S} 个样本, 耗时 {t_sample:.1f}s, PSNR={compute_psnr(x_true, x_sample):.2f} dB")
-        
-        print(f"ULA采样完成! 平均每样本耗时: {np.mean(sample_times):.2f}s")
-        ula_method = "ULA"
-        
-    except ImportError:
-        print("ULA采样器不可用，尝试手动实现...")
-        ula_method = None
-    except Exception as e:
-        print(f"ULA采样失败: {e}")
-        ula_method = None
-
-# 2b. 如果ULA不可用，尝试扩散采样
-if len(all_samples) == 0:
-    print("\n--- 2b. 扩散后验采样 ---")
-    try:
-        from deepinv.models import DiffUNet
-        denoiser_diff = DiffUNet(pretrained='download').to(device)
-        print("DiffUNet加载成功")
-        
-        # 使用DPS采样
+        if os.path.getsize(cache_file) > 0:
+            with open(cache_file, 'rb') as f:
+                cached_data = pickle.load(f)
+            if 'samples' in cached_data and len(cached_data['samples']) > 0:
+                cached_samples = cached_data['samples']
+                cached_method = cached_data.get('method', 'Unknown')
+                print(f"[缓存] 加载了 {len(cached_samples)} 个样本 (方法: {cached_method})")
+                if len(cached_samples) >= S:
+                    print(f"[缓存] 样本数已满足需求，跳过采样")
+                    all_samples = cached_samples[:S]
+                    ula_method = cached_method
+        else:
+            print(f"[缓存] 缓存文件为空，将重新采样")
+            os.remove(cache_file)
+    except (EOFError, pickle.UnpicklingError) as e:
+        print(f"[缓存] 缓存文件损坏，将重新采样")
         try:
-            from deepinv.sampling import DPS
-            
-            dps = DPS(denoiser=denoiser_diff)
-            print(f"开始DPS采样 (S={S})...")
-            for s in range(S):
-                torch.manual_seed(42 + s)
-                t_start = time.time()
-                x_sample = dps(y_inp, physics_inp)
-                t_sample = time.time() - t_start
-                all_samples.append(x_sample.detach())
-                sample_times.append(t_sample)
-                if (s + 1) % 4 == 0:
-                    print(f"  完成 {s+1}/{S} 个样本, 耗时 {t_sample:.1f}s, PSNR={compute_psnr(x_true, x_sample):.2f} dB")
-            
-            print(f"DPS采样完成! 平均每样本耗时: {np.mean(sample_times):.2f}s")
-            ula_method = "DPS"
-        except (ImportError, Exception) as e:
-            print(f"DPS采样不可用: {e}")
-            ula_method = None
+            os.remove(cache_file)
+        except:
+            pass
     except Exception as e:
-        print(f"DiffUNet加载失败: {e}")
-        ula_method = None
+        print(f"[缓存] 加载失败: {e}")
 
-# 2c. 如果都不可用，用加噪PnP近似后验采样（★原创后备方案）
-if len(all_samples) == 0:
-    print("\n--- 2c. ★ 加噪PnP近似后验采样（后备方案）---")
-    print("使用PnP-HQS + 不同随机噪声初始化来近似后验多样性")
-    
-    if has_drunet:
-        from deepinv.optim.data_fidelity import L2
-        data_fidelity = L2()
-        
-        for s in range(S):
+def save_samples_to_cache(samples, method, times=None):
+    if not use_cache:
+        return
+    try:
+        cached_data = {'samples': samples, 'method': method, 'times': times or []}
+        with open(cache_file, 'wb') as f:
+            pickle.dump(cached_data, f)
+        print(f"[缓存] 已保存 {len(samples)} 个样本")
+    except Exception as e:
+        print(f"[缓存] 保存失败: {e}")
+
+def release_model(model_var_name):
+    if model_var_name in dir():
+        del globals()[model_var_name]
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        print(f"[显存] 已释放 {model_var_name}，当前显存: {torch.cuda.memory_allocated()/1e9:.2f}GB")
+
+if len(all_samples) < S:
+    remaining = S - len(all_samples)
+    start_idx = len(all_samples)
+    print(f"需要采样 {remaining} 个样本")
+
+    if cached_samples:
+        all_samples = cached_samples.copy()
+        ula_method = cached_method
+
+    # ========== 2a. ULA 采样 ==========
+    if len(all_samples) < S:
+        print("\n" + "="*50)
+        print("--- 2a. ULA 后验采样 ---")
+        print("="*50)
+
+        denoiser_ula = None
+        try:
+            from deepinv.models import DRUNet
+            print("[ULA] 加载 DRUNet...")
+            denoiser_ula = DRUNet(pretrained='download').to(device)
+            print(f"[ULA] DRUNet 加载成功，显存: {torch.cuda.memory_allocated()/1e9:.2f}GB")
+        except Exception as e:
+            print(f"[ULA] DRUNet 加载失败!")
+            print(f"[ULA] 错误类型: {type(e).__name__}")
+            print(f"[ULA] 错误信息: {e}")
+            print("[ULA] 详细堆栈:")
+            traceback.print_exc()
+
+        if denoiser_ula is not None:
+            try:
+                from deepinv.sampling import ULA
+                from deepinv.optim import L2 as DataFid_L2
+                from deepinv.optim import ScorePrior
+
+                print("[ULA] 创建 ScorePrior...")
+                # ★ 根据deepinv官方示例，sigma_denoiser应很小（2/255）
+                sigma_denoiser = 2.0 / 255.0
+                prior_score = ScorePrior(denoiser=denoiser_ula)
+                data_fidelity = DataFid_L2(sigma=0.01)
+
+                print("[ULA] 创建 ULA 采样器...")
+                # ★ 根据deepinv官方示例参数：
+                # step_size = 0.01 * sigma^2, alpha = 0.9
+                ula = ULA(prior=prior_score, data_fidelity=data_fidelity,
+                          max_iter=1000, burnin_ratio=0.5, thinning=1,
+                          step_size=0.01 * (0.01**2), alpha=0.9, sigma=sigma_denoiser)
+
+                print(f"[ULA] 开始采样...")
+                start_idx = len(all_samples)
+                for s in range(start_idx, S):
+                    # ★ 每次采样使用不同的随机种子，确保样本多样性
+                    torch.manual_seed(s * 1000 + 42)
+                    t_start = time.time()
+                    ula_result = ula(y_inp, physics_inp)
+                    x_sample = ula_result[0] if isinstance(ula_result, tuple) else ula_result
+                    t_sample = time.time() - t_start
+                    all_samples.append(x_sample.detach().cpu())
+                    sample_times.append(t_sample)
+                    print(f"[ULA] 样本 {s+1}/{S}, 耗时 {t_sample:.1f}s, PSNR={compute_psnr(x_true, x_sample):.2f}dB")
+                    del x_sample, ula_result
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    save_samples_to_cache(all_samples, "ULA", sample_times)
+
+                print(f"[ULA] 采样完成! 平均耗时: {np.mean(sample_times):.2f}s")
+                ula_method = "ULA"
+
+            except ImportError as e:
+                print(f"[ULA] 导入失败: {e}")
+                print("[ULA] 详细堆栈:")
+                traceback.print_exc()
+            except Exception as e:
+                print(f"[ULA] 采样失败!")
+                print(f"[ULA] 错误类型: {type(e).__name__}")
+                print(f"[ULA] 错误信息: {e}")
+                print("[ULA] 详细堆栈:")
+                traceback.print_exc()
+            finally:
+                release_model('denoiser_ula')
+
+    # ========== 2b. DPS 采样 ==========
+    if len(all_samples) < S:
+        print("\n" + "="*50)
+        print("--- 2b. DPS 扩散采样 ---")
+        print("="*50)
+
+        denoiser_dps = None
+        try:
+            from deepinv.models import DiffUNet
+            print("[DPS] 加载 DiffUNet...")
+            denoiser_dps = DiffUNet(pretrained='download').to(device)
+            print(f"[DPS] DiffUNet 加载成功，显存: {torch.cuda.memory_allocated()/1e9:.2f}GB")
+        except Exception as e:
+            print(f"[DPS] DiffUNet 加载失败!")
+            print(f"[DPS] 错误类型: {type(e).__name__}")
+            print(f"[DPS] 错误信息: {e}")
+            print("[DPS] 详细堆栈:")
+            traceback.print_exc()
+
+        if denoiser_dps is not None:
+            try:
+                from deepinv.sampling import DPS
+                from deepinv.optim import L2 as DPS_L2
+
+                print("[DPS] 创建 DPS 采样器...")
+                n_dps_iter = 100
+                dps = DPS(model=denoiser_dps, data_fidelity=DPS_L2(), max_iter=n_dps_iter, verbose=True)
+                dps.to(device)
+
+                print(f"[DPS] 开始采样 (每样本 {n_dps_iter} 步)...")
+                start_idx = len(all_samples)
+                for s in range(start_idx, S):
+                    # ★ 使用差异更大的种子确保样本多样性
+                    torch.manual_seed(s * 1000 + 42)
+                    t_start = time.time()
+                    dps_result = dps(y_inp, physics_inp)
+                    x_sample = dps_result[0] if isinstance(dps_result, tuple) else dps_result
+                    t_sample = time.time() - t_start
+                    all_samples.append(x_sample.detach().cpu())
+                    sample_times.append(t_sample)
+                    print(f"[DPS] 样本 {s+1}/{S}, 耗时 {t_sample:.1f}s, PSNR={compute_psnr(x_true, x_sample):.2f}dB")
+                    del x_sample, dps_result
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    save_samples_to_cache(all_samples, "DPS", sample_times)
+
+                print(f"[DPS] 采样完成! 平均耗时: {np.mean(sample_times):.2f}s")
+                ula_method = "DPS"
+
+            except ImportError as e:
+                print(f"[DPS] 导入失败: {e}")
+                print("[DPS] 详细堆栈:")
+                traceback.print_exc()
+            except Exception as e:
+                print(f"[DPS] 采样失败!")
+                print(f"[DPS] 错误类型: {type(e).__name__}")
+                print(f"[DPS] 错误信息: {e}")
+                print("[DPS] 详细堆栈:")
+                traceback.print_exc()
+            finally:
+                release_model('denoiser_dps')
+
+    # ========== 2c. PnP 近似采样 ==========
+    if len(all_samples) < S:
+        print("\n" + "="*50)
+        print("--- 2c. PnP 近似后验采样 ---")
+        print("="*50)
+
+        denoiser_pnp = None
+        try:
+            from deepinv.models import DRUNet
+            print("[PnP] 加载 DRUNet...")
+            denoiser_pnp = DRUNet(pretrained='download').to(device)
+            print(f"[PnP] DRUNet 加载成功，显存: {torch.cuda.memory_allocated()/1e9:.2f}GB")
+        except Exception as e:
+            print(f"[PnP] DRUNet 加载失败!")
+            print(f"[PnP] 错误类型: {type(e).__name__}")
+            print(f"[PnP] 错误信息: {e}")
+            print("[PnP] 详细堆栈:")
+            traceback.print_exc()
+
+        if denoiser_pnp is not None:
+            try:
+                print("[PnP] 开始采样...")
+                start_idx = len(all_samples)
+                for s in range(start_idx, S):
+                    torch.manual_seed(42 + s)
+                    x_pnp = physics_inp.A_adjoint(y_inp) + 0.05 * torch.randn_like(x_true)
+
+                    n_iter = 20
+                    for it in range(n_iter):
+                        with torch.no_grad():
+                            grad = physics_inp.A_adjoint(physics_inp.A(x_pnp) - y_inp)
+                            x_pnp = x_pnp - 0.5 * grad
+                            sigma_cur = max(0.1 * (1 - it / n_iter), 0.01)
+                            noise_level = torch.tensor([sigma_cur] * x_pnp.shape[0]).to(device)
+                            x_pnp = denoiser_pnp(x_pnp, noise_level)
+                            del grad, noise_level
+                        if (it + 1) % 5 == 0 and torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+
+                    all_samples.append(x_pnp.detach().cpu())
+                    del x_pnp
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    save_samples_to_cache(all_samples, "PnP近似", sample_times)
+                    print(f"[PnP] 样本 {len(all_samples)}/{S}")
+
+                print(f"[PnP] 采样完成!")
+                ula_method = "PnP近似"
+
+            except Exception as e:
+                print(f"[PnP] 采样失败!")
+                print(f"[PnP] 错误类型: {type(e).__name__}")
+                print(f"[PnP] 错误信息: {e}")
+                print("[PnP] 详细堆栈:")
+                traceback.print_exc()
+            finally:
+                release_model('denoiser_pnp')
+
+    # ========== 2d. 伪逆近似 ==========
+    if len(all_samples) < S:
+        print("\n" + "="*50)
+        print("--- 2d. 伪逆+噪声近似 ---")
+        print("="*50)
+
+        start_idx = len(all_samples)
+        for s in range(start_idx, S):
             torch.manual_seed(42 + s)
-            # 从随机初始化开始
-            x_pnp = physics_inp.A_adjoint(y_inp) + 0.05 * torch.randn_like(x_true)
-            
-            # PnP-HQS迭代
-            n_iter = 30
-            for it in range(n_iter):
-                grad = physics_inp.A_adjoint(physics_inp.A(x_pnp) - y_inp)
-                x_pnp = x_pnp - 0.5 * grad
-                sigma_cur = max(0.1 * (1 - it / n_iter), 0.01)
-                noise_level = torch.tensor([sigma_cur]).to(device)
-                x_pnp = denoiser(x_pnp, noise_level)
-            
-            all_samples.append(x_pnp.detach())
-        
-        print(f"加噪PnP近似采样完成! S={S}")
-        ula_method = "加噪PnP(近似)"
-    else:
-        print("无可用的去噪器，无法进行后验采样")
-        ula_method = None
-
-# 如果仍没有样本，用伪逆+噪声做最简近似
-if len(all_samples) == 0:
-    print("\n使用伪逆+随机噪声作为最简近似...")
-    for s in range(S):
-        torch.manual_seed(42 + s)
-        x_approx = physics_inp.A_adjoint(y_inp) + 0.02 * torch.randn_like(x_true)
-        all_samples.append(x_approx)
-    ula_method = "伪逆+噪声(最简近似)"
+            x_approx = physics_inp.A_adjoint(y_inp) + 0.02 * torch.randn_like(x_true)
+            all_samples.append(x_approx.cpu())
+        ula_method = "伪逆+噪声"
+        save_samples_to_cache(all_samples, ula_method, sample_times)
+        print(f"[伪逆] 完成 {len(all_samples)} 个样本")
 
 print(f"\n最终采样方法: {ula_method}, 样本数: {len(all_samples)}")
 
@@ -345,7 +503,7 @@ q875 = samples_tensor.quantile(0.875, dim=0)
 ci_width_75 = q875 - q125
 
 # 统计量
-psnr_mean = compute_psnr(x_true, posterior_mean)
+psnr_mean = compute_psnr(x_true, posterior_mean.to(device))
 mean_std = posterior_std.mean().item()
 max_std = posterior_std.max().item()
 mean_ci_width = ci_width.mean().item()
@@ -357,7 +515,7 @@ print(f"平均经验分位数区间宽度(S={S}):  {mean_ci_width:.4f}")
 print(f"⚠️ 注意: S={S} 时区间估计不可靠，建议 S≥30")
 
 # 各样本的PSNR分布
-sample_psnrs = [compute_psnr(x_true, s) for s in all_samples]
+sample_psnrs = [compute_psnr(x_true, s.to(device)) for s in all_samples]
 print(f"样本PSNR范围: {min(sample_psnrs):.2f} - {max(sample_psnrs):.2f} dB")
 print(f"样本PSNR标准差: {np.std(sample_psnrs):.2f} dB")
 
@@ -405,7 +563,7 @@ plt.colorbar(im13, ax=ax13, fraction=0.046, pad=0.04)
 
 # 第三行: 真值vs均值误差 + 覆盖图 + PSNR直方图 + 误差分布
 ax20 = fig.add_subplot(gs[2, 0])
-error_map = (x_true - posterior_mean).abs()[0].cpu().mean(dim=0).numpy()
+error_map = (x_true - posterior_mean.to(device)).abs()[0].cpu().mean(dim=0).numpy()
 im20 = ax20.imshow(error_map, cmap='hot', vmin=0, vmax=error_map.max())
 ax20.set_title('重建误差地图', fontsize=11)
 ax20.axis('off')
@@ -414,7 +572,7 @@ plt.colorbar(im20, ax=ax20, fraction=0.046, pad=0.04)
 # ★ 经验分位数覆盖图（S=8时覆盖率估计不准确）
 ax21 = fig.add_subplot(gs[2, 1])
 # 检查真值是否在经验分位数区间内
-in_ci = ((x_true >= q025) & (x_true <= q975)).float()
+in_ci = ((x_true >= q025.to(device)) & (x_true <= q975.to(device))).float()
 coverage_map = in_ci[0].cpu().mean(dim=0).numpy()
 im21 = ax21.imshow(coverage_map, cmap='RdYlGn', vmin=0, vmax=1)
 overall_coverage = in_ci.mean().item()
@@ -433,7 +591,7 @@ ax22.legend(fontsize=9)
 
 # 误差分布
 ax23 = fig.add_subplot(gs[2, 3])
-errors = (posterior_mean - x_true).cpu().numpy().flatten()
+errors = (posterior_mean.to(device) - x_true).cpu().numpy().flatten()
 ax23.hist(errors, bins=100, density=True, color='steelblue', alpha=0.7)
 ax23.axvline(0, color='red', linestyle='--')
 ax23.set_xlabel('误差值', fontsize=10)
@@ -462,7 +620,7 @@ print("""
   - 覆盖率 ≈ 名义覆盖率 → 校准良好
   - 覆盖率 > 名义覆盖率 → 过于保守（区间太宽）
   - 覆盖率 < 名义覆盖率 → 过于自信（区间太窄）
-  
+
   ⚠️ 注意: S=8 时覆盖率估计不准确，结果仅供参考
      要获得可靠的95%置信区间校准检验，需要 S≥30
 """)
@@ -474,8 +632,8 @@ confidence_levels = [0.50, 0.60, 0.68, 0.75]  # 限制在 S=8 可靠范围内
 coverages = []
 
 for cl in confidence_levels:
-    q_low = samples_tensor.quantile((1 - cl) / 2, dim=0)
-    q_high = samples_tensor.quantile(1 - (1 - cl) / 2, dim=0)
+    q_low = samples_tensor.quantile((1 - cl) / 2, dim=0).to(device)
+    q_high = samples_tensor.quantile(1 - (1 - cl) / 2, dim=0).to(device)
     in_interval = ((x_true >= q_low) & (x_true <= q_high)).float()
     coverage = in_interval.mean().item()
     coverages.append(coverage)
@@ -548,57 +706,57 @@ if len(all_samples) >= 4:
     samples_s4 = torch.stack(all_samples[:4], dim=0)
     mean_s4 = samples_s4.mean(dim=0)
     std_s4 = samples_s4.std(dim=0)
-    psnr_s4 = compute_psnr(x_true, mean_s4)
-    
+    psnr_s4 = compute_psnr(x_true, mean_s4.to(device))
+
     # 用全部样本
-    psnr_full = compute_psnr(x_true, posterior_mean)
-    
+    psnr_full = compute_psnr(x_true, posterior_mean.to(device))
+
     print(f"\nS=4 采样:  PSNR={psnr_s4:.2f} dB, 平均std={std_s4.mean():.4f}")
     print(f"S={S} 采样: PSNR={psnr_full:.2f} dB, 平均std={posterior_std.mean():.4f}")
-    
+
     # 样本数对不确定性的影响
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-    
+
     # 上行: S=4
     axes[0, 0].imshow(mean_s4[0].cpu().permute(1, 2, 0).clamp(0, 1))
     axes[0, 0].set_title(f'S=4 后验均值\nPSNR={psnr_s4:.1f}dB', fontsize=11)
     axes[0, 0].axis('off')
-    
+
     std_s4_map = std_s4[0].cpu().mean(dim=0).numpy()
     im01 = axes[0, 1].imshow(std_s4_map, cmap='hot', vmin=0, vmax=std_map.max())
     axes[0, 1].set_title(f'S=4 不确定性\n平均std={std_s4.mean():.4f}', fontsize=11)
     axes[0, 1].axis('off')
     plt.colorbar(im01, ax=axes[0, 1], fraction=0.046)
-    
+
     # S=4 vs S=full 差异
     diff_std = (std_s4 - posterior_std).abs()[0].cpu().mean(dim=0).numpy()
     im02 = axes[0, 2].imshow(diff_std, cmap='hot')
     axes[0, 2].set_title(f'|std(S=4) - std(S={S})|', fontsize=11)
     axes[0, 2].axis('off')
     plt.colorbar(im02, ax=axes[0, 2], fraction=0.046)
-    
+
     # 下行: S=full
     axes[1, 0].imshow(posterior_mean[0].cpu().permute(1, 2, 0).clamp(0, 1))
     axes[1, 0].set_title(f'S={S} 后验均值\nPSNR={psnr_full:.1f}dB', fontsize=11)
     axes[1, 0].axis('off')
-    
+
     im11 = axes[1, 1].imshow(std_map, cmap='hot', vmin=0, vmax=std_map.max())
     axes[1, 1].set_title(f'S={S} 不确定性\n平均std={posterior_std.mean():.4f}', fontsize=11)
     axes[1, 1].axis('off')
     plt.colorbar(im11, ax=axes[1, 1], fraction=0.046)
-    
+
     # 样本数 vs PSNR收敛
     psnr_by_s = []
     for n in range(1, len(all_samples) + 1):
         mean_n = torch.stack(all_samples[:n], dim=0).mean(dim=0)
-        psnr_by_s.append(compute_psnr(x_true, mean_n))
-    
+        psnr_by_s.append(compute_psnr(x_true, mean_n.to(device)))
+
     axes[1, 2].plot(range(1, len(all_samples) + 1), psnr_by_s, 'bo-', markersize=6)
     axes[1, 2].set_xlabel('样本数 S', fontsize=11)
     axes[1, 2].set_ylabel('PSNR (dB)', fontsize=11)
     axes[1, 2].set_title('★ 后验均值PSNR vs 样本数', fontsize=11)
     axes[1, 2].grid(alpha=0.3)
-    
+
     fig.suptitle('Step 5: ★ 样本数对不确定性估计的影响', fontsize=14)
     plt.tight_layout()
     plt.savefig(os.path.join(SAVE_DIR, 'step5_acceleration.png'), dpi=150, bbox_inches='tight')
@@ -614,16 +772,16 @@ print("""
 去模糊:
   - 均匀分布的不确定性 → 噪声主导
   - 边缘区域不确定性高 → 模糊核导致的结构模糊
-  
+
 超分辨率:
   - 高频细节区域不确定性高 → 细节丢失无法恢复
   - 平滑区域不确定性低 → 低频信息保留完好
-  
+
 修复:
   - 缺失区域不确定性高 → 无观测约束
   - 观测区域不确定性低 → 有直接约束
   - 缺失区域边缘 → 不确定性过渡带
-  
+
 通用规律:
   - 不确定性高 ↔ 信息丢失严重
   - 不确定性低 ↔ 有充分观测约束
