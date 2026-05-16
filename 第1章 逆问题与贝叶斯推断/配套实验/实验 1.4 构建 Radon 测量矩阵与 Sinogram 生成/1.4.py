@@ -33,7 +33,8 @@ def _find_chinese_font():
     for font in candidates:
         if font in available:
             return font
-    import os, re
+    import os
+    import re
     cjk_patterns = ['cjk', 'wqy', 'noto.*cjk', 'wenquan', 'chinese', 'simhei']
     for f in fm.ttflist:
         name_lower = f.name.lower()
@@ -172,11 +173,11 @@ axes[0, 3].set_ylabel('探测器位置 t')
 
 # 第二行：频域采样模式
 plot_fourier_sampling(axes[1, 0], theta_full, 
-                       f'频域采样 (完整)\n圆形覆盖')
+                       '频域采样 (完整)\n圆形覆盖')
 plot_fourier_sampling(axes[1, 1], theta_sparse, 
-                       f'频域采样 (稀疏)\n星形缺失')
+                       '频域采样 (稀疏)\n星形缺失')
 plot_fourier_sampling(axes[1, 2], theta_limited, 
-                       f'频域采样 (有限)\n楔形缺失',
+                       '频域采样 (有限)\n楔形缺失',
                        highlight_missing=True, missing_range=(60, 180))
 
 # 频域缺失与不可观测空间说明

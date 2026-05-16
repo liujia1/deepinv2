@@ -33,7 +33,8 @@ def _find_chinese_font():
     for font in candidates:
         if font in available:
             return font
-    import os, re
+    import os
+    import re
     cjk_patterns = ['cjk', 'wqy', 'noto.*cjk', 'wenquan', 'chinese', 'simhei']
     for f in fm.ttflist:
         name_lower = f.name.lower()
@@ -133,7 +134,7 @@ axes[1, 0].set_title('Ax（x 的观测）')
 axes[1, 0].axis('off')
 
 axes[1, 1].imshow(Ax_prime, cmap='gray', vmin=ax_vmin, vmax=ax_vmax)
-axes[1, 1].set_title(f"Ax'（x' 的观测）")
+axes[1, 1].set_title("Ax'（x' 的观测）")
 axes[1, 1].axis('off')
 
 Ax_diff = Ax_prime - Ax
@@ -153,7 +154,7 @@ plt.tight_layout()
 plt.savefig('实验1_8_几乎幽灵.png', dpi=150, bbox_inches='tight')
 plt.show()
 
-print(f"\n=== 几乎幽灵验证 ===")
+print("\n=== 几乎幽灵验证 ===")
 print(f"图像相对差异: ‖x - x'‖/‖x‖ = {rel_img_err:.1%}")
 print(f"测量相对差异: ‖Ax - Ax'‖/‖Ax‖ = {rel_meas_err:.3%}")
 print(f"放大因子: 图像差异/测量差异 = {rel_img_err / rel_meas_err:.0f} 倍")
