@@ -122,10 +122,10 @@ axes[0].grid(True, which='both', alpha=0.3)
 for kappa in [1e0, 1e3, 1e6, 1e10]:
     sv = singular_values_cache[kappa]
     axes[1].semilogy(np.arange(1, n + 1), sv, label=f'κ={kappa:.0e}')
-axes[1].set_xlabel('奇异值索引 i', fontsize=11)
-axes[1].set_ylabel('奇异值 σ_i', fontsize=11)
+axes[1].set_xlabel(r'奇异值索引 $i$', fontsize=11)
+axes[1].set_ylabel(r'奇异值 $\sigma_i$', fontsize=11)
 # 将副标题整合到主标题中，使用换行符分隔
-axes[1].set_title('不同条件数的奇异值分布\n（小 σ_i → 1/σ_i 爆炸 → 噪声放大）', 
+axes[1].set_title(r'不同条件数的奇异值分布\n（小 $\sigma_i$ → $1/\sigma_i$ 爆炸 → 噪声放大）',
                   fontsize=12, fontweight='bold')
 axes[1].legend(fontsize=9)
 axes[1].grid(True, alpha=0.3)
