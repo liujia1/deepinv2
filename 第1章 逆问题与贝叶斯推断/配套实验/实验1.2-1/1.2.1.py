@@ -2,17 +2,19 @@ import numpy as np
 import matplotlib.pyplot as plt
 from skimage.data import astronaut
 from skimage.color import rgb2gray
-
-# ====== 确保可以导入同级目录的 chinese_font 模块 ======
 import sys
 import os
-# 将当前脚本所在目录添加到 Python 路径
-_chinese_path = os.path.dirname(os.path.abspath(__file__))
-if _chinese_path not in sys.path:
-    sys.path.insert(0, _chinese_path)
+
+_gdrive = '/content/drive/MyDrive'
+if os.path.isdir(_gdrive):
+    _chinese_path = os.path.join(_gdrive, '实验1.2-1', '.chinese')
+    SAVE_DIR = os.path.join(_gdrive, '实验1.2-1')
+else:
+    _chinese_path = '.chinese'
+    SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
+sys.path.insert(0, _chinese_path)
 from chinese_font import setup_chinese_font
-setup_chinese_font()
-# ========================================================
+setup_chinese_font(save_dir=_chinese_path)
 
 np.random.seed(42)
 
@@ -114,11 +116,11 @@ axes[1, 2].imshow(np.log10(np.abs(np.fft.fftshift(H)) + 1e-15), cmap='hot')
 axes[1, 2].set_title('PSF 频谱 |H(k)|\n高频趋零→1/H爆炸')
 axes[1, 2].axis('off')
 
-# 掩码可视化：展示哪些位置的像素丢失了（教学意义更强）
+# 掩码可视化：展示哪些位置的像素丢失了
 axes[1, 3].imshow(mask.astype(float), cmap='gray')
 axes[1, 3].set_title('掩码图案 (50%保留)\n白色=保留, 黑色=丢失')
 axes[1, 3].axis('off')
 
 plt.tight_layout()
-plt.savefig('实验1_2_正向模型.png', dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, '实验1_2_1_正向模型.png'), dpi=150, bbox_inches='tight')
 plt.show()
