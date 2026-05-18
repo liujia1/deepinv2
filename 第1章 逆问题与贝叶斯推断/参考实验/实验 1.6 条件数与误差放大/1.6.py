@@ -57,14 +57,25 @@ np.random.seed(42)
 n = 100
 x_true = np.random.randn(n)
 
-# 对角矩阵：最大奇异值=1，最小奇异值=1/κ
+# 对角矩阵：最大对角元=1，最小对角元=1/κ
+# 
+# 关键说明：
+# 1. 这里使用的是对角矩阵 D = diag(σ₁, ..., σₙ)
+# 2. 对角矩阵的SVD分解为 D = I · D · I^T，因此对角元就是奇异值
+# 3. 条件数 κ(D) = σ_max / σ_min = 1 / σ_min（因为 σ_max = 1）
+# 4. 对于一般矩阵，需要通过 np.linalg.svd() 计算奇异值（见实验1.7）
+# 
+# 这种简化让我们能专注于理解"奇异值衰减→误差放大"的核心机制
 # 条件数从 1 到 10^12
 kappas = [1, 10, 1e2, 1e3, 1e4, 1e6, 1e8, 1e10, 1e12]
 noise_level = 1e-6  # 数据中的噪声水平
 
-# 预计算各条件数对应的奇异值，避免重复构造
-# 使用对数间隔，更接近真实不适定问题的奇异值衰减特性
-sv_cache = {kappa: np.logspace(0, -np.log10(kappa), n) for kappa in kappas}
+# 预计算各条件数对应的奇异值（即对角元）
+# 使用对数间隔，模拟真实不适定问题的奇异值衰减特性
+singular_values_cache = {
+    kappa: np.logspace(0, -np.log10(kappa), n) 
+    for kappa in kappas
+}
 
 # 正则化参数（简化处理：实际应用中应使用 L-curve 或 GCV 选择最优参数）
 lam = noise_level
@@ -75,7 +86,7 @@ bias_errors = []
 variance_errors = []
 
 for kappa in kappas:
-    singular_values = sv_cache[kappa]
+    singular_values = singular_values_cache[kappa]
 
     # 正问题：y = Ax
     y = singular_values * x_true
@@ -119,7 +130,7 @@ axes[0, 0].loglog(kappas, rel_errors_tikh, 's-', linewidth=2, markersize=8, labe
 # 注意：噪声向量 δy = noise_level * randn(n)，其期望范数为 noise_level * √n
 theory_bound = []
 for kappa in kappas:
-    sv = sv_cache[kappa]
+    sv = singular_values_cache[kappa]
     y_norm = np.linalg.norm(sv * x_true)
     theory_bound.append(kappa * (noise_level * np.sqrt(n)) / y_norm)
 axes[0, 0].loglog(kappas, theory_bound, '--', alpha=0.7, label='理论上界 κ·(‖δy‖/‖y‖)')
@@ -131,8 +142,9 @@ axes[0, 0].legend()
 axes[0, 0].grid(True, which='both')
 
 # 奇异值衰减示意
+# 注：这里展示的是对角矩阵的奇异值（即对角元）的分布
 for kappa in [1, 1e3, 1e6, 1e10]:
-    sv = sv_cache[kappa]
+    sv = singular_values_cache[kappa]
     axes[0, 1].semilogy(np.arange(1, n + 1), sv, label=f'κ={kappa:.0e}')
 axes[0, 1].set_xlabel('奇异值索引 i')
 axes[0, 1].set_ylabel('奇异值 σ_i')
@@ -152,7 +164,7 @@ axes[1, 0].grid(True, which='both')
 
 # Bias-Variance vs 正则化参数 λ（固定 κ）—— 经典权衡曲线
 kappa_fixed = 1e6  # 固定一个高条件数
-singular_values_fixed = sv_cache[kappa_fixed]
+singular_values_fixed = singular_values_cache[kappa_fixed]
 y_fixed = singular_values_fixed * x_true
 y_noisy_fixed = y_fixed + noise_level * np.random.randn(n)
 
