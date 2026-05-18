@@ -5,6 +5,13 @@ from skimage.transform import radon, iradon, resize
 import sys
 import os
 
+# Jupyter 中渲染 LaTeX 公式
+try:
+    from IPython.display import display, Markdown
+    _in_jupyter = True
+except ImportError:
+    _in_jupyter = False
+
 # ====== 中文字体配置（兼容本地和 Google Colab）======
 _gdrive = '/content/drive/MyDrive'
 if os.path.isdir(_gdrive):
@@ -48,12 +55,12 @@ print("t = a·cos(θ) + b·sin(θ)，所有点的正弦曲线叠加形成正弦�
 print("="*60)
 
 # ---- 3. FBP 重建 ----
-reconstruction_fbp = iradon(sinogram, theta=theta, filter_name='ramp', output_size=n)
+reconstruction_fbp = iradon(sinogram, theta=theta, filter_name='ramp', circle=True)
 reconstruction_fbp = np.clip(reconstruction_fbp, 0, 1)
 
 error_map = np.abs(phantom - reconstruction_fbp)
 rmse_fbp = np.sqrt(np.mean((phantom - reconstruction_fbp)**2))
-psnr_fbp = 20 * np.log10(1.0 / rmse_fbp)
+psnr_fbp = 20 * np.log10(1.0 / (rmse_fbp + 1e-10))  # 动态范围=1，加 1e-10 防止除零
 
 print("\nFBP（滤波反投影）重建结果")
 print("="*60)
@@ -87,11 +94,11 @@ axes[0, 2].set_ylabel('线积分值')
 axes[0, 2].grid(True, alpha=0.3)
 axes[0, 2].axhline(y=0, color='k', linestyle='--', linewidth=0.5)
 
-axes[1, 0].imshow(reconstruction_fbp, cmap='gray')
+axes[1, 0].imshow(reconstruction_fbp, cmap='gray', vmin=0, vmax=1)
 axes[1, 0].set_title(f'FBP 重建结果\n(RMSE={rmse_fbp:.4f}, PSNR={psnr_fbp:.2f} dB)')
 axes[1, 0].axis('off')
 
-im2 = axes[1, 1].imshow(error_map, cmap='hot')
+im2 = axes[1, 1].imshow(error_map, cmap='hot', vmax=0.3)
 axes[1, 1].set_title('误差热力图\n|x - x_FBP|')
 axes[1, 1].axis('off')
 plt.colorbar(im2, ax=axes[1, 1], fraction=0.046, pad=0.04)
@@ -108,5 +115,8 @@ plt.savefig(os.path.join(SAVE_DIR, '实验1_2_2_Radon变换.png'), dpi=150, bbox
 plt.show()
 
 print("\n可视化结果已保存。")
-print("说明：FBP 是 CT 重建的经典算法，通过滤波+反投影操作近似求解 $x = A^{-1}y$。")
-print("当投影角度充足时，FBP 能较好地恢复原始图像。")
+if _in_jupyter:
+    display(Markdown(r"**说明：** FBP 是 CT 重建的经典算法，通过滤波+反投影操作近似求解逆问题，对应伪逆 $\hat{x} = A^\dagger y$。当投影角度充足时，FBP 能较好地恢复原始图像。"))
+else:
+    print("说明：FBP 是 CT 重建的经典算法，通过滤波+反投影操作近似求解逆问题，对应伪逆 x_hat = A^dagger y。")
+    print("当投影角度充足时，FBP 能较好地恢复原始图像。")
