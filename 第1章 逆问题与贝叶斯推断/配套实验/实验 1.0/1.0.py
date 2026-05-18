@@ -109,12 +109,12 @@ axes[0, 2].set_title('随机噪声 x_random\n（无意义的噪声图像）')
 axes[0, 2].axis('off')
 
 # 第二行：变换结果
-axes[1, 0].imshow(maomi_gray, cmap='gray', vmin=0, vmax=1)
-axes[1, 0].set_title('真实图像 x_true\n（参考）')
+axes[1, 0].imshow(Ax_true.reshape(32, 32), cmap='gray')
+axes[1, 0].set_title(f'A @ x_true\n||Ax - y||_2 = {error_true:.4f}')
 axes[1, 0].axis('off')
 
-axes[1, 1].imshow(Ax_true.reshape(32, 32), cmap='gray')
-axes[1, 1].set_title(f'A @ x_true\n||Ax - y||_2 = {error_true:.4f}')
+axes[1, 1].imshow(maomi_mohu, cmap='gray', vmin=0, vmax=1)
+axes[1, 1].set_title('观测数据 y')
 axes[1, 1].axis('off')
 
 axes[1, 2].imshow(Ax_random.reshape(32, 32), cmap='gray')
