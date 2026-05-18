@@ -2,7 +2,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from skimage.data import astronaut
 from skimage.color import rgb2gray
-import matplotlib as mpl
 import warnings
 import logging
 
@@ -15,7 +14,7 @@ warnings.filterwarnings("ignore", message=".*glyph.*")
 plt.rcParams['axes.unicode_minus'] = False
 
 import platform
-from matplotlib.font_manager import FontManager, FontProperties
+from matplotlib.font_manager import FontManager
 
 def _find_chinese_font():
     """自动检测系统中可用的中文字体，兼容 Windows / Linux"""
@@ -34,7 +33,8 @@ def _find_chinese_font():
     for font in candidates:
         if font in available:
             return font
-    import os, re
+    import os
+    import re
     cjk_patterns = ['cjk', 'wqy', 'noto.*cjk', 'wenquan', 'chinese', 'simhei']
     for f in fm.ttflist:
         name_lower = f.name.lower()
@@ -191,7 +191,7 @@ print("\n=== Inverse Crime 警示 ===")
 print(f"同模型(σ={sigma_A})生成 + 重建 → PSNR={psnr_tikh_IC:.1f}dB")
 print(f"异模型(σ={sigma_B})生成 + 重建 → PSNR={psnr_tikh_noIC:.1f}dB")
 print(f"PSNR 差异: {psnr_tikh_IC - psnr_tikh_noIC:.2f} dB")
-print(f"\n--- PSNR 随建模偏差变化 ---")
+print("\n--- PSNR 随建模偏差变化 ---")
 for sb, p in zip(sigma_B_list, psnr_curve):
     marker = " ← IC" if sb == sigma_A else ""
     print(f"  σ_真实={sb:.1f} (偏差 Δσ={sb-sigma_A:.1f}) → PSNR={p:.2f} dB{marker}")

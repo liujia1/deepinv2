@@ -34,7 +34,8 @@ def _find_chinese_font():
     for font in candidates:
         if font in available:
             return font
-    import os, re
+    import os
+    import re
     cjk_patterns = ['cjk', 'wqy', 'noto.*cjk', 'wenquan', 'chinese', 'simhei']
     for f in fm.ttflist:
         name_lower = f.name.lower()
@@ -195,7 +196,7 @@ plt.grid(True)
 plt.savefig('实验1_10_λ扫描.png', dpi=150, bbox_inches='tight')
 plt.show()
 
-print(f"\n=== 贝叶斯验证 ===")
+print("\n=== 贝叶斯验证 ===")
 print(f"闭式解 PSNR: {psnr_closed:.2f} dB")
 print(f"梯度下降 PSNR: {psnr_gd:.2f} dB")
 print(f"差异: {abs(psnr_closed - psnr_gd):.4f} dB (应接近0)")

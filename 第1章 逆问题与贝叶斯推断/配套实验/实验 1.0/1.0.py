@@ -31,7 +31,8 @@ def _find_chinese_font():
     for font in candidates:
         if font in available:
             return font
-    import os, re
+    import os
+    import re
     cjk_patterns = ['cjk', 'wqy', 'noto.*cjk', 'wenquan', 'chinese', 'simhei']
     for f in fm.ttflist:
         name_lower = f.name.lower()
@@ -80,7 +81,7 @@ error_random = np.linalg.norm(Ax_random - y_obs)  # L2范数
 print("\n" + "="*60)
 print("似然的关键洞察：似然只关心数据拟合，不关心 x 是否合理")
 print("="*60)
-print(f"\n数据拟合误差 ||Ax - y||_2 (L2范数):")
+print("\n数据拟合误差 ||Ax - y||_2 (L2范数):")
 print(f"  真实图像 x_true:  {error_true:.4f}")
 print(f"  随机噪声 x_random: {error_random:.4f}")
 print(f"\n比值: {error_true / error_random:.2f} 倍")

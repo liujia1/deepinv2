@@ -2,7 +2,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from skimage.data import astronaut
 from skimage.color import rgb2gray
-import matplotlib as mpl
 import warnings
 import logging
 
@@ -34,7 +33,8 @@ def _find_chinese_font():
     for font in candidates:
         if font in available:
             return font
-    import os, re
+    import os
+    import re
     cjk_patterns = ['cjk', 'wqy', 'noto.*cjk', 'wenquan', 'chinese', 'simhei']
     for f in fm.ttflist:
         name_lower = f.name.lower()
