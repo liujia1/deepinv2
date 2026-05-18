@@ -108,7 +108,7 @@ axes[0].text(kappa_critical*1.3, 2e-4,
              bbox=dict(boxstyle='round,pad=0.4', facecolor='lightyellow', alpha=0.5))
 
 axes[0].set_xlabel('条件数 κ(A)', fontsize=11)
-axes[0].set_ylabel('重建相对误差 ‖x-x̂‖/‖x‖', fontsize=11)
+axes[0].set_ylabel(r'重建相对误差 $\|x-\hat{x}\|/\|x\|$', fontsize=11)
 axes[0].set_title('条件数与误差放大', fontsize=12, fontweight='bold')
 axes[0].legend(fontsize=9)
 axes[0].grid(True, which='both', alpha=0.3)
