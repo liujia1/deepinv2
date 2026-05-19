@@ -48,6 +48,9 @@ def gaussian_psf(size: int, sigma: float) -> np.ndarray:
 def blur(x: np.ndarray, h: np.ndarray) -> np.ndarray:
     """频域卷积：y = x * h（循环卷积）。
     
+    注意：频域卷积等价于循环卷积，图像边缘可能出现环绕伪影。
+    若要减轻此效应，可在卷积前对图像做边缘填充（padding）。
+    
     Args:
         x: 输入图像。
         h: 卷积核（PSF）。
@@ -93,10 +96,15 @@ def naive_deconv(y: np.ndarray, H: np.ndarray, eps: float = 1e-15) -> np.ndarray
     Returns:
         重建图像。
     """
-    # 保相位模截断：只放大模值，不改变相位
+    # 保相位模截断：模值放大到至少 eps，相位严格不变
     abs_H = np.abs(H)
-    scale = np.where(abs_H < eps, eps / (abs_H + 1e-300), 1.0)
+    abs_H_clamped = np.maximum(abs_H, eps)
+    # 安全缩放：避免 H=0 时 0/0 产生 NaN
+    scale = np.ones_like(abs_H)
+    mask = abs_H > 0
+    scale[mask] = abs_H_clamped[mask] / abs_H[mask]
     H_reg = H * scale
+    H_reg[~mask] = eps  # H=0 时相位无意义，直接用 eps
     return np.real(np.fft.ifft2(np.fft.fft2(y) / H_reg))
 
 # ---- 4. Tikhonov 正则化反卷积 ----
@@ -135,7 +143,10 @@ x_tikh_noIC = tikhonov_deconv(y_noIC, H_A, lam=1e-2)
 # ---- 6. PSNR vs 建模偏差曲线 ----
 # 首元素 sigma=5.0 对应 Δσ=0（即 IC 条件），与主实验变量 sigma_A 相同
 # 后续递增模拟不同建模偏差，观察重建质量退化
-sigma_B_list = [5.0, 5.3, 5.5, 6.0, 7.0, 8.0, 10.0]
+# 注意：曲线通常不关于 Δσ=0 对称——
+# 低估模糊（Δσ<0）因过度锐化导致噪声放大，PSNR 下降更陡；
+# 高估模糊（Δσ>0）因过度平滑导致细节损失，下降相对平缓。
+sigma_B_list = [3.0, 4.0, 4.5, 5.0, 5.3, 5.5, 6.0, 7.0, 8.0, 10.0]
 psnr_curve = []
 for sb in sigma_B_list:
     h_tmp = gaussian_psf(n, sb)
@@ -193,10 +204,14 @@ ax2.set_title('Inverse Crime 警示：重建质量随建模偏差的系统退化
 ax2.legend(fontsize=11)
 ax2.grid(True, alpha=0.3)
 
+# 设置 y 轴范围，给数据标注留出上边距
+psnr_max = max(psnr_curve)
+ax2.set_ylim(bottom=min(psnr_curve) - 1, top=psnr_max + 2.5)
+
 # 标注每个数据点的 PSNR 值
 for d, p in zip(deviations, psnr_curve):
     ax2.annotate(f'{p:.1f}dB', (d, p), textcoords="offset points",
-                 xytext=(0, 12), ha='center', fontsize=9)
+                 xytext=(0, 15), ha='center', fontsize=9)
 
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '实验1_3_4_PSNR_vs_建模偏差.png'), dpi=150, bbox_inches='tight')
@@ -209,9 +224,10 @@ print(f"异模型(σ={sigma_B})生成 + 重建 → PSNR={psnr_tikh_noIC:.1f}dB")
 print(f"PSNR 差异: {psnr_tikh_IC - psnr_tikh_noIC:.2f} dB")
 print("\n--- PSNR 随建模偏差变化 ---")
 for sb, p in zip(sigma_B_list, psnr_curve):
-    marker = " ← IC" if sb == sigma_A else ""
+    marker = " ← IC" if abs(sb - sigma_A) < 1e-9 else ""
     print(f"  σ_真实={sb:.1f} (偏差 Δσ={sb-sigma_A:.1f}) → PSNR={p:.2f} dB{marker}")
 print("\n建模偏差越大，重建质量系统性地越低——IC 条件下测得的性能不可靠！")
 print("\n注：以上结论基于 astronaut 单幅图像和固定正则化参数 λ=1e-2。")
-print("  定量数值会因图像内容、噪声水平和 λ 选择而变化，但定性趋势——")
-print("  建模偏差导致 PSNR 系统性下降——具有一般性。")
+print("  定量数值会因图像内容、噪声水平和 λ 选择而变化。")
+print("  Tikhonov 正则化对小幅建模误差有一定鲁棒性，但当建模偏差超过")
+print("  正则化的容忍范围时，PSNR 系统性下降的趋势具有一般性。")

@@ -1,0 +1,118 @@
+实验内容与章节知识点匹配表
+一、基础篇（basics/）
+实验内容	代码位置	可匹配?	匹配章节与知识点
+5分钟快速入门：加载图像、定义物理模型、使用预训练模型	basics/demo_quickstart.py	✅	第1章·正向模型 / 第18章·端到端管线
+使用预训练模型重建（RAM、PnP+DRUNet、扩散模型）	basics/demo_pretrained_model.py	✅	第13章·条件生成/第18章·综合项目
+自定义前向物理模型（继承Physics/LinearPhysics类）	basics/demo_custom_physics.py	✅	第1章·正向模型y=Ax / 第18章·自定义算子
+定义迭代重建算法（PGD, BaseOptim）	basics/demo_custom_optim.py	✅	第3章·优化基础/第3.4节·ISTA/近端方法
+自定义数据集与DeepInverse集成	basics/demo_custom_dataset.py	✅	第17章·数据困境/第18章·训练管线
+二、优化类（optimization/）
+实验内容	代码位置	可匹配?	匹配章节与知识点
+TV先验图像去模糊（PGD+L2数据保真项）	optimization/demo_TV_minimisation.py	✅	第2.2节·TV先验/第3.5节·TV正则化
+小波先验图像补全（DRS）	optimization/demo_wavelet_prior.py	✅	第2.2节·稀疏先验/第3.4节·ISTA/FISTA
+深度图像先验DIP（随机网络+Adam优化）	optimization/demo_dip.py	✅	第2.4节·隐式先验/第3.2节·梯度下降
+EPLL先验去噪与补全（GMM补丁先验）	optimization/demo_epll.py	✅	第2.4节·学习型先验/第6.6节·去噪器架构
+泊松逆问题MLEM（含TV先验CT）	optimization/demo_poisson_mlem.py	✅	第1.4节·Poisson噪声/第16章·CT重建
+有限角CT的补丁先验（EPLL+PatchNR）	optimization/demo_patch_priors_CT.py	✅	第2.4节·学习型先验/第16.2节·有限角CT
+自定义显式先验（L2先验+ADMM）	optimization/demo_custom_prior.py	✅	第2.1节·正则化概率诠释/第3.5节·ADMM
+3D去噪（3D TV/小波/张量核范数）	optimization/demo_3D_denoising.py	✅	第2.2节·经典先验/第3章·优化方法
+三、物理模型（physics/）
+实验内容	代码位置	可匹配?	匹配章节与知识点
+前向算子巡览（去噪/补全/去模糊/下采样/压缩感知/相位检索/CT/MRI/编码衍射/超分辨率）	physics/demo_physics_tour.py	✅	第1.2节·正向模型/第16章·CT/MRI
+模糊算子巡览（衍射模糊/运动模糊/空间变化模糊）	physics/demo_blur_tour.py	✅	第1.2节·卷积模糊
+MRI功能巡览（物理模型/数据集/模型）	physics/demo_mri_tour.py	✅	第16.3节·MRI成像/第16.4节·学习型重建
+随机相位检索（梯度下降/谱方法/PnP）	physics/demo_phase_retrieval.py	✅	第1.2节·非线性正向模型/第5.5节·PnP
+单光子激光雷达LiDAR（泊松噪声+高斯脉冲响应）	physics/demo_lidar.py	✅	第1.4节·噪声建模/第16章·成像物理
+卫星遥感（全色锐化/压缩光谱成像/高光谱解混）	physics/demo_remote_sensing.py	✅	第1.2节·正向模型/第18章·自定义问题
+3D显微成像	physics/demo_microscopy_3d.py	✅	第1.2节·正向模型
+叠层衍射成像Ptychography	physics/demo_ptychography.py	✅	第1.2节·非线性正向模型
+散射成像	physics/demo_scattering.py	✅	第1.2节·正向模型
+空间相位解包裹	physics/demo_spatial_unwrapping.py	✅	第1.2节·正向模型
+单像素相机SPC	physics/demo_spc.py	✅	第1.2节·压缩感知
+四、即插即用（plug-and-play/）
+实验内容	代码位置	可匹配?	匹配章节与知识点
+Vanilla PnP CT重建（DnCNN去噪器+PGD）	plug-and-play/demo_vanilla_PnP.py	✅	第5.5节·PnP框架/第16章·CT
+RED超分辨率（梯度步去噪器+PGD）	plug-and-play/demo_RED_GSPnP_SR.py	✅	第5.5节·RED/第13.3.3节·RED-Diff
+PnP自定义优化器	plug-and-play/demo_PnP_custom_optim.py	✅	第5.5节·PnP-ADMM
+PnP+DPIR去模糊	plug-and-play/demo_PnP_DPIR_deblur.py	✅	第5.5节·PnP/第13章·扩散去模糊
+PnP镜像下降采样	plug-and-play/demo_PnP_mirror_descent.py	✅	第3.5节·优化算法/第5.5节
+五、采样与扩散（sampling/）
+实验内容	代码位置	可匹配?	匹配章节与知识点
+PnP-ULA后验采样与不确定性量化	sampling/demo_sampling.py	✅	第4.3节·ULA/第5.5节·PnP-ULA
+扩散SDE后验采样（VE/VP-SDE+DPS数据保真项）	sampling/demo_diffusion_sde.py	✅	第7章·扩散SDE/第13.2节·条件逆向SDE
+DPS扩散后验采样（Chung 2022）	sampling/demo_dps.py	✅	核心匹配： 第13.3.2节·DPS深度剖析
+DDRM（Kawar 2022，需SVD分解）	sampling/demo_ddrm.py	✅	第13.3.1节·DDRM（Laplace近似族）
+DiffPIR扩散算法（Zhu 2023）	sampling/demo_diffpir.py	✅	第13.3.4节·DiffPIR（隐空间优化）
+Flow Matching无条件生成+后验采样	sampling/demo_flow_matching.py	✅	第14章·Flow Matching与最优传输
+HuggingFace Diffusers集成	sampling/demo_diffusers.py	✅	第7.6节·扩散实践/第15章·架构
+自定义MCMC采样核（PreconULA）	sampling/demo_custom_kernel.py	✅	第4.3节·ULA/第4.5节·加速采样
+自定义采样核	sampling/demo_custom_kernel.py	✅	第4章·MCMC与ULA算法
+六、自监督学习（self-supervised-learning/）
+实验内容	代码位置	可匹配?	匹配章节与知识点
+SURE损失自监督去噪（泊松噪声）	self-supervised-learning/demo_sure_denoising.py	✅	第17.3节·SURE/第6.3节·去噪得分匹配
+等变成像EI自监督MRI重建	self-supervised-learning/demo_equivariant_imaging.py	✅	第17.5节·等变成像
+等变分割ES损失（平移/旋转/翻转）	self-supervised-learning/demo_equivariant_splitting.py	✅	第17.5节·等变分割
+低场MRI自监督去噪（R2R损失）	self-supervised-learning/demo_lowfieldmri.py	✅	第17.3节·R2R/第16.3节·MRI
+多算子自监督（inpainting）	self-supervised-learning/demo_multioperator_imaging.py	✅	第17.5节·多算子成像MOI
+Artifact2Artifact自监督MRI	self-supervised-learning/demo_artifact2artifact.py	✅	第17.6节·测量一致性
+广义R2R自监督去噪（高斯/泊松/伽马噪声）	self-supervised-learning/demo_r2r_denoising.py	✅	第17.3节·R2R
+Noise2Noise自监督去噪	self-supervised-learning/demo_n2n_denoising.py	✅	第17.2节·Noise2Noise
+UNSURE未知噪声水平自监督	self-supervised-learning/demo_unsure.py	✅	第17.4节·UNSURE
+逐样本零样本MRI SSDU	self-supervised-learning/demo_scan_specific.py	✅	第17.6节·测量一致性
+测量分割损失（CT/MRI）	self-supervised-learning/demo_splitting_loss.py	✅	第17.6节·分割损失
+EI几何变换（平移/旋转/缩放/仿射等）	self-supervised-learning/demo_ei_transforms.py	✅	第17.5节·等变性数学定义
+Poisson2Sparse单图像去噪	self-supervised-learning/demo_poisson2sparse.py	✅	第17.3节·自监督/第1.4节·Poisson
+七、展开网络（unfolded/）
+实验内容	代码位置	可匹配?	匹配章节与知识点
+展开PnP超分辨率（DnCNN+参数联合训练）	unfolded/demo_vanilla_unfolded.py	✅	第16.4.2节·算法展开/第3.4节·ISTA
+LISTA压缩感知（学习型软阈值）	unfolded/demo_LISTA.py	✅	第3.4节·ISTA→LISTA/第16.4.2节
+学习型原始-对偶CT重建	unfolded/demo_learned_primal_dual.py	✅	第3.5节·Chambolle-Pock/第16.4.2节
+Deep Equilibrium展开去模糊	unfolded/demo_DEQ.py	✅	第16.4.2节·算法展开/第3章
+自定义先验展开	unfolded/demo_custom_prior_unfolded.py	✅	第2章·先验/第16.4.2节
+常数内存展开	unfolded/demo_unfolded_constant_memory.py	✅	第16.4.2节·展开实践
+约束LISTA	unfolded/demo_unfolded_constrained_LISTA.py	✅	第3.4节·ISTA变体
+八、盲逆问题（blind-inverse-problems/）
+实验内容	代码位置	可匹配?	匹配章节与知识点
+盲去模糊（未知模糊核）	blind-inverse-problems/demo_blind_deblurring.py	✅	第1.3节·inverse crime/第2.4节·学习先验
+盲去噪（未知噪声水平）	blind-inverse-problems/demo_blind_denoising.py	✅	第1.4节·噪声建模/第17.4节·UNSURE
+优化物理参数（自动微分）	blind-inverse-problems/demo_optimizing_physics_parameter.py	✅	第18.2节·自定义算子/第3.2节·梯度下降
+九、对抗学习（adversarial-learning/）
+实验内容	代码位置	可匹配?	匹配章节与知识点
+GAN式成像（生成模型逆问题）	adversarial-learning/demo_gan_imaging.py	✅	第9章·VAE（生成模型谱系）/第5.2节·得分
+十、模型（models/）
+实验内容	代码位置	可匹配?	匹配章节与知识点
+去噪器巡览（DnCNN/DRUNet等）	models/demo_denoiser_tour.py	✅	第6.6节·去噪器架构/第15.1节·UNet
+基础模型（RAM等）	models/demo_foundation_model.py	✅	第18章·综合项目/第15章·架构
+训练脚本（Trainer使用）	models/demo_training.py	✅	第15.5节·训练实践/第6.6节
+十一、外部库集成（external-libraries/）
+实验内容	代码位置	可匹配?	匹配章节与知识点
+ASTRA工具箱CT重建	external-libraries/demo_astra_tomography.py	✅	第16.1节·CT/第16.2节·正则化重建
+Spyrit超分辨荧光显微	external-libraries/demo_connect_spyrit.py	✅	第1.2节·正向模型/第16章
+HuggingFace数据集加载	external-libraries/demo_hf_dataset.py	✅	第17.1节·数据困境/第18章
+数据I/O（ISMRMD/HDF5等格式）	external-libraries/demo_io.py	✅	第16章·MRI/第18章·实践
+旋转不变MRI基础	external-libraries/demo_ri_basic.py	✅	第17.5节·等变性/第16.3节·MRI
+十二、变换与等变性（transforms-equivariance/）
+实验内容	代码位置	可匹配?	匹配章节与知识点
+几何变换（平移/旋转/欧几里得/仿射/单应等）	transforms-equivariance/demo_transforms.py	✅	第17.5节·等变性数学定义/第15.3节·ViT位置编码
+十三、分布式计算（distributed/）
+实验内容	代码位置	可匹配?	匹配章节与知识点
+分布式去噪器	distributed/demo_denoiser_distributed.py	⚠️ 部分匹配	第18章·实践工程化（非核心知识点）
+分布式物理模型	distributed/demo_physics_distributed.py	⚠️ 部分匹配	第18章·实践工程化
+分布式PnP	distributed/demo_pnp_distributed.py	⚠️ 部分匹配	第18章·实践工程化
+覆盖统计
+分类	实验数	完全匹配	部分匹配
+basics	5	5	0
+optimization	8	8	0
+physics	11	11	0
+plug-and-play	5	5	0
+sampling	8	8	0
+self-supervised-learning	13	13	0
+unfolded	7	7	0
+blind-inverse-problems	3	3	0
+adversarial-learning	1	1	0
+models	3	3	0
+external-libraries	5	5	0
+transforms-equivariance	1	1	0
+distributed	3	0	3
+总计	73	70	3
+结论： 70/73 个实验代码可直接匹配到对应章节知识点，覆盖率约 96%。最密集匹配章节为：第1章（正向模型/噪声）、第3章（优化算法）、第5章（PnP框架）、第13章（条件扩散采样）、第16章（CT/MRI重建）、第17章（自监督学习/等变性）。分布式类3个实验偏向工程化，与核心知识点匹配较弱。
