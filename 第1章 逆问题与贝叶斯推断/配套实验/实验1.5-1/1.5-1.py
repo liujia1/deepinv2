@@ -2,7 +2,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from skimage.data import shepp_logan_phantom
 from skimage.transform import resize
-from skimage.metrics import peak_signal_noise_ratio
 import os
 import sys
 
@@ -70,20 +69,24 @@ mu_post = np.linalg.solve(AtA + lam * np.eye(N), Aty)
 
 # ---- 5. 后验不确定性：后验方差 ----
 # Σ_post = σ² (A^T A + λ I)^{-1}
-# diag(Σ_post) = σ² · diag((A^T A + λ I)^{-1})
-Sigma_post = sigma_noise ** 2 * np.linalg.inv(AtA + lam * np.eye(N))
-post_var = np.diag(Sigma_post).reshape(n, n)
+# 用 Cholesky 分解计算对角线
+# 注：此处仍构造 N×N 矩阵 Z，内存与 inv 相当
+# 优势在于数值稳定性更好，且可扩展为只取对角线的迭代版本
+L = np.linalg.cholesky(AtA + lam * np.eye(N))
+Z = np.linalg.solve(L, np.eye(N))
+post_var = sigma_noise**2 * np.sum(Z**2, axis=0).reshape(n, n)
 
 # ---- 6. λ 扫描：验证 λ=σ²/σ_x² 附近最优 ----
 # 注意：λ* = σ²/σ_x² 最小化的是期望 MSE（对噪声样本取平均），
 # 而非保证单次实验 PSNR 最高。单次结果因噪声实现不同会有波动。
 # 扫描时直接算 MSE（不 clip），避免 clip 掩盖负值导致的误差低估
+# 注：λ<1e-4 时系统极度病态，PSNR 下降同时包含数值误差的贡献
 lambdas_sweep = np.logspace(-5, 1, 50)  # 峰值在 λ≈0.01，1e1 已足够
 psnrs = []
 for l in lambdas_sweep:
     mu_l = np.linalg.solve(AtA + l * np.eye(N), Aty)
     mse = np.mean((x - mu_l.reshape(n, n))**2)
-    psnrs.append(10 * np.log10(1.0 / mse))
+    psnrs.append(10 * np.log10(1.0 / mse) if mse > 1e-12 else float('-inf'))
 
 # 选取三个代表性 λ 进行可视化对比
 lambdas_demo = [1e-4, lam, 10.0]
@@ -102,31 +105,36 @@ axes[0, 0].axis('off')
 
 # 模糊含噪观测
 axes[0, 1].imshow(y.reshape(n, n), cmap='gray')
-axes[0, 1].set_title(f'模糊含噪观测 y\nσ={sigma_noise}')
+axes[0, 1].set_title(f'模糊含噪观测 y\n$\\sigma$={sigma_noise}')
 axes[0, 1].axis('off')
 
 # 贝叶斯闭式解
-psnr_closed = peak_signal_noise_ratio(x, np.clip(mu_post.reshape(n, n), 0, 1),
-                                       data_range=1.0)
+mse_closed = np.mean((x - mu_post.reshape(n, n))**2)
+psnr_closed = 10 * np.log10(1.0 / mse_closed) if mse_closed > 1e-12 else float('-inf')
 axes[0, 2].imshow(np.clip(mu_post.reshape(n, n), 0, 1), cmap='gray')
-axes[0, 2].set_title(f'贝叶斯后验均值 μ_post\nλ=σ²/σ_x²={lam:.4f}\nPSNR={psnr_closed:.1f}dB')
+axes[0, 2].set_title(f'贝叶斯后验均值 $\\mu_{{post}}$\n$\\lambda=\\sigma^2/\\sigma_x^2$={lam:.4f}\nPSNR={psnr_closed:.1f}dB')
 axes[0, 2].axis('off')
 
 # 后验不确定性图（直接显示方差，不叠加原图）
 im = axes[0, 3].imshow(post_var, cmap='hot')
-axes[0, 3].set_title('后验方差 diag(Σ_post)\n不确定性量化')
+axes[0, 3].set_title('后验方差 $\\mathrm{diag}(\\Sigma_{{post}})$\n不确定性量化')
 axes[0, 3].axis('off')
 plt.colorbar(im, ax=axes[0, 3], fraction=0.046)
 
 # λ 扫描展示
-lambda_labels = [f'λ={lam:.4f}（贝叶斯最优）' if abs(l - lam) < 0.001 else
-                 f'λ={l:.1g}（过小）' if l < lam else
-                 f'λ={l:.1g}（过大）'
-                 for l in lambdas_demo]
+lambda_labels = []
+for l in lambdas_demo:
+    if np.isclose(l, lam, rtol=1e-3):
+        lambda_labels.append(f'$\\lambda$={lam:.4f}（贝叶斯最优）')
+    elif l < lam:
+        lambda_labels.append(f'$\\lambda$={l:.1g}（过小）')
+    else:
+        lambda_labels.append(f'$\\lambda$={l:.1g}（过大）')
 
 for i, l in enumerate(lambdas_demo):
     img = np.clip(recons_demo[l], 0, 1)
-    psnr_l = peak_signal_noise_ratio(x, img, data_range=1.0)
+    mse_l = np.mean((x - recons_demo[l])**2)
+    psnr_l = 10 * np.log10(1.0 / mse_l) if mse_l > 1e-12 else float('-inf')
     axes[1, i].imshow(img, cmap='gray')
     axes[1, i].set_title(f'{lambda_labels[i]}\nPSNR={psnr_l:.1f}dB')
     axes[1, i].axis('off')
@@ -134,10 +142,10 @@ for i, l in enumerate(lambdas_demo):
 # 合并 λ 扫描曲线到第4个位置
 axes[1, 3].semilogx(lambdas_sweep, psnrs, 'b-', linewidth=2)
 axes[1, 3].axvline(x=lam, color='r', linestyle='--',
-                   label=f'λ=σ²/σ_x²={lam:.4f}')
-axes[1, 3].set_xlabel('正则化参数 λ')
+                   label=f'$\\lambda=\\sigma^2/\\sigma_x^2$={lam:.4f}')
+axes[1, 3].set_xlabel('正则化参数 $\\lambda$')
 axes[1, 3].set_ylabel('PSNR (dB)')
-axes[1, 3].set_title('λ 扫描：λ=σ²/σ_x² 附近最优\n左：λ过小（欠正则化） 右：λ过大（过正则化）')
+axes[1, 3].set_title('$\\lambda$ 扫描：$\\lambda=\\sigma^2/\\sigma_x^2$ 附近最优\n左：$\\lambda$过小（欠正则化） 右：$\\lambda$过大（过正则化）')
 axes[1, 3].legend()
 axes[1, 3].grid(True)
 
