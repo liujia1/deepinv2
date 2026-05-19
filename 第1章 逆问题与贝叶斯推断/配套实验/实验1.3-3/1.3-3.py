@@ -254,7 +254,7 @@ print("5. 即使零噪声，不引入额外信息也无法唯一确定解")
 print("="*60)
 
 if _in_jupyter:
-    display(Markdown("""
+    display(Markdown(r"""
 **理论回顾**：
 - **几乎幽灵**（almost-ghost）：两个图像 $x$ 和 $x'$，测量几乎相同但视觉截然不同
 - **根本原因**：差异 $d = x' - x$ 落在 $A$ 的近似零空间中，$\|Ad\| \ll \|d\|$
