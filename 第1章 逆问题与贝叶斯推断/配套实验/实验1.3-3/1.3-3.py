@@ -69,7 +69,7 @@ attenuations = []
 
 for freq in frequencies:
     d_test = np.sin(2 * np.pi * freq * xx / n) * np.sin(2 * np.pi * freq * yy / n)
-    # 使用与验证相同的 blur() 算子（FFT 圆周卷积），确保教学一致性
+    # 使用与验证相同的 blur() 算子（FFT 圆周卷积），确保一致性
     Ad_test = blur(d_test, h)
     attenuation = np.linalg.norm(Ad_test) / np.linalg.norm(d_test)
     attenuations.append(attenuation)

@@ -61,7 +61,7 @@ y_ds = downsample_average(x, factor=4)
 y_mask, mask = apply_mask(x, keep_ratio=0.5)
 
 # ---- 6. DFT 域直接反卷积（去模糊）----
-# 教学说明：为什么无噪声和含噪声需要不同的正则化策略？
+# 说明：为什么无噪声和含噪声需要不同的正则化策略？
 #
 # 无噪声情况：y_blur = H * X（精确的频域关系）
 #   - 即使 |H(k)| ≈ 0（高频衰减），分子 F(y_blur)(k) 也同时趋近于 0

@@ -25,7 +25,7 @@ np.random.seed(42)
 # ---- 1. 加载图像（使用 Shepp-Logan 幻影，含亮区和暗区）----
 n = 256
 # 最近邻插值（order=0）保留幻影的硬边缘，但锯齿会在噪声图中产生结构性残差
-# 使得直方图尾部略微偏离纯理论分布——教学时可留意这一来源
+# 使得直方图尾部略微偏离纯理论分布
 x = resize(shepp_logan_phantom(), (n, n), order=0, preserve_range=True, anti_aliasing=False)
 x = x / x.max()  # 归一化到 [0, 1]
 
@@ -71,7 +71,7 @@ for i, (y, name) in enumerate(zip(noisy_list, names)):
 
     # 噪声图像 = y - x
     noise = y - x
-    # 使用完整范围显示噪声，避免截断导致的教学误解
+    # 使用完整范围显示噪声，避免截断导致的误解
     vmax = max(np.abs(noise).max(), 0.1)
     axes[i, 1].imshow(noise, cmap='RdBu_r', vmin=-vmax, vmax=vmax)
     axes[i, 1].set_title(f'噪声分量 (y - x)\nmax|ε|={np.abs(noise).max():.3f}')
