@@ -54,7 +54,7 @@ if _cn_font:
     print(f"[Font] 已检测到中文字体: {_cn_font}")
 
 np.random.seed(42)
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
 
 
 # ============================================================

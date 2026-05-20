@@ -17,7 +17,7 @@ if _IN_COLAB:
     SAVE_DIR = os.path.join(_gdrive, '实验1.4-2')
 else:
     _chinese_path = '.chinese'
-    SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
+    SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
 
 sys.path.insert(0, _chinese_path)
 from chinese_font import setup_chinese_font

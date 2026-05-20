@@ -80,7 +80,7 @@ import sys
 import os
 
 # sampling_tools 已拷贝到当前目录
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
 if SCRIPT_DIR not in sys.path:
     sys.path.append(SCRIPT_DIR)
 

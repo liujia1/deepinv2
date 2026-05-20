@@ -65,11 +65,11 @@ np.random.seed(42)
 import torch
 torch.manual_seed(42)
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
 # 尝试检测models目录是否存在，不存在则向上搜索
 if not os.path.isdir(os.path.join(_SCRIPT_DIR, "models")):
     # 可能是从其他目录运行的，尝试用脚本内容定位
-    _candidate = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else None
+    _candidate = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else None
     if _candidate and os.path.isdir(os.path.join(_candidate, "models")):
         _SCRIPT_DIR = _candidate
 

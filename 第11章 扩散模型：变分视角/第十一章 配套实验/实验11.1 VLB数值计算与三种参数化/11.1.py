@@ -37,7 +37,7 @@ np.random.seed(42)
 import torch
 torch.manual_seed(42)
 
-SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
+SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
 
 
 # ============================================================

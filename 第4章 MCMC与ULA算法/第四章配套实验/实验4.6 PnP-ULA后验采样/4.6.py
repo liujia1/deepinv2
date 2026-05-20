@@ -91,7 +91,7 @@ print(f"Device: {device}")
 # ============================================================
 # 加载图像（取自 lab2_PnP_sol Cell 5，cman.png已拷贝到当前目录）
 # ============================================================
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
 im = np.array(Image.open(os.path.join(SCRIPT_DIR, "cman.png")))
 plot_im(im, "ground truth image")
 
