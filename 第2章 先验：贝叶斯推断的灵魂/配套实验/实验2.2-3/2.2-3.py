@@ -1,5 +1,5 @@
 """
-实验2.2-1 经典先验族对比：高斯、Laplace与TV
+实验2.2-3 经典先验族对比：高斯、Laplace与TV
 对应章节：2.2 经典先验族
 知识点：高斯先验→Tikhonov；Laplace先验→LASSO；TV先验→ROF模型；三种先验的解形态对比
 
