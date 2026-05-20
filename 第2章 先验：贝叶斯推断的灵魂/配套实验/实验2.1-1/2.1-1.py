@@ -35,8 +35,10 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    _chinese_path = os.path.join(_gdrive, '实验2.1-3', '.chinese')
-    SAVE_DIR = os.path.join(_gdrive, '实验2.1-3')
+    SAVE_DIR = os.path.join(_gdrive, '实验2.1-1')
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+    # 确保保存目录存在
+    os.makedirs(SAVE_DIR, exist_ok=True)
 else:
     _chinese_path = '.chinese'
     try:

@@ -30,14 +30,20 @@ import sys
 
 _gdrive = '/content/drive/MyDrive'
 if os.path.isdir(_gdrive):
-    _chinese_path = os.path.join(_gdrive, '实验2.2-2', '.chinese')
-    SAVE_DIR = os.path.join(_gdrive, '实验2.2-2')
+    _chinese_path = os.path.join(_gdrive, '实验2.2-1', '.chinese')
+    SAVE_DIR = os.path.join(_gdrive, '实验2.2-1')
+    # 确保保存目录存在
+    os.makedirs(SAVE_DIR, exist_ok=True)
 else:
     _chinese_path = '.chinese'
     SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
 sys.path.insert(0, _chinese_path)
-from chinese_font import setup_chinese_font
-setup_chinese_font(save_dir=_chinese_path)
+try:
+    from chinese_font import setup_chinese_font
+    setup_chinese_font(save_dir=_chinese_path)
+except ImportError:
+    print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
+    print("请确保 .chinese 文件夹已上传到 Google Drive 的正确位置")
 
 np.random.seed(42)
 
