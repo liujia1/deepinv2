@@ -409,11 +409,29 @@ var_methods = ['真实', 'Tikhonov\n(数据估计)'] + [f'Sobolev\nλ={lam}' for
 var_values = [local_var_true, local_var_tikh] + local_var_sob
 var_colors = plt.cm.tab10(np.linspace(0, 0.5, len(var_methods)))
 
+# 调整图表边距，防止标题与文字重叠
+plt.subplots_adjust(top=0.88)
+
 axes[1].bar(var_methods, var_values, color=var_colors[:len(var_methods)], alpha=0.7)
 axes[1].set_ylabel('局部方差')
 axes[1].set_title('局部方差保持度\n(中心10×10区域)')
+
+# 动态计算文字偏移量，避免超出边框
+var_max = max(var_values)
+var_min = min(var_values)
+var_range = var_max - var_min
+offset = var_range * 0.02 if var_range > 0 else var_max * 0.02
+
 for i, v in enumerate(var_values):
-    axes[1].text(i, v + 0.001, f'{v:.4f}', ha='center', fontsize=8)
+    # 根据数值大小动态调整文字位置
+    text_y = v + offset
+    # 如果文字可能超出标题区域，将文字移到柱内
+    if text_y > var_max * 0.95:
+        text_y = v - offset
+        va = 'top'
+    else:
+        va = 'bottom'
+    axes[1].text(i, text_y, f'{v:.4f}', ha='center', va=va, fontsize=8)
 axes[1].grid(True, alpha=0.3, axis='y')
 
 plt.tight_layout()
@@ -428,12 +446,14 @@ fig, axes = plt.subplots(n_rows, n_cols, figsize=(4*n_cols, 4*n_rows), squeeze=F
 for i, lam_sob in enumerate(SOB_LAMBDAS):
     # 上排：迭代解
     axes[0, i].imshow(x_sob_results[i], cmap='gray')
-    axes[0, i].set_title(f'迭代解 (λ={lam_sob:.2f})\n{fmt_metrics(psnr_sob[i], ssim_sob[i])}\n迭代{converged_iters[i]}次')
+    title1 = '迭代解 ($\\lambda$={:.2f})\n{}\n迭代{}次'.format(lam_sob, fmt_metrics(psnr_sob[i], ssim_sob[i]), converged_iters[i])
+    axes[0, i].set_title(title1)
     axes[0, i].axis('off')
     
     # 下排：闭式解
     axes[1, i].imshow(x_sob_exact_results[i], cmap='gray')
-    axes[1, i].set_title(f'闭式解 (λ={lam_sob:.2f})\n{fmt_metrics(psnr_sob_exact[i], ssim_sob_exact[i])}\n频域O(n²logn), n为边长')
+    title2 = '闭式解 ($\\lambda$={:.2f})\n{}\n频域O($n^2\\log n$), n为边长'.format(lam_sob, fmt_metrics(psnr_sob_exact[i], ssim_sob_exact[i]))
+    axes[1, i].set_title(title2)
     axes[1, i].axis('off')
 
 plt.suptitle('Sobolev去噪：迭代解 vs 频域闭式解', fontsize=14)
