@@ -16,16 +16,13 @@ import warnings
 # ====== 静默模式配置 ======
 SILENT_MODE = True  # True: 不弹窗、不显示警告；False: 正常交互模式
 
-if SILENT_MODE:
-    import matplotlib
-    matplotlib.use('Agg')
-    warnings.filterwarnings('ignore')
-    if sys.platform == 'win32':
-        sys.stdout.reconfigure(encoding='utf-8') if hasattr(sys.stdout, 'reconfigure') else None
-else:
-    import matplotlib
-
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings('ignore')
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8') if hasattr(sys.stdout, 'reconfigure') else None
 from skimage import data
 from skimage.util import random_noise
 from skimage.restoration import denoise_tv_chambolle

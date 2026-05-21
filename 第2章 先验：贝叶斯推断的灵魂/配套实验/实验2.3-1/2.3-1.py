@@ -30,16 +30,13 @@ import warnings
 
 SILENT_MODE = True
 
-if SILENT_MODE:
-    import matplotlib
-    matplotlib.use('Agg')
-    warnings.filterwarnings('ignore')
-    if sys.platform == 'win32':
-        sys.stdout.reconfigure(encoding='utf-8') if hasattr(sys.stdout, 'reconfigure') else None
-else:
-    import matplotlib
-
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings('ignore')
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8') if hasattr(sys.stdout, 'reconfigure') else None
 
 _gdrive = '/content/drive/MyDrive'
 if os.path.isdir(_gdrive):
@@ -169,14 +166,14 @@ ax2.scatter(x_tikh[idx, 0], x_tikh[idx, 1], s=1, alpha=0.5, c='green')
 ax2.set_xlim(-1.5, 1.5)
 ax2.set_ylim(-1.5, 1.5)
 ax2.set_aspect('equal')
-ax2.set_title(f'Tikhonov去噪\n(高斯先验, λ={lambda_tikh_optimal:.3f})\nerr={err_tikh*100:.1f}%')
+ax2.set_title(f'Tikhonov去噪\n(高斯先验, $\\lambda$={lambda_tikh_optimal:.3f})\nerr={err_tikh*100:.1f}%')
 
 ax3 = fig.add_subplot(gs[0, 3])
 ax3.scatter(x_lasso[idx, 0], x_lasso[idx, 1], s=1, alpha=0.5, c='orange')
 ax3.set_xlim(-1.5, 1.5)
 ax3.set_ylim(-1.5, 1.5)
 ax3.set_aspect('equal')
-ax3.set_title(f'LASSO去噪\n(Laplace先验, λ={lambda_lasso})\nerr={err_lasso*100:.1f}%')
+ax3.set_title(f'LASSO去噪\n(Laplace先验, $\\lambda$={lambda_lasso})\nerr={err_lasso*100:.1f}%')
 
 ax4 = fig.add_subplot(gs[0, 4])
 ax4.scatter(x_bayes[idx, 0], x_bayes[idx, 1], s=1, alpha=0.5, c='purple')
@@ -199,7 +196,7 @@ for bar, e in zip(bars, errors):
 ax_bar.set_ylim(0, max(errors)*100 * 1.15)
 ax_bar.grid(axis='y', alpha=0.3)
 
-fig.suptitle('贝叶斯去噪器：先验质量决定去噪器质量\nD(y) = E[x|y] 是给定先验下的最优去噪器', fontsize=14, y=0.98)
+fig.suptitle('贝叶斯去噪器：先验质量决定去噪器质量\n$D(y) = E[x|y]$ 是给定先验下的最优去噪器', fontsize=14, y=0.98)
 plt.savefig(os.path.join(SAVE_DIR, '步骤1_去噪器对比.png'), dpi=150, bbox_inches='tight')
 if not SILENT_MODE:
     plt.show()
