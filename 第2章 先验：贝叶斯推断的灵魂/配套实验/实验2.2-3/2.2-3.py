@@ -173,15 +173,15 @@ print(f"噪声水平 sigma = {sigma:.4f}")
 print(f"\n高斯先验 (假设: 值小):")
 print(f"  正则项: ||x||_2^2 -> Tikhonov")
 print(f"  lam = sigma^2/sigma_x^2 = {lam_tikh:.4f}")
-print(f"  PSNR = {psnr_tikh:.2f} dB")
+print(f"  PSNR = {psnr_tikh:.4f} dB")
 print(f"\nLaplace先验 (假设: 值稀疏):")
 print(f"  正则项: ||x||_1 -> LASSO")
 print(f"  lam = sigma^2/b = {lam_lasso:.4f}")
-print(f"  PSNR = {psnr_lasso:.2f} dB")
+print(f"  PSNR = {psnr_lasso:.4f} dB")
 print(f"\nTV先验 (假设: 梯度稀疏):")
 print(f"  正则项: ||grad x||_1 -> ROF模型")
 print(f"  lam = {lam_tv:.4f} (手动调参)")
-print(f"  PSNR = {psnr_tv:.2f} dB")
+print(f"  PSNR = {psnr_tv:.4f} dB")
 
 fig, axes = plt.subplots(2, 3, figsize=(14, 9))
 
@@ -190,19 +190,19 @@ axes[0, 0].set_title('原始图像')
 axes[0, 0].axis('off')
 
 axes[0, 1].imshow(y, cmap='gray')
-axes[0, 1].set_title(f'含噪图像\nPSNR={psnr_noisy:.2f}dB')
+axes[0, 1].set_title(f'含噪图像\nPSNR={psnr_noisy:.4f}dB')
 axes[0, 1].axis('off')
 
 axes[0, 2].imshow(x_tikh, cmap='gray')
-axes[0, 2].set_title(f'Tikhonov (高斯先验)\n假设: 值小\nPSNR={psnr_tikh:.2f}dB')
+axes[0, 2].set_title(f'Tikhonov (高斯先验)\n假设: 值小\nPSNR={psnr_tikh:.4f}dB')
 axes[0, 2].axis('off')
 
 axes[1, 0].imshow(x_lasso, cmap='gray')
-axes[1, 0].set_title(f'LASSO (Laplace先验)\n假设: 值稀疏\nPSNR={psnr_lasso:.2f}dB')
+axes[1, 0].set_title(f'LASSO (Laplace先验)\n假设: 值稀疏\nPSNR={psnr_lasso:.4f}dB')
 axes[1, 0].axis('off')
 
 axes[1, 1].imshow(x_tv, cmap='gray')
-axes[1, 1].set_title(f'TV去噪 (TV先验)\n假设: 梯度稀疏\nPSNR={psnr_tv:.2f}dB')
+axes[1, 1].set_title(f'TV去噪 (TV先验)\n假设: 梯度稀疏\nPSNR={psnr_tv:.4f}dB')
 axes[1, 1].axis('off')
 
 center = n // 2
