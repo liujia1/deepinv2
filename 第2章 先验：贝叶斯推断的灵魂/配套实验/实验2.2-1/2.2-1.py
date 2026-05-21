@@ -129,6 +129,7 @@ def sobolev_denoise(y, lam, n_iter=SOB_ITERS, tol=SOB_TOL, verbose=False):
         x = x + dt * ((y - x) + lam * lap)
         
         # 计算更新后x的目标函数（用于收敛诊断）
+        # 等价形式：||∇x||² = Σ(前向差分)²，与拉普拉斯二次型 -x^T Δx 在周期边界下等价
         grad_x = np.roll(x, -1, axis=1) - x
         grad_y = np.roll(x, -1, axis=0) - x
         loss = 0.5 * np.sum((x - y)**2) + 0.5 * lam * np.sum(grad_x**2 + grad_y**2)
@@ -314,22 +315,22 @@ axes[0, 1].set_title(f'含噪图像\n{fmt_metrics(psnr_noisy, ssim_noisy)}')
 axes[0, 1].axis('off')
 
 axes[0, 2].imshow(x_tikh_data, cmap='gray')
-axes[0, 2].set_title(f'Tikhonov (数据估计σ_x)\nλ={lam_tikh_data:.4f}\n{fmt_metrics(psnr_tikh_data, ssim_tikh_data)}')
+axes[0, 2].set_title(f'Tikhonov (数据估计$\\sigma_x$)\n$\\lambda$={lam_tikh_data:.4f}\n{fmt_metrics(psnr_tikh_data, ssim_tikh_data)}')
 axes[0, 2].axis('off')
 
 axes[1, 0].imshow(x_tikh_prior, cmap='gray')
-axes[1, 0].set_title(f'Tikhonov (主观先验σ_x=1)\nλ={lam_tikh_prior:.4f}\n{fmt_metrics(psnr_tikh_prior, ssim_tikh_prior)}')
+axes[1, 0].set_title(f'Tikhonov (主观先验$\\sigma_x=1$)\n$\\lambda$={lam_tikh_prior:.4f}\n{fmt_metrics(psnr_tikh_prior, ssim_tikh_prior)}')
 axes[1, 0].axis('off')
 
-sob_idx_01 = 1  # λ=0.1 在 SOB_LAMBDAS 中的索引
+sob_idx_01 = 1  # $\\lambda$=0.1 在 SOB_LAMBDAS 中的索引
 lam_display = SOB_LAMBDAS[sob_idx_01]
 axes[1, 1].imshow(x_sob_results[sob_idx_01], cmap='gray')
-axes[1, 1].set_title(f'Sobolev (λ={lam_display})\n{fmt_metrics(psnr_sob[sob_idx_01], ssim_sob[sob_idx_01])}')
+axes[1, 1].set_title(f'Sobolev ($\\lambda$={lam_display})\n{fmt_metrics(psnr_sob[sob_idx_01], ssim_sob[sob_idx_01])}')
 axes[1, 1].axis('off')
 
 best_sob_idx = np.argmax(psnr_sob)
 axes[1, 2].imshow(x_sob_results[best_sob_idx], cmap='gray')
-axes[1, 2].set_title(f'Sobolev (最优λ={SOB_LAMBDAS[best_sob_idx]})\n{fmt_metrics(psnr_sob[best_sob_idx], ssim_sob[best_sob_idx])}\n(按PSNR自动选择)')
+axes[1, 2].set_title(f'Sobolev (最优$\\lambda$={SOB_LAMBDAS[best_sob_idx]})\n{fmt_metrics(psnr_sob[best_sob_idx], ssim_sob[best_sob_idx])}\n(按PSNR自动选择)')
 axes[1, 2].set_axis_off()
 
 plt.suptitle('高斯先验的推广：Tikhonov vs Sobolev', fontsize=14)
@@ -341,16 +342,16 @@ fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
 center = n // 2
 for i, (lam_sob, xs) in enumerate(zip(SOB_LAMBDAS, x_sob_results)):
-    axes[0].plot(xs[center, :], linewidth=1, label=f'λ={lam_sob:.2f}')
+    axes[0].plot(xs[center, :], linewidth=1, label=f'$\\lambda$={lam_sob:.2f}')
 axes[0].plot(x_true[center, :], 'k--', linewidth=1.5, label='真实')
 axes[0].plot(y[center, :], 'r-', linewidth=0.5, alpha=0.5, label='含噪')
-axes[0].set_title('Sobolev不同λ的剖面对比\n展示超参数敏感性')
+axes[0].set_title('Sobolev不同$\\lambda$的剖面对比\n展示超参数敏感性')
 axes[0].legend(fontsize=8)
 axes[0].set_xlabel('像素索引')
 axes[0].set_ylabel('灰度值')
 axes[0].grid(True, alpha=0.3)
 
-all_methods = ['Tikhonov\n(数据估计)', 'Tikhonov\n(主观先验)'] + [f'Sobolev\nλ={lam}' for lam in SOB_LAMBDAS]
+all_methods = ['Tikhonov\n(数据估计)', 'Tikhonov\n(主观先验)'] + [f'Sobolev\n$\\lambda$={lam}' for lam in SOB_LAMBDAS]
 all_psnrs = [psnr_tikh_data, psnr_tikh_prior] + psnr_sob
 all_ssim_scaled = [ssim_tikh_data*100, ssim_tikh_prior*100] + [s*100 for s in ssim_sob]
 
@@ -368,16 +369,18 @@ ax1.set_ylabel('PSNR (dB)', color='steelblue')
 ax1.tick_params(axis='y', labelcolor='steelblue')
 
 ax2 = ax1.twinx()
-ax2.bar(x_pos + width/2, all_ssim_scaled, width, color='seagreen', alpha=0.6, label='SSIM×100')
+ax2.bar(x_pos + width/2, all_ssim_scaled, width, color='seagreen', alpha=0.6, label='SSIM$\\times$100')
 
 ssim_min, ssim_max = min(all_ssim_scaled), max(all_ssim_scaled)
-ax2.set_ylim([ssim_min - 2, ssim_max + 2])
-ax2.set_ylabel('SSIM×100', color='seagreen')
+ssim_noisy_scaled = ssim_noisy * 100
+ax2.set_ylim([min(ssim_min, ssim_noisy_scaled) - 2, ssim_max + 2])
+ax2.axhline(y=ssim_noisy_scaled, color='gray', linestyle=':', label=f'含噪SSIM$\\times$100: {ssim_noisy_scaled:.1f}')
+ax2.set_ylabel('SSIM$\\times$100', color='seagreen')
 ax2.tick_params(axis='y', labelcolor='seagreen')
 
 ax1.set_xticks(x_pos)
 ax1.set_xticklabels(all_methods, fontsize=8)
-ax1.set_title('不同方法的性能对比\n(左轴: PSNR, 右轴: SSIM×100)')
+ax1.set_title('不同方法的性能对比\n(左轴: PSNR, 右轴: SSIM$\\times$100)')
 
 lines1, labels1 = ax1.get_legend_handles_labels()
 lines2, labels2 = ax2.get_legend_handles_labels()
@@ -390,7 +393,7 @@ plt.close()
 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
 t = np.linspace(-2, 2, 400)
-axes[0].plot(t, t**2, 'b-', linewidth=2, label='L2: t² (高斯先验正则项)')
+axes[0].plot(t, t**2, 'b-', linewidth=2, label='L2: $t^2$ (高斯先验正则项)')
 axes[0].plot(t, np.abs(t), 'r-', linewidth=2, label='L1: |t| (Laplace/TV正则项)')
 axes[0].set_title('正则项形态对比（示意）\nL2均匀惩罚 vs L1促稀疏\n注：L1方法未在本实验实现，详见实验2.2-3')
 axes[0].legend()
@@ -405,16 +408,13 @@ local_var_true = np.var(x_true[center-5:center+5, center-5:center+5])
 local_var_tikh = np.var(x_tikh_data[center-5:center+5, center-5:center+5])
 local_var_sob = [np.var(xs[center-5:center+5, center-5:center+5]) for xs in x_sob_results]
 
-var_methods = ['真实', 'Tikhonov\n(数据估计)'] + [f'Sobolev\nλ={lam}' for lam in SOB_LAMBDAS]
+var_methods = ['真实', 'Tikhonov\n(数据估计)'] + [f'Sobolev\n$\\lambda$={lam}' for lam in SOB_LAMBDAS]
 var_values = [local_var_true, local_var_tikh] + local_var_sob
 var_colors = plt.cm.tab10(np.linspace(0, 0.5, len(var_methods)))
 
-# 调整图表边距，防止标题与文字重叠
-plt.subplots_adjust(top=0.88)
-
 axes[1].bar(var_methods, var_values, color=var_colors[:len(var_methods)], alpha=0.7)
 axes[1].set_ylabel('局部方差')
-axes[1].set_title('局部方差保持度\n(中心10×10区域)')
+axes[1].set_title('局部方差保持度\n(中心$10\\times10$区域)')
 
 # 动态计算文字偏移量，避免超出边框
 var_max = max(var_values)
@@ -434,7 +434,7 @@ for i, v in enumerate(var_values):
     axes[1].text(i, text_y, f'{v:.4f}', ha='center', va=va, fontsize=8)
 axes[1].grid(True, alpha=0.3, axis='y')
 
-plt.tight_layout()
+plt.tight_layout(rect=[0, 0, 1, 0.95])
 plt.savefig(os.path.join(SAVE_DIR, '步骤3_正则项形态与方差保持.png'), dpi=150, bbox_inches='tight')
 plt.close()
 
