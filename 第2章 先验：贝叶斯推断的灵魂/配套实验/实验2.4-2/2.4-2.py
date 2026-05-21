@@ -9,11 +9,25 @@
 """
 
 import numpy as np
+import os
+import sys
+import warnings
+
+# ====== 静默模式配置 ======
+SILENT_MODE = True  # True: 不弹窗、不显示警告；False: 正常交互模式
+
+if SILENT_MODE:
+    import matplotlib
+    matplotlib.use('Agg')
+    warnings.filterwarnings('ignore')
+    if sys.platform == 'win32':
+        sys.stdout.reconfigure(encoding='utf-8') if hasattr(sys.stdout, 'reconfigure') else None
+else:
+    import matplotlib
+
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
-import os
-import sys
 
 _gdrive = '/content/drive/MyDrive'
 if os.path.isdir(_gdrive):
@@ -192,7 +206,8 @@ axes[1, 2].axis('off')
 plt.suptitle('Plug-and-Play先验: 去噪器即先验', fontsize=14)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤1_PnP实验.png'), dpi=150, bbox_inches='tight')
-plt.show()
+if not SILENT_MODE:
+    plt.show()
 
 print("\n===== 2.4章节核心结论 =====")
 print("\n1. PnP的定义:")

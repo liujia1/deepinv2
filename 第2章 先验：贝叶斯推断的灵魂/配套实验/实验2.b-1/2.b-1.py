@@ -9,14 +9,28 @@
 """
 
 import numpy as np
+import os
+import sys
+import warnings
+
+# ====== 静默模式配置 ======
+SILENT_MODE = True  # True: 不弹窗、不显示警告；False: 正常交互模式
+
+if SILENT_MODE:
+    import matplotlib
+    matplotlib.use('Agg')
+    warnings.filterwarnings('ignore')
+    if sys.platform == 'win32':
+        sys.stdout.reconfigure(encoding='utf-8') if hasattr(sys.stdout, 'reconfigure') else None
+else:
+    import matplotlib
+
 import matplotlib.pyplot as plt
 from skimage import data
 from skimage.util import random_noise
 from skimage.restoration import denoise_tv_chambolle
 from skimage.transform import resize
 from skimage.metrics import peak_signal_noise_ratio
-import os
-import sys
 
 _gdrive = '/content/drive/MyDrive'
 if os.path.isdir(_gdrive):
@@ -164,7 +178,8 @@ axes[3].axis('off')
 plt.suptitle('TV vs TGV：阶梯效应的改善', fontsize=14)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤1_TV_vs_TGV对比.png'), dpi=150, bbox_inches='tight')
-plt.show()
+if not SILENT_MODE:
+    plt.show()
 
 row = n // 2
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
@@ -190,7 +205,8 @@ axes[1].grid(True, alpha=0.3)
 
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤2_阶梯效应改善分析.png'), dpi=150, bbox_inches='tight')
-plt.show()
+if not SILENT_MODE:
+    plt.show()
 
 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
@@ -224,7 +240,8 @@ axes[1].set_title('TV vs TGV 特性对比', fontsize=12, pad=20)
 
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤3_性能与特性对比.png'), dpi=150, bbox_inches='tight')
-plt.show()
+if not SILENT_MODE:
+    plt.show()
 
 print("\n===== 附录2B 核心结论 =====")
 print("\n1. 阶梯效应根源:")

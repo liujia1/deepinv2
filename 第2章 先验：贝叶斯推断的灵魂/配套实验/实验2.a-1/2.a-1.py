@@ -9,9 +9,23 @@
 """
 
 import numpy as np
-import matplotlib.pyplot as plt
 import os
 import sys
+import warnings
+
+# ====== 静默模式配置 ======
+SILENT_MODE = True  # True: 不弹窗、不显示警告；False: 正常交互模式
+
+if SILENT_MODE:
+    import matplotlib
+    matplotlib.use('Agg')
+    warnings.filterwarnings('ignore')
+    if sys.platform == 'win32':
+        sys.stdout.reconfigure(encoding='utf-8') if hasattr(sys.stdout, 'reconfigure') else None
+else:
+    import matplotlib
+
+import matplotlib.pyplot as plt
 
 _gdrive = '/content/drive/MyDrive'
 if os.path.isdir(_gdrive):
@@ -101,7 +115,8 @@ for k, alpha in enumerate(alpha_values):
 plt.suptitle('共轭先验：高斯先验 + 高斯似然 → 高斯后验\nMAP估计 = 后验均值，后验协方差有闭式解', fontsize=14)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤1_共轭先验与闭式后验.png'), dpi=150, bbox_inches='tight')
-plt.show()
+if not SILENT_MODE:
+    plt.show()
 
 fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
@@ -129,7 +144,8 @@ axes[1].grid(True, alpha=0.3)
 
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤2_后验不确定性与正则化参数.png'), dpi=150, bbox_inches='tight')
-plt.show()
+if not SILENT_MODE:
+    plt.show()
 
 print("\n===== 附录2A 核心结论 =====")
 print("\n1. 共轭性:")
