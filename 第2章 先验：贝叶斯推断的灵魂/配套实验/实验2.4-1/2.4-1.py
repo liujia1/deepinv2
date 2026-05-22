@@ -40,7 +40,11 @@ else:
 sys.path.insert(0, _chinese_path)
 try:
     from chinese_font import setup_chinese_font
-    setup_chinese_font(save_dir=_chinese_path)
+    cn_font = setup_chinese_font(save_dir=_chinese_path)
+    # 额外配置：确保LaTeX模式下也能使用中文字体
+    if cn_font:
+        plt.rcParams['font.sans-serif'] = [cn_font] + plt.rcParams.get('font.sans-serif', [])
+        plt.rcParams['font.family'] = 'sans-serif'
 except ImportError:
     print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
     print("请确保 .chinese 文件夹已上传到 Google Drive 的正确位置")
@@ -369,7 +373,6 @@ print("   - 适用于各种逆问题 (去模糊、超分、修复等)")
 
 print("\n6. 理论保证:")
 print("   PnP-ULA 收敛到 oracle 后验邻域")
-print("   (详见 Pereyra 等人的理论分析)")
 
 print("\n" + "=" * 70)
 print("实验完成。结果已保存至:", SAVE_DIR)

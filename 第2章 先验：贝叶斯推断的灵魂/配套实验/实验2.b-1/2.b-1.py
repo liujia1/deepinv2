@@ -41,7 +41,11 @@ else:
 sys.path.insert(0, _chinese_path)
 try:
     from chinese_font import setup_chinese_font
-    setup_chinese_font(save_dir=_chinese_path)
+    cn_font = setup_chinese_font(save_dir=_chinese_path)
+    # 额外配置：确保LaTeX模式下也能使用中文字体
+    if cn_font:
+        plt.rcParams['font.sans-serif'] = [cn_font] + plt.rcParams.get('font.sans-serif', [])
+        plt.rcParams['font.family'] = 'sans-serif'
 except ImportError:
     print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
     print("请确保 .chinese 文件夹已上传到 Google Drive 的正确位置")
