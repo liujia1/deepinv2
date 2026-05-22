@@ -23,7 +23,12 @@ if os.path.isdir(_chinese_path):
 else:
     print("警告: .chinese 文件夹未找到，中文字体可能无法正常显示")
 
-# ─── 构造双峰后验分布 ───
+# ── 构造双峰后验分布 ───
+# 确保中文字体在所有绘图操作之前加载
+plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei'] + plt.rcParams.get('font.sans-serif', [])
+plt.rcParams['font.family'] = 'sans-serif'
+plt.rcParams['axes.unicode_minus'] = False
+
 # 模拟二值图像场景：像素值应为0或1，但观测被噪声污染
 # 先验：两个峰在0和1（二值先验）
 # 似然：高斯噪声
@@ -76,7 +81,7 @@ ax.plot(x_range, p2, 'b--', linewidth=1, alpha=0.4, label=f'分量2: $w_2={w2}$,
 ax.axvline(x=x_map, color='red', linestyle='--', linewidth=2, alpha=0.8)
 ax.plot(x_map, p[map_idx], 'ro', markersize=12, zorder=5)
 ax.annotate(f'MAP = {x_map:.2f}\n(选最高的峰)', 
-            xy=(x_map, p[map_idx]), xytext=(x_map - 0.35, p[map_idx] + 0.3),
+            xy=(x_map, p[map_idx]), xytext=(x_map - 0.35, p[map_idx] + 0.15),
             fontsize=11, ha='center', color='red',
             arrowprops=dict(arrowstyle='->', color='red', lw=1.5))
 
@@ -103,19 +108,19 @@ ax.text(mu2, -0.15, '像素值=1\n(前景)', fontsize=9, ha='center', color='blu
 ax.set_xlabel('$x$ (像素值)', fontsize=13)
 ax.set_ylabel('后验概率密度 $p(x|y)$', fontsize=13)
 ax.set_title('图2-4：多峰后验下 MAP vs MMSE 分歧\n二值图像场景：像素应为0或1，但噪声使后验呈双峰', 
-             fontsize=14, fontweight='bold')
+             fontsize=15, fontweight='bold', pad=12)
 ax.legend(loc='upper right', fontsize=9)
 ax.set_ylim(bottom=-0.2)
 ax.grid(True, alpha=0.3)
 
-# 底部说明
-fig.text(0.5, 0.02,
-         '核心观察：MAP选择概率最高的峰（此处为0），但MMSE取两峰的加权平均（0.4）。'
-         '在二值图像去噪中，MAP给出"背景"判断，而MMSE给出模糊的0.4——两者代表不同的决策哲学。',
-         ha='center', fontsize=10, style='italic',
-         bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+# 底部说明（使用ax.text + transAxes，继承全局字体设置）
+ax.text(0.5, -0.15,
+        '核心观察：MAP选择概率最高的峰（此处为0），但MMSE取两峰的加权平均（0.4）。'
+        '在二值图像去噪中，MAP给出"背景"判断，而MMSE给出模糊的0.4——两者代表不同的决策哲学。',
+        ha='center', va='top', fontsize=9, transform=ax.transAxes,
+        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3), wrap=True)
 
-plt.tight_layout(rect=[0, 0.06, 1, 1])
+plt.subplots_adjust(bottom=0.20)
 plt.savefig(os.path.join(SAVE_DIR, '图2-4_多峰后验MMSE_vs_MAP.png'), dpi=150, bbox_inches='tight')
 plt.close()
 

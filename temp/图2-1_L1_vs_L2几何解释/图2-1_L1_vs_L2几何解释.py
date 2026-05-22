@@ -8,6 +8,7 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from matplotlib.font_manager import FontProperties
 import os
 import sys
 
@@ -24,6 +25,11 @@ else:
     print("警告: .chinese 文件夹未找到，中文字体可能无法正常显示")
 
 # ─── 参数设置 ───
+# 确保中文字体在所有绘图操作之前加载
+plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei'] + plt.rcParams.get('font.sans-serif', [])
+plt.rcParams['font.family'] = 'sans-serif'
+plt.rcParams['axes.unicode_minus'] = False
+
 theta = np.linspace(0, 2*np.pi, 400)
 
 # L2 正则项的等高线：圆形
@@ -141,16 +147,17 @@ legend_elements = [Patch(facecolor='forestgreen', alpha=0.3, edgecolor='green', 
                    plt.Line2D([0], [0], color='red', linewidth=2, label='损失函数等高线')]
 ax.legend(handles=legend_elements, loc='upper left', fontsize=9)
 
-# ── 总标题和注释 ───
-fig.suptitle('图2-1：L1 vs L2 几何解释——为什么L1促稀疏', fontsize=15, fontweight='bold', y=0.98)
-# 底部注释
-fig.text(0.5, 0.02, 
+#  总标题和注释 ─
+fig.suptitle('图2-1：L1 vs L2 几何解释\n为什么L1促稀疏', fontsize=15, fontweight='bold', y=0.96, linespacing=1.5)
+
+# 底部注释（使用fig.text在整个图底部居中）
+fig.text(0.5, 0.04, 
          '核心直觉：L2的圆形约束集没有"角点"，最优解通常不在坐标轴上；'
          'L1的菱形约束集有4个角点，椭圆更容易在角点处与之相切，从而得到稀疏解（某些分量为0）',
-         ha='center', fontsize=10, style='italic',
-         bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+         ha='center', va='bottom', fontsize=9, linespacing=1.5,
+         bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3), wrap=True)
 
-plt.tight_layout(rect=[0, 0.06, 1, 0.95])
+plt.subplots_adjust(wspace=0.12, hspace=0.3, bottom=0.15, top=0.85)
 plt.savefig(os.path.join(SAVE_DIR, '图2-1_L1_vs_L2几何解释.png'), dpi=150, bbox_inches='tight')
 plt.close()
 
