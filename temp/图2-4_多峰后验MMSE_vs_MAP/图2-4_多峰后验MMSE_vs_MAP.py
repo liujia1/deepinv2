@@ -107,7 +107,7 @@ ax.text(mu2, -0.15, '像素值=1\n(前景)', fontsize=9, ha='center', color='blu
 
 ax.set_xlabel('$x$ (像素值)', fontsize=13)
 ax.set_ylabel('后验概率密度 $p(x|y)$', fontsize=13)
-ax.set_title('图2-4：多峰后验下 MAP vs MMSE 分歧\n二值图像场景：像素应为0或1，但噪声使后验呈双峰', 
+ax.set_title('多峰后验下 MAP vs MMSE 分歧\n二值图像场景：像素应为0或1，但噪声使后验呈双峰', 
              fontsize=15, fontweight='bold', pad=12)
 ax.legend(loc='upper right', fontsize=9)
 ax.set_ylim(bottom=-0.2)

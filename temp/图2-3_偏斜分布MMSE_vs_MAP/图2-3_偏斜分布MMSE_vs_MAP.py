@@ -109,7 +109,7 @@ ax.text(y_obs + 0.05, ax.get_ylim()[1]*0.8, f'观测 $y={y_obs}$', fontsize=9, c
 
 ax.set_xlabel('$x$', fontsize=13)
 ax.set_ylabel('后验概率密度 $p(x|y)$', fontsize=13)
-ax.set_title('图 2-3：偏斜后验下 MAP vs MMSE 分歧\nLaplace 先验 + 高斯似然 → 偏斜后验', 
+ax.set_title('偏斜后验下 MAP vs MMSE 分歧\nLaplace 先验 + 高斯似然 → 偏斜后验', 
              fontsize=14, fontweight='bold', linespacing=1.8, pad=20)
 ax.legend(loc='upper left', fontsize=10)
 ax.grid(True, alpha=0.3)

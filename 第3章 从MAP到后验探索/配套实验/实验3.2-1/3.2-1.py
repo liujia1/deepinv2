@@ -29,7 +29,7 @@ if _IN_COLAB:
         drive.mount('/content/drive')
     SAVE_DIR = os.path.join(_gdrive, '实验3.2-1')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
-    os.makedirs(SAVE_DIR, exist_ok=True)
+    os.makedirs(_chinese_path, exist_ok=True)  # 递归创建所有父目录
 else:
     _chinese_path = '.chinese'
     try:

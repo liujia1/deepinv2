@@ -30,7 +30,7 @@ if _IN_COLAB:
         drive.mount('/content/drive')
     SAVE_DIR = os.path.join(_gdrive, '实验3.1-1')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
-    os.makedirs(SAVE_DIR, exist_ok=True)
+    os.makedirs(_chinese_path, exist_ok=True)  # 递归创建所有父目录
 else:
     _chinese_path = '.chinese'
     try:
@@ -59,7 +59,7 @@ N = n * n
 
 # 高斯模糊核
 def gaussian_psf(size, sigma):
-    ax = np.concatenate((np.arange(0, size // 2), np.arange(-size // 2, 0)))
+    ax = np.fft.fftfreq(size, d=1.0) * size
     xx, yy = np.meshgrid(ax, ax)
     h = np.exp(-(xx ** 2 + yy ** 2) / (2 * sigma ** 2))
     return h / h.sum()
@@ -69,6 +69,9 @@ h = gaussian_psf(n, blur_sigma)
 H_fft = np.fft.fft2(h)
 
 # 构建模糊矩阵 A (N×N)
+# [注意] 这里显式构建 A 矩阵仅用于教学演示（小规模 N=1024）
+# [重要] 实际大规模问题中应使用迭代法（如共轭梯度CG）或傅里叶域求解
+#        避免显式构建和求逆大矩阵（计算复杂度 O(N^3)，内存 O(N^2)）
 A = np.zeros((N, N))
 for j in range(N):
     e_j = np.zeros(N)
@@ -88,17 +91,24 @@ y = A @ x.ravel() + sigma_noise * np.random.randn(N)
 
 sigma_prior = 0.5
 lam = sigma_noise ** 2 / sigma_prior ** 2
-sigma_x = sigma_prior
 
 AtA = A.T @ A
 Aty = A.T @ y
 
 # 闭式解（MAP估计）
+# [注意] np.linalg.inv 仅适用于小规模问题（此处 N=1024，约几秒）
+# [重要] 实际应用中应使用：
+#   1. 迭代法：共轭梯度法 (CG)、LSQR 等，避免显式求逆
+#   2. 傅里叶域求解：利用卷积定理，在频域直接计算 (O(N log N))
+#   3. 预条件技术：加速迭代收敛
+# [说明] 高斯后验下 MAP = 后验均值 = 后验众数，因此可用后验分布的均值公式计算 MAP
 Sigma_post = np.linalg.inv(AtA / sigma_noise ** 2 + np.eye(N) / sigma_prior ** 2)
 mu_post = Sigma_post @ (Aty / sigma_noise ** 2)
 
 # 后验方差（不确定性量化）
-# [注意] 这仅在高斯-高斯共轭模型下可用（闭式后验协方差）
+# [注意1] 这仅在高斯-高斯共轭模型下可用（闭式后验协方差）
+# [注意2] 图中展示的是边缘方差 diag(Σ_post)，忽略了非对角元（像素间相关性）
+#         实际后验分布中像素之间存在相关性，此处仅展示各像素的边际不确定性
 # [预告] 非高斯后验的不确定性量化见第4章（MCMC/ULA采样方法）
 # [关联] 3.7节将讨论：为什么仅有MAP点估计是不够的
 post_var = np.diag(Sigma_post).reshape(n, n)
@@ -113,15 +123,21 @@ def posterior_energy(x_vec, y, A, sigma_noise, sigma_prior):
     return data_term + reg_term, data_term, reg_term
 
 # 计算三种情况下的后验能量
-x_init = A.T @ y
+# 初始化点1：转置近似（匹配滤波输出，质量较好）
+x_init_good = A.T @ y
+# 初始化点2：直接用观测作为初始（代表"不做任何复原"，实际中常见的基线）
+x_init_bad = y
+# MAP估计（最优解）
 x_map = mu_post
 
-E_init, d_init, r_init = posterior_energy(x_init, y, A, sigma_noise, sigma_prior)
+E_init_good, d_init_good, r_init_good = posterior_energy(x_init_good, y, A, sigma_noise, sigma_prior)
+E_init_bad, d_init_bad, r_init_bad = posterior_energy(x_init_bad, y, A, sigma_noise, sigma_prior)
 E_map, d_map, r_map = posterior_energy(x_map, y, A, sigma_noise, sigma_prior)
 E_true, d_true, r_true = posterior_energy(x.ravel(), y, A, sigma_noise, sigma_prior)
 
 psnr_map = peak_signal_noise_ratio(x, np.clip(x_map.reshape(n, n), 0, 1))
-psnr_init = peak_signal_noise_ratio(x, np.clip(x_init.reshape(n, n), 0, 1))
+psnr_init_good = peak_signal_noise_ratio(x, np.clip(x_init_good.reshape(n, n), 0, 1))
+psnr_init_bad = peak_signal_noise_ratio(x, np.clip(x_init_bad.reshape(n, n), 0, 1))
 
 print("=" * 60)
 print("实验3.1-1 MAP估计：后验能量分解")
@@ -132,67 +148,62 @@ print(f"  先验标准差 sigma_x = {sigma_prior:.3f}")
 print(f"  正则化参数 lambda = sigma^2/sigma_x^2 = {lam:.4f}")
 print(f"\n[后验能量分解 -ln p(x|y) = 数据项 + 正则项]")
 print(f"  {'':>15} {'数据项':>12} {'正则项':>12} {'后验能量':>12} {'PSNR':>10}")
-print(f"  {'初始点':>15} {d_init:>12.2f} {r_init:>12.2f} {E_init:>12.2f} {psnr_init:>10.2f}")
+print(f"  {'观测初始':>15} {d_init_bad:>12.2f} {r_init_bad:>12.2f} {E_init_bad:>12.2f} {psnr_init_bad:>10.2f}")
+print(f"  {'转置初始':>15} {d_init_good:>12.2f} {r_init_good:>12.2f} {E_init_good:>12.2f} {psnr_init_good:>10.2f}")
 print(f"  {'MAP估计':>15} {d_map:>12.2f} {r_map:>12.2f} {E_map:>12.2f} {psnr_map:>10.2f}")
 print(f"  {'真解':>15} {d_true:>12.2f} {r_true:>12.2f} {E_true:>12.2f} {'N/A':>10}")
-print(f"\n  [验证] MAP解的后验能量 ({E_map:.2f}) < 初始点 ({E_init:.2f})，优化有效")
-print(f"  [验证] MAP解PSNR = {psnr_map:.2f} dB，显著优于初始点 {psnr_init:.2f} dB")
+print(f"\n  [验证] MAP解的后验能量 ({E_map:.2f}) < 观测初始 ({E_init_bad:.2f})，优化有效")
+print(f"  [验证] MAP解的后验能量 ({E_map:.2f}) < 转置初始 ({E_init_good:.2f})，进一步优化")
+print(f"  [验证] MAP解PSNR = {psnr_map:.2f} dB，显著优于观测初始 {psnr_init_bad:.2f} dB 和转置初始 {psnr_init_good:.2f} dB")
+print(f"\n  [注] 观测初始代表'不做任何复原处理'，是实践中最常见的朴素基线")
 
 # ══════════════════════════════════════════════════════════
 # 4. 可视化
 # ══════════════════════════════════════════════════════════
-fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+from matplotlib import gridspec
+fig = plt.figure(figsize=(15, 10))
+# 第一行3个图，第二行2个图居中（使用5列布局实现居中）
+gs = gridspec.GridSpec(2, 5, figure=fig,
+                       width_ratios=[1, 1, 1, 1, 1])
 
-# 第一行：原始 → 观测 → MAP重建
-axes[0, 0].imshow(x, cmap='gray')
-axes[0, 0].set_title(r'原始图像 $x$')
-axes[0, 0].axis('off')
+# 第一行：原始 → 观测 → MAP重建（跨所有5列中的前3、中间、后3）
+ax1 = fig.add_subplot(gs[0, 0:2])  # 占据第0-1列
+ax1.imshow(x, cmap='gray')
+ax1.set_title(r'原始图像 $x$')
+ax1.axis('off')
 
-axes[0, 1].imshow(y.reshape(n, n), cmap='gray')
-axes[0, 1].set_title(r'模糊含噪观测 $y = Ax + \epsilon$')
-axes[0, 1].axis('off')
+ax2 = fig.add_subplot(gs[0, 1:4])  # 占据第1-3列（居中）
+ax2.imshow(y.reshape(n, n), cmap='gray')
+ax2.set_title(r'模糊含噪观测 $y = Ax + \epsilon$')
+ax2.axis('off')
 
-axes[0, 2].imshow(np.clip(x_map.reshape(n, n), 0, 1), cmap='gray')
-axes[0, 2].set_title(r'MAP估计 $\hat{x}_{\mathrm{MAP}}$' + f'\nPSNR={psnr_map:.2f}dB')
-axes[0, 2].axis('off')
+ax3 = fig.add_subplot(gs[0, 3:5])  # 占据第3-4列
+ax3.imshow(np.clip(x_map.reshape(n, n), 0, 1), cmap='gray')
+ax3.set_title(r'MAP估计 $\hat{x}_{\mathrm{MAP}}$' + f'\nPSNR={psnr_map:.2f}dB')
+ax3.axis('off')
 
-# 第二行：后验不确定性 → 能量分解 → 核心公式
-im = axes[1, 0].imshow(post_var, cmap='hot')
-axes[1, 0].set_title(r'后验方差 $\mathrm{diag}(\Sigma_{\mathrm{post}})$\n不确定性量化')
-axes[1, 0].axis('off')
-plt.colorbar(im, ax=axes[1, 0], fraction=0.046)
+# 第二行：后验不确定性 → 能量分解（居中放置）
+ax4 = fig.add_subplot(gs[1, 0:2])  # 左侧图
+im = ax4.imshow(post_var, cmap='hot')
+ax4.set_title(r'后验边缘方差 $\mathrm{diag}(\Sigma_{\mathrm{post}})$\n不确定性量化（忽略像素间相关性）')
+ax4.axis('off')
+plt.colorbar(im, ax=ax4, fraction=0.046)
 
 # 能量分解柱状图
-methods = ['初始点', 'MAP估计', '真解']
-data_terms = [d_init, d_map, d_true]
-reg_terms = [r_init, r_map, r_true]
+ax5 = fig.add_subplot(gs[1, 3:5])  # 右侧图（与左侧对称）
+methods = ['观测初始', '转置初始', 'MAP估计', '真解']
+data_terms = [d_init_bad, d_init_good, d_map, d_true]
+reg_terms = [r_init_bad, r_init_good, r_map, r_true]
 x_pos = np.arange(len(methods))
 width = 0.35
-axes[1, 1].bar(x_pos - width/2, data_terms, width, label='数据项', color='steelblue', alpha=0.8)
-axes[1, 1].bar(x_pos + width/2, reg_terms, width, label='正则项', color='seagreen', alpha=0.8)
-axes[1, 1].set_xticks(x_pos)
-axes[1, 1].set_xticklabels(methods)
-axes[1, 1].set_title(r'后验能量分解: $-\ln p(x|y) = $ 数据项 $+$ 正则项')
-axes[1, 1].legend(fontsize=9)
-axes[1, 1].grid(True, alpha=0.3, axis='y')
-
-# 核心公式
-formula_text = (
-    r'$\hat{x}_{\mathrm{MAP}} = \arg\max_x p(x|y)$'
-    '\n'
-    r'$= \arg\min_x [ -\ln p(x|y) ]$'
-    '\n\n'
-    r'$-\ln p(x|y) = \frac{1}{2\sigma^2}\|Ax-y\|^2$'
-    '\n'
-    r'$\qquad\qquad + \frac{1}{2\sigma_x^2}\|x\|^2 + \mathrm{const}$'
-    '\n\n'
-    r'$\lambda = \sigma^2 / \sigma_x^2$ (正则化参数)'
-)
-axes[1, 2].text(0.5, 0.5, formula_text, fontsize=12, ha='center', va='center',
-                transform=axes[1, 2].transAxes,
-                bbox=dict(boxstyle='round,pad=0.5', facecolor='lightyellow', alpha=0.8))
-axes[1, 2].set_title('MAP核心公式')
-axes[1, 2].axis('off')
+ax5.bar(x_pos - width/2, data_terms, width, label='数据项', color='steelblue', alpha=0.8)
+ax5.bar(x_pos + width/2, reg_terms, width, label='正则项', color='seagreen', alpha=0.8)
+ax5.set_xticks(x_pos)
+ax5.set_xticklabels(methods, rotation=15, ha='right')
+ax5.set_ylabel('能量值 (nats)')
+ax5.set_title(r'后验能量分解: $-\ln p(x|y) = $ 数据项 $+$ 正则项')
+ax5.legend(fontsize=9)
+ax5.grid(True, alpha=0.3, axis='y')
 
 plt.suptitle('实验3.1-1: MAP估计——从后验众数到优化问题', fontsize=14)
 plt.tight_layout()

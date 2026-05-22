@@ -148,7 +148,7 @@ legend_elements = [Patch(facecolor='forestgreen', alpha=0.3, edgecolor='green', 
 ax.legend(handles=legend_elements, loc='upper left', fontsize=9)
 
 #  总标题和注释 ─
-fig.suptitle('图2-1：L1 vs L2 几何解释\n为什么L1促稀疏', fontsize=15, fontweight='bold', y=0.96, linespacing=1.5)
+fig.suptitle('L1 vs L2 几何解释\n为什么L1促稀疏', fontsize=15, fontweight='bold', y=0.96, linespacing=1.5)
 
 # 底部注释（使用fig.text在整个图底部居中）
 fig.text(0.5, 0.04, 
