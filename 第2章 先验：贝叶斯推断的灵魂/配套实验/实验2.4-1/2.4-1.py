@@ -277,7 +277,7 @@ for name, p in zip(methods, psnrs_all):
 # 可视化
 # ══════════════════════════════════════════════════════════
 
-fig, axes = plt.subplots(2, 4, figsize=(18, 10))
+fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 
 # 第1行：原始 -> 退化 -> 显式先验基线
 axes[0, 0].imshow(x_true.cpu().squeeze(), cmap='gray')
@@ -292,11 +292,7 @@ axes[0, 2].imshow(x_tikh.cpu().squeeze(), cmap='gray')
 axes[0, 2].set_title(f'Tikhonov (L2显式先验)\nPSNR={psnr_tikh:.2f}dB')
 axes[0, 2].axis('off')
 
-axes[0, 3].imshow(x_tv.cpu().squeeze(), cmap='gray')
-axes[0, 3].set_title(f'TV (L1梯度显式先验)\nPSNR={psnr_tv:.2f}dB')
-axes[0, 3].axis('off')
-
-# 第2行：线性反演 -> PnP -> 收敛曲线 -> 核心公式
+# 第2行：线性反演 -> PnP -> TV
 axes[1, 0].imshow(x_lin.cpu().squeeze(), cmap='gray')
 axes[1, 0].set_title(f'线性反演\nPSNR={psnr_lin:.2f}dB')
 axes[1, 0].axis('off')
@@ -305,35 +301,15 @@ axes[1, 1].imshow(x_pnp.cpu().squeeze(), cmap='gray')
 axes[1, 1].set_title(f'PnP (隐式先验)\nPSNR={psnr_pnp:.2f}dB')
 axes[1, 1].axis('off')
 
-axes[1, 2].text(0.5, 0.5, '去噪器 = 隐式先验', fontsize=13,
-                ha='center', fontweight='bold')
-axes[1, 2].text(0.5, 0.3, 'D_tau(x_lin) 降低噪声\nprox_{tau R}(x) = D_tau(x)',
-                fontsize=11, ha='center')
-axes[1, 2].text(0.5, 0.12, '迭代PnP需更强去噪器\n(BM3D/DnCNN, 见第3章)',
-                fontsize=10, ha='center', style='italic')
+axes[1, 2].imshow(x_tv.cpu().squeeze(), cmap='gray')
+axes[1, 2].set_title(f'TV (L1梯度显式先验)\nPSNR={psnr_tv:.2f}dB')
 axes[1, 2].axis('off')
 
-axes[1, 3].text(0.5, 0.85, 'PnP核心公式', fontsize=14,
-                ha='center', fontweight='bold')
-axes[1, 3].text(0.5, 0.68, 'prox_{tau R}(x) = D_tau(x)',
-                fontsize=12, ha='center')
-axes[1, 3].text(0.5, 0.52, '去噪器 = 近端算子',
-                fontsize=12, ha='center')
-axes[1, 3].text(0.5, 0.38, 'D_tau(x) - x propto grad_x ln p(x)',
-                fontsize=11, ha='center')
-axes[1, 3].text(0.5, 0.24, '(Tweedie等式, 第5章详解)',
-                fontsize=10, ha='center', style='italic')
-axes[1, 3].text(0.5, 0.08, '去噪器 = 隐式先验,',
-                fontsize=10, ha='center', style='italic')
-axes[1, 3].text(0.5, 0.02, '无需显式定义 R(x)',
-                fontsize=10, ha='center', style='italic')
-axes[1, 3].axis('off')
-
 plt.suptitle('隐式先验 vs 显式先验：图像去模糊任务对比', fontsize=14)
-plt.tight_layout()
+plt.tight_layout(rect=[0, 0, 1, 0.98])  # 调整布局，为suptitle留出更多空间
+plt.subplots_adjust(hspace=0.175)  # 增加行间距，使两行子图之间有更多间隔
 plt.savefig(os.path.join(SAVE_DIR, '步骤1_PnP与显式先验对比.png'), dpi=150, bbox_inches='tight')
-if not SILENT_MODE:
-    plt.show()
+plt.close()
 
 # ══════════════════════════════════════════════════════════
 # 核心结论
