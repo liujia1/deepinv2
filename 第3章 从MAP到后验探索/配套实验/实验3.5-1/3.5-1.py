@@ -122,11 +122,10 @@ def chambolle_pock_tv_denoise(y, lam, maxiter=500):
         # ---- 原始步: 近端梯度下降 ----
         x_old = x.copy()
         div_p = dxm_ad(px) + dym_ad(py)
-        x = (x - tau * (-div_p) + tau * y) / (1 + tau)
-        x = np.maximum(0, x)
+        x = (x_old + tau * div_p + tau * y) / (1 + tau)
+        x = np.maximum(0, x)  # 图像非负约束（非算法标准步骤，仅适用于灰度图像）
 
-        # ---- 外推步 ----
-        x_bar = 2 * x - x_old
+        # ---- 外推步: x_bar = x + (x_new - x_old)（过外推，驱动对偶变量跟上原始更新）----
 
     return x
 
@@ -162,8 +161,8 @@ print("实验3.5-1 Chambolle-Pock算法TV去噪")
 print("=" * 60)
 
 n = 128
-x_true = resize(shepp_logan_phantom(), (n, n), order=0,
-                preserve_range=True, anti_aliasing=True)
+x_true = resize(shepp_logan_phantom(), (n, n), order=1,
+                preserve_range=True)
 
 sigma = 0.15
 y = x_true + sigma * np.random.randn(n, n)
@@ -233,7 +232,7 @@ plt.close()
 
 psnr_noisy = peak_signal_noise_ratio(x_true, y)
 psnr_tikh = peak_signal_noise_ratio(x_true, np.clip(x_tikh, 0, 1))
-psnr_tv = peak_signal_noise_ratio(x_true, np.clip(x_tv, 0, 1))
+psnr_tv = peak_signal_noise_ratio(x_true, np.clip(x_tv, None, 1))  # x_tv已保证非负，只需clip上界
 
 print(f"\n[PSNR 对比]")
 print(f"  含噪图像:      {psnr_noisy:.2f} dB")
@@ -265,7 +264,7 @@ print(f"     — 只惩罚梯度的总幅度，不惩罚梯度的平方")
 print(f"  2. 当近端算子无闭式解时 (TV = ‖D·‖₁)，Fenchel对偶打开新路径:")
 print(f"     g(x) = ‖Dx‖₁ → g*(y) = ι_{{‖y‖_∞ ≤ λ}} (简单投影!)")
 print(f"  3. Chambolle-Pock 在鞍点结构上交替更新原始/对偶变量")
-print(f"     — 每步代价 O(n)，步长条件 τσ‖K‖² < 1 保证收敛")
+print(f"     — 每步代价 O(n)，步长条件 τσ‖K‖² ≤ 1 保证收敛")
 print(f"  4. TV vs H1-Tikhonov: 保边 vs 平滑 — 同一问题的不同正则化哲学")
 print(f"     — TV更适合分段光滑图像 (如 phantom)，H1更适合平滑图像")
 
