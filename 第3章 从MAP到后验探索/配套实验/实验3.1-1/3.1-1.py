@@ -162,35 +162,36 @@ print(f"\n  [注] 观测初始代表'不做任何复原处理'，是实践中最
 # ══════════════════════════════════════════════════════════
 from matplotlib import gridspec
 fig = plt.figure(figsize=(15, 10))
-# 第一行3个图，第二行2个图居中（使用5列布局实现居中）
-gs = gridspec.GridSpec(2, 5, figure=fig,
-                       width_ratios=[1, 1, 1, 1, 1])
+# 第一行3个图，第二行2个图居中且适度分开（使用7列布局实现）
+gs = gridspec.GridSpec(2, 7, figure=fig,
+                       width_ratios=[1, 1, 1, 1, 1, 1, 1],
+                       wspace=0.3, hspace=0.3)
 
-# 第一行：原始 → 观测 → MAP重建（跨所有5列中的前3、中间、后3）
+# 第一行：原始 → 观测 → MAP重建（均匀分布）
 ax1 = fig.add_subplot(gs[0, 0:2])  # 占据第0-1列
 ax1.imshow(x, cmap='gray')
 ax1.set_title(r'原始图像 $x$')
 ax1.axis('off')
 
-ax2 = fig.add_subplot(gs[0, 1:4])  # 占据第1-3列（居中）
+ax2 = fig.add_subplot(gs[0, 2:5])  # 占据第2-4列（居中，稍宽）
 ax2.imshow(y.reshape(n, n), cmap='gray')
 ax2.set_title(r'模糊含噪观测 $y = Ax + \epsilon$')
 ax2.axis('off')
 
-ax3 = fig.add_subplot(gs[0, 3:5])  # 占据第3-4列
+ax3 = fig.add_subplot(gs[0, 5:7])  # 占据第5-6列
 ax3.imshow(np.clip(x_map.reshape(n, n), 0, 1), cmap='gray')
 ax3.set_title(r'MAP估计 $\hat{x}_{\mathrm{MAP}}$' + f'\nPSNR={psnr_map:.2f}dB')
 ax3.axis('off')
 
-# 第二行：后验不确定性 → 能量分解（居中放置）
-ax4 = fig.add_subplot(gs[1, 0:2])  # 左侧图
+# 第二行：后验不确定性 → 能量分解（居中且适度分开，中间留1列间隙）
+ax4 = fig.add_subplot(gs[1, 1:3])  # 左侧图（占据第1-2列）
 im = ax4.imshow(post_var, cmap='hot')
 ax4.set_title(r'后验边缘方差 $\mathrm{diag}(\Sigma_{\mathrm{post}})$\n不确定性量化（忽略像素间相关性）')
 ax4.axis('off')
 plt.colorbar(im, ax=ax4, fraction=0.046)
 
 # 能量分解柱状图
-ax5 = fig.add_subplot(gs[1, 3:5])  # 右侧图（与左侧对称）
+ax5 = fig.add_subplot(gs[1, 4:6])  # 右侧图（占据第4-5列，与左侧间隔1列）
 methods = ['观测初始', '转置初始', 'MAP估计', '真解']
 data_terms = [d_init_bad, d_init_good, d_map, d_true]
 reg_terms = [r_init_bad, r_init_good, r_map, r_true]
@@ -205,8 +206,8 @@ ax5.set_title(r'后验能量分解: $-\ln p(x|y) = $ 数据项 $+$ 正则项')
 ax5.legend(fontsize=9)
 ax5.grid(True, alpha=0.3, axis='y')
 
-plt.suptitle('实验3.1-1: MAP估计——从后验众数到优化问题', fontsize=14)
-plt.tight_layout()
+plt.suptitle('实验3.1-1: MAP估计——从后验众数到优化问题', fontsize=14, y=0.98)
+plt.tight_layout(pad=2.0)
 plt.savefig(os.path.join(SAVE_DIR, '步骤1_MAP后验能量分解.png'), dpi=150, bbox_inches='tight')
 plt.close()
 
