@@ -199,7 +199,7 @@ print(f"MCMC step size gamma = {gamma:.6f}")
 
 # ============================================================
 # MYULA暖启动（取自答案 Cell 14）
-# 关键：prox_{θg}^λ(x) = prox_g^{λ/θ}(x)，所以proxg参数是 λ/θ
+# 关键：prox_{θg}^λ(x) = prox_g^{λθ}(x)，所以proxg参数是 λ*θ
 # ============================================================
 X_wu = y.to(device).detach().clone()
 
@@ -213,8 +213,8 @@ for k in tqdm(range(1,warmupSteps)):
     grad_f = grad_f_x(X_wu, fix_sigma2)
 
     # define the gradient of g here (使用MY包络梯度)
-    # prox_{θg}的参数是 λ/θ，不是θ
-    lam_wu = lambda_prox / fix_theta
+    # prox_{θg}的参数是 λ*θ，不是θ
+    lam_wu = lambda_prox * fix_theta
     grad_g = fix_theta * gradg(X_wu, lam_wu, lambda_prox)
 
     # define the MYULA update here
@@ -268,7 +268,7 @@ for k in tqdm(range(1, total_iter)):
         gamma = 0.98 / (L_f + L_g)
 
         # Calculate the gradient related to g for the current theta here
-        lam = lambda_prox / theta   # proxg参数：对θ·g，prox参数是λ/θ
+        lam = lambda_prox * theta   # proxg参数：对θ·g，prox参数是λ*θ
         grad_g = theta * gradg(X, lam, lambda_prox)
 
         # Calculate the gradient related to f for the current sigma^2 here
@@ -366,7 +366,7 @@ print('\nRunning MAP reconstruction with estimated parameters...')
 x_map = y.clone()
 n_map_iter = 200
 
-lam_map = lambda_prox / theta_est
+lam_map = lambda_prox * theta_est
 L_f_map = AAT_norm / sigma2_est
 L_g_map = theta_est / lambda_prox
 gamma_map = 0.98 / (L_f_map + L_g_map)
