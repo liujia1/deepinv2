@@ -1,0 +1,350 @@
+# -*- coding: utf-8 -*-
+"""
+实验5.6-1 后验标准差与不确定性图
+对应章节：5.6 近似理论与收敛保证 -> 5.6.5 像素级不确定性：后验方差
+知识点：
+  - 后验方差估计：Var(x_i) = 1/(M-B) Σ(X_m^(i) - x_MMSE^(i))^2
+  - 高方差区域 = 信息丢失区域
+  - 低方差区域 = 数据约束强
+
+前置实验：
+  - 需要先运行实验5.5-1，生成sampling_results.npz
+
+素材来源：
+  - Mathematics.../Teaching Unit 2/labs/lab2_PnP_sol.ipynb
+    - Cell 18-20: 结果评估与可视化
+  - 实验5.3.py 不确定性量化部分
+"""
+
+import torch
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # 非交互式后端
+import matplotlib.pyplot as plt
+import os
+import sys
+
+# ====== 中文字体配置（兼容本地和Google Colab）======
+_gdrive = '/content/drive/MyDrive'
+_IN_COLAB = 'google.colab' in sys.modules
+
+if _IN_COLAB:
+    from google.colab import drive
+    if not os.path.isdir(_gdrive):
+        print("正在挂载 Google Drive...")
+        drive.mount('/content/drive')
+    SAVE_DIR = os.path.join(_gdrive, '实验5.6-1')
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+    os.makedirs(_chinese_path, exist_ok=True)
+
+    # 在Colab中自动创建chinese_font.py
+    _chinese_font_path = os.path.join(_chinese_path, 'chinese_font.py')
+    if not os.path.exists(_chinese_font_path):
+        print("正在创建中文字体配置模块...")
+        _chinese_font_code = '''# -*- coding: utf-8 -*-
+"""
+中文显示支持模块 - 兼容 Windows / Linux / Colab
+"""
+import os
+import sys
+import platform
+import warnings
+import logging
+import matplotlib.pyplot as plt
+from matplotlib.font_manager import FontManager
+
+logging.getLogger('matplotlib').setLevel(logging.ERROR)
+logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*U\\\\+2212.*")
+warnings.filterwarnings("ignore", message=".*glyph.*")
+plt.rcParams['axes.unicode_minus'] = False
+
+def _find_chinese_font():
+    candidates = []
+    if platform.system() == 'Windows':
+        candidates = ['SimHei', 'Microsoft YaHei', 'KaiTi', 'FangSong']
+    else:
+        candidates = ['WenQuanYi Micro Hei', 'WenQuanYi Zen Hei', 'Noto Sans CJK SC', 'Noto Sans CJK', 'Source Han Sans SC', 'AR PL UMing CN', 'SimHei']
+    fm = FontManager()
+    available = set(f.name for f in fm.ttflist)
+    for font in candidates:
+        if font in available:
+            return font
+    import re
+    cjk_patterns = ['cjk', 'wqy', 'noto.*cjk', 'wenquan', 'chinese', 'simhei']
+    for f in fm.ttflist:
+        name_lower = f.name.lower()
+        fname_lower = (os.path.basename(f.fname) if hasattr(f, 'fname') else '').lower()
+        for pat in cjk_patterns:
+            if re.search(pat, name_lower) or re.search(pat, fname_lower):
+                return f.name
+    return None
+
+def setup_chinese_font(save_dir=None):
+    if save_dir is None:
+        save_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
+    _cn_font = _find_chinese_font()
+    if _cn_font:
+        plt.rcParams['font.sans-serif'] = [_cn_font] + plt.rcParams.get('font.sans-serif', [])
+        plt.rcParams['font.family'] = 'sans-serif'
+        print(f"[Font] 已检测到中文字体: {_cn_font}")
+        return _cn_font
+    if platform.system() != 'Windows':
+        _font_url = 'https://github.com/jsntn/webfonts/raw/master/NotoSansSC-Regular.ttf'
+        _font_file = os.path.join(save_dir, 'NotoSansSC-Regular.ttf')
+        if os.path.exists(_font_file):
+            from matplotlib.font_manager import fontManager
+            fontManager.addfont(_font_file)
+            plt.rcParams['font.sans-serif'] = ['Noto Sans SC'] + plt.rcParams.get('font.sans-serif', [])
+            plt.rcParams['font.family'] = 'sans-serif'
+            print(f"[Font] 已加载缓存字体: Noto Sans SC")
+            return 'Noto Sans SC'
+        else:
+            try:
+                import urllib.request
+                print(f"[Font] 正在下载中文字体 NotoSansSC...")
+                urllib.request.urlretrieve(_font_url, _font_file)
+                from matplotlib.font_manager import fontManager
+                fontManager.addfont(_font_file)
+                plt.rcParams['font.sans-serif'] = ['Noto Sans SC'] + plt.rcParams.get('font.sans-serif', [])
+                plt.rcParams['font.family'] = 'sans-serif'
+                print(f"[Font] 已下载并注册中文字体: Noto Sans SC")
+                return 'Noto Sans SC'
+            except Exception as e:
+                print(f"[Font] 字体下载失败: {e}")
+    else:
+        print("[Font] 未找到中文字体")
+    return None
+
+__all__ = ['setup_chinese_font']
+'''
+        with open(_chinese_font_path, 'w', encoding='utf-8') as f:
+            f.write(_chinese_font_code)
+else:
+    try:
+        SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        SAVE_DIR = os.getcwd()
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+
+sys.path.insert(0, _chinese_path)
+try:
+    from chinese_font import setup_chinese_font
+    setup_chinese_font(save_dir=_chinese_path)
+except ImportError:
+    print("警告: chinese_font 模块未找到")
+# ========================================================
+
+np.random.seed(42)
+
+
+# ============================================================
+# 加载采样结果
+# ============================================================
+print("=" * 60)
+print("步骤1：加载采样结果")
+print("=" * 60)
+
+# 尝试从多个位置加载
+_possible_paths = [
+    os.path.join(SAVE_DIR, 'sampling_results.npz'),
+    os.path.join(os.path.dirname(SAVE_DIR), '实验5.5-1', 'sampling_results.npz'),
+]
+
+if _IN_COLAB:
+    _possible_paths.insert(0, os.path.join(_gdrive, '实验5.5-1', 'sampling_results.npz'))
+
+_data_loaded = False
+for _path in _possible_paths:
+    if os.path.exists(_path):
+        print(f"[Data] 从 {_path} 加载采样结果")
+        data = np.load(_path)
+        post_mean = data['post_mean']
+        post_var = data['post_var']
+        mc_samples = data['mc_samples']
+        x_true = data['x_true']
+        y_obs = data['y_obs']
+        _data_loaded = True
+        break
+
+if not _data_loaded:
+    print("[Error] 未找到采样结果文件 sampling_results.npz")
+    print("[Error] 请先运行实验5.5-1生成采样结果")
+    print("\n[Info] 将使用合成数据进行演示...")
+
+    # 创建合成数据
+    x_true = np.zeros((64, 64))
+    x_true[20:40, 20:40] = 1.0
+    x_true[10:20, 40:50] = 0.8
+
+    # 模拟后验统计
+    post_mean = x_true + 0.05 * np.random.randn(*x_true.shape)
+    post_var = 0.01 * np.ones_like(x_true)
+    post_var[20:40, 20:40] = 0.02  # 边缘区域不确定性更高
+
+    # 模拟样本
+    mc_samples = np.array([post_mean + np.sqrt(post_var) * np.random.randn(*post_mean.shape)
+                          for _ in range(10)])
+
+    y_obs = x_true + 0.1 * np.random.randn(*x_true.shape)
+
+print(f"后验均值形状: {post_mean.shape}")
+print(f"后验方差形状: {post_var.shape}")
+print(f"样本数量: {len(mc_samples)}")
+
+
+# ============================================================
+# 步骤2：计算后验标准差
+# ============================================================
+print("\n" + "=" * 60)
+print("步骤2：计算后验标准差")
+print("=" * 60)
+
+post_std = np.sqrt(post_var)
+
+print(f"后验标准差统计:")
+print(f"  平均值: {np.mean(post_std):.4f}")
+print(f"  最大值: {np.max(post_std):.4f}")
+print(f"  最小值: {np.min(post_std):.4f}")
+print(f"  中位数: {np.median(post_std):.4f}")
+
+
+# ============================================================
+# 步骤3：可视化不确定性
+# ============================================================
+print("\n" + "=" * 60)
+print("步骤3：可视化不确定性")
+print("=" * 60)
+
+fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+
+# 第1行：原始、观测、后验均值
+axes[0, 0].imshow(x_true, cmap='gray')
+axes[0, 0].set_title('原始图像 $x$')
+axes[0, 0].axis('off')
+
+axes[0, 1].imshow(y_obs, cmap='gray')
+axes[0, 1].set_title('含噪观测 $y$')
+axes[0, 1].axis('off')
+
+axes[0, 2].imshow(post_mean, cmap='gray', vmin=0, vmax=1)
+axes[0, 2].set_title('后验均值 $\\hat{x}_{MMSE}$')
+axes[0, 2].axis('off')
+
+# 第2行：后验标准差、直方图、高不确定性区域
+im_std = axes[1, 0].imshow(post_std, cmap='hot')
+axes[1, 0].set_title('后验标准差 $\\sqrt{\\mathrm{Var}(x|y)}$')
+axes[1, 0].axis('off')
+plt.colorbar(im_std, ax=axes[1, 0], fraction=0.046, pad=0.04)
+
+# 标准差直方图
+axes[1, 1].hist(post_std.flatten(), bins=50, color='steelblue', alpha=0.7, edgecolor='white')
+axes[1, 1].axvline(np.mean(post_std), color='red', linestyle='--', label=f'均值: {np.mean(post_std):.4f}')
+axes[1, 1].set_xlabel('后验标准差')
+axes[1, 1].set_ylabel('像素数量')
+axes[1, 1].set_title('不确定性分布')
+axes[1, 1].legend()
+axes[1, 1].grid(alpha=0.3)
+
+# 高不确定性区域标记（超过均值+1倍标准差）
+threshold = np.mean(post_std) + np.std(post_std)
+high_uncertainty = post_std > threshold
+axes[1, 2].imshow(high_uncertainty, cmap='Reds')
+axes[1, 2].set_title(f'高不确定性区域 (>{threshold:.4f})')
+axes[1, 2].axis('off')
+
+fig.suptitle('实验5.6-1 后验标准差与不确定性图', fontsize=14, y=1.02)
+plt.tight_layout()
+plt.savefig(os.path.join(SAVE_DIR, '步骤3_后验标准差与不确定性.png'), dpi=150, bbox_inches='tight')
+plt.close()
+
+print(f"\n高不确定性像素占比: {np.sum(high_uncertainty) / high_uncertainty.size * 100:.1f}%")
+
+
+# ============================================================
+# 步骤4：不确定性与重建误差的关系
+# ============================================================
+print("\n" + "=" * 60)
+print("步骤4：不确定性与重建误差的关系")
+print("=" * 60)
+
+# 计算重建误差
+error = np.abs(x_true - post_mean)
+
+fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+# 误差图
+im_err = axes[0].imshow(error, cmap='hot')
+axes[0].set_title('重建误差 $|x - \\hat{x}_{MMSE}|$')
+axes[0].axis('off')
+plt.colorbar(im_err, ax=axes[0], fraction=0.046, pad=0.04)
+
+# 散点图：不确定性 vs 误差
+axes[1].scatter(post_std.flatten()[::10], error.flatten()[::10], alpha=0.3, s=1)
+axes[1].set_xlabel('不确定性（标准差）')
+axes[1].set_ylabel('重建误差')
+axes[1].set_title('不确定性 vs 误差')
+corr = np.corrcoef(post_std.flatten(), error.flatten())[0, 1]
+axes[1].annotate(f'相关系数: $r$ = {corr:.3f}', xy=(0.05, 0.95), xycoords='axes fraction',
+                fontsize=12, bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+axes[1].grid(alpha=0.3)
+
+# 分区域统计
+# 按不确定性分位数分组
+n_bins = 5
+uncertainty_bins = np.percentile(post_std.flatten(), np.linspace(0, 100, n_bins+1))
+bin_means = []
+bin_labels = []
+for i in range(n_bins):
+    mask = (post_std >= uncertainty_bins[i]) & (post_std < uncertainty_bins[i+1])
+    if np.sum(mask) > 0:
+        bin_means.append(np.mean(error[mask]))
+        bin_labels.append(f'Q{i+1}')
+
+axes[2].bar(range(n_bins), bin_means, color='steelblue', alpha=0.7)
+axes[2].set_xlabel('不确定性分位数')
+axes[2].set_ylabel('平均重建误差')
+axes[2].set_title('分位数统计')
+axes[2].set_xticks(range(n_bins))
+axes[2].set_xticklabels(bin_labels)
+axes[2].grid(alpha=0.3, axis='y')
+
+plt.tight_layout()
+plt.savefig(os.path.join(SAVE_DIR, '步骤4_不确定性与误差关系.png'), dpi=150, bbox_inches='tight')
+plt.close()
+
+print(f"不确定性-误差相关系数: {corr:.3f}")
+print("解读: 相关系数越高，说明后验方差是可靠的误差代理指标")
+
+
+# ============================================================
+# 步骤5：Welford在线算法说明（附录）
+# ============================================================
+print("\n" + "=" * 60)
+print("附录：Welford在线算法")
+print("=" * 60)
+print("后验方差使用Welford算法在线计算，避免存储所有样本:")
+print("")
+print("递推公式:")
+print("  $\\bar{x}_k = \\bar{x}_{k-1} + (x_k - \\bar{x}_{k-1}) / k$")
+print("  $S_k = S_{k-1} + (x_k - \\bar{x}_{k-1})(x_k - \\bar{x}_k)$")
+print("  $\\widehat{\\mathrm{Var}} = S_k / (k-1)$")
+print("")
+print("优势:")
+print("  - 单次遍历，无需存储所有样本")
+print("  - O(1)存储空间")
+print("  - 数值稳定（避免大数相减）")
+
+
+# ============================================================
+# 实验总结
+# ============================================================
+print("\n" + "=" * 60)
+print("实验5.6-1 总结")
+print("=" * 60)
+print("1. 后验标准差提供像素级的不确定性度量")
+print("2. 高方差区域对应信息丢失区域（模糊核导致的频率缺失）")
+print("3. 低方差区域对应数据约束强的区域")
+print("4. 不确定性与重建误差正相关，是可靠的误差代理指标")
+print("5. Welford算法实现高效的在线统计计算")
