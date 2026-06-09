@@ -34,11 +34,11 @@ if _IN_COLAB:
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
     os.makedirs(_chinese_path, exist_ok=True)
 else:
-    _chinese_path = '.chinese'
     try:
         SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
     except NameError:
         SAVE_DIR = os.getcwd()
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 
 sys.path.insert(0, _chinese_path)
 try:
@@ -94,7 +94,8 @@ def gaussian_mixture_score(x, y):
     计算2D高斯混合的得分函数（对数概率的梯度）
     s(x,y) = ∇ log p(x,y)
     
-    使用数值梯度计算
+    使用解析梯度计算：
+    ∇log p(x) = Σ_k [w_k p_k(x) / p(x)] · (-Σ_k^{-1}(x - μ_k))
     
     参数:
         x, y: 空间坐标
@@ -102,11 +103,38 @@ def gaussian_mixture_score(x, y):
     返回:
         [∂log p/∂x, ∂log p/∂y]
     """
-    h = 1e-5
-    logp = gaussian_mixture_logprob(x, y)
-    grad_x = (gaussian_mixture_logprob(x + h, y) - logp) / h
-    grad_y = (gaussian_mixture_logprob(x, y + h) - logp) / h
-    return np.array([grad_x, grad_y])
+    # 定义两个高斯分量的参数
+    mu1 = np.array([-2., -2.])
+    mu2 = np.array([2., 2.])
+    S1 = np.array([[1., 0.3], [0.3, 1.]])
+    S2 = np.array([[1., -0.3], [-0.3, 1.]])
+    
+    # 预计算逆矩阵和行列式
+    inv_S1 = np.linalg.inv(S1)
+    inv_S2 = np.linalg.inv(S2)
+    det_S1 = np.linalg.det(S1)
+    det_S2 = np.linalg.det(S2)
+    
+    # 输入向量
+    xv = np.array([x, y])
+    
+    # 计算两个高斯分量的密度
+    def gauss_density(xv, mu, inv_S, det_S):
+        d = xv - mu
+        return np.exp(-0.5 * d @ inv_S @ d) / (2 * np.pi * np.sqrt(det_S))
+    
+    p1 = gauss_density(xv, mu1, inv_S1, det_S1)
+    p2 = gauss_density(xv, mu2, inv_S2, det_S2)
+    
+    # 总密度（等权重混合）
+    p = 0.5 * p1 + 0.5 * p2
+    
+    # 解析梯度：加权平均各分量的梯度
+    # ∇log p = Σ_k [w_k p_k / p] · (-Σ_k^{-1}(x - μ_k))
+    grad = (0.5 * p1 * (-inv_S1 @ (xv - mu1)) + 
+            0.5 * p2 * (-inv_S2 @ (xv - mu2))) / p
+    
+    return grad
 
 print("得分函数定义：")
 print("  s(x) = ∇_x log p(x)")
@@ -138,15 +166,22 @@ for i in range(X.shape[0]):
 # 可视化
 plt.figure(figsize=(15, 5))
 
-# 子图1：得分函数向量场
+# 归一化向量场（仅显示方向，用颜色编码模长）
+norm = np.sqrt(U_grid**2 + V_grid**2) + 1e-8
+U_normalized = U_grid / norm
+V_normalized = V_grid / norm
+
+# 子图1：得分函数向量场（归一化，颜色编码模长）
 plt.subplot(1, 3, 1)
-plt.quiver(X, Y, U_grid, V_grid, color='red', alpha=0.6)
+plt.quiver(X, Y, U_normalized, V_normalized, np.log1p(norm), 
+           cmap='Reds', alpha=0.7, scale=25)
 plt.scatter([-2, 2], [-2, 2], c='black', s=100, marker='x', label='众数')
 plt.xlabel('$x$')
 plt.ylabel('$y$')
-plt.title('得分函数向量场 $s(x,y) = \\nabla \\log p(x,y)$')
+plt.title('得分函数向量场 $s(x,y) = \\nabla \\log p(x,y)$\n（箭头归一化，颜色表示模长）')
 plt.legend()
 plt.grid(alpha=0.3)
+plt.colorbar(label='$\\log(1 + |s(x,y)|)$')
 
 # 子图2：概率密度等高线
 plt.subplot(1, 3, 2)
@@ -169,11 +204,12 @@ plt.grid(alpha=0.3)
 # 子图3：得分场与密度叠加
 plt.subplot(1, 3, 3)
 plt.contour(X_dense, Y_dense, Z, levels=20, cmap='viridis', alpha=0.5)
-plt.quiver(X, Y, U_grid, V_grid, color='red', alpha=0.6)
+plt.quiver(X, Y, U_normalized, V_normalized, np.log1p(norm), 
+           cmap='Reds', alpha=0.6, scale=25)
 plt.scatter([-2, 2], [-2, 2], c='black', s=100, marker='x', label='众数')
 plt.xlabel('$x$')
 plt.ylabel('$y$')
-plt.title('得分场与密度叠加')
+plt.title('得分场与密度叠加\n（箭头归一化，颜色表示模长）')
 plt.legend()
 plt.grid(alpha=0.3)
 
@@ -219,6 +255,7 @@ def ULA_2d(niter, delta, x0):
 niter = 10000
 delta = 0.1
 x0 = np.array([0.0, 0.0])
+burn_in = 2000  # 丢弃初始的burn-in阶段
 
 # 运行ULA
 samples = ULA_2d(niter, delta, x0)
@@ -226,12 +263,12 @@ samples = ULA_2d(niter, delta, x0)
 # 可视化
 plt.figure(figsize=(15, 5))
 
-# 子图1：样本散点图
+# 子图1：样本散点图（丢弃burn-in）
 plt.subplot(1, 3, 1)
-plt.scatter(samples[:, 0], samples[:, 1], s=1, alpha=0.3, c='blue')
+plt.scatter(samples[burn_in:, 0], samples[burn_in:, 1], s=1, alpha=0.3, c='blue')
 plt.xlabel('$x$')
 plt.ylabel('$y$')
-plt.title(f'ULA采样（burn-in后）\n{niter}次迭代')
+plt.title(f'ULA采样（丢弃前{burn_in}步burn-in）\n有效样本{niter-burn_in}个')
 plt.grid(alpha=0.3)
 
 # 子图2：采样轨迹
@@ -248,13 +285,14 @@ plt.grid(alpha=0.3)
 # 子图3：轨迹与得分场叠加
 plt.subplot(1, 3, 3)
 plt.contour(X_dense, Y_dense, Z, levels=20, cmap='viridis', alpha=0.3)
-plt.quiver(X, Y, U_grid, V_grid, color='red', alpha=0.3)
+plt.quiver(X, Y, U_normalized, V_normalized, np.log1p(norm), 
+           cmap='Reds', alpha=0.3, scale=25)
 plt.plot(samples[:2000, 0], samples[:2000, 1], 'g-', lw=0.8, alpha=0.7)
 plt.scatter(samples[0, 0], samples[0, 1], c='green', s=50, label='起点')
 plt.scatter(samples[-1, 0], samples[-1, 1], c='red', s=50, label='终点')
 plt.xlabel('$x$')
 plt.ylabel('$y$')
-plt.title('轨迹与得分场叠加')
+plt.title('轨迹与得分场叠加\n（箭头归一化，颜色表示模长）')
 plt.legend()
 plt.grid(alpha=0.3)
 
@@ -266,6 +304,7 @@ print("Langevin动力学机制：")
 print("  漂移项：沿得分方向'爬坡'（推向高密度区域）")
 print("  扩散项：随机'游走'（防止坍缩到众数）")
 print("  平衡：漂移力与扩散力平衡产生目标分布")
+print(f"  burn-in：丢弃前{burn_in}步，确保样本来自平稳分布")
 
 
 # ============================================================
@@ -275,14 +314,18 @@ print("\n" + "=" * 60)
 print("实验5.2-1 总结")
 print("=" * 60)
 print("1. 得分函数定义：s(x) = ∇_x log p(x)，是对数概率的梯度")
-print("2. 几何含义：")
+print("2. 解析梯度计算：")
+print("   对于高斯混合 p(x) = Σ_k w_k N(μ_k, Σ_k)")
+print("   ∇log p(x) = Σ_k [w_k p_k(x) / p(x)] · (-Σ_k^{-1}(x - μ_k))")
+print("   比数值梯度更精确，且避免了浮点精度问题")
+print("3. 几何含义：")
 print("   - 方向：指向密度增长最快的方向")
 print("   - 模长：表示密度变化的剧烈程度")
 print("   - 零点：概率密度的驻点")
-print("3. 与Langevin动力学的关系：")
+print("4. 与Langevin动力学的关系：")
 print("   - 漂移项：s(x)dt 推向高密度区域")
 print("   - 扩散项：√2 dW_t 防止坍缩")
 print("   - 两者平衡产生目标分布 p(x)")
-print("4. 得分函数天然消去归一化常数：")
+print("5. 得分函数天然消去归一化常数：")
 print("   s(x) = ∇ log p(x) = ∇ log p̃(x)")
 print("   这对贝叶斯推断至关重要")
