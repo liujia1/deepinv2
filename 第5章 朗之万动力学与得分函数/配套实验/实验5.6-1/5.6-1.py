@@ -181,7 +181,7 @@ if not _data_loaded:
     # 模拟后验统计
     post_mean = x_true + 0.05 * np.random.randn(*x_true.shape)
     post_var = 0.01 * np.ones_like(x_true)
-    post_var[20:40, 20:40] = 0.02  # 边缘区域不确定性更高
+    post_var[20:40, 20:40] = 0.02  # 目标区域内部不确定性更高
 
     # 模拟样本
     mc_samples = np.array([post_mean + np.sqrt(post_var) * np.random.randn(*post_mean.shape)
@@ -192,6 +192,18 @@ if not _data_loaded:
 print(f"后验均值形状: {post_mean.shape}")
 print(f"后验方差形状: {post_var.shape}")
 print(f"样本数量: {len(mc_samples)}")
+
+# 从样本重新估计统计量（验证采样结果的核心操作）
+post_mean_recomputed = np.mean(mc_samples, axis=0)
+post_var_recomputed = np.var(mc_samples, axis=0, ddof=1)
+
+print(f"\n[验证] 从样本重新估计的统计量:")
+print(f"  均值差异 (L2范数): {np.linalg.norm(post_mean - post_mean_recomputed):.6f}")
+print(f"  方差差异 (L2范数): {np.linalg.norm(post_var - post_var_recomputed):.6f}")
+
+# 使用重新估计的方差（教学意义：展示如何从样本计算后验统计量）
+post_var = post_var_recomputed
+print(f"\n[Info] 使用从样本重新估计的后验方差进行后续分析")
 
 
 # ============================================================
@@ -280,8 +292,12 @@ axes[0].set_title('重建误差 $|x - \\hat{x}_{MMSE}|$')
 axes[0].axis('off')
 plt.colorbar(im_err, ax=axes[0], fraction=0.046, pad=0.04)
 
-# 散点图：不确定性 vs 误差
-axes[1].scatter(post_std.flatten()[::10], error.flatten()[::10], alpha=0.3, s=1)
+# 散点图：不确定性 vs 误差（随机采样避免空间相关性偏差）
+post_std_flat = post_std.flatten()
+error_flat = error.flatten()
+n_samples_scatter = min(500, len(post_std_flat))  # 采样点数
+idx = np.random.choice(len(post_std_flat), size=n_samples_scatter, replace=False)
+axes[1].scatter(post_std_flat[idx], error_flat[idx], alpha=0.3, s=1)
 axes[1].set_xlabel('不确定性（标准差）')
 axes[1].set_ylabel('重建误差')
 axes[1].set_title('不确定性 vs 误差')
@@ -324,25 +340,6 @@ print("解读: 相关系数越高，说明后验方差是可靠的误差代理�
 
 
 # ============================================================
-# 步骤5：Welford在线算法说明（附录）
-# ============================================================
-print("\n" + "=" * 60)
-print("附录：Welford在线算法")
-print("=" * 60)
-print("后验方差使用Welford算法在线计算，避免存储所有样本:")
-print("")
-print("递推公式:")
-print("  $\\bar{x}_k = \\bar{x}_{k-1} + (x_k - \\bar{x}_{k-1}) / k$")
-print("  $S_k = S_{k-1} + (x_k - \\bar{x}_{k-1})(x_k - \\bar{x}_k)$")
-print("  $\\widehat{\\mathrm{Var}} = S_k / (k-1)$")
-print("")
-print("优势:")
-print("  - 单次遍历，无需存储所有样本")
-print("  - O(1)存储空间")
-print("  - 数值稳定（避免大数相减）")
-
-
-# ============================================================
 # 实验总结
 # ============================================================
 print("\n" + "=" * 60)
@@ -352,4 +349,3 @@ print("1. 后验标准差提供像素级的不确定性度量")
 print("2. 高方差区域对应信息丢失区域（模糊核导致的频率缺失）")
 print("3. 低方差区域对应数据约束强的区域")
 print("4. 不确定性与重建误差正相关，是可靠的误差代理指标")
-print("5. Welford算法实现高效的在线统计计算")
