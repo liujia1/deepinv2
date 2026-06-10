@@ -163,10 +163,26 @@ if not _data_loaded:
     post_mean = x_true + 0.05 * np.random.randn(*x_true.shape)
     post_var = 0.01 * np.ones_like(x_true)
     mc_samples = np.array([post_mean + np.sqrt(post_var) * np.random.randn(*post_mean.shape)
-                          for _ in range(16)])
+                          for _ in range(100)])  # 增加到100样本以提高统计可靠性
 
 print(f"后验均值形状: {post_mean.shape}")
 print(f"样本数量: {len(mc_samples)}")
+
+# 样本数警告
+if len(mc_samples) < 50:
+    print(f"\n[警告] 样本数量 {len(mc_samples)} 过少，统计估计不可靠（建议≥100）")
+
+# 从样本重新估计统计量（与5.6-1保持一致）
+post_mean_recomputed = np.mean(mc_samples, axis=0)
+post_var_recomputed = np.var(mc_samples, axis=0, ddof=1)
+
+print(f"\n[验证] 从样本重新估计的统计量:")
+print(f"  均值差异 (L2范数): {np.linalg.norm(post_mean - post_mean_recomputed):.6f}")
+print(f"  方差差异 (L2范数): {np.linalg.norm(post_var - post_var_recomputed):.6f}")
+
+# 使用重新估计的方差
+post_var = post_var_recomputed
+print(f"\n[Info] 使用从样本重新估计的后验方差进行后续分析")
 
 
 # ============================================================
@@ -178,17 +194,28 @@ print("=" * 60)
 
 post_std = np.sqrt(post_var)
 
-# 95%置信区间
+# 方法1：正态近似（假设后验为正态分布）
 z_95 = 1.96
 q_low = post_mean - z_95 * post_std
 q_high = post_mean + z_95 * post_std
 ci_width = q_high - q_low  # 置信区间宽度
 
-print(f"95%置信区间公式: $\\hat{{x}}_{{MMSE}} \\pm 1.96\\sqrt{{\\mathrm{{Var}}(x|y)}}$")
-print(f"置信区间宽度统计:")
+# 方法2：基于样本分位数（非参数方法，不假设正态）
+q_low_empirical = np.percentile(mc_samples, 2.5, axis=0)
+q_high_empirical = np.percentile(mc_samples, 97.5, axis=0)
+ci_width_empirical = q_high_empirical - q_low_empirical
+
+print(f"95%置信区间公式（正态近似）: $\\hat{{x}}_{{MMSE}} \\pm 1.96\\sqrt{{\\mathrm{{Var}}(x|y)}}$")
+print(f"\n[注意] ±1.96σ 假设后验为正态分布，是近似结果")
+print(f"       若后验非正态（如TV先验），应使用样本分位数方法")
+print(f"\n正态近似置信区间宽度统计:")
 print(f"  平均宽度: {np.mean(ci_width):.4f}")
 print(f"  最大宽度: {np.max(ci_width):.4f}")
 print(f"  最小宽度: {np.min(ci_width):.4f}")
+print(f"\n样本分位数置信区间宽度统计（非参数）:")
+print(f"  平均宽度: {np.mean(ci_width_empirical):.4f}")
+print(f"  最大宽度: {np.max(ci_width_empirical):.4f}")
+print(f"  最小宽度: {np.min(ci_width_empirical):.4f}")
 
 
 # ============================================================
@@ -307,8 +334,12 @@ if len(mc_samples) >= 2:
     axes[0].axis('off')
     plt.colorbar(im_sample_std, ax=axes[0], fraction=0.046, pad=0.04)
 
-    # 与后验标准差对比
-    axes[1].scatter(post_std.flatten()[::10], sample_std.flatten()[::10], alpha=0.3, s=1)
+    # 与后验标准差对比（随机采样避免空间相关性偏差）
+    post_std_flat = post_std.flatten()
+    sample_std_flat = sample_std.flatten()
+    n_samples_scatter = min(500, len(post_std_flat))
+    idx = np.random.choice(len(post_std_flat), size=n_samples_scatter, replace=False)
+    axes[1].scatter(post_std_flat[idx], sample_std_flat[idx], alpha=0.3, s=1)
     axes[1].plot([0, max(post_std.max(), sample_std.max())],
                 [0, max(post_std.max(), sample_std.max())], 'r--', label='y=x')
     axes[1].set_xlabel('后验标准差')

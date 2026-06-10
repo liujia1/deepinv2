@@ -99,6 +99,7 @@ else:
         SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
     except NameError:
         SAVE_DIR = os.getcwd()
+    os.makedirs(SAVE_DIR, exist_ok=True)
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 
 sys.path.insert(0, _chinese_path)
@@ -125,9 +126,9 @@ def compute_psnr(x, y):
     max_val = max(x.max(), 1.0)
     return 10 * np.log10(max_val ** 2 / mse)
 
-def compute_ssim_global(x, y):
+def compute_global_similarity(x, y):
     """
-    全局简化版SSIM计算（用于相对比较）
+    全局相似度指标（简化版，用于相对比较）
     
     注意：这不是标准的局部窗口SSIM，仅用于对比不同方法的相对性能。
     标准SSIM需要使用skimage.metrics.structural_similarity。
@@ -191,7 +192,10 @@ if not _data_loaded:
     post_mean = x_true + 0.05 * np.random.randn(*x_true.shape)
     post_var = 0.01 * np.ones_like(x_true)
     mc_samples = np.array([post_mean + np.sqrt(post_var) * np.random.randn(*post_mean.shape)
-                          for _ in range(16)])
+                          for _ in range(100)])  # 100个样本用于统计
+
+# 从样本重新估计方差（无论真实数据还是合成数据，统一重估）
+post_var = np.var(mc_samples, axis=0, ddof=1)
 
 print(f"后验均值形状: {post_mean.shape}")
 print(f"样本数量: {len(mc_samples)}")
@@ -207,27 +211,34 @@ print("=" * 60)
 # MMSE估计 = 后验均值
 x_mmse = post_mean
 
-# MAP估计 ≈ 最后一个样本（或后验均值附近的样本）
-# 在实际PnP-ULA中，MAP通常通过PnP-ADMM获得
-# 这里用最后一个样本近似MAP
-x_map = mc_samples[-1] if len(mc_samples) > 0 else post_mean
+# MAP估计说明：
+# ULA是朗之万采样算法，其样本是从后验分布中随机抽取的，
+# 每个样本都是后验的一个代表，而不是后验众数。
+# 从ULA样本中无法得到真正的MAP估计（后验众数），
+# 因为距离后验均值最近的样本本质上也趋向于后验均值本身，
+# 导致MMSE与MAP的对比失去教学意义。
+# 在实际PnP-ULA中，MAP通常通过PnP-ADMM获得。
+# 这里用含噪观测作为对比基准，展示贝叶斯推断（MMSE）相对于无正则化重建的价值。
+x_map = y_obs
+print("[注意] 此处用含噪观测代替MAP作为对比基准，展示正则化的效果")
+print("       在实际PnP-ULA中，MAP通常通过PnP-ADMM获得")
 
 # 计算质量指标
 psnr_mmse = compute_psnr(x_true, x_mmse)
 psnr_map = compute_psnr(x_true, x_map)
-ssim_mmse = compute_ssim_global(x_true, x_mmse)
-ssim_map = compute_ssim_global(x_true, x_map)
+sim_mmse = compute_global_similarity(x_true, x_mmse)
+sim_map = compute_global_similarity(x_true, x_map)
 nrmse_mmse = compute_nrmse(x_true, x_mmse)
 nrmse_map = compute_nrmse(x_true, x_map)
 
 print(f"\nMMSE估计（后验均值）:")
 print(f"  PSNR: {psnr_mmse:.2f} dB")
-print(f"  SSIM: {ssim_mmse:.4f}")
+print(f"  全局相似度: {sim_mmse:.4f} (全局近似，非标准SSIM)")
 print(f"  NRMSE: {nrmse_mmse:.4f}")
 
-print(f"\nMAP估计（最终样本）:")
+print(f"\n含噪观测（作为对比基准）:")
 print(f"  PSNR: {psnr_map:.2f} dB")
-print(f"  SSIM: {ssim_map:.4f}")
+print(f"  全局相似度: {sim_map:.4f} (全局近似，非标准SSIM)")
 print(f"  NRMSE: {nrmse_map:.4f}")
 
 
@@ -254,7 +265,7 @@ axes[0, 2].set_title(f'MMSE估计 (PSNR: {psnr_mmse:.2f}dB)')
 axes[0, 2].axis('off')
 
 axes[0, 3].imshow(x_map, cmap='gray', vmin=0, vmax=1)
-axes[0, 3].set_title(f'MAP估计 (PSNR: {psnr_map:.2f}dB)')
+axes[0, 3].set_title(f'含噪观测 (PSNR: {psnr_map:.2f}dB)')
 axes[0, 3].axis('off')
 
 # 第2行：误差图、差异图、平滑度对比
@@ -267,23 +278,35 @@ axes[1, 0].set_title('MMSE误差')
 axes[1, 0].axis('off')
 
 axes[1, 1].imshow(error_map, cmap='hot')
-axes[1, 1].set_title('MAP误差')
+axes[1, 1].set_title('含噪观测误差')
 axes[1, 1].axis('off')
 
 axes[1, 2].imshow(diff, cmap='hot')
-axes[1, 2].set_title('MMSE与MAP的差异')
+axes[1, 2].set_title('MMSE与含噪观测的差异')
 axes[1, 2].axis('off')
 
-# 平滑度对比（局部放大）
+# 平滑度对比（局部放大：MMSE vs MAP）
 h, w = x_true.shape
 zoom_size = min(32, h//2, w//2)
 zoom_region = (h//2-zoom_size//2, h//2+zoom_size//2, w//2-zoom_size//2, w//2+zoom_size//2)
 
-axes[1, 3].imshow(x_mmse[zoom_region[0]:zoom_region[1], zoom_region[2]:zoom_region[3]], cmap='gray')
-axes[1, 3].set_title('MMSE局部放大')
-axes[1, 3].axis('off')
+# 在axes[1, 3]中创建两个子图展示MMSE和MAP的局部放大
+axes[1, 3].axis('off')  # 先关闭主轴
+# 创建两个子图
+ax_mmse_zoom = axes[1, 3].inset_axes([0, 0, 0.48, 1])
+ax_map_zoom = axes[1, 3].inset_axes([0.52, 0, 0.48, 1])
 
-fig.suptitle('实验5.6-3 MAP vs MMSE综合对比', fontsize=14, y=1.02)
+ax_mmse_zoom.imshow(x_mmse[zoom_region[0]:zoom_region[1], zoom_region[2]:zoom_region[3]], cmap='gray')
+ax_mmse_zoom.set_title('MMSE', fontsize=10)
+ax_mmse_zoom.axis('off')
+
+ax_map_zoom.imshow(x_map[zoom_region[0]:zoom_region[1], zoom_region[2]:zoom_region[3]], cmap='gray')
+ax_map_zoom.set_title('含噪观测', fontsize=10)
+ax_map_zoom.axis('off')
+
+axes[1, 3].set_title('局部放大对比', fontsize=11)
+
+fig.suptitle('实验5.6-3 MMSE vs 含噪观测对比', fontsize=14, y=1.02)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤3_MAP_vs_MMSE对比.png'), dpi=150, bbox_inches='tight')
 plt.close()
@@ -321,32 +344,52 @@ print("\n" + "=" * 60)
 print("步骤5：不确定性量化的实践指导意义")
 print("=" * 60)
 
-# 创建应用场景表格
-fig, ax = plt.subplots(figsize=(12, 6))
-ax.axis('off')
+# 计算后验标准差
+post_std = np.sqrt(post_var)
 
-table_data = [
-    ['应用场景', '利用不确定性'],
-    ['医学影像重建', '高不确定性区域标记为"需医生复核"'],
-    ['遥感图像解译', '不确定性图指导采样策略——高不确定区域增加采样'],
-    ['科学计算', '不确定性量化是实验结果可信度的核心指标'],
-    ['主动学习', '选择高不确定性样本进行主动标注或重新测量'],
-]
+# 创建不确定性叠加可视化（模拟医学影像应用场景）
+fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
-table = ax.table(cellText=table_data, loc='center', cellLoc='left',
-                colWidths=[0.3, 0.7])
-table.auto_set_font_size(False)
-table.set_fontsize(11)
-table.scale(1.2, 1.8)
+# 左图：MMSE重建结果
+axes[0].imshow(x_mmse, cmap='gray', vmin=0, vmax=1)
+axes[0].set_title('MMSE重建结果')
+axes[0].axis('off')
 
-# 设置表头样式
-for i in range(2):
-    table[(0, i)].set_facecolor('#4472C4')
-    table[(0, i)].set_text_props(color='white', fontweight='bold')
+# 中图：不确定性热图
+im1 = axes[1].imshow(post_std, cmap='hot')
+axes[1].set_title('不确定性（后验标准差）')
+axes[1].axis('off')
+plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
 
-ax.set_title('不确定性量化的实践指导意义', fontsize=14, fontweight='bold', pad=20)
+# 右图：不确定性叠加 + 高不确定区域标注
+# 将不确定性归一化到[0,1]用于叠加
+uncertainty_norm = (post_std - post_std.min()) / (post_std.max() - post_std.min() + 1e-10)
+# 创建RGB叠加图
+overlay = np.zeros((*x_mmse.shape, 3))
+overlay[:, :, 0] = x_mmse  # 灰度底图
+overlay[:, :, 1] = x_mmse
+overlay[:, :, 2] = x_mmse
+# 在高不确定性区域叠加红色
+threshold = np.percentile(uncertainty_norm, 90)  # 前10%高不确定性
+high_uncertainty_mask = uncertainty_norm > threshold
+overlay[high_uncertainty_mask, 0] = 1.0  # 红色
+overlay[high_uncertainty_mask, 1] = 0.3
+overlay[high_uncertainty_mask, 2] = 0.3
+
+axes[2].imshow(overlay)
+axes[2].set_title(f'不确定性叠加（红色=高不确定区域，占{np.mean(high_uncertainty_mask)*100:.1f}%）')
+axes[2].axis('off')
+
+fig.suptitle('不确定性量化在医学影像中的应用示意', fontsize=14, y=1.02)
+plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤5_实践指导意义.png'), dpi=150, bbox_inches='tight')
 plt.close()
+
+print("\n应用场景说明:")
+print("  医学影像：高不确定性区域（红色）应标记为'需医生复核'")
+print("  遥感图像：不确定性图指导采样策略——高不确定区域增加采样")
+print("  科学计算：不确定性量化是实验结果可信度的核心指标")
+print("  主动学习：选择高不确定性样本进行主动标注或重新测量")
 
 
 # ============================================================
@@ -356,30 +399,70 @@ print("\n" + "=" * 60)
 print("步骤6：参数敏感性分析")
 print("=" * 60)
 
-# 创建参数影响表格
-fig, ax = plt.subplots(figsize=(12, 5))
-ax.axis('off')
+# 使用合成数据演示参数对不确定性估计的影响
+# 模拟不同噪声水平ε对后验方差的影响
+print("\n模拟参数敏感性实验...")
 
-param_data = [
-    ['参数', '对不确定性的影响'],
-    ['$\\varepsilon$（去噪器噪声水平）', '$\\varepsilon$越大，后验方差越大（先验约束越弱）'],
-    ['$\\delta$（步长）', '$\\delta$过小 → burn-in长 → 有效样本少 → 方差估计不稳定'],
-    ['$M$（迭代次数）', '有效样本数决定方差估计的精度'],
-]
+# 基准参数
+base_var = np.mean(post_var)  # 使用实际数据的平均方差作为基准
 
-table2 = ax.table(cellText=param_data, loc='center', cellLoc='left',
-                 colWidths=[0.35, 0.65])
-table2.auto_set_font_size(False)
-table2.set_fontsize(11)
-table2.scale(1.2, 1.8)
+# 实验1：噪声水平ε的影响（ε越大，后验方差越大）
+epsilon_values = np.array([0.01, 0.02, 0.05, 0.1, 0.2])
+# 后验方差与噪声水平的关系：var ∝ ε²（简化模型）
+var_vs_epsilon = base_var * (epsilon_values / 0.05) ** 2  # 以0.05为基准
 
-for i in range(2):
-    table2[(0, i)].set_facecolor('#4472C4')
-    table2[(0, i)].set_text_props(color='white', fontweight='bold')
+# 实验2：样本数M的影响（M越大，方差估计越稳定）
+M_values = np.array([10, 20, 50, 100, 200, 500])
+# 方差估计的标准误差 ∝ 1/√M
+std_error_vs_M = base_var * 0.5 / np.sqrt(M_values)
 
-ax.set_title('实验5.3中关键参数的不确定性影响', fontsize=14, fontweight='bold', pad=20)
+# 实验3：步长δ的影响（δ过小导致有效样本减少）
+delta_values = np.array([0.001, 0.005, 0.01, 0.05, 0.1])
+# 有效样本数与步长的关系（简化模型）
+effective_samples = 100 * delta_values / 0.01  # 以0.01为基准
+effective_samples = np.clip(effective_samples, 5, 200)  # 限制范围
+var_stability = base_var * (1 + 0.5 / np.sqrt(effective_samples))
+
+# 创建可视化
+fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+# 子图1：噪声水平ε的影响
+axes[0].plot(epsilon_values, var_vs_epsilon, 'o-', color='#2E86AB', linewidth=2, markersize=8)
+axes[0].set_xlabel('噪声水平 ε')
+axes[0].set_ylabel('平均后验方差')
+axes[0].set_title('ε对后验方差的影响（理论示意）')
+axes[0].grid(True, alpha=0.3)
+axes[0].annotate('ε↑ → 先验约束弱 → 方差↑', xy=(0.7, 0.7), xycoords='axes fraction',
+                fontsize=10, ha='center', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+# 子图2：样本数M的影响
+axes[1].plot(M_values, std_error_vs_M, 's-', color='#A23B72', linewidth=2, markersize=8)
+axes[1].set_xlabel('样本数 M')
+axes[1].set_ylabel('方差估计标准误差')
+axes[1].set_title('M对估计稳定性的影响（理论示意）')
+axes[1].grid(True, alpha=0.3)
+axes[1].annotate('M↑ → 估计更稳定', xy=(0.7, 0.7), xycoords='axes fraction',
+                fontsize=10, ha='center', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+# 子图3：步长δ的影响
+axes[2].plot(delta_values, var_stability, '^-', color='#F18F01', linewidth=2, markersize=8)
+axes[2].set_xlabel('步长 δ')
+axes[2].set_ylabel('方差估计波动')
+axes[2].set_title('δ对估计稳定性的影响（理论示意）')
+axes[2].grid(True, alpha=0.3)
+axes[2].annotate('δ过小 → 有效样本少 → 不稳定', xy=(0.25, 0.8), xycoords='axes fraction',
+                fontsize=10, ha='center', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+fig.suptitle('关键参数对不确定性估计的影响（理论示意）', fontsize=14, y=1.02)
+fig.text(0.5, 0.01, '注：以上曲线为理论模型示意，非真实实验数据', ha='center', fontsize=9, color='gray')
+plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤6_参数敏感性.png'), dpi=150, bbox_inches='tight')
 plt.close()
+
+print("\n参数敏感性结论:")
+print("  1. ε（去噪器噪声水平）: ε越大 → 先验约束越弱 → 后验方差越大")
+print("  2. M（迭代次数/样本数）: M越大 → 方差估计越稳定（标准误差 ∝ 1/√M）")
+print("  3. δ（步长）: δ过小 → burn-in长 → 有效样本少 → 估计不稳定")
 
 
 # ============================================================
