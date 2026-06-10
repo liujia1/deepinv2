@@ -302,13 +302,18 @@ for i in range(n_bins):
         bin_means.append(np.mean(error[mask]))
         bin_labels.append(f'Q{i+1}')
 
-axes[2].bar(range(n_bins), bin_means, color='steelblue', alpha=0.7)
-axes[2].set_xlabel('不确定性分位数')
-axes[2].set_ylabel('平均重建误差')
-axes[2].set_title('分位数统计')
-axes[2].set_xticks(range(n_bins))
-axes[2].set_xticklabels(bin_labels)
-axes[2].grid(alpha=0.3, axis='y')
+if len(bin_means) > 0:
+    axes[2].bar(range(len(bin_means)), bin_means, color='steelblue', alpha=0.7)
+    axes[2].set_xlabel('不确定性分位数')
+    axes[2].set_ylabel('平均重建误差')
+    axes[2].set_title('分位数统计')
+    axes[2].set_xticks(range(len(bin_means)))
+    axes[2].set_xticklabels(bin_labels)
+    axes[2].grid(alpha=0.3, axis='y')
+else:
+    axes[2].text(0.5, 0.5, '数据不足', ha='center', va='center', transform=axes[2].transAxes)
+    axes[2].set_title('分位数统计')
+    axes[2].grid(alpha=0.3)
 
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤4_不确定性与误差关系.png'), dpi=150, bbox_inches='tight')

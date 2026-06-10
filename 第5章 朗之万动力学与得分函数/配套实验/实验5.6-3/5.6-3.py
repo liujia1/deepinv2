@@ -114,6 +114,8 @@ np.random.seed(42)
 
 # ============================================================
 # 辅助函数：图像质量指标
+# 注意：这是简化版实现，用于相对比较
+# 与sampling_tools中的实现可能有数值差异
 # ============================================================
 def compute_psnr(x, y):
     """计算PSNR"""
@@ -123,8 +125,13 @@ def compute_psnr(x, y):
     max_val = max(x.max(), 1.0)
     return 10 * np.log10(max_val ** 2 / mse)
 
-def compute_ssim(x, y, window_size=7):
-    """简化版SSIM计算"""
+def compute_ssim_global(x, y):
+    """
+    全局简化版SSIM计算（用于相对比较）
+    
+    注意：这不是标准的局部窗口SSIM，仅用于对比不同方法的相对性能。
+    标准SSIM需要使用skimage.metrics.structural_similarity。
+    """
     C1 = 0.01 ** 2
     C2 = 0.03 ** 2
 
@@ -140,7 +147,10 @@ def compute_ssim(x, y, window_size=7):
 
 def compute_nrmse(x, y):
     """计算NRMSE"""
-    return np.sqrt(np.mean((x - y) ** 2)) / np.std(x)
+    std_x = np.std(x)
+    if std_x == 0:
+        return float('inf')
+    return np.sqrt(np.mean((x - y) ** 2)) / std_x
 
 
 # ============================================================
@@ -205,8 +215,8 @@ x_map = mc_samples[-1] if len(mc_samples) > 0 else post_mean
 # 计算质量指标
 psnr_mmse = compute_psnr(x_true, x_mmse)
 psnr_map = compute_psnr(x_true, x_map)
-ssim_mmse = compute_ssim(x_true, x_mmse)
-ssim_map = compute_ssim(x_true, x_map)
+ssim_mmse = compute_ssim_global(x_true, x_mmse)
+ssim_map = compute_ssim_global(x_true, x_map)
 nrmse_mmse = compute_nrmse(x_true, x_mmse)
 nrmse_map = compute_nrmse(x_true, x_map)
 

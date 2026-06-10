@@ -220,14 +220,26 @@ axes[1, 0].axis('off')
 plt.colorbar(im_width, ax=axes[1, 0], fraction=0.046, pad=0.04)
 
 # 宽度直方图
-axes[1, 1].hist(ci_width.flatten(), bins=50, color='coral', alpha=0.7, edgecolor='white')
-axes[1, 1].axvline(np.mean(ci_width), color='red', linestyle='--',
-                   label=f'均值: {np.mean(ci_width):.4f}')
-axes[1, 1].set_xlabel('置信区间宽度')
-axes[1, 1].set_ylabel('像素数量')
-axes[1, 1].set_title('宽度分布')
-axes[1, 1].legend()
-axes[1, 1].grid(alpha=0.3)
+unique_widths = np.unique(ci_width)
+if len(unique_widths) > 10:
+    n_bins = 50
+else:
+    n_bins = min(10, len(unique_widths))
+
+if n_bins > 1:
+    axes[1, 1].hist(ci_width.flatten(), bins=n_bins, color='coral', alpha=0.7, edgecolor='white')
+    axes[1, 1].axvline(np.mean(ci_width), color='red', linestyle='--',
+                       label=f'均值：{np.mean(ci_width):.4f}')
+    axes[1, 1].set_xlabel('置信区间宽度')
+    axes[1, 1].set_ylabel('像素数量')
+    axes[1, 1].set_title('宽度分布')
+    axes[1, 1].legend()
+    axes[1, 1].grid(alpha=0.3)
+else:
+    axes[1, 1].text(0.5, 0.5, f'宽度恒定：{ci_width[0,0]:.4f}', ha='center', va='center',
+                    transform=axes[1, 1].transAxes, fontsize=12)
+    axes[1, 1].set_title('宽度分布（常数）')
+    axes[1, 1].axis('off')
 
 # 高宽度区域
 threshold = np.percentile(ci_width, 90)

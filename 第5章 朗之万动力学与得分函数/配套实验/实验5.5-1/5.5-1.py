@@ -348,6 +348,18 @@ if _has_gpu and _has_sampling_tools:
     print(f"BSNR: {BSNRdb} dB")
 else:
     print("  缺少GPU或sampling_tools，跳过模糊和加噪")
+    plt.subplot(1, 2, 2)
+    # 创建一个空白图像用于显示提示
+    plt.imshow(np.ones_like(im) * 0.9, cmap='gray', vmin=0, vmax=1)
+    plt.text(0.5, 0.6, '需要GPU运行', 
+             ha='center', va='center', transform=plt.gca().transAxes,
+             fontsize=14, fontweight='bold', color='red',
+             bbox=dict(boxstyle='round,pad=0.5', facecolor='white', edgecolor='red', linewidth=2))
+    plt.text(0.5, 0.35, '请使用GPU设备\n以生成含噪+模糊观测', 
+             ha='center', va='center', transform=plt.gca().transAxes,
+             fontsize=10, color='darkred')
+    plt.title('含噪+模糊观测 $y$ (需要GPU)')
+    plt.axis('off')
 
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤1_图像与观测.png'), dpi=150)
@@ -502,10 +514,73 @@ if _has_gpu and _has_sampling_tools and _has_model:
     print(f"  PSNR: {PSNR(post_mean, x):.2f} dB")
     print(f"  SSIM: {SSIM(x, post_mean):.4f}")
 
-    # 可视化
-    plots(x, y, post_meanvar, absfouriercoeff, nrmse_values, psnr_values, ssim_values)
-    plt.savefig(os.path.join(SAVE_DIR, '步骤4_PnP-ULA结果.png'), dpi=150, bbox_inches='tight')
+    # 可视化 - 需要手动保存两个图表
+    # plots函数会创建两个图表，我们需要分别保存
+    
+    # 创建第一个图表（2行4列）
+    post_mean_numpy = post_meanvar.get_mean().detach().cpu().numpy()
+    post_var_numpy = post_meanvar.get_var().detach().cpu().numpy()
+    
+    fig1, axes1 = plt.subplots(nrows=2, ncols=4, figsize=(15, 10))
+    fig1.tight_layout(pad=.01)
+    
+    axes1[0,0].imshow(x.detach().cpu().numpy(), cmap="gray")
+    axes1[0,0].set_title('Ground truth image')
+    axes1[0,0].axis('off')
+    
+    axes1[0,1].imshow(y.detach().cpu().numpy(), cmap="gray")
+    axes1[0,1].set_title('Blurred noisy image')
+    axes1[0,1].axis('off')
+    
+    axes1[0,2].imshow(post_mean_numpy, cmap="gray")
+    axes1[0,2].set_title('x - posterior mean')
+    axes1[0,2].axis('off')
+    
+    axes1[0,3].imshow(post_var_numpy, cmap="gray")
+    axes1[0,3].set_title('x - posterior variance')
+    axes1[0,3].axis('off')
+    
+    axes1[1,0].imshow(post_mean_numpy/np.sqrt(post_meanvar.get_var().detach().cpu().numpy()), cmap="gray")
+    axes1[1,0].set_title('x - posterior mean/posterior SD')
+    axes1[1,0].axis('off')
+    
+    axes1[1,1].imshow(np.sqrt(post_var_numpy)/post_mean_numpy, cmap="gray")
+    axes1[1,1].set_title('x - Coefs of variation')
+    axes1[1,1].axis('off')
+    
+    axes1[1,2].imshow(torch.log(absfouriercoeff.get_mean()).detach().cpu().numpy())
+    axes1[1,2].set_title('Mean coefs (log-scale)')
+    axes1[1,2].axis('off')
+    
+    axes1[1,3].imshow(torch.log(absfouriercoeff.get_var()).detach().cpu().numpy())
+    axes1[1,3].set_title('Var coefs (log-scale)')
+    axes1[1,3].axis('off')
+    
+    plt.savefig(os.path.join(SAVE_DIR, '步骤4_PnP-ULA结果_图像.png'), dpi=150, bbox_inches='tight')
     plt.close()
+    
+    # 创建第二个图表（1行3列）
+    fig2, axes2 = plt.subplots(nrows=1, ncols=3, figsize=(15, 5))
+    fig2.tight_layout(pad=.01)
+    
+    axes2[0].plot(np.arange(len(nrmse_values))[::10], nrmse_values[::10], label="-- NRMSE --")
+    axes2[0].set_title('NRMSE of $X$ vs $x_{gr}$')
+    axes2[0].legend()
+    
+    axes2[1].plot(np.arange(len(psnr_values))[::10], psnr_values[::10], label="-- PSNR --")
+    axes2[1].set_title('PSNR of $X$ vs $x_{gr}$')
+    axes2[1].legend()
+    
+    axes2[2].plot(np.arange(len(ssim_values))[::10], ssim_values[::10], label="-- SSIM --")
+    axes2[2].set_title('SSIM of $X$ vs $x_{gr}$')
+    axes2[2].legend()
+    
+    plt.savefig(os.path.join(SAVE_DIR, '步骤4_PnP-ULA结果_曲线.png'), dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    print(f"\n可视化结果已保存:")
+    print(f"  - {os.path.join(SAVE_DIR, '步骤4_PnP-ULA结果_图像.png')}")
+    print(f"  - {os.path.join(SAVE_DIR, '步骤4_PnP-ULA结果_曲线.png')}")
 
     # 保存采样结果供后续实验使用
     np.savez(os.path.join(SAVE_DIR, 'sampling_results.npz'),
@@ -515,6 +590,63 @@ if _has_gpu and _has_sampling_tools and _has_model:
              x_true=x.cpu().numpy(),
              y_obs=y.cpu().numpy())
     print(f"\n采样结果已保存到: {os.path.join(SAVE_DIR, 'sampling_results.npz')}")
+else:
+    # 步骤4需要GPU但不可用时的可视化提示
+    print("\n" + "=" * 60)
+    print("步骤4：PnP-ULA采样")
+    print("=" * 60)
+    print("  缺少必要资源（GPU、sampling_tools或预训练模型）")
+    print("  无法执行PnP-ULA采样")
+    
+    # 创建第一个提示图表（2行4列，对应plots函数的第一个图表）
+    fig1, axes1 = plt.subplots(2, 4, figsize=(15, 10))
+    fig1.suptitle('PnP-ULA采样结果 (需要GPU运行)', fontsize=16, fontweight='bold', color='red')
+    
+    for ax in axes1.flat:
+        ax.imshow(np.ones((256, 256)) * 0.9, cmap='gray', vmin=0, vmax=1)
+        ax.axis('off')
+    
+    # 设置子图标题
+    titles_row1 = ['Ground truth image', 'Blurred noisy image', 'x - posterior mean', 'x - posterior variance']
+    titles_row2 = ['x - posterior mean/SD', 'x - Coefs of variation', 'Mean coefs (log)', 'Var coefs (log)']
+    
+    for i, title in enumerate(titles_row1):
+        axes1[0, i].set_title(title, fontsize=10)
+        axes1[0, i].text(0.5, 0.5, '需要GPU', 
+                        ha='center', va='center', transform=axes1[0, i].transAxes,
+                        fontsize=12, color='red', fontweight='bold')
+    
+    for i, title in enumerate(titles_row2):
+        axes1[1, i].set_title(title, fontsize=10)
+        axes1[1, i].text(0.5, 0.5, '需要GPU', 
+                        ha='center', va='center', transform=axes1[1, i].transAxes,
+                        fontsize=12, color='red', fontweight='bold')
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(SAVE_DIR, '步骤4_PnP-ULA结果_图像.png'), dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    # 创建第二个提示图表（1行3列，对应plots函数的第二个图表）
+    fig2, axes2 = plt.subplots(1, 3, figsize=(15, 5))
+    fig2.suptitle('收敛曲线 (需要GPU运行)', fontsize=14, fontweight='bold', color='red')
+    
+    titles_row3 = ['NRMSE of $X$ vs $x_{gr}$', 'PSNR of $X$ vs $x_{gr}$', 'SSIM of $X$ vs $x_{gr}$']
+    
+    for i, ax in enumerate(axes2):
+        ax.text(0.5, 0.5, '需要GPU\n才能显示\n收敛曲线', 
+                ha='center', va='center', transform=ax.transAxes,
+                fontsize=12, color='red', fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='white', edgecolor='red', linewidth=2))
+        ax.set_title(titles_row3[i], fontsize=10)
+        ax.axis('off')
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(SAVE_DIR, '步骤4_PnP-ULA结果_曲线.png'), dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    print(f"\n提示图表已保存:")
+    print(f"  - {os.path.join(SAVE_DIR, '步骤4_PnP-ULA结果_图像.png')}")
+    print(f"  - {os.path.join(SAVE_DIR, '步骤4_PnP-ULA结果_曲线.png')}")
 
 
 # ============================================================
