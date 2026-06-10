@@ -58,7 +58,7 @@ x = resize(data.camera(), (n, n))
 # 贝叶斯框架中 sigma_x 是先验分布的标准差，用全图统计量代替是一种近似。
 # 实际中 sigma_x 未知，需从含噪观测 y 估计（见下方对比）。
 x_std = np.std(x)
-DATA_RANGE = 1.0
+DATA_RANGE = x.max() - x.min()  # 使用实际动态范围，避免PSNR计算偏差
 
 sigma_noise = 0.1
 y = x + sigma_noise * np.random.randn(n, n)

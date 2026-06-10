@@ -63,15 +63,43 @@ target = np.array([2.0, 2.0, 6.0, 7.0])
 rhs = A @ target
 alpha = 1.0
 
-LH = np.array([[1, 0, -1, 0],
-               [0, 1, 0, -1]])
-LV = np.array([[1, -1, 0, 0],
+# 离散梯度算子（各向异性TV）
+# 注意: 变量名按标准约定——DH计算水平差分(同行相邻)，DV计算垂直差分(同列相邻)
+# 对于行优先排列的 2x2 图像 [[x1,x2],[x3,x4]]：
+#   水平差分: x1-x2, x3-x4  (DH)
+#   垂直差分: x1-x3, x2-x4  (DV)
+DH = np.array([[1, -1, 0, 0],
                [0, 0, 1, -1]])
+DV = np.array([[1, 0, -1, 0],
+               [0, 1, 0, -1]])
 
 def tv_cost(x_vec):
     data_fit = 0.5 * np.sum((A @ x_vec - rhs) ** 2)
-    tv = np.sum(np.abs(LH @ x_vec)) + np.sum(np.abs(LV @ x_vec))
+    tv = np.sum(np.abs(DH @ x_vec)) + np.sum(np.abs(DV @ x_vec))
     return data_fit + alpha * tv
+
+def tv_grad(x_vec):
+    """TV目标函数的次梯度（subgradient）
+    
+    数据保真项梯度: ∇(0.5*||Ax-b||^2) = A^T(Ax-b)
+    TV项次梯度: ∂||Dx||_1 = D^T · sign(Dx), 其中 sign(0)=0
+    
+    注意: TV在Dx=0处不可微，此处使用次梯度（sign(0)=0）而非经典梯度。
+    
+    重要说明: L-BFGS-B本质上是为光滑函数设计的拟牛顿法，对非光滑函数
+    没有收敛性保证。此处以次梯度代入L-BFGS-B是实践中常用的工程做法
+    （"碰巧有效"），但并非理论上正确的处理方式。严格处理TV的非光滑性
+    需使用近端算子（如ISTA/FISTA）或原始-对偶算法（如Chambolle-Pock）。
+    """
+    # 数据保真项的梯度
+    grad_data = A.T @ (A @ x_vec - rhs)
+    
+    # TV项的次梯度: D^T · sign(Dx)
+    # DH: 水平差分算子, DV: 垂直差分算子
+    grad_tv_h = DH.T @ np.sign(DH @ x_vec)
+    grad_tv_v = DV.T @ np.sign(DV @ x_vec)
+    
+    return grad_data + alpha * (grad_tv_h + grad_tv_v)
 
 # ══════════════════════════════════════════════════════════
 # 2. 暴力搜索与随机采样
@@ -87,6 +115,9 @@ print(f"TV参数: alpha = {alpha}")
 print("\n--- 方法A: 粗网格搜索 (10^4 = 1 万点) ---")
 t0 = time.time()
 n_grid = 10
+# 搜索范围 [1, 7] 基于已知观测范围设定：
+# rhs = [8, 9, 4, 13]，各像素值大致在 1~7 之间（由 target=[2,2,6,7] 决定）
+# 若改变 target，需相应调整搜索范围
 x_range = np.linspace(1, 7, n_grid)
 best_cost_grid = np.inf
 best_x_grid = None
@@ -132,7 +163,7 @@ print("\n--- 方法C: 优化求解 (scipy L-BFGS-B) ---")
 t0 = time.time()
 
 result = minimize(tv_cost, x0=[4.0, 4.0, 4.0, 4.0], method='L-BFGS-B',
-                  bounds=[(0, None)] * 4)
+                  jac=tv_grad, bounds=[(0, None)] * 4)
 x_opt = result.x
 t_opt = time.time() - t0
 print(f"优化解: x = [{x_opt[0]:.4f}, {x_opt[1]:.4f}, "
@@ -197,7 +228,7 @@ print(f"  2. 粗网格搜索 (10^4 点): 精度受网格分辨率限制，")
 print(f"     加密一倍网格 → 搜索量增至 16 倍 (维度诅咒)")
 print(f"  3. 随机采样 (10^4 点): 无系统性覆盖，精度有限")
 print(f"  4. 优化求解 (L-BFGS-B): 高效精确，")
-print(f"     但在大规模问题中 TV 的不可微性使一阶方法失效，")
+print(f"     但在大规模问题中 TV 的不可微性使平滑梯度方法（如普通梯度下降/L-BFGS）失效，")
 print(f"     需使用 Chambolle-Pock 或 ADMM 等保留非光滑结构的专用算法")
 
 print(f"\n[联系后续实验]")

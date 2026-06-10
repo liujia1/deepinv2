@@ -1,5 +1,5 @@
 """
-实验3.5-1 Chambolle-Pock算法TV去噪
+实验3.5-2 Chambolle-Pock算法TV去噪
 对应章节：3.5 TV正则化与原始-对偶算法
 知识点：TV正则化（ROF模型）的保边性；有限差分算子与离散梯度；
          Chambolle-Pock原始-对偶混合梯度算法；H1-Tikhonov vs TV对比；
@@ -125,7 +125,8 @@ def chambolle_pock_tv_denoise(y, lam, maxiter=500):
         x = (x_old + tau * div_p + tau * y) / (1 + tau)
         x = np.maximum(0, x)  # 图像非负约束（非算法标准步骤，仅适用于灰度图像）
 
-        # ---- 外推步: x_bar = x + (x_new - x_old)（过外推，驱动对偶变量跟上原始更新）----
+        # ---- 外推步: x_bar = 2*x_new - x_old（过外推，驱动对偶变量跟上原始更新）----
+        x_bar = 2 * x - x_old
 
     return x
 
@@ -157,7 +158,7 @@ def h1_tikhonov_denoise(y, lam):
 # ══════════════════════════════════════════════════════════
 
 print("=" * 60)
-print("实验3.5-1 Chambolle-Pock算法TV去噪")
+print("实验3.5-2 Chambolle-Pock算法TV去噪")
 print("=" * 60)
 
 n = 128
