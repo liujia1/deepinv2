@@ -8,17 +8,16 @@
 知识点：
   - TV-ULA（显式先验）：使用TV近端算子+Moreau包络梯度
   - PnP-ULA（隐式先验）：使用学习去噪器+Tweedie等式
-  - 结构对偶：两者形式相同 $y - c\cdot\nabla(\cdot)$，但目标不同（众数 vs 均值）
+  - 结构对偶：两者形式相同 $y - c\\cdot\\nabla(\\cdot)$，但目标不同（众数 vs 均值）
   - 温度参数：$T=0$（MAP）vs $T=1$（MMSE）
 
 运行前提：
   需要GPU和预训练RealSN-DnCNN模型
     - sampling_tools/ 已包含在当前目录
     - Pretrained_models/ 需要包含 RealSN_DnCNN_noise5.pth
-    - 若无GPU或缺少模型，步骤2-4将被跳过
+     - 若无GPU或缺少模型，步骤1-3将被跳过
 
 本实验对应5.4节第5小节"结构对偶"和第6小节"温度参数"。
-拆分自原实验5.4-1的步骤2-4。
 """
 
 import math
@@ -180,7 +179,7 @@ _local_sampling_tools = os.path.join(SAVE_DIR, 'sampling_tools')
 if os.path.exists(_local_sampling_tools):
     sys.path.insert(0, SAVE_DIR)
     try:
-        from sampling_tools import *
+        from sampling_tools import chambolle_prox_TV, load_model, blur_operators, PSNR
         _has_sampling_tools = True
     except ImportError as e:
         print(f"警告: sampling_tools 导入失败: {e}")
@@ -278,17 +277,17 @@ if not (_has_gpu and _has_sampling_tools and _has_model):
     print(f"  sampling_tools可用: {_has_sampling_tools}")
     print(f"  预训练模型可用: {_has_model}")
     print("\n  缺少必要资源，将仅运行环境信息")
-    print("  步骤2-4需要GPU和预训练模型")
+    print("  步骤1-3需要GPU和预训练模型")
     print("=" * 60)
 
 
 # ============================================================
-# 步骤2：显式先验（TV）vs 隐式先验（学习去噪器）对比
+# 步骤1：显式先验（TV）vs 隐式先验（学习去噪器）对比
 # 对应5.4节第5小节"结构对偶"
 # ============================================================
 if _has_gpu and _has_sampling_tools and _has_model:
     print("\n" + "=" * 60)
-    print("步骤2：显式先验（TV）vs 隐式先验（学习去噪器）对比")
+    print("步骤1：显式先验（TV）vs 隐式先验（学习去噪器）对比")
     print("=" * 60)
 
     # 加载图像
@@ -322,7 +321,7 @@ if _has_gpu and _has_sampling_tools and _has_model:
 
 
     # ============================================================
-    # 步骤2a：TV-ULA（显式TV先验采样）
+    # 步骤1a：TV-ULA（显式TV先验采样）
     # 使用 chambolle_prox_TV 提供TV近端，再通过Moreau包络梯度获得TV梯度
     # Moreau包络梯度: $\nabla R_\lambda(y) = (y - \mathrm{prox}_{\lambda R}(y)) / \lambda$
     # ============================================================
@@ -330,7 +329,7 @@ if _has_gpu and _has_sampling_tools and _has_model:
         """
         TV-ULA：使用TV先验的ULA采样
         TV梯度通过Moreau包络的梯度获取：
-          $\nabla \mathrm{TV}_\lambda(x) = (x - \mathrm{prox}_{\lambda \mathrm{TV}}(x)) / \lambda$
+          $\\nabla \\mathrm{TV}_\\lambda(x) = (x - \\mathrm{prox}_{\\lambda \\mathrm{TV}}(x)) / \\lambda$
         """
         X = y.clone()
         post_sum = torch.zeros_like(X)
@@ -341,7 +340,7 @@ if _has_gpu and _has_sampling_tools and _has_model:
             grad_likelihood = gradf(X, A, AT)
 
             # TV梯度（通过Moreau包络）
-            prox_tv = chambolle_prox_TV(X, device, {'lambda': lambda_tv, 'maxiter': 50})
+            prox_tv = chambolle_prox_TV(X, device, {'lambda': lambda_tv, 'maxiter': 200})
             grad_tv = (X - prox_tv) / lambda_tv  # $\nabla R_\lambda(x) = (x - \mathrm{prox}) / \lambda$
 
             # ULA更新
@@ -365,14 +364,14 @@ if _has_gpu and _has_sampling_tools and _has_model:
 
 
     # ============================================================
-    # 步骤2b：PnP-ULA（隐式学习先验采样）
+    # 步骤1b：PnP-ULA（隐式学习先验采样）
     # 使用Tweedie等式从去噪器提取得分函数
     # ============================================================
     def pnp_ula(y, A, AT, sigma, denoiser, niter, delta, eps, device):
         """
         PnP-ULA：使用学习去噪器的ULA采样
         先验得分通过Tweedie等式获取：
-          $\nabla\log p_\varepsilon(x) = (D_\varepsilon(x) - x) / \varepsilon$
+          $\\nabla\\log p_\\varepsilon(x) = (D_\\varepsilon(x) - x) / \\varepsilon$
         """
         X = y.clone()
         post_sum = torch.zeros_like(X)
@@ -387,7 +386,7 @@ if _has_gpu and _has_sampling_tools and _has_model:
 
             # ULA更新
             noise = torch.randn_like(X) * math.sqrt(2 * delta)
-            X = X - delta * (grad_likelihood - score_prior) + noise
+            X = X - delta * (grad_likelihood + score_prior) + noise
 
             # 投影到[0,1]
             X = projbox(X)
@@ -408,7 +407,7 @@ if _has_gpu and _has_sampling_tools and _has_model:
     # ============================================================
     # 运行对比实验
     # ============================================================
-    niter = 500    # 原始10000，此处缩小以便快速演示
+    niter = 500    # 演示模式，结果仅供参考；正式实验请使用 niter=2000-5000
     lambda_tv = 0.05
 
     # PnP-ULA步长
@@ -430,10 +429,10 @@ if _has_gpu and _has_sampling_tools and _has_model:
 
 
     # ============================================================
-    # 步骤3：显式先验（TV）vs 隐式先验（学习去噪器）可视化对比
+    # 步骤2：显式先验（TV）vs 隐式先验（学习去噪器）可视化对比
     # ============================================================
     print("\n" + "=" * 60)
-    print("步骤3：显式先验（TV）vs 隐式先验（学习去噪器）对比")
+    print("步骤2：显式先验（TV）vs 隐式先验（学习去噪器）对比")
     print("=" * 60)
 
     fig, axes = plt.subplots(3, 4, figsize=(20, 15))
@@ -481,7 +480,7 @@ if _has_gpu and _has_sampling_tools and _has_model:
 
     fig.suptitle('实验5.4-2 显式先验(TV) vs 隐式先验(学习去噪器)', fontsize=14, y=1.01)
     plt.tight_layout()
-    plt.savefig(os.path.join(SAVE_DIR, '步骤3_显式vs隐式先验.png'), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(SAVE_DIR, '步骤2_显式vs隐式先验.png'), dpi=150, bbox_inches='tight')
     plt.close()
 
     # 对比统计
@@ -495,11 +494,11 @@ if _has_gpu and _has_sampling_tools and _has_model:
 
 
     # ============================================================
-    # 步骤4：结构对偶性展示
+    # 步骤3：近端算子 vs 去噪器的结构对偶性展示
     # 对应5.4节第5小节"结构对偶"和第6小节"温度参数"
     # ============================================================
     print("\n" + "=" * 60)
-    print("步骤4：近端算子 vs 去噪器的结构对偶性")
+    print("步骤3：近端算子 vs 去噪器的结构对偶性")
     print("=" * 60)
 
     # 在含噪图像上分别应用TV近端算子和去噪器
@@ -542,7 +541,7 @@ if _has_gpu and _has_sampling_tools and _has_model:
 
     fig.suptitle('近端算子 vs 去噪器：结构对偶性', fontsize=14, y=1.01)
     plt.tight_layout()
-    plt.savefig(os.path.join(SAVE_DIR, '步骤4_结构对偶性.png'), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(SAVE_DIR, '步骤3_结构对偶性.png'), dpi=150, bbox_inches='tight')
     plt.close()
 
 

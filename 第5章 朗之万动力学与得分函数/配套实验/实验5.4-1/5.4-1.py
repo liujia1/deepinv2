@@ -208,45 +208,51 @@ print("\n" + "=" * 60)
 print("步骤1：TV近端算子（显式先验）演示")
 print("=" * 60)
 
-# 创建测试图像（简单形状）
-test_image = np.zeros((64, 64))
-test_image[10:20, 10:20] = 1.0  # 正方形
-test_image[40:50, 40:50] = 0.8  # 另一个正方形
-test_image_t = torch.from_numpy(test_image).float().to(device)
+if not _has_sampling_tools:
+    print("警告: sampling_tools 模块未找到，跳过步骤1")
+    print("  请确保 sampling_tools/ 目录存在且包含 chambolle_prox_TV.py")
+else:
+    # 创建测试图像（简单形状）
+    test_image = np.zeros((64, 64))
+    test_image[10:20, 10:20] = 1.0  # 正方形
+    test_image[40:50, 40:50] = 0.8  # 另一个正方形
+    test_image_t = torch.from_numpy(test_image).float().to(device)
 
-# 添加噪声
-noisy_image_t = test_image_t + 0.2 * torch.randn_like(test_image_t)
+    # 添加噪声
+    noisy_image_t = test_image_t + 0.2 * torch.randn_like(test_image_t)
 
-# 测试不同$\lambda$值的TV近端算子
-lambda_values = [0.01, 0.05, 0.1, 0.5]
+    # 测试不同lam值的TV近端算子
+    lam_values = [0.01, 0.05, 0.1, 0.5]
 
-plt.figure(figsize=(15, 4))
+    plt.figure(figsize=(15, 4))
 
-plt.subplot(1, len(lambda_values)+2, 1)
-plt.imshow(test_image, cmap='gray', vmin=0, vmax=1)
-plt.title('原始图像')
-plt.axis('off')
-
-plt.subplot(1, len(lambda_values)+2, 2)
-plt.imshow(noisy_image_t.cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-plt.title('含噪图像')
-plt.axis('off')
-
-for i, lambda_ in enumerate(lambda_values):
-    result = chambolle_prox_TV(noisy_image_t, device, {'lambda': lambda_, 'maxiter': 200})
-    plt.subplot(1, len(lambda_values)+2, i+3)
-    plt.imshow(result.cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-    plt.title(r'TV近端 ($\lambda$={})'.format(lambda_))
+    plt.subplot(1, len(lam_values)+2, 1)
+    plt.imshow(test_image, cmap='gray', vmin=0, vmax=1)
+    plt.title('原始图像')
     plt.axis('off')
 
-plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤1_TV近端算子.png'), dpi=150)
-plt.close()
+    plt.subplot(1, len(lam_values)+2, 2)
+    plt.imshow(noisy_image_t.cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+    plt.title('含噪图像')
+    plt.axis('off')
 
-print("TV近端算子说明：")
-print(r"  $\lambda$小（0.01）：近端算子接近输入，TV正则化弱，保留更多噪声")
-print(r"  $\lambda$大（0.5）：近端算子趋向于常数，TV正则化强，图像被过度平滑")
-print(r"  适当$\lambda$：平衡去噪与保真度")
+    for i, lam in enumerate(lam_values):
+        result = chambolle_prox_TV(noisy_image_t, device, {'lambda': lam, 'maxiter': 200})
+        # 设备一致性检查
+        assert result.device == noisy_image_t.device, f"设备不一致: result在{result.device}, 输入在{noisy_image_t.device}"
+        plt.subplot(1, len(lam_values)+2, i+3)
+        plt.imshow(result.cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+        plt.title(r'TV近端 ($\lambda$={})'.format(lam))
+        plt.axis('off')
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(SAVE_DIR, '步骤1_TV近端算子.png'), dpi=150)
+    plt.close()
+
+    print("TV近端算子说明：")
+    print(r"  $\lambda$小（0.01）：近端算子接近输入，TV正则化弱，保留更多噪声")
+    print(r"  $\lambda$大（0.5）：近端算子趋向于常数，TV正则化强，图像被过度平滑")
+    print(r"  适当$\lambda$：平衡去噪与保真度")
 
 # ============================================================
 # 步骤2：Moreau包络梯度验证
@@ -256,55 +262,127 @@ print("\n" + "=" * 60)
 print("步骤2：验证 Moreau包络梯度关系")
 print("=" * 60)
 
-if _has_sampling_tools:
-    lambda_tv = 0.1
+if not _has_sampling_tools:
+    print("警告: sampling_tools 模块未找到，跳过步骤2")
+else:
+    lam_tv = 0.1
 
-    # 在近端算子结果上计算残差
-    prox_result = chambolle_prox_TV(noisy_image_t, device, {'lambda': lambda_tv, 'maxiter': 200})
-    residual = noisy_image_t - prox_result  # λ∇R̂_λ(y)
-    gradient = residual / lambda_tv  # ∇R̂_λ(y)
+    # 计算近端算子
+    prox_result = chambolle_prox_TV(noisy_image_t, device, {'lambda': lam_tv, 'maxiter': 200})
+    
+    # 理论梯度：(y - prox) / λ
+    gradient_theory = (noisy_image_t - prox_result) / lam_tv
 
-    # 反向计算：y - λ∇R̂_λ(y) 应该等于 prox
-    reconstructed = noisy_image_t - lambda_tv * gradient
-
-    print(rf"  测试 $\lambda = {lambda_tv}$")
-    print(rf"  prox(y) = Chambolle_TV近端算子输出")
-    print(rf"  y - prox(y) = {torch.mean(residual.abs()).item():.4f} (平均残差绝对值)")
-    print(rf"  ∇R̂_λ(y) = (y - prox) / λ")
-    print(rf"  y - λ∇R̂_λ(y) = {torch.mean(reconstructed.abs()).item():.4f}")
-    print(rf"  ||prox - (y - λ∇R̂_λ(y))|| = {torch.norm(prox_result - reconstructed).item():.2e}")
-    is_valid = torch.norm(prox_result - reconstructed).item() < 1e-6
-    print(f"  验证结果：{is_valid}（误差 < 1e-6 则成立）")
+    # ====== 用有限差分独立估计Moreau包络的梯度 ======
+    # Moreau包络：R̂_λ(y) = R(prox(y)) + ||y - prox(y)||^2 / (2λ)
+    # 其中 R(x) = ||x||_TV 是TV范数
+    
+    def compute_tv_norm(x):
+        """计算TV范数（各向异性）"""
+        dx = torch.diff(x, dim=0)
+        dy = torch.diff(x, dim=1)
+        return torch.sum(torch.abs(dx)) + torch.sum(torch.abs(dy))
+    
+    def compute_moreau_envelope(y, lam):
+        """计算Moreau包络值 R̂_λ(y) = R(prox(y)) + ||y - prox(y)||^2 / (2λ)"""
+        prox_y = chambolle_prox_TV(y, device, {'lambda': lam, 'maxiter': 200})
+        residual = y - prox_y
+        # TV范数项：R(prox(y)) = ||prox(y)||_TV
+        tv_term = compute_tv_norm(prox_y)
+        # 保真项：||y - prox(y)||^2 / (2λ)
+        fidelity_term = 0.5 * torch.sum(residual ** 2) / lam
+        return tv_term + fidelity_term
+    
+    # 使用有限差分估计梯度（只对部分像素采样，避免计算量过大）
+    eps = 1e-4  # 有限差分步长
+    n_samples = 100  # 采样像素数
+    H, W = noisy_image_t.shape
+    
+    # 随机选择采样像素
+    torch.manual_seed(42)
+    sample_indices = torch.randint(0, H * W, (n_samples,))
+    sample_h = sample_indices // W
+    sample_w = sample_indices % W
+    
+    # 计算有限差分梯度
+    gradient_fd = torch.zeros_like(noisy_image_t)
+    errors = []
+    
+    print(f"  使用有限差分验证梯度关系（采样 {n_samples} 个像素）...")
+    print(f"  有限差分步长: ε = {eps}")
+    
+    for i in range(n_samples):
+        h, w = sample_h[i].item(), sample_w[i].item()
+        
+        # 创建扰动向量
+        e_i = torch.zeros_like(noisy_image_t)
+        e_i[h, w] = 1.0
+        
+        # 中心差分：(R̂(y + εe_i) - R̂(y - εe_i)) / (2ε)
+        moreau_plus = compute_moreau_envelope(noisy_image_t + eps * e_i, lam_tv)
+        moreau_minus = compute_moreau_envelope(noisy_image_t - eps * e_i, lam_tv)
+        grad_fd_i = (moreau_plus - moreau_minus) / (2 * eps)
+        
+        gradient_fd[h, w] = grad_fd_i
+        
+        # 计算误差
+        error_i = torch.abs(grad_fd_i - gradient_theory[h, w]).item()
+        errors.append(error_i)
+    
+    # 统计误差
+    mean_error = np.mean(errors)
+    max_error = np.max(errors)
+    rel_error = mean_error / (torch.mean(torch.abs(gradient_theory)).item() + 1e-8)
+    
+    print(rf"  测试 $\lambda = {lam_tv}$")
+    print(f"  理论梯度: (y - prox) / λ")
+    print(f"  有限差分梯度: [R̂(y+εe_i) - R̂(y-εe_i)] / (2ε)")
+    print(f"  平均绝对误差: {mean_error:.4e}")
+    print(f"  最大绝对误差: {max_error:.4e}")
+    print(f"  相对误差: {rel_error:.2%}")
+    
+    is_valid = rel_error < 0.1  # 相对误差 < 10% 则认为验证通过
+    print(f"  验证结果：{is_valid}（相对误差 < 10% 则成立）")
 
     # 可视化
-    fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 
-    axes[0].imshow(noisy_image_t.cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-    axes[0].set_title(r'含噪图像 $y$')
-    axes[0].axis('off')
+    axes[0, 0].imshow(noisy_image_t.cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+    axes[0, 0].set_title(r'含噪图像 $y$')
+    axes[0, 0].axis('off')
 
-    axes[1].imshow(prox_result.cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-    axes[1].set_title(r'$\mathrm{prox}_{\lambda\mathrm{TV}}(y)$' + '\n(MAP方向)')
-    axes[1].axis('off')
+    axes[0, 1].imshow(prox_result.cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+    axes[0, 1].set_title(r'$\mathrm{prox}_{\lambda\mathrm{TV}}(y)$' + '\n(MAP方向)')
+    axes[0, 1].axis('off')
 
-    axes[2].imshow(residual.cpu().numpy(), cmap='RdBu_r')
-    axes[2].set_title(r'$y - \mathrm{prox}(y)$' + '\n' + r'$= \lambda\cdot\nabla \hat{R}_\lambda(y)$')
-    axes[2].axis('off')
+    axes[0, 2].imshow((noisy_image_t - prox_result).cpu().numpy(), cmap='RdBu_r')
+    axes[0, 2].set_title(r'$y - \mathrm{prox}(y)$' + '\n' + r'$= \lambda\cdot\nabla \hat{R}_\lambda(y)$')
+    axes[0, 2].axis('off')
 
-    axes[3].imshow(gradient.cpu().numpy(), cmap='RdBu_r')
-    axes[3].set_title(r'$\nabla \hat{R}_\lambda(y)$' + '\n' + r'$= (y - \mathrm{prox})/\lambda$')
-    axes[3].axis('off')
+    axes[1, 0].imshow(gradient_theory.cpu().numpy(), cmap='RdBu_r')
+    axes[1, 0].set_title(r'理论梯度 $\nabla \hat{R}_\lambda(y)$' + '\n' + r'$= (y - \mathrm{prox})/\lambda$')
+    axes[1, 0].axis('off')
 
-    fig.suptitle('Moreau包络梯度验证：prox = y - λ∇R̂_λ(y)', fontsize=14, y=1.01)
+    # 有限差分梯度（只在采样点有值）
+    axes[1, 1].imshow(gradient_fd.cpu().numpy(), cmap='RdBu_r')
+    axes[1, 1].set_title(r'有限差分梯度' + '\n' + r'$(R̂(y+εe_i) - R̂(y-εe_i))/(2ε)$')
+    axes[1, 1].axis('off')
+
+    # 梯度误差图
+    error_map = torch.abs(gradient_fd - gradient_theory).cpu().numpy()
+    axes[1, 2].imshow(error_map, cmap='hot')
+    axes[1, 2].set_title(f'梯度误差图\n平均误差: {mean_error:.2e}')
+    axes[1, 2].axis('off')
+
+    fig.suptitle('Moreau包络梯度验证：有限差分 vs 理论公式', fontsize=14, y=1.01)
     plt.tight_layout()
     plt.savefig(os.path.join(SAVE_DIR, '步骤2_Moreau包络梯度验证.png'), dpi=150, bbox_inches='tight')
     plt.close()
 
     print("\n  上图说明：")
-    print(r"    左2：TV近端算子输出（MAP方向的一步结果）")
-    print(r"    左3：残差 y - prox，等于 λ∇R̂_λ(y)（Moreau包络梯度方向）")
-    print(r"    右：梯度 ∇R̂_λ(y) = (y - prox) / λ")
-    print(r"    验证：从 $y$ 沿 Moreau 包络梯度走一步，恰好到达 $\mathrm{prox}_{\lambda\mathrm{TV}}(y)$")
+    print(r"    上排：含噪图像、近端算子结果、残差（λ倍梯度）")
+    print(r"    下排：理论梯度、有限差分梯度、梯度误差图")
+    print(r"    验证：有限差分独立估计的梯度与理论公式 (y-prox)/λ 一致")
 
 
 # ============================================================
