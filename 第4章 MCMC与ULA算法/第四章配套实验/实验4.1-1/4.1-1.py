@@ -55,9 +55,9 @@ except ImportError:
     print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
 # ========================================================
 
-# 为每个步骤使用独立的 RNG
-rng1 = np.random.default_rng(42)
-rng2 = np.random.default_rng(123)
+# 为每个步骤使用独立的 RNG（注意：monte_carlo_integral 内部仍使用全局 np.random，
+# 步骤1、2 共享全局 RNG 状态；步骤3 使用 rng3 独立 RNG）
+# 若要步骤间完全独立，需给 monte_carlo_integral 增加 rng 参数
 rng3 = np.random.default_rng(456)
 
 # ══════════════════════════════════════════════════════════
@@ -91,8 +91,7 @@ def trapezoidal_integral_nd(func, bounds, n_points_per_dim):
         bounds: [(a1, b1), ..., (ad, bd)] 积分边界
         n_points_per_dim: 每维离散点数
 
-    返回:
-        积分近似值
+    每维的权重向量为 [0.5, 1, 1, ..., 1, 0.5]，总权重为各维权重向量的张量积
     """
     d = len(bounds)
     grids = [np.linspace(b[0], b[1], n_points_per_dim) for b in bounds]
@@ -104,16 +103,14 @@ def trapezoidal_integral_nd(func, bounds, n_points_per_dim):
 
     h = (bounds[0][1] - bounds[0][0]) / (n_points_per_dim - 1)
 
-    # 多维梯形法则：边缘点权重为 1，内部点权重为 2^d
-    weights = np.ones([n_points_per_dim] * d)
-    for axis in range(d):
-        edge_mask = np.ones([n_points_per_dim] * d, dtype=bool)
-        slices = [slice(None)] * d
-        slices[axis] = slice(1, -1)
-        edge_mask[tuple(slices)] = False
-        weights = np.where(edge_mask, weights, weights * 2)
+    # 多维梯形法则：各维权重向量为 [0.5, 1, 1, ..., 1, 0.5]，总权重为张量积
+    w1d = np.ones(n_points_per_dim)
+    w1d[0] = w1d[-1] = 0.5
+    W = w1d.copy()
+    for _ in range(d - 1):
+        W = np.outer(W, w1d).reshape([-1])
 
-    integral = (h ** d) * np.sum(values * weights) / (2 ** d)
+    integral = (h ** d) * np.dot(values.flatten(), W.flatten())
     return integral
 
 
@@ -170,8 +167,13 @@ print("-" * 60)
 # 解析解: I_d = d/3
 
 def h_squared(samples):
-    """被积函数: sum(x_i^2)"""
+    """被积函数: sum(x_i^2)，输入为 (M, d) 数组"""
     return np.sum(samples ** 2, axis=1)
+
+
+def h_squared_point(x):
+    """被积函数点版本: sum(x_i^2)，输入为 1D 向量（用于 trapezoidal_integral_nd）"""
+    return np.sum(x ** 2)
 
 # 测试维数
 dimensions = [1, 2, 3, 4, 5]
@@ -191,7 +193,7 @@ for d in dimensions:
     # 梯形法则
     start = time.time()
     try:
-        trap_result = trapezoidal_integral_nd(lambda x: np.sum(x**2), [(0, 1)] * d, n_points)
+        trap_result = trapezoidal_integral_nd(h_squared_point, [(0, 1)] * d, n_points)
         trap_error = abs(trap_result - true_value)
         trap_time = time.time() - start
     except MemoryError:
@@ -204,7 +206,7 @@ for d in dimensions:
 
     # Monte Carlo
     start = time.time()
-    mc_result, mc_std = monte_carlo_integral(h_squared, d, M_mc)
+    mc_result, mc_std = monte_carlo_integral(h_squared, d, M_mc, bounds=[(0, 1)] * d)
     mc_error = abs(mc_result - true_value)
     mc_time = time.time() - start
 
@@ -274,7 +276,7 @@ for d in dimensions_test:
     for M in M_values:
         trial_errors = []
         for _ in range(n_repeats):
-            mc_result, mc_std = monte_carlo_integral(h_squared, d, M)
+            mc_result, mc_std = monte_carlo_integral(h_squared, d, M, bounds=[(0, 1)] * d)
             trial_errors.append(abs(mc_result - true_value))
         errors_for_M.append(np.mean(trial_errors))
         std_errors_for_M.append(np.std(trial_errors))
@@ -294,9 +296,16 @@ for idx, d in enumerate(dimensions_test):
                    linewidth=2, markersize=6, label=rf'$d={d}$')
 
 # 理论参考线: O(1/√M)
-M_ref = np.array(M_values)
-ref_error = results[1]['errors'][0] * np.sqrt(M_values[0]) / np.sqrt(M_ref)
-axes[0].loglog(M_ref, ref_error, 'k--', linewidth=1.5, label=r'$O(1/\sqrt{M})$')
+# 方差推导：对于 h(x)=sum(x_i^2)，X~U[0,1]^d
+#   E[x^2] = integral_0^1 x^2 dx = 1/3
+#   E[x^4] = integral_0^1 x^4 dx = 1/5
+#   Var(x^2) = E[x^4] - (E[x^2])^2 = 1/5 - 1/9 = 4/45
+#   Var(h) = d * Var(x^2) = 4d/45
+# 因此误差 ~ sqrt(Var/M) = sqrt(4d/45) / sqrt(M)
+# 这里使用 d=1 的情况作为参考：Var(h) = 4/45
+var_h_1d = 4.0 / 45.0
+ref_error = np.sqrt(var_h_1d / np.array(M_values))
+axes[0].loglog(M_values, ref_error, 'k--', linewidth=1.5, label=r'$O(1/\sqrt{M})$')
 
 axes[0].set_xlabel(r'样本数 $M$', fontsize=12)
 axes[0].set_ylabel(r'绝对误差', fontsize=12)
@@ -351,16 +360,15 @@ print(r"  先验: p(x) = N(0, \sigma_x^2 I)")
 print(r"  后验: p(x|y) = p(y|x)p(x) / p(y)")
 print("")
 
-# 设置问题
+# 设置问题（使用独立的 RNG3 以保持步骤2的独立性）
 d_demo = 50  # 维数
 sigma = 0.1
 sigma_x = 1.0
 
 # 生成真实信号和观测
-np.random.seed(123)
-x_true = np.random.randn(d_demo)
-A = np.random.randn(d_demo, d_demo) / np.sqrt(d_demo)  # 随机矩阵
-y = A @ x_true + sigma * np.random.randn(d_demo)
+x_true = rng3.standard_normal(d_demo)
+A = rng3.standard_normal((d_demo, d_demo)) / np.sqrt(d_demo)  # 随机矩阵
+y = A @ x_true + sigma * rng3.standard_normal(d_demo)
 
 # 尝试用 Monte Carlo 估计 p(y)
 # p(y) = integral p(y|x) p(x) dx
@@ -379,21 +387,17 @@ def log_joint(x, y, A, sigma, sigma_x):
     """联合对数密度 log p(y,x) = log p(y|x) + log p(x)"""
     return log_likelihood(x, y, A, sigma) + log_prior(x, sigma_x)
 
-# 尝试估计 p(y) 的困难
-print("尝试估计归一化常数 p(y):")
-print(f"  维数 d = {d_demo}")
-print("")
-
 # 方法1：直接 Monte Carlo（效率极低）
 M_test = 100000
-log_joint_values = np.zeros(M_test)
-for i in range(M_test):
-    x_sample = sigma_x * np.random.randn(d_demo)
-    log_joint_values[i] = log_joint(x_sample, y, A, sigma, sigma_x)
+# 向量化采样和计算
+X_samples = sigma_x * rng3.standard_normal((M_test, d_demo))  # (M, d)
+residuals = y[np.newaxis, :] - X_samples @ A.T  # (M, d): y - Ax for each sample
+log_likelihoods = -0.5 * np.sum(residuals ** 2, axis=1) / sigma ** 2  # (M,)
 
-# log p(y) = log integral exp(log_joint(x)) dx
-# 使用 log-sum-exp 技巧
-log_py_estimate = np.log(np.mean(np.exp(log_joint_values - np.max(log_joint_values)))) + np.max(log_joint_values)
+# log p(y) = log integral p(y|x) p(x) dx ≈ log E_{p(x)}[p(y|x)]
+# 从先验 p(x)=N(0, sigma_x^2 I) 采样，估计 p(y) = E_{p(x)}[p(y|x)]
+# 使用 log-sum-exp 技巧计算 log(mean(exp(log_likelihoods)))
+log_py_estimate = np.log(np.mean(np.exp(log_likelihoods - np.max(log_likelihoods)))) + np.max(log_likelihoods)
 
 print(f"  直接 Monte Carlo 估计 log p(y):")
 print(f"    样本数 M = {M_test}")
@@ -402,9 +406,10 @@ print(f"    问题: 方差极大，估计不可靠")
 print("")
 
 # 方法2：对于这个简单问题，p(y) 有解析解
-# p(y) = N(y; 0, A A^T sigma_x^2 + sigma^2 I)
-Sigma_y = sigma_x ** 2 * (A @ A.T) + sigma ** 2 * np.eye(d_demo)
-log_py_exact = -0.5 * (d_demo * np.log(2 * np.pi) + np.log(np.linalg.det(Sigma_y)) + y @ np.linalg.solve(Sigma_y, y))
+# p(y) = N(y; 0, sigma_x^2 A A^T + sigma^2 I)
+# 注意：线性高斯问题可解析求解，此处用其作为基准验证 MC 估计
+_, logdet = np.linalg.slogdet(sigma_x ** 2 * (A @ A.T) + sigma ** 2 * np.eye(d_demo))
+log_py_exact = -0.5 * (d_demo * np.log(2 * np.pi) + logdet + y @ np.linalg.solve(sigma_x ** 2 * (A @ A.T) + sigma ** 2 * np.eye(d_demo), y))
 
 print(f"  解析解 log p(y) = {log_py_exact:.4f}")
 print(f"  Monte Carlo 误差 = {abs(log_py_estimate - log_py_exact):.4f}")
@@ -418,9 +423,11 @@ print("  3. 没有归一化常数，无法使用逆CDF采样")
 print("  → 这正是 MCMC 方法的出发点！")
 
 # 绘图：log p(y) 估计的困难
+# 注意：线性高斯问题可解析求解，此处用于对照验证 MC 估计的方差
+# 实际困难来自非线性 A 或非高斯先验，此时无解析解
 fig, ax = plt.subplots(1, 1, figsize=(8, 5))
 
-# 不同样本数下的估计方差
+# 不同样本数下的估计方差（向量化版本）
 M_range = [1000, 5000, 10000, 50000]
 estimates = []
 stds = []
@@ -428,12 +435,11 @@ stds = []
 for M in M_range:
     trial_estimates = []
     for trial in range(5):  # 减少试验次数以加速
-        log_vals = np.zeros(M)
-        for i in range(M):
-            x_sample = sigma_x * np.random.randn(d_demo)
-            log_vals[i] = log_joint(x_sample, y, A, sigma, sigma_x)
-        log_py = np.log(np.mean(np.exp(log_vals - np.max(log_vals)))) + np.max(log_vals)
-        trial_estimates.append(log_py)
+        X_trial = sigma_x * rng3.standard_normal((M, d_demo))
+        res_trial = y[np.newaxis, :] - X_trial @ A.T
+        ll_trial = -0.5 * np.sum(res_trial ** 2, axis=1) / sigma ** 2
+        log_py_trial = np.log(np.mean(np.exp(ll_trial - np.max(ll_trial)))) + np.max(ll_trial)
+        trial_estimates.append(log_py_trial)
     estimates.append(np.mean(trial_estimates))
     stds.append(np.std(trial_estimates))
     print(f"  M={M}: 估计值={estimates[-1]:.2f}, 标准差={stds[-1]:.2f}")
