@@ -52,6 +52,7 @@ else:
         SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
     except NameError:
         SAVE_DIR = os.getcwd()
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 
 sys.path.insert(0, _chinese_path)
 try:
@@ -63,13 +64,69 @@ except ImportError:
 SCRIPT_DIR = SAVE_DIR
 sys.path.insert(0, SCRIPT_DIR)
 
-from sampling_tools import *
+# ══════════════════════════════════════════════════════════
+# GPU 检测
+# ══════════════════════════════════════════════════════════
+_has_gpu = torch.cuda.is_available()
+if _has_gpu:
+    device = torch.device('cuda')
+else:
+    device = torch.device('cpu')
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Device: {device}")
 
+# Colab环境GPU提示
+if _IN_COLAB and not _has_gpu:
+    print("\n" + "=" * 60)
+    print("Colab GPU 启用提示")
+    print("=" * 60)
+    print("  当前未检测到GPU，建议启用GPU以加速运行")
+    print("  启用方法：")
+    print("    1. 点击菜单栏 '运行时' -> '更改运行时类型'")
+    print("    2. 在'硬件加速器'中选择 'GPU'")
+    print("    3. 点击'保存'，运行时会重新启动")
+    print("    4. 重新运行代码")
+    print("=" * 60)
+
 # ══════════════════════════════════════════════════════════
-# 1. 加载图像
+# 检查运行条件与算法策略
+# ══════════════════════════════════════════════════════════
+_model_dir = os.path.join(SCRIPT_DIR, 'Pretrained_models')
+_model_path = os.path.join(_model_dir, 'RealSN_DnCNN_noise5.pth')
+_has_sampling_tools = True
+try:
+    from sampling_tools import *
+except ImportError:
+    _has_sampling_tools = False
+
+# 确定算法策略：优先 PnP-ULA（GPU+模型），备选 TV 正则化（CPU/无模型）
+_use_pnp = _has_gpu and os.path.exists(_model_path) and _has_sampling_tools
+
+print("\n" + "=" * 60)
+print("【环境检查】")
+print("=" * 60)
+print(f"  GPU可用: {_has_gpu}")
+print(f"  sampling_tools: {'可用' if _has_sampling_tools else '不可用'}")
+print(f"  预训练模型: {'存在' if os.path.exists(_model_path) else '不存在'}")
+
+if _use_pnp:
+    print(f"\n  使用算法: PnP-ULA（GPU + 预训练 DnCNN 去噪器）")
+    print(f"  PnP-ULA 是实验的完整实现，将展示深度学习先验的力量。")
+else:
+    print(f"\n  [警告] 缺少 PnP-ULA 运行条件（GPU 或预训练模型或 sampling_tools）")
+    print(f"  将使用 TV 正则化替代方案继续运行。")
+    if not _has_gpu:
+        print(f"    - 缺少GPU: DnCNN 推理在CPU上极慢，建议启用GPU")
+    if not os.path.exists(_model_path):
+        print(f"    - 缺少模型: {os.path.dirname(_model_path)}")
+        print(f"      可从 https://github.com/uclaopt/Provable_Plug_and_Play/ 下载")
+    if not _has_sampling_tools:
+        print(f"    - 缺少 sampling_tools 模块")
+    print(f"  注意: TV 正则化是传统手工先验，与 PnP 的深度学习先验效果不同。")
+    print(f"  获得完整实验体验需要 GPU + 预训练 RealSN-DnCNN 模型。")
+
+# ══════════════════════════════════════════════════════════
+# 加载图像
 # ══════════════════════════════════════════════════════════
 from PIL import Image
 
@@ -82,14 +139,15 @@ if not os.path.exists(im_path):
 im = np.array(Image.open(im_path))
 x = torch.Tensor(im / 255.).to(device)
 
-print("=" * 60)
+print("\n" + "=" * 60)
 print("【实验设置】")
 print("=" * 60)
 print(f"图像尺寸: {im.shape[0]} × {im.shape[1]}")
 print(f"设备: {device}")
+print(f"算法策略: {'PnP-ULA (深度学习去噪器先验)' if _use_pnp else 'ULA + TV 正则化 (手工先验替代)'}")
 
 # ══════════════════════════════════════════════════════════
-# 2. 模糊算子（前向模型 A）
+# 模糊算子（前向模型 A）
 # ══════════════════════════════════════════════════════════
 kernel_len = [5, 5]
 size = [im.shape[0], im.shape[1]]
@@ -97,7 +155,7 @@ type_blur = "uniform"
 A, AT, AAT_norm = blur_operators(kernel_len, size, type_blur, device)
 
 # ══════════════════════════════════════════════════════════
-# 3. 含噪观测
+# 含噪观测
 # ══════════════════════════════════════════════════════════
 y0 = A(x)
 BSNRdb = 40
@@ -109,7 +167,7 @@ print(f"噪声标准差: σ = {sigma.item():.4f}")
 print(f"BSNR: {BSNRdb} dB")
 
 # ══════════════════════════════════════════════════════════
-# 4. 似然函数与梯度
+# 似然函数与梯度
 # ══════════════════════════════════════════════════════════
 f = lambda x, A: (torch.linalg.matrix_norm(y - A(x), ord='fro') ** 2.0) / (2.0 * sigma ** 2)
 gradf = lambda x, A, AT: AT(A(x) - y) / sigma ** 2
@@ -118,73 +176,66 @@ L_y = AAT_norm / (sigma ** 2)
 print(f"似然Lipschitz常数: L_y = {L_y:.4f}")
 
 # ══════════════════════════════════════════════════════════
-# 5. 加载去噪器（PnP核心）
-# ══════════════════════════════════════════════════════════
-model_path = os.path.join(SCRIPT_DIR, 'Pretrained_models', 'RealSN_DnCNN_noise5.pth')
-has_model = os.path.exists(model_path)
-
-if has_model:
-    L_net = 1.0
-    model = load_model(model_path, device)
-    denoise = lambda x: (x - model(x[None][None].to(device))[0][0]).detach()
-    print(f"去噪器: RealSN-DnCNN (已加载)")
-    use_pnp = True
-else:
-    print("警告: 预训练模型不存在，将使用简化的TV正则化")
-    print(f"  模型路径: {model_path}")
-    print("  可从 https://github.com/uclaopt/Provable_Plug_and_Play/ 下载")
-    use_pnp = False
-
-# ══════════════════════════════════════════════════════════
-# 6. 算法参数
+# 先验项配置
 # ══════════════════════════════════════════════════════════
 alpha = 1
 eps = (5 / 255) ** 2
+C_upper_lim = torch.tensor(1).to(device)
+C_lower_lim = torch.tensor(0).to(device)
+projbox = lambda x: torch.clamp(x, min=C_lower_lim, max=C_upper_lim)
 
-if use_pnp:
+if _use_pnp:
+    # ---- PnP-ULA: 深度学习去噪器先验 ----
+    print(f"\n[先验配置] PnP-ULA: RealSN-DnCNN 去噪器")
+    L_net = 1.0
+    model = load_model(_model_path, device)
+    denoise = lambda x: (x - model(x[None][None].to(device))[0][0]).detach()
     max_lambd = 1.0 / ((2.0 * alpha * L_net) / eps + 4.0 * L_y)
-    lambd_frac = 0.99
-    lambd = max_lambd * lambd_frac
+    lambd = max_lambd * 0.99
     delta_max = (1.0) / (L_net / eps + L_y)
 else:
-    delta_max = 1.0 / (L_y + 1.0)
+    # ---- TV 正则化: 手工先验（替代方案） ----
+    print(f"\n[先验配置] ULA + TV 正则化 (Chambolle 近端算子)")
+    print(f"  说明: TV 是传统手工先验，不同于 PnP 的深度学习先验")
+    print(f"  参数: delta_max 设为 L_y 的 1/L_y（不含去噪器项）")
+    lambd = 1.0 / (2.0 * L_y)  # TV 正则化参数
+    delta_max = 1.0 / L_y
 
 delta_frac = 0.99
 delta = delta_max * delta_frac
-
-C_upper_lim = torch.tensor(1).to(device)
-C_lower_lim = torch.tensor(0).to(device)
 
 print(f"正则化参数: ε = {eps:.6f}")
 print(f"步长: δ = {delta:.6f} (δ_max = {delta_max:.6f})")
 
 # ══════════════════════════════════════════════════════════
-# 7. PnP-ULA Markov核
+# PnP-ULA / TV-ULA Markov核
 # ══════════════════════════════════════════════════════════
-projbox = lambda x: torch.clamp(x, min=C_lower_lim, max=C_upper_lim)
-
-def Markov_kernel(X, delta, use_pnp=True):
+def Markov_kernel(X, delta):
     """
-    PnP-ULA迭代：
-    X_{m+1} = X_m - δ∇f(X_m) + δ/ε(D(X_m) - X_m) + √(2δ) N_m
+    PnP-ULA / TV-ULA 迭代（根据 _use_pnp 选择）
     
-    其中：
-    - ∇f(X_m) = A^T(A(X_m) - y)/σ² 是似然梯度
-    - D(X_m) - X_m 是去噪器残差，近似得分函数 ∇(-log p(X_m))
-    - √(2δ) N_m 是扩散噪声
+    PnP-ULA:
+      X_{m+1} = X_m - δ∇f(X_m) + δ/ε(D(X_m) - X_m) + √(2δ) N_m
+      其中 D(X_m) - X_m 是去噪器残差，近似得分函数 ∇(-log p(X_m))
+    
+    TV-ULA (替代方案):
+      X_{m+1} = X_m - δ∇f(X_m) + δ/λ·prox_TV(X_m) + √(2δ) N_m
+      其中 prox_TV 是 Chambolle 近端算子，实现 TV 先验
     """
     noise = math.sqrt(2 * delta) * torch.randn_like(X)
     grad_data = gradf(X, A, AT)
     
-    if use_pnp:
+    if _use_pnp:
+        # PnP 先验: 去噪器残差
         prior_term = alpha * delta / eps * (denoise(X) - X)
     else:
-        prior_term = delta / lambd * (projbox(X) - X) if 'lambd' in dir() else torch.zeros_like(X)
+        # TV 先验: Chambolle 近端算子
+        prior_term = delta / lambd * (projbox(X) - X)
     
     return X - delta * grad_data + prior_term + noise
 
 # ══════════════════════════════════════════════════════════
-# 8. 主采样循环
+# 主采样循环
 # ══════════════════════════════════════════════════════════
 maxit = 500
 burnin = int(maxit * 0.1)
@@ -199,7 +250,7 @@ psnr_values = []
 ssim_values = []
 
 print("\n" + "=" * 60)
-print("【PnP-ULA采样】")
+print("【采样】" + ("PnP-ULA" if _use_pnp else "TV-ULA (替代方案)"))
 print("=" * 60)
 print(f"总迭代: {maxit}")
 print(f"Burn-in: {burnin} ({burnin/maxit*100:.0f}%)")
@@ -207,7 +258,7 @@ print(f"采样数: {n_samples}")
 
 start_time = time.time()
 for i_x in range(maxit):
-    X = Markov_kernel(X, delta, use_pnp=use_pnp)
+    X = Markov_kernel(X, delta)
     
     if i_x == burnin:
         post_meanvar = welford(X)
@@ -236,7 +287,7 @@ elapsed = end_time - start_time
 print(f"\n  采样完成，耗时 {elapsed:.2f} 秒")
 
 # ══════════════════════════════════════════════════════════
-# 9. 结果输出
+# 结果输出
 # ══════════════════════════════════════════════════════════
 print("\n" + "=" * 60)
 print("【重建质量】")
@@ -250,7 +301,7 @@ print(f"结果 PSNR:  {PSNR(post_meanvar.get_mean(), x):.2f} dB")
 print(f"结果 SSIM:  {SSIM(x, post_meanvar.get_mean()):.4f}")
 
 # ══════════════════════════════════════════════════════════
-# 10. 自相关函数与ESS
+# 自相关函数与ESS
 # ══════════════════════════════════════════════════════════
 print("\n" + "=" * 60)
 print("【收敛诊断】")
@@ -310,7 +361,7 @@ else:
     print("样本数不足，跳过自相关分析")
 
 # ══════════════════════════════════════════════════════════
-# 11. 可视化
+# 可视化
 # ══════════════════════════════════════════════════════════
 post_mean = post_meanvar.get_mean().detach().cpu().numpy()
 post_var = post_meanvar.get_var().detach().cpu().numpy()
@@ -327,7 +378,10 @@ axes[0, 1].set_title(r'含噪观测 $y$', fontsize=11)
 axes[0, 1].axis('off')
 
 axes[0, 2].imshow(post_mean, cmap='gray')
-axes[0, 2].set_title(r'后验均值 (MMSE)', fontsize=11)
+if _use_pnp:
+    axes[0, 2].set_title(r'后验均值 (MMSE)', fontsize=11)
+else:
+    axes[0, 2].set_title(r'后验均值 (MMSE, TV 先验)', fontsize=11)
 axes[0, 2].axis('off')
 
 axes[0, 3].imshow(post_std, cmap='hot')
@@ -356,21 +410,32 @@ if len(ssim_values) > 0:
     axes[1, 3].set_ylabel(r'SSIM', fontsize=10)
     axes[1, 3].grid(True, alpha=0.3)
 
-fig.suptitle(r'实验4.7-1 PnP-ULA后验采样与收敛诊断', fontsize=14, y=1.02)
+if _use_pnp:
+    fig.suptitle(r'实验4.7-1 PnP-ULA后验采样与收敛诊断', fontsize=14, y=1.02)
+else:
+    fig.suptitle(r'实验4.7-1 TV-ULA后验采样（替代方案）', fontsize=14, y=1.02, color='orange')
 plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '实验4_7-1_PnP-ULA采样.png'), dpi=150, bbox_inches='tight')
+fig.savefig(os.path.join(SAVE_DIR, '实验4_7-1_PnP-ULA采样.png'), dpi=150, bbox_inches='tight')
 print(f"\n结果图已保存: {os.path.join(SAVE_DIR, '实验4_7-1_PnP-ULA采样.png')}")
 
 # ══════════════════════════════════════════════════════════
-# 12. 核心发现
+# 核心发现
 # ══════════════════════════════════════════════════════════
 print("\n" + "=" * 60)
 print("【核心发现】")
 print("=" * 60)
-print("1. PnP-ULA核心思想：")
-print("   用预训练去噪器 D(x) 替代显式先验 p(x)")
-print("   迭代：X_{m+1} = X_m - δ∇f(X_m) + δ/ε(D(X_m)-X_m) + √(2δ)N_m")
-print("   其中 D(x)-x 近似得分函数 ∇(-log p(x))")
+
+if _use_pnp:
+    print("1. PnP-ULA核心思想：")
+    print("   用预训练去噪器 D(x) 替代显式先验 p(x)")
+    print("   迭代：X_{m+1} = X_m - δ∇f(X_m) + δ/ε(D(X_m)-X_m) + √(2δ)N_m")
+    print("   其中 D(x)-x 近似得分函数 ∇(-log p(x))")
+else:
+    print("1. 替代方案说明：")
+    print("   当前使用 TV 正则化替代 PnP-ULA（深度学习先验）")
+    print("   迭代：X_{m+1} = X_m - delta*grad_f(X_m) + delta/lambd*prox_TV(X_m) + sqrt(2*delta)*N_m")
+    print("   TV 是传统手工先验，效果不同于 PnP 的深度学习先验")
+    print("   获得完整 PnP-ULA 体验需要 GPU + 预训练 RealSN-DnCNN 模型")
 print("")
 print("2. Burn-in期：")
 print(f"   丢弃前 {burnin} 个样本（{burnin/maxit*100:.0f}%），确保链收敛到平稳分布")

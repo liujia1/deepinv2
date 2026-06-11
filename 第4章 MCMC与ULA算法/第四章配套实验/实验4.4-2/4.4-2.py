@@ -15,14 +15,13 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import torch
-from scipy.linalg import norm
+from tqdm.auto import tqdm
+from PIL import Image
 import math
 import os
 import sys
 import warnings
 import logging
-from tqdm.auto import tqdm
-from PIL import Image
 
 logging.getLogger('matplotlib').setLevel(logging.ERROR)
 logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
@@ -96,11 +95,11 @@ print(f"Image: {nx}x{ny}, BSNR={BSNR}, true sigma^2={sigma2_init:.4f}")
 # 2. 似然
 # ══════════════════════════════════════════════════════════
 # f(x) = ||y - Ax||^2 / (2*sigma^2)
-# grad_f_sigma2 = ||y - Ax||^2 / (2*sigma^4)
-# grad_f_x = A^T(Ax - y) / sigma^2
+# df_dsigma2 = ∂f/∂σ² = ||y - Ax||^2 / (2*sigma^4)
+# grad_f_x = ∂f/∂x = A^T(Ax - y) / sigma^2
 
 f_y = lambda x, s2: (torch.linalg.matrix_norm(y - A(x), ord='fro')**2) / (2 * s2)
-grad_f_sigma2 = lambda x, s2: (torch.linalg.matrix_norm(y - A(x), ord='fro')**2) / (2 * s2**2)
+df_dsigma2 = lambda x, s2: (torch.linalg.matrix_norm(y - A(x), ord='fro')**2) / (2 * s2**2)
 grad_f_x = lambda x, s2: AT(A(x) - y) / s2
 
 # ══════════════════════════════════════════════════════════
@@ -114,7 +113,13 @@ grad_f_x = lambda x, s2: AT(A(x) - y) / s2
 
 lambda_prox = 1.0
 
-proxg = lambda x, lam: chambolle_prox_TV(x, device, {'lambda': lam, 'MaxIter': 25})
+# 近端算子参数
+# MaxIter=10: MCMC采样中前后两步X变化很小，近端算子不需要每次完全收敛
+# 性能优化建议：
+#   1. 可进一步降低MaxIter到5（快速近似）
+#   2. 若chambolle_prox_TV支持warm-start（传入上一步对偶变量），可大幅加速
+#   3. GPU并行化可提升数倍速度
+proxg = lambda x, lam: chambolle_prox_TV(x, device, {'lambda': lam, 'MaxIter': 10})
 gradg = lambda x, lam, lprox: (x - proxg(x, lam)) / lprox
 
 # ══════════════════════════════════════════════════════════
@@ -128,14 +133,19 @@ min_sigma2 = 0.1
 max_sigma2 = 100
 
 d_exp = 0.8
-delta_step = lambda i: (i ** (-d_exp)) / dimx
+delta_step = lambda i: ((i + 1) ** (-d_exp)) / dimx
 
+# 超参数学习率缩放因子
+# c_eta=10: 对数域参数 eta=log(theta) 梯度数量级较小，需要较小步长
+# c_sigma2=10000: 线性域参数 sigma^2 梯度波动剧烈（残差项 ||y-Ax||^2/(2*sigma^4)），
+#                 需要较大步长补偿；实际步长 = c * delta_step(k)
+# 注意：更换图像尺寸或噪声水平时，可能需要重新调参
 c_eta = 10
 c_sigma2 = 10000
 
 warmupSteps = 1000
-total_iter = 1028
-burnIn = int(total_iter * 0.7)
+total_iter = 1000
+n_burn_in = 700   # 70% burn-in，与 4.4-1 风格统一
 
 # Lipschitz常数
 L_f_init = AAT_norm / sigma2_init
@@ -153,7 +163,7 @@ X_wu = y.to(device).detach().clone()
 fix_sigma2 = sigma2_init
 fix_theta = th_init
 
-for k in tqdm(range(1, warmupSteps)):
+for k in tqdm(range(warmupSteps)):
     grad_f = grad_f_x(X_wu, fix_sigma2)
     lam_wu = lambda_prox * fix_theta   # prox参数: lambda*theta
     grad_g = fix_theta * gradg(X_wu, lam_wu, lambda_prox)
@@ -180,10 +190,8 @@ sigma2_list = [sigma2]
 
 alpha = 1  # TV is 1-homogeneous
 
-for k in tqdm(range(1, total_iter)):
-    sum_g_x = 0.0
-    sum_grad_f_sigma2 = 0.0
-
+for k in tqdm(range(total_iter)):
+    # SAPG使用单步样本近似期望（随机近似），无需多样本平均
     L_f = AAT_norm / sigma2
     L_g = theta / lambda_prox
     gamma = 0.98 / (L_f + L_g)
@@ -195,27 +203,24 @@ for k in tqdm(range(1, total_iter)):
     Z = torch.randn_like(X)
     X = X - gamma * grad_f - gamma * grad_g + math.sqrt(2 * gamma) * Z
 
-    sum_g_x += TVnorm(X).item()
-    sum_grad_f_sigma2 += grad_f_sigma2(X, sigma2).item()
+    g_x = TVnorm(X).item()
+    gf_sigma2 = df_dsigma2(X, sigma2).item()
 
-    avg_g_x = sum_g_x
-    avg_grad_f_sigma2 = sum_grad_f_sigma2
-
-    grad_theta_logp = -avg_g_x + dimx / (alpha * theta)
+    grad_theta_logp = -g_x + dimx / (alpha * theta)
     grad_eta_logp = grad_theta_logp * theta
     eta = eta + c_eta * delta_step(k) * grad_eta_logp
     eta = max(min_eta, min(max_eta, eta))
     theta = math.exp(eta)
 
-    grad_sigma2_logp = avg_grad_f_sigma2 - dimx / (2 * sigma2)
+    grad_sigma2_logp = gf_sigma2 - dimx / (2 * sigma2)
     sigma2 = sigma2 + c_sigma2 * delta_step(k) * grad_sigma2_logp
     sigma2 = max(min_sigma2, min(max_sigma2, sigma2))
 
     theta_list.append(theta)
     sigma2_list.append(sigma2)
 
-theta_burnin = theta_list[burnIn:]
-sigma2_burnin = sigma2_list[burnIn:]
+theta_burnin = theta_list[n_burn_in:]
+sigma2_burnin = sigma2_list[n_burn_in:]
 theta_est = float(np.mean(theta_burnin))
 sigma2_est = float(np.mean(sigma2_burnin))
 true_sigma2 = (sigma ** 2).item()
@@ -231,7 +236,7 @@ fig, axes = plt.subplots(1, 2, figsize=(14, 4))
 
 iters = np.arange(len(theta_list))
 axes[0].plot(iters, theta_list, label=r'$\theta_n$', color='steelblue')
-axes[0].axvline(burnIn, color='red', linestyle='--', label=r'Burn-in end')
+axes[0].axvline(n_burn_in, color='red', linestyle='--', label=r'Burn-in end')
 axes[0].axhline(theta_est, color='orange', linestyle='--', label=rf'Mean after burn-in: {theta_est:.4f}')
 axes[0].set_xlabel(r'Iteration')
 axes[0].set_ylabel(r'$\theta$')
@@ -239,7 +244,7 @@ axes[0].set_title(r'$\theta$ (TV regularization) convergence')
 axes[0].legend()
 
 axes[1].plot(iters, sigma2_list, label=r'$\sigma^2_n$', color='darkorange')
-axes[1].axvline(burnIn, color='red', linestyle='--', label=r'Burn-in end')
+axes[1].axvline(n_burn_in, color='red', linestyle='--', label=r'Burn-in end')
 axes[1].axhline(sigma2_est, color='blue', linestyle='--', label=rf'Estimate: {sigma2_est:.5f}')
 axes[1].axhline(true_sigma2, color='green', linestyle=':', label=rf'True value: {true_sigma2:.5f}')
 axes[1].set_xlabel(r'Iteration')
@@ -268,6 +273,12 @@ for _ in tqdm(range(n_map_iter)):
     grad_f_map = grad_f_x(x_map, sigma2_est)
     grad_g_map = theta_est * gradg(x_map, lam_map, lambda_prox)
     x_map = x_map - gamma_map * (grad_f_map + grad_g_map)
+
+# MAP收敛验证：打印最终梯度范数
+final_grad = grad_f_x(x_map, sigma2_est) + theta_est * gradg(x_map, lam_map, lambda_prox)
+print(f"  MAP final gradient norm: {torch.norm(final_grad).item():.6f}")
+# 图像值域统计（梯度下降无约束，MAP结果可能超出 [0,255]）
+print(f"  x_map range: [{x_map.min().item():.1f}, {x_map.max().item():.1f}]")
 
 # ══════════════════════════════════════════════════════════
 # 9. SNR指标与可视化
@@ -309,6 +320,7 @@ print(f"\n[步骤3] MAP重建:")
 print(f"  SNR(observation) = {snr_obs:.2f} dB")
 print(f"  SNR(MAP)         = {snr_map:.2f} dB")
 print(f"  SNR improvement  = {snr_map - snr_obs:.2f} dB")
+print(f"  x_map range: [{x_map.min().item():.1f}, {x_map.max().item():.1f}]")
 
 print("\n" + "=" * 60)
 print("【核心结论】")
