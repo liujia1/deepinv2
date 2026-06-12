@@ -27,14 +27,6 @@ warnings.filterwarnings("ignore", message=".*U\\+2212.*")
 warnings.filterwarnings("ignore", message=".*glyph.*")
 plt.rcParams['axes.unicode_minus'] = False
 
-# ══════════════════════════════════════════════════════════
-# GPU 配置
-# ══════════════════════════════════════════════════════════
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"使用设备: {device}")
-if device.type == 'cuda':
-    print(f"GPU: {torch.cuda.get_device_name(0)}")
-
 # ====== 中文字体配置（兼容本地和Google Colab）======
 _gdrive = '/content/drive/MyDrive'
 _IN_COLAB = 'google.colab' in sys.modules
@@ -66,15 +58,22 @@ np.random.seed(42)
 torch.manual_seed(42)
 
 # ══════════════════════════════════════════════════════════
-# 0. 参数配置与缓存加载
+# 0. GPU检测与缓存配置
 # ══════════════════════════════════════════════════════════
+_has_gpu = torch.cuda.is_available()
+if _has_gpu:
+    device = torch.device('cuda')
+else:
+    device = torch.device('cpu')
+print(f"Device: {device}")
+
 CACHE_FILE = os.path.join(SAVE_DIR, 'experiment_4.5-1_cache.pth')
 USE_CACHE = os.path.exists(CACHE_FILE)
 
 if USE_CACHE:
     print(f"\n发现缓存文件: {CACHE_FILE}")
     print("加载缓存结果（跳过计算）...")
-    cache = torch.load(CACHE_FILE, map_location='cpu', weights_only=False)
+    cache = torch.load(CACHE_FILE, map_location=device, weights_only=False)
     u = cache['u']
     f = cache['f']
     f_ = cache['f_'].to(device)
@@ -156,10 +155,7 @@ if not USE_CACHE:
 
     sigma = 0.1
     f = u + np.random.randn(N, N) * sigma
-    f_ = torch.from_numpy(f).float().to(device)  # 统一为float32，避免dtype混用，并移至GPU
-else:
-    N = cache['N']
-    sigma = cache['sigma']
+    f_ = torch.from_numpy(f).float().to(device)  # 统一为float32，移到GPU
 
 # ══════════════════════════════════════════════════════════
 # 3. 步骤1：MAP——半二次最小化
@@ -175,16 +171,15 @@ maxiter_hq = 50
 lamb_hq = 10.0
 
 Au_hq = lambda sigma, lamb, z, u: lamb_hq * DTp(Du(u) / z) + u / sigma**2
-rhs_hq = (f_ / sigma**2).to(device)
-
-u_ = torch.from_numpy(f).float().to(device)  # 统一为float32并移至GPU
+rhs_hq = f_ / sigma**2
 
 print(f"\n[步骤1] 半二次最小化 MAP (lambda={lamb_hq}, {maxiter_hq} iters)")
 if not USE_CACHE:
+    u_ = torch.from_numpy(f).float().to(device)  # 统一为float32，移到GPU
     for it in range(maxiter_hq):
-        diff_u = torch.abs(Du(u_)).cpu().numpy()
-        z_ = np.clip(diff_u, a_min=1e-6, a_max=None)
-        z_ = torch.from_numpy(z_).float().to(device)  # 统一为float32并移至GPU
+        diff_u = torch.abs(Du(u_))
+        z_ = np.clip(diff_u.cpu().numpy(), a_min=1e-6, a_max=None)  # 移回CPU进行clip
+        z_ = torch.from_numpy(z_).float().to(device)  # 统一为float32，移到GPU
         u_ = CG(u_, Au_hq, sigma, lamb_hq, z_, rhs_hq, maxit=1000, verbose=0)
         # 使用更新后的u_计算TV和Dat，确保一致性
         diff_u = torch.abs(Du(u_))
@@ -213,6 +208,8 @@ maxiter_glm = 50
 lamb_glm = 10.0  # 与lamb_hq保持一致，确保MAP与MMSE对比的公平性
 
 # Au_glm: GLM条件高斯的系统矩阵
+# 注意：lamb参数未在函数体中使用，因为λ已通过GIG采样隐含在z_中
+# 保留lamb参数是为了与Au_hq保持一致的函数签名
 Au_glm = lambda sigma, lamb, z, u: DTp(Du(u) / z) + u / sigma**2
 
 u_sum_ = 0
@@ -221,16 +218,16 @@ n_burn_in = 20  # burn-in期，丢弃前20次迭代的样本
 
 print(f"\n[步骤2] GLM Gibbs采样 MMSE (lambda={lamb_glm}, {maxiter_glm} iters, burn-in={n_burn_in})")
 if not USE_CACHE:
-    u_ = torch.from_numpy(f).float().to(device)  # 统一为float32并移至GPU
+    u_ = torch.from_numpy(f).float().to(device)  # 统一为float32，移到GPU
     for it in range(maxiter_glm):
         diff_u = torch.abs(Du(u_))
-        tmp = diff_u.cpu().numpy().ravel()
+        tmp = diff_u.cpu().numpy().ravel()  # 移回CPU进行GIG采样
         tmp[tmp == 0] = 1e-30
 
         # z_j ~ GIG(1/2, λ², |Du_j|²)
         # 令 c = |Du|/λ，X ~ geninvgauss(0.5, λ|Du|)，则 z = cX = X·|Du|/λ
-        z_ = torch.from_numpy(geninvgauss.rvs(0.5, lamb_glm * tmp) * tmp / lamb_glm).float().to(device).reshape(2, N, N)
-        eta = torch.normal(0, 1, size=(3, N, N), device=device)
+        z_ = torch.from_numpy(geninvgauss.rvs(0.5, lamb_glm * tmp) * tmp / lamb_glm).float().reshape(2, N, N).to(device)
+        eta = torch.normal(0, 1, size=(3, N, N)).to(device)
 
         rhs = DTp(eta[:2] / torch.sqrt(z_)) + eta[2] / sigma + f_ / sigma**2
         u_ = CG(u_, Au_glm, sigma, lamb_glm, z_, rhs, maxit=1000, verbose=0)
@@ -269,15 +266,15 @@ axes[0][1].axis('off')
 
 axes[0][2].axis('off')
 
-axes[1][0].imshow(u_hq.cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+axes[1][0].imshow(u_hq.cpu().numpy(), cmap='gray', vmin=0, vmax=1)  # 移回CPU可视化
 axes[1][0].set_title(r'MAP (Half-quadratic minimization)')
 axes[1][0].axis('off')
 
-axes[1][1].imshow(u_avg_.cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+axes[1][1].imshow(u_avg_.cpu().numpy(), cmap='gray', vmin=0, vmax=1)  # 移回CPU可视化
 axes[1][1].set_title(r'MMSE (GLM Gibbs posterior mean)')
 axes[1][1].axis('off')
 
-axes[1][2].imshow(torch.sqrt(torch.clamp(u_var_, min=0)).cpu().numpy(), cmap='hot')
+axes[1][2].imshow(torch.sqrt(torch.clamp(u_var_, min=0)).cpu().numpy(), cmap='hot')  # 移回CPU可视化
 axes[1][2].set_title(r'Posterior std (uncertainty)')
 axes[1][2].axis('off')
 
@@ -293,7 +290,7 @@ if not USE_CACHE:
     cache = {
         'u': u,
         'f': f,
-        'f_': f_.cpu(),
+        'f_': f_.cpu(),  # 保存时移回CPU，确保跨设备兼容
         'u_hq': u_hq.cpu(),
         'u_avg_': u_avg_.cpu(),
         'u_var_': u_var_.cpu(),
@@ -304,7 +301,7 @@ if not USE_CACHE:
     print(f"\n缓存已保存至: {CACHE_FILE}")
 
 # ══════════════════════════════════════════════════════════
-# 6. 输出结论
+# 7. 输出结论
 # ══════════════════════════════════════════════════════════
 print("\n" + "=" * 60)
 print("【核心结论】")

@@ -45,6 +45,7 @@ except ImportError:
     print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
 
 np.random.seed(42)
+torch.manual_seed(42)
 
 # ══════════════════════════════════════════════════════════
 # 1. 离散梯度算子 Du（Neumann边界）
@@ -56,7 +57,7 @@ def Du(u):
     输出: [2, M, N]，第0维是x方向梯度，第1维是y方向梯度
     """
     M, N = u.shape
-    Du_out = torch.zeros((2, M, N))
+    Du_out = torch.zeros((2, M, N), dtype=u.dtype, device=u.device)
     Du_out[0, :, :-1] += u[:, 1:] - u[:, :-1]
     Du_out[1, :-1, :] += u[1:, :] - u[:-1, :]
     return Du_out
@@ -71,7 +72,7 @@ def DTp(p):
     输出: [M, N]
     """
     C, M, N = p.shape
-    DTp_out = torch.zeros((M, N))
+    DTp_out = torch.zeros((M, N), dtype=p.dtype, device=p.device)
     DTp_out[:, 1:] += p[0, :, :-1]
     DTp_out[:, :-1] -= p[0, :, :-1]
     DTp_out[1:, :] += p[1, :-1, :]
@@ -115,13 +116,12 @@ print("【参数设定】")
 print("=" * 60)
 print(f"图像尺寸: {N} × {N}")
 print(f"噪声标准差: σ = {sigma}")
-print(f"TV正则化参数(MAP): λ = 10.0")
-print(f"TV正则化参数(ILA): λ = 20.0")
+print(f"TV正则化参数: λ = 10.0")
 print(f"动量参数: θ = 0.99")
 print(f"迭代次数: {10000}")
 
 # ══════════════════════════════════════════════════════════
-# 5. MAP：加速梯度下降（Nesterov动量）
+# 5. MAP：加速梯度下降（重球法/Heavy-ball momentum）
 # ══════════════════════════════════════════════════════════
 lamb = 10.0
 eps = 1e-03
@@ -137,7 +137,7 @@ maxit = 10000
 check = 1000
 
 print("\n" + "=" * 60)
-print("【MAP求解】加速梯度下降")
+print("【MAP求解】加速梯度下降（重球法）")
 print("=" * 60)
 
 for it in range(maxit):
@@ -159,16 +159,10 @@ print(f"\n  MAP求解完成")
 # 6. MMSE：ILA（惯性Langevin算法）
 #    与MAP的唯一区别：多了噪声项 √(2τ(1-θ)) N
 # ══════════════════════════════════════════════════════════
-lamb = 20.0
-eps = 1e-03
-theta = 0.99
-L = lamb * 8 / eps + 1 / sigma**2
-tau = 2 / L
-
-f_ = torch.from_numpy(f.copy())
 u_ila = torch.from_numpy(f.copy())
 u_old_ = torch.from_numpy(f.copy())
 
+n_burn_in = 1000
 u_sum_ = torch.zeros((N, N))
 u_sqr_ = torch.zeros((N, N))
 
@@ -184,18 +178,21 @@ for it in range(maxit):
     u_old_ = u_ila.clone()
     u_ila = u_i - tau * grad_u + torch.randn((N, N)) * np.sqrt(2 * tau * (1 - theta))
     
-    u_sum_ += u_ila
-    u_sqr_ += u_ila**2
+    # burn-in: 跳过前期非平稳样本
+    if it >= n_burn_in:
+        u_sum_ += u_ila
+        u_sqr_ += u_ila**2
     
     if it % check == 0:
         TV = lamb * torch.abs(diff_u).sum()
         Dat = torch.sum((u_ila - f_)**2 / (2 * sigma**2))
         print(f"  iter {it:5d}: TV + Data = {TV.item() + Dat.item():.6f}", end="\r")
 
-print(f"\n  ILA采样完成")
+print(f"\n  ILA采样完成 (burn-in: {n_burn_in} iterations)")
 
-u_avg_ = u_sum_ / maxit
-u_var_ = u_sqr_ / maxit - u_avg_**2
+n_samples = maxit - n_burn_in
+u_avg_ = u_sum_ / n_samples
+u_var_ = u_sqr_ / n_samples - u_avg_**2
 
 # ══════════════════════════════════════════════════════════
 # 7. 结果输出
@@ -222,12 +219,11 @@ print("【核心发现】")
 print("=" * 60)
 print("1. ILA迭代格式：")
 print("   X_{m+1} = X_m - γ∇E(X_m) + β(X_m - X_{m-1}) + √(2γ(1-β)) N_m")
-print("   其中 γ = ω²τ, β = (1-ω)²")
 print("")
 print("2. 与MAP的唯一区别：多了噪声项 √(2γ(1-β)) N_m")
 print("   → 优化算法 + 噪声 = 采样算法")
 print("")
-print("3. 动量项 β(X_m - X_{m-1}) 加速收敛，对应优化中的Nesterov加速")
+print("3. 动量项 β(X_m - X_{m-1}) 加速收敛，对应优化中的重球法（Heavy-ball momentum）")
 print("")
 print("4. 后验标准差量化不确定性：边缘处不确定性高，平坦区域不确定性低")
 
@@ -254,11 +250,12 @@ axes[1, 1].imshow(u_avg_.numpy(), cmap='gray', vmin=0, vmax=1)
 axes[1, 1].set_title(r'MMSE（ILA后验均值）', fontsize=12)
 axes[1, 1].axis('off')
 
-axes[1, 2].imshow(torch.sqrt(u_var_).numpy(), cmap='hot')
+axes[1, 2].imshow(torch.sqrt(torch.clamp(u_var_, min=0)).numpy(), cmap='hot')
 axes[1, 2].set_title(r'后验标准差（不确定性）', fontsize=12)
 axes[1, 2].axis('off')
 
 fig.suptitle(r'实验4.6-1 优化 vs 采样：MAP vs MMSE', fontsize=14, y=1.01)
 plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '实验4_6-1_MAP_vs_MMSE.png'), dpi=150, bbox_inches='tight')
-print(f"\n图像已保存: {os.path.join(SAVE_DIR, '实验4_6-1_MAP_vs_MMSE.png')}")
+plt.savefig(os.path.join(SAVE_DIR, 'exp4_6-1_MAP_vs_MMSE.png'), dpi=150, bbox_inches='tight')
+plt.close()
+print(f"\n图像已保存: {os.path.join(SAVE_DIR, 'exp4_6-1_MAP_vs_MMSE.png')}")
