@@ -27,6 +27,14 @@ warnings.filterwarnings("ignore", message=".*U\\+2212.*")
 warnings.filterwarnings("ignore", message=".*glyph.*")
 plt.rcParams['axes.unicode_minus'] = False
 
+# ══════════════════════════════════════════════════════════
+# GPU 配置
+# ══════════════════════════════════════════════════════════
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"使用设备: {device}")
+if device.type == 'cuda':
+    print(f"GPU: {torch.cuda.get_device_name(0)}")
+
 # ====== 中文字体配置（兼容本地和Google Colab）======
 _gdrive = '/content/drive/MyDrive'
 _IN_COLAB = 'google.colab' in sys.modules
@@ -58,6 +66,28 @@ np.random.seed(42)
 torch.manual_seed(42)
 
 # ══════════════════════════════════════════════════════════
+# 0. 参数配置与缓存加载
+# ══════════════════════════════════════════════════════════
+CACHE_FILE = os.path.join(SAVE_DIR, 'experiment_4.5-1_cache.pth')
+USE_CACHE = os.path.exists(CACHE_FILE)
+
+if USE_CACHE:
+    print(f"\n发现缓存文件: {CACHE_FILE}")
+    print("加载缓存结果（跳过计算）...")
+    cache = torch.load(CACHE_FILE, map_location='cpu', weights_only=False)
+    u = cache['u']
+    f = cache['f']
+    f_ = cache['f_'].to(device)
+    u_hq = cache['u_hq'].to(device)
+    u_avg_ = cache['u_avg_'].to(device)
+    u_var_ = cache['u_var_'].to(device)
+    sigma = cache['sigma']
+    N = cache['N']
+    print("缓存加载完成")
+else:
+    print("\n未找到缓存文件，开始计算...")
+
+# ══════════════════════════════════════════════════════════
 # 1. 辅助函数
 # ══════════════════════════════════════════════════════════
 
@@ -71,8 +101,9 @@ def CG(x, Ax, sigma, lamb, z, b, maxit=100, verbose=0):
         x = x + alpha * p
         r = r - alpha * Ap
         rsnew = torch.sum(r**2)
+        beta = rsnew / rsold
         rsold = rsnew.clone()
-        p = r + rsnew / rsold * p
+        p = r + beta * p
         R = torch.mean(r**2)
         if R < 1e-9:
             break
@@ -82,14 +113,14 @@ def CG(x, Ax, sigma, lamb, z, b, maxit=100, verbose=0):
 
 def Du(u):
     M, N = u.shape
-    Du_out = torch.zeros((2, M, N))
+    Du_out = torch.zeros((2, M, N), dtype=u.dtype, device=u.device)
     Du_out[0, :, :-1] += u[:, 1:] - u[:, :-1]
     Du_out[1, :-1, :] += u[1:, :] - u[:-1, :]
     return Du_out
 
 def DTp(p):
     C, M, N = p.shape
-    DTp_out = torch.zeros((M, N))
+    DTp_out = torch.zeros((M, N), dtype=p.dtype, device=p.device)
     DTp_out[:, 1:] += p[0, :, :-1]
     DTp_out[:, :-1] -= p[0, :, :-1]
     DTp_out[1:, :] += p[1, :-1, :]
@@ -99,32 +130,36 @@ def DTp(p):
 # ══════════════════════════════════════════════════════════
 # 2. 合成图像与加噪
 # ══════════════════════════════════════════════════════════
-N = 100
-x_grid = np.linspace(-1, 1, N)
-y_grid = np.linspace(-1, 1, N)
-X, Y = np.meshgrid(x_grid, y_grid)
+if not USE_CACHE:
+    N = 100
+    x_grid = np.linspace(-1, 1, N)
+    y_grid = np.linspace(-1, 1, N)
+    X, Y = np.meshgrid(x_grid, y_grid)
 
-u1 = 0 * X + 0.5
-u2 = X + Y
-u2 -= u2.min()
-u2 /= u2.max()
+    u1 = 0 * X + 0.5
+    u2 = X + Y
+    u2 -= u2.min()
+    u2 /= u2.max()
 
-u3 = np.clip(1 - ((1 - X)**2 + (1 - Y)**2), a_min=0, a_max=None)
-u3 -= u3.min()
-u3 /= u3.max()
+    u3 = np.clip(1 - ((1 - X)**2 + (1 - Y)**2), a_min=0, a_max=None)
+    u3 -= u3.min()
+    u3 /= u3.max()
 
-m1 = 0 * X
-m1[N//8:-N//8, N//8:-N//8] = 1
-u = u1.copy()
-u[m1 == 1] = u2[m1 == 1] * 1.25
+    m1 = 0 * X
+    m1[N//8:-N//8, N//8:-N//8] = 1
+    u = u1.copy()
+    u[m1 == 1] = u2[m1 == 1] * 1.25
 
-m2 = 0 * X
-m2[(X - 1)**2 + (Y - 1)**2 <= 1] = 1
-u[m2 == 1] = u3[m2 == 1]
+    m2 = 0 * X
+    m2[(X - 1)**2 + (Y - 1)**2 <= 1] = 1
+    u[m2 == 1] = u3[m2 == 1]
 
-sigma = 0.1
-f = u + np.random.randn(N, N) * sigma
-f_ = torch.from_numpy(f)
+    sigma = 0.1
+    f = u + np.random.randn(N, N) * sigma
+    f_ = torch.from_numpy(f).float().to(device)  # 统一为float32，避免dtype混用，并移至GPU
+else:
+    N = cache['N']
+    sigma = cache['sigma']
 
 # ══════════════════════════════════════════════════════════
 # 3. 步骤1：MAP——半二次最小化
@@ -140,23 +175,28 @@ maxiter_hq = 50
 lamb_hq = 10.0
 
 Au_hq = lambda sigma, lamb, z, u: lamb_hq * DTp(Du(u) / z) + u / sigma**2
-rhs_hq = f_ / sigma**2
+rhs_hq = (f_ / sigma**2).to(device)
 
-u_ = torch.from_numpy(f)
+u_ = torch.from_numpy(f).float().to(device)  # 统一为float32并移至GPU
 
 print(f"\n[步骤1] 半二次最小化 MAP (lambda={lamb_hq}, {maxiter_hq} iters)")
-for it in range(maxiter_hq):
-    diff_u = torch.abs(Du(u_))
-    z_ = np.clip(diff_u.numpy(), a_min=1e-6, a_max=None)
-    z_ = torch.from_numpy(z_)
-    u_ = CG(u_, Au_hq, sigma, lamb_hq, z_, rhs_hq, maxit=1000, verbose=0)
-    TV = lamb_hq * diff_u.sum()
-    Dat = torch.sum((u_ - f_)**2 / (2 * sigma**2))
-    if (it + 1) % 10 == 0:
-        print(f"  iter {it+1}: TV + Dat = {(TV + Dat).item():.6f}")
+if not USE_CACHE:
+    for it in range(maxiter_hq):
+        diff_u = torch.abs(Du(u_)).cpu().numpy()
+        z_ = np.clip(diff_u, a_min=1e-6, a_max=None)
+        z_ = torch.from_numpy(z_).float().to(device)  # 统一为float32并移至GPU
+        u_ = CG(u_, Au_hq, sigma, lamb_hq, z_, rhs_hq, maxit=1000, verbose=0)
+        # 使用更新后的u_计算TV和Dat，确保一致性
+        diff_u = torch.abs(Du(u_))
+        TV = lamb_hq * diff_u.sum()
+        Dat = torch.sum((u_ - f_)**2 / (2 * sigma**2))
+        if (it + 1) % 10 == 0:
+            print(f"  iter {it+1}: TV + Dat = {(TV + Dat).item():.6f}")
 
-u_hq = u_
-print("  半二次最小化完成")
+    u_hq = u_
+    print("  半二次最小化完成")
+else:
+    print("  从缓存加载 MAP 结果")
 
 # ══════════════════════════════════════════════════════════
 # 4. 步骤2：MMSE——GLM Gibbs采样
@@ -165,43 +205,54 @@ print("  半二次最小化完成")
 #   z_j ~ GIG(lambda^2, |Du_j|^2, 1/2)  (辅助变量)
 #   x ~ N(mu(z), Sigma(z))              (条件高斯，CG+扰动)
 #
-# 对比半二次最小化：
-#   确定版：z = clip(|Du|, eps)  vs  Gibbs版：z ~ GIG(0.5, lambda*|Du|)
-#   确定版：CG精确右端          vs  Gibbs版：CG求解带高斯扰动的右端
+# 注意：迭代次数影响MMSE估计的精度。对于100x100图像，
+# 50次迭代（含20次burn-in）仅使用30个有效样本，后验均值估计方差较大。
+# 教学实验中可适当增加至200次以获得更稳定的结果。
 
 maxiter_glm = 50
-lamb_glm = 20.0
+lamb_glm = 10.0  # 与lamb_hq保持一致，确保MAP与MMSE对比的公平性
 
-u_ = torch.from_numpy(f)
-
+# Au_glm: GLM条件高斯的系统矩阵
 Au_glm = lambda sigma, lamb, z, u: DTp(Du(u) / z) + u / sigma**2
 
 u_sum_ = 0
 u_sqr_ = 0
+n_burn_in = 20  # burn-in期，丢弃前20次迭代的样本
 
-print(f"\n[步骤2] GLM Gibbs采样 MMSE (lambda={lamb_glm}, {maxiter_glm} iters)")
-for it in range(maxiter_glm):
-    diff_u = torch.abs(Du(u_))
-    tmp = diff_u.numpy().ravel()
-    tmp[tmp == 0] = 1e-30
+print(f"\n[步骤2] GLM Gibbs采样 MMSE (lambda={lamb_glm}, {maxiter_glm} iters, burn-in={n_burn_in})")
+if not USE_CACHE:
+    u_ = torch.from_numpy(f).float().to(device)  # 统一为float32并移至GPU
+    for it in range(maxiter_glm):
+        diff_u = torch.abs(Du(u_))
+        tmp = diff_u.cpu().numpy().ravel()
+        tmp[tmp == 0] = 1e-30
 
-    z_ = torch.from_numpy(geninvgauss.rvs(0.5, lamb_glm * tmp) * tmp / lamb_glm).reshape(2, N, N)
-    eta = torch.normal(0, 1, size=(3, N, N))
+        # z_j ~ GIG(1/2, λ², |Du_j|²)
+        # 令 c = |Du|/λ，X ~ geninvgauss(0.5, λ|Du|)，则 z = cX = X·|Du|/λ
+        z_ = torch.from_numpy(geninvgauss.rvs(0.5, lamb_glm * tmp) * tmp / lamb_glm).float().to(device).reshape(2, N, N)
+        eta = torch.normal(0, 1, size=(3, N, N), device=device)
 
-    rhs = DTp(eta[:2] / torch.sqrt(z_)) + eta[2] / sigma + f_ / sigma**2
-    u_ = CG(u_, Au_glm, sigma, lamb_glm, z_, rhs, maxit=1000, verbose=0)
+        rhs = DTp(eta[:2] / torch.sqrt(z_)) + eta[2] / sigma + f_ / sigma**2
+        u_ = CG(u_, Au_glm, sigma, lamb_glm, z_, rhs, maxit=1000, verbose=0)
 
-    u_sum_ += u_
-    u_sqr_ += u_**2
+        # 仅在burn-in期后累加样本
+        if it >= n_burn_in:
+            u_sum_ += u_
+            u_sqr_ += u_**2
 
-    TV = lamb_glm * diff_u.sum()
-    Dat = torch.sum((u_ - f_)**2 / (2 * sigma**2))
-    if (it + 1) % 10 == 0:
-        print(f"  iter {it+1}: TV + Dat = {(TV + Dat).item():.6f}")
+        # 使用更新后的u_计算TV和Dat，确保一致性
+        diff_u = torch.abs(Du(u_))
+        TV = lamb_glm * diff_u.sum()
+        Dat = torch.sum((u_ - f_)**2 / (2 * sigma**2))
+        if (it + 1) % 10 == 0:
+            print(f"  iter {it+1}: TV + Dat = {(TV + Dat).item():.6f}")
 
-u_avg_ = u_sum_ / maxiter_glm
-u_var_ = u_sqr_ / maxiter_glm - u_avg_**2
-print("  GLM Gibbs采样完成")
+    n_samples = maxiter_glm - n_burn_in
+    u_avg_ = u_sum_ / n_samples
+    u_var_ = u_sqr_ / n_samples - u_avg_**2
+    print(f"  GLM Gibbs采样完成 (有效样本数: {n_samples}, 总迭代={maxiter_glm}, burn-in={n_burn_in})")
+else:
+    print("  从缓存加载 MMSE 结果")
 
 # ══════════════════════════════════════════════════════════
 # 5. 可视化
@@ -218,15 +269,15 @@ axes[0][1].axis('off')
 
 axes[0][2].axis('off')
 
-axes[1][0].imshow(u_hq.reshape(N, N).numpy(), cmap='gray', vmin=0, vmax=1)
+axes[1][0].imshow(u_hq.cpu().numpy(), cmap='gray', vmin=0, vmax=1)
 axes[1][0].set_title(r'MAP (Half-quadratic minimization)')
 axes[1][0].axis('off')
 
-axes[1][1].imshow(u_avg_.reshape(N, N).numpy(), cmap='gray', vmin=0, vmax=1)
+axes[1][1].imshow(u_avg_.cpu().numpy(), cmap='gray', vmin=0, vmax=1)
 axes[1][1].set_title(r'MMSE (GLM Gibbs posterior mean)')
 axes[1][1].axis('off')
 
-axes[1][2].imshow(torch.sqrt(torch.clamp(u_var_, min=0)).numpy(), cmap='hot')
+axes[1][2].imshow(torch.sqrt(torch.clamp(u_var_, min=0)).cpu().numpy(), cmap='hot')
 axes[1][2].set_title(r'Posterior std (uncertainty)')
 axes[1][2].axis('off')
 
@@ -234,6 +285,23 @@ fig.suptitle(r'Experiment 4.5-1: Half-quadratic minimization vs GLM (Gibbs sampl
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, 'hq_vs_glm_results.png'), dpi=150, bbox_inches='tight')
 plt.close()
+
+# ══════════════════════════════════════════════════════════
+# 6. 保存缓存（用于下次快速加载）
+# ══════════════════════════════════════════════════════════
+if not USE_CACHE:
+    cache = {
+        'u': u,
+        'f': f,
+        'f_': f_.cpu(),
+        'u_hq': u_hq.cpu(),
+        'u_avg_': u_avg_.cpu(),
+        'u_var_': u_var_.cpu(),
+        'sigma': sigma,
+        'N': N,
+    }
+    torch.save(cache, CACHE_FILE)
+    print(f"\n缓存已保存至: {CACHE_FILE}")
 
 # ══════════════════════════════════════════════════════════
 # 6. 输出结论
