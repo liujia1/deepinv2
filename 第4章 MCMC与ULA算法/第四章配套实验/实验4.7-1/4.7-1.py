@@ -35,6 +35,11 @@ import matplotlib.pyplot as plt
 import os
 import sys
 
+# 设置随机种子，确保结果可复现
+SEED = 42
+torch.manual_seed(SEED)
+np.random.seed(SEED)
+
 _gdrive = '/content/drive/MyDrive'
 _IN_COLAB = 'google.colab' in sys.modules
 
@@ -93,36 +98,30 @@ if _IN_COLAB and not _has_gpu:
 # ══════════════════════════════════════════════════════════
 _model_dir = os.path.join(SCRIPT_DIR, 'Pretrained_models')
 _model_path = os.path.join(_model_dir, 'RealSN_DnCNN_noise5.pth')
-_has_sampling_tools = True
-try:
-    from sampling_tools import *
-except ImportError:
-    _has_sampling_tools = False
+from sampling_tools import *
 
-# 确定算法策略：优先 PnP-ULA（GPU+模型），备选 TV 正则化（CPU/无模型）
-_use_pnp = _has_gpu and os.path.exists(_model_path) and _has_sampling_tools
+# 确定算法策略：优先 PnP-ULA（GPU+模型），备选盲箱约束先验（CPU/无模型）
+_use_pnp = _has_gpu and os.path.exists(_model_path)
 
 print("\n" + "=" * 60)
 print("【环境检查】")
 print("=" * 60)
 print(f"  GPU可用: {_has_gpu}")
-print(f"  sampling_tools: {'可用' if _has_sampling_tools else '不可用'}")
 print(f"  预训练模型: {'存在' if os.path.exists(_model_path) else '不存在'}")
 
 if _use_pnp:
     print(f"\n  使用算法: PnP-ULA（GPU + 预训练 DnCNN 去噪器）")
     print(f"  PnP-ULA 是实验的完整实现，将展示深度学习先验的力量。")
 else:
-    print(f"\n  [警告] 缺少 PnP-ULA 运行条件（GPU 或预训练模型或 sampling_tools）")
-    print(f"  将使用 TV 正则化替代方案继续运行。")
+    print(f"\n  [警告] 缺少 PnP-ULA 运行条件（GPU 或预训练模型）")
+    print(f"  将使用盲箱约束先验（均匀先验 MYULA）替代方案继续运行。")
     if not _has_gpu:
         print(f"    - 缺少GPU: DnCNN 推理在CPU上极慢，建议启用GPU")
     if not os.path.exists(_model_path):
         print(f"    - 缺少模型: {os.path.dirname(_model_path)}")
         print(f"      可从 https://github.com/uclaopt/Provable_Plug_and_Play/ 下载")
-    if not _has_sampling_tools:
-        print(f"    - 缺少 sampling_tools 模块")
-    print(f"  注意: TV 正则化是传统手工先验，与 PnP 的深度学习先验效果不同。")
+    print(f"  注意: 盲箱约束先验仅将像素值约束在 [0,1] 范围内，不含空间正则化项，")
+    print(f"  与 PnP 的深度学习先验效果不同。")
     print(f"  获得完整实验体验需要 GPU + 预训练 RealSN-DnCNN 模型。")
 
 # ══════════════════════════════════════════════════════════
@@ -144,7 +143,7 @@ print("【实验设置】")
 print("=" * 60)
 print(f"图像尺寸: {im.shape[0]} × {im.shape[1]}")
 print(f"设备: {device}")
-print(f"算法策略: {'PnP-ULA (深度学习去噪器先验)' if _use_pnp else 'ULA + TV 正则化 (手工先验替代)'}")
+print(f"算法策略: {'PnP-ULA (深度学习去噪器先验)' if _use_pnp else 'ULA + 盲箱约束先验 (均匀先验 MYULA)'}")
 
 # ══════════════════════════════════════════════════════════
 # 模糊算子（前向模型 A）
@@ -190,21 +189,20 @@ if _use_pnp:
     L_net = 1.0
     model = load_model(_model_path, device)
     denoise = lambda x: (x - model(x[None][None].to(device))[0][0]).detach()
-    max_lambd = 1.0 / ((2.0 * alpha * L_net) / eps + 4.0 * L_y)
-    lambd = max_lambd * 0.99
     delta_max = (1.0) / (L_net / eps + L_y)
+    print(f"正则化参数: ε = {eps:.6f}")
 else:
-    # ---- TV 正则化: 手工先验（替代方案） ----
-    print(f"\n[先验配置] ULA + TV 正则化 (Chambolle 近端算子)")
-    print(f"  说明: TV 是传统手工先验，不同于 PnP 的深度学习先验")
+    # ---- 盲箱约束先验: 均匀先验 MYULA（替代方案） ----
+    print(f"\n[先验配置] ULA + 盲箱约束先验 (均匀先验 MYULA)")
+    print(f"  说明: 盲箱约束先验 p(x) ∝ 𝟙_[0,1]^n(x)，仅将像素值约束在 [0,1] 范围内")
+    print(f"  不含空间正则化项（如 TV），效果不同于 PnP 的深度学习先验")
     print(f"  参数: delta_max 设为 L_y 的 1/L_y（不含去噪器项）")
-    lambd = 1.0 / (2.0 * L_y)  # TV 正则化参数
-    delta_max = 1.0 / L_y
+    lambd = 1.0 / (2.0 * L_y)  # Moreau-Yosida 正则化参数
+    delta_max = 1.0 / L_y  # 经验性宽松取值；严格MYULA理论上界为 1/(L_y+1/lambd)=1/(3*L_y)
+    print(f"Moreau-Yosida 参数: λ = {lambd:.6f}")
 
 delta_frac = 0.99
 delta = delta_max * delta_frac
-
-print(f"正则化参数: ε = {eps:.6f}")
 print(f"步长: δ = {delta:.6f} (δ_max = {delta_max:.6f})")
 
 # ══════════════════════════════════════════════════════════
@@ -212,15 +210,16 @@ print(f"步长: δ = {delta:.6f} (δ_max = {delta_max:.6f})")
 # ══════════════════════════════════════════════════════════
 def Markov_kernel(X, delta):
     """
-    PnP-ULA / TV-ULA 迭代（根据 _use_pnp 选择）
+    PnP-ULA / 盲箱约束 MYULA 迭代（根据 _use_pnp 选择）
     
     PnP-ULA:
       X_{m+1} = X_m - δ∇f(X_m) + δ/ε(D(X_m) - X_m) + √(2δ) N_m
       其中 D(X_m) - X_m 是去噪器残差，近似得分函数 ∇(-log p(X_m))
     
-    TV-ULA (替代方案):
-      X_{m+1} = X_m - δ∇f(X_m) + δ/λ·prox_TV(X_m) + √(2δ) N_m
-      其中 prox_TV 是 Chambolle 近端算子，实现 TV 先验
+    盲箱约束 MYULA (替代方案):
+      X_{m+1} = X_m - δ∇f(X_m) + δ/λ·(prox(X_m) - X_m) + √(2δ) N_m
+      其中 prox(X_m) = proj_[0,1](X_m) 是对 [0,1]^n 盲箱的投影，
+      对应均匀先验 p(x) ∝ 𝟙_[0,1]^n(x) 的 Moreau-Yosida 近似
     """
     noise = math.sqrt(2 * delta) * torch.randn_like(X)
     grad_data = gradf(X, A, AT)
@@ -229,7 +228,7 @@ def Markov_kernel(X, delta):
         # PnP 先验: 去噪器残差
         prior_term = alpha * delta / eps * (denoise(X) - X)
     else:
-        # TV 先验: Chambolle 近端算子
+        # 盲箱约束先验: proj_[0,1] 的 Moreau-Yosida 近似梯度
         prior_term = delta / lambd * (projbox(X) - X)
     
     return X - delta * grad_data + prior_term + noise
@@ -242,15 +241,14 @@ burnin = int(maxit * 0.1)
 n_samples = int(50)
 X = y.clone()
 MC_X = []
-thinned_trace_counter = 0
 thinning_step = max(1, int((maxit - burnin) / n_samples))
 
-nrmse_values = []
 psnr_values = []
 ssim_values = []
+_HAS_STATS = False
 
 print("\n" + "=" * 60)
-print("【采样】" + ("PnP-ULA" if _use_pnp else "TV-ULA (替代方案)"))
+print("【采样】" + ("PnP-ULA" if _use_pnp else "盲箱约束 MYULA (替代方案)"))
 print("=" * 60)
 print(f"总迭代: {maxit}")
 print(f"Burn-in: {burnin} ({burnin/maxit*100:.0f}%)")
@@ -262,14 +260,11 @@ for i_x in range(maxit):
     
     if i_x == burnin:
         post_meanvar = welford(X)
-        absfouriercoeff = welford(torch.fft.fft2(X).abs())
         count = 0
     elif i_x > burnin:
         post_meanvar.update(X)
-        absfouriercoeff.update(torch.fft.fft2(X).abs())
         
         current_mean = post_meanvar.get_mean()
-        nrmse_values.append(NRMSE(x, current_mean))
         psnr_values.append(PSNR(x, current_mean))
         ssim_values.append(SSIM(x, current_mean))
         
@@ -280,11 +275,11 @@ for i_x in range(maxit):
             count += 1
     
     if (i_x + 1) % 100 == 0:
-        print(f"  iter {i_x+1}/{maxit}", end="\r")
+        print(f"  iter {i_x+1}/{maxit}")
 
 end_time = time.time()
 elapsed = end_time - start_time
-print(f"\n  采样完成，耗时 {elapsed:.2f} 秒")
+print(f"  采样完成，耗时 {elapsed:.2f} 秒")
 
 # ══════════════════════════════════════════════════════════
 # 结果输出
@@ -328,9 +323,9 @@ if len(MC_X) > 10:
         trace_fast = X_chain_vec[:, np.argmin(var_sp)]
         trace_med = X_chain_vec[:, np.argsort(var_sp)[len(var_sp)//2]]
         
-        ess_slow = arviz.ess(trace_slow)
-        ess_fast = arviz.ess(trace_fast)
-        ess_med = arviz.ess(trace_med)
+        ess_slow = float(arviz.ess(trace_slow))
+        ess_fast = float(arviz.ess(trace_fast))
+        ess_med = float(arviz.ess(trace_med))
         
         print(f"有效样本量 (ESS):")
         print(f"  最慢分量: {ess_slow:.2f} / {len(MC_X)} ({ess_slow/len(MC_X)*100:.1f}%)")
@@ -355,8 +350,8 @@ if len(MC_X) > 10:
         axes[2].set_xlabel(r'滞后 $k$', fontsize=10)
         
         plt.tight_layout()
-        plt.savefig(os.path.join(SAVE_DIR, '实验4_7-1_自相关函数.png'), dpi=150, bbox_inches='tight')
-        print(f"\n自相关图已保存: {os.path.join(SAVE_DIR, '实验4_7-1_自相关函数.png')}")
+        plt.savefig(os.path.join(SAVE_DIR, 'exp4_7-1_autocorrelation.png'), dpi=150, bbox_inches='tight')
+        print(f"\n自相关图已保存: {os.path.join(SAVE_DIR, 'exp4_7-1_autocorrelation.png')}")
 else:
     print("样本数不足，跳过自相关分析")
 
@@ -381,14 +376,16 @@ axes[0, 2].imshow(post_mean, cmap='gray')
 if _use_pnp:
     axes[0, 2].set_title(r'后验均值 (MMSE)', fontsize=11)
 else:
-    axes[0, 2].set_title(r'后验均值 (MMSE, TV 先验)', fontsize=11)
+    axes[0, 2].set_title(r'后验均值 (MMSE, 盲箱约束先验)', fontsize=11)
 axes[0, 2].axis('off')
 
 axes[0, 3].imshow(post_std, cmap='hot')
 axes[0, 3].set_title(r'后验标准差 $\sigma$', fontsize=11)
 axes[0, 3].axis('off')
 
-axes[1, 0].imshow(post_mean / (post_std + 1e-8), cmap='gray')
+snr_map = post_mean / (post_std + 1e-8)
+vmax = np.percentile(snr_map, 99)
+axes[1, 0].imshow(snr_map, cmap='gray', vmax=vmax)
 axes[1, 0].set_title(r'信噪比 $\mu/\sigma$', fontsize=11)
 axes[1, 0].axis('off')
 
@@ -413,10 +410,10 @@ if len(ssim_values) > 0:
 if _use_pnp:
     fig.suptitle(r'实验4.7-1 PnP-ULA后验采样与收敛诊断', fontsize=14, y=1.02)
 else:
-    fig.suptitle(r'实验4.7-1 TV-ULA后验采样（替代方案）', fontsize=14, y=1.02, color='orange')
+    fig.suptitle(r'实验4.7-1 盲箱约束 MYULA 后验采样（替代方案）', fontsize=14, y=1.02, color='orange')
 plt.tight_layout()
-fig.savefig(os.path.join(SAVE_DIR, '实验4_7-1_PnP-ULA采样.png'), dpi=150, bbox_inches='tight')
-print(f"\n结果图已保存: {os.path.join(SAVE_DIR, '实验4_7-1_PnP-ULA采样.png')}")
+fig.savefig(os.path.join(SAVE_DIR, 'exp4_7-1_PnP-ULA_sampling.png'), dpi=150, bbox_inches='tight')
+print(f"\n结果图已保存: {os.path.join(SAVE_DIR, 'exp4_7-1_PnP-ULA_sampling.png')}")
 
 # ══════════════════════════════════════════════════════════
 # 核心发现
@@ -432,9 +429,10 @@ if _use_pnp:
     print("   其中 D(x)-x 近似得分函数 ∇(-log p(x))")
 else:
     print("1. 替代方案说明：")
-    print("   当前使用 TV 正则化替代 PnP-ULA（深度学习先验）")
-    print("   迭代：X_{m+1} = X_m - delta*grad_f(X_m) + delta/lambd*prox_TV(X_m) + sqrt(2*delta)*N_m")
-    print("   TV 是传统手工先验，效果不同于 PnP 的深度学习先验")
+    print("   当前使用盲箱约束先验（均匀先验 MYULA）替代 PnP-ULA（深度学习先验）")
+    print("   迭代：X_{m+1} = X_m - δ∇f(X_m) + δ/λ·(proj(X_m)-X_m) + √(2δ)N_m")
+    print("   其中 proj(X_m) = clamp(X_m, 0, 1)，对应均匀先验 p(x) ∝ 𝟙_[0,1]^n(x)")
+    print("   该先验仅将像素值约束在 [0,1]，不含空间正则化项（如 TV）")
     print("   获得完整 PnP-ULA 体验需要 GPU + 预训练 RealSN-DnCNN 模型")
 print("")
 print("2. Burn-in期：")
@@ -447,6 +445,9 @@ print("")
 print("4. 收敛诊断：")
 if _HAS_STATS and len(MC_X) > 10:
     print(f"   ESS/M 比率：{ess_med/len(MC_X)*100:.1f}%（中速分量）")
-    print("   ESS > 100 通常足够估计后验均值")
+    if ess_med > 100:
+        print(f"   ESS = {ess_med:.1f} > 100，通常足够估计后验均值")
+    else:
+        print(f"   ESS = {ess_med:.1f} < 100，样本量可能不足，建议增加迭代次数")
 else:
     print("   需要更多样本进行可靠的ESS估计")
