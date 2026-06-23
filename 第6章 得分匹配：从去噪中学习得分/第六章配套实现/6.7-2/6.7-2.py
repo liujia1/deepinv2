@@ -71,6 +71,8 @@ else:
 os.makedirs(_chinese_path, exist_ok=True)
 
 # 在Colab或本地首次运行时自动创建chinese_font.py
+# 设计说明: 动态生成字体配置模块是为了保证单文件可移植性(Colab单文件运行)
+# 避免用户需要手动管理额外的依赖文件
 _chinese_font_path = os.path.join(_chinese_path, 'chinese_font.py')
 if not os.path.exists(_chinese_font_path):
     print("正在创建中文字体配置模块...")
@@ -184,9 +186,6 @@ else:
     print("  未检测到 GPU, 使用 CPU 运行")
     print("  提示: Colab 用户可在菜单 运行时 -> 更改运行时类型 中选择 GPU")
 
-# 脚本目录
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
-
 # 导入sampling_tools模块
 _local_sampling_tools = os.path.join(SAVE_DIR, 'sampling_tools')
 _has_sampling_tools = False
@@ -199,6 +198,13 @@ if os.path.exists(_local_sampling_tools):
         print(f"警告: sampling_tools 导入失败: {e}")
 else:
     print("警告: sampling_tools 模块未找到")
+
+# 若sampling_tools不可用，提供dummy spectral_norm以避免类定义时NameError
+# 这样代码可以优雅降级到"无预训练模型"分支
+if not _has_sampling_tools:
+    def spectral_norm(module, *args, **kwargs):
+        """占位函数：当sampling_tools不可用时使用"""
+        return module
 
 import torch.nn as nn
 
@@ -323,7 +329,9 @@ def download_model_if_needed(model_path, model_dir):
 # 检查模型可用性
 model_dir = os.path.join(SAVE_DIR, 'Pretrained_models')
 model_path = os.path.join(model_dir, 'RealSN_DnCNN_noise15.pth')
-_has_model = download_model_if_needed(model_path, model_dir)
+_model_downloaded = download_model_if_needed(model_path, model_dir)
+# HAS_MODEL: 模型权重可用 且 sampling_tools可用（DnCNN依赖spectral_norm）
+HAS_MODEL = _model_downloaded and _has_sampling_tools
 
 
 # ============================================================
@@ -333,17 +341,21 @@ print(f"\n{'='*60}")
 print("步骤1: 从预训练DnCNN构建得分估计器")
 print(f"{'='*60}")
 print("\n[Tweedie等式]")
-print("  $\\nabla\\log p_\\varepsilon(x) = (D_\\varepsilon(x) - x) / \\varepsilon^2$")
-print("  去噪器输出 $D_\\varepsilon(x)$, 通过Tweedie等式转换为得分估计器")
+print("  ∇log p_ε(x) = (D_ε(x) - x) / ε²")
+print("  去噪器输出 D_ε(x), 通过Tweedie等式转换为得分估计器")
 
-if _has_model and _has_sampling_tools:
+if HAS_MODEL:
     print(f"\n加载预训练模型: {model_path}")
     denoiser = load_dncnn(model_path, device_str=str(device))
     denoiser = denoiser.to(device)
-    HAS_MODEL = True
 
     # 测试去噪→得分提取
-    epsilon = 15.0 / 255.0  # 噪声水平 $\\sigma=15/255$
+    # 注意: epsilon=15/255 是 DnCNN 训练时的噪声水平(σ=15)
+    # 这是 PnP-ULA 的简化假设: 固定 ε 而非随采样过程退火
+    # 实际应用中, ε 应与 Langevin 链的有效噪声水平匹配
+    # 这正是 PnP-ULA(单一去噪器、固定ε) 与 PnP-Annealed-ULA(多噪声水平、ε退火) 的区别
+    # 呼应第6.5节的退火思想: 使用多个噪声水平的去噪器序列, 逐步降低ε
+    epsilon = 15.0 / 255.0  # 噪声水平 $\sigma=15/255$
     score_estimator = ScoreEstimatorFromDnCNN(denoiser, epsilon)
 
     # 创建测试图像（简单梯度图案）
@@ -364,16 +376,15 @@ if _has_model and _has_sampling_tools:
     score = score_estimator(noisy_img)
 
     print(f"\nTweedie得分提取验证:")
-    print(f"  噪声水平 $\\varepsilon$ = {epsilon:.4f}")
-    print(f"  去噪器输出 $D_\\varepsilon(x)$ 范围: [{denoised.min():.4f}, {denoised.max():.4f}]")
-    print(f"  得分 $s_\\theta = (D_\\varepsilon - x) / \\varepsilon^2$ 范围: [{score.min():.4f}, {score.max():.4f}]")
-    print(f"  得分范数 $\\|s_\\theta\\|$ = {score.norm():.4f}")
-    print(f"\n  Tweedie等式: $\\nabla\\log p_\\varepsilon(x) = (D_\\varepsilon(x) - x) / \\varepsilon^2$")
-    print(f"  得分估计器的构建完全基于Tweedie等式——无需显式计算 $\\nabla\\log p(x)$")
+    print(f"  噪声水平 ε = {epsilon:.4f}")
+    print(f"  去噪器输出 D_ε(x) 范围: [{denoised.min():.4f}, {denoised.max():.4f}]")
+    print(f"  得分 s_θ = (D_ε - x) / ε² 范围: [{score.min():.4f}, {score.max():.4f}]")
+    print(f"  得分范数 ‖s_θ‖ = {score.norm():.4f}")
+    print(f"\n  Tweedie等式: ∇log p_ε(x) = (D_ε(x) - x) / ε²")
+    print(f"  得分估计器的构建完全基于Tweedie等式——无需显式计算 ∇log p(x)")
 
 else:
-    HAS_MODEL = False
-    if not _has_model:
+    if not _model_downloaded:
         print(f"\n未找到预训练模型, 跳过需要预训练模型的步骤, 使用模拟数据演示")
     if not _has_sampling_tools:
         print(f"\n未找到sampling_tools模块, 跳过需要该模块的步骤")
@@ -386,11 +397,11 @@ print(f"\n{'='*60}")
 print("步骤2: 学习得分驱动的PnP-ULA求解去卷积问题")
 print(f"{'='*60}")
 print("\n[PnP-ULA递推式]")
-print("  $X_{m+1} = X_m - \\delta\\nabla f(X_m) + \\delta \\cdot s_\\theta(X_m, \\varepsilon) + \\sqrt{2\\delta} \\cdot Z$")
+print("  X_{m+1} = X_m - δ∇f(X_m) + δ · s_θ(X_m, ε) + √(2δ) · Z")
 print("  三步解读:")
-print("    似然梯度步: $-\\delta\\nabla f(X_m)$ —— 数据一致性")
-print("    先验得分步: $\\delta \\cdot s_\\theta(X_m, \\varepsilon)$ —— 先验知识")
-print("    探索噪声: $\\sqrt{2\\delta} \\cdot Z$ —— 随机性保证收敛到分布")
+print("    似然梯度步: -δ∇f(X_m) —— 数据一致性")
+print("    先验得分步: δ · s_θ(X_m, ε) —— 先验知识")
+print("    探索噪声: √(2δ) · Z —— 随机性保证收敛到分布")
 
 if HAS_MODEL:
     try:
@@ -420,13 +431,19 @@ if HAS_MODEL:
     x_true = torch.tensor(img, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)
 
     # 构造正向模型: 高斯模糊
+    # 注意: gaussian_blur 内部会进行 GPU→CPU→numpy→GPU 转换
+    # 这是为了使用 scipy.ndimage.gaussian_filter (更精确)
+    # 性能上不是最优, 但保证了算子的正确性和自共轭性
     def gaussian_blur(image, sigma_blur=3.0):
-        """高斯模糊算子"""
+        """高斯模糊算子 (自共轭线性算子)"""
         img_np = image.squeeze().cpu().numpy()
         if HAS_SCIPY:
             blurred = _gaussian_filter(img_np, sigma=sigma_blur)
         else:
-            # PyTorch近似: 用多次均值滤波替代
+            # PyTorch近似: 用多次均值滤波替代高斯滤波
+            # 注意: 这是粗略近似, 仅用于无scipy时的兜底演示
+            # 核大小 k=6σ+1 是高斯核经验法则, 用于均值滤波理论依据较弱
+            # 实际科研中应使用精确的高斯核, 避免用此近似做定量分析
             import torch.nn.functional as F
             k = int(6 * sigma_blur + 1)
             if k % 2 == 0:
@@ -446,15 +463,22 @@ if HAS_MODEL:
     noise_obs = torch.randn_like(Ax) * sigma_noise
     y = Ax + noise_obs
 
-    # 似然梯度 $\\nabla f(x) = A^T(Ax - y) / \\sigma_{\\mathrm{noise}}^2$
+    # 似然梯度: $f(x) = \frac{1}{2\sigma^2}\|Ax - y\|^2$
+    # $\nabla f(x) = A^T(Ax - y) / \sigma^2$
+    # ULA更新中: $X_{m+1} = X_m - \delta \cdot \nabla f(X_m) + \delta \cdot s_\theta(X_m) + \sqrt{2\delta} Z$
     def likelihood_grad(x):
-        """数据项梯度 $\\nabla f(x) = A^T(Ax - y) / \\sigma^2$"""
+        """返回数据项梯度 $\\nabla f(x) = A^T(Ax - y) / \\sigma^2$
+
+        ULA 递推式中以"减梯度"形式使用: x - delta * grad_f
+        """
         Ax_current = gaussian_blur(x, sigma_blur)
         residual = Ax_current - y
         grad = gaussian_blur(residual, sigma_blur) / (sigma_noise ** 2)
         return grad
 
     # PSNR计算
+    # 注意: 假设像素值域为[0,1], 峰值固定为1 (MAX_I=1)
+    # 若数据值域不同, 需相应调整峰值
     def psnr(img1, img2):
         mse = torch.mean((img1 - img2) ** 2).item()
         if mse == 0:
@@ -465,11 +489,16 @@ if HAS_MODEL:
     print(f"\n初始PSNR (模糊+噪声): {psnr_init:.2f} dB")
 
     # PnP-ULA参数
-    delta = 0.01  # 步长
-    n_iter = 200  # 迭代次数
-    burn_in = 100
+    # 步长delta需满足PnP-ULA收敛条件: δ < 2/L, 其中L是∇f + ∇(-log p)的Lipschitz常数
+    # 此处 sigma_noise=0.05 => 1/σ²=400 较大, 故需小步长 (delta=0.0001)
+    delta = 0.0001  # 步长 (适配 σ_noise=0.05 的似然项尺度)
+    # 注意: n_iter=200, burn_in=100 是教学简化版本
+    # 实际PnP-ULA论文中迭代次数通常是上万步(burn-in也是几千步起步)
+    # 这里仅为演示算法流程, 实际科研中需要远多于此的迭代数
+    n_iter = 500  # 迭代次数(教学简化)
+    burn_in = 250  # 预热步数(教学简化)
 
-    print(f"\n运行PnP-ULA ({n_iter}步, $\\delta$={delta}, $\\varepsilon$={epsilon:.4f})...")
+    print(f"\n运行PnP-ULA ({n_iter}步, δ={delta}, ε={epsilon:.4f})...")
     print(f"  预计耗时: {'~3分钟(CPU)' if device.type == 'cpu' else '~30秒(GPU)'}")
 
     # 初始化
@@ -509,6 +538,9 @@ if HAS_MODEL:
     psnr_mmse = psnr(x_mmse, x_true)
 
     # 后验方差（像素级不确定性）
+    # 注意: 这里仅用burn-in后的100个样本估计方差
+    # 这些样本是高度自相关的相邻迭代, 未做thinning/降相关处理
+    # 统计上方差可能被低估, 实际应用中应增加样本数或使用thinning
     if len(samples) > 1:
         x_var = torch.stack(samples).var(dim=0)
         mean_var = x_var.mean().item()
@@ -649,23 +681,23 @@ print(f"\n{'='*60}")
 print("实验6.7-2 总结")
 print(f"{'='*60}")
 print("\n1. 从DnCNN通过Tweedie等式构建得分估计器:")
-print(r"   $s_\theta(x,\varepsilon) = (D_\varepsilon(x) - x) / \varepsilon^2$")
+print("   s_θ(x,ε) = (D_ε(x) - x) / ε²")
 print("   这正是6.6节'去噪器作为得分估计器'的实践验证")
 print("\n2. 学习得分驱动的PnP-ULA:")
-print(r"   $X_{m+1} = X_m - \delta\nabla f(X_m) + \delta \cdot s_\theta(X_m,\varepsilon) + \sqrt{2\delta} \cdot Z$")
+print("   X_{m+1} = X_m - δ∇f(X_m) + δ · s_θ(X_m,ε) + √(2δ) · Z")
 print("   三步解读: 似然梯度步(数据) + 先验得分步(知识) + 探索噪声(随机性)")
 if HAS_MODEL:
-    print(f"   去卷积$\\mathrm{{PSNR}}$: {psnr_init:.1f} $\\to$ {psnr_mmse:.1f} dB")
+    print(f"   去卷积PSNR: {psnr_init:.1f} → {psnr_mmse:.1f} dB")
 else:
-    print(r"   去卷积PSNR: 15.2 $\to$ 27.1 dB (引用6.7节数据)")
+    print("   去卷积PSNR: 15.2 → 27.1 dB (引用6.7节数据)")
 print("\n3. 学习先验 vs 手工先验:")
-print("   - TV先验: 手工设计, staircase效应, $\\mathrm{PSNR}\\approx24.8$dB")
-print("   - 学习先验: 数据驱动, 自然重建, $\\mathrm{PSNR}\\approx27.1$dB")
+print("   - TV先验: 手工设计, staircase效应, PSNR≈24.8dB")
+print("   - 学习先验: 数据驱动, 自然重建, PSNR≈27.1dB")
 print("   - 得分匹配训练使得数据驱动的先验得分成为可能")
 print("\n4. 本章核心论点的实践验证:")
 print("   得分匹配解决了'得分从哪来'的问题")
 print("   PnP-ULA解决了'如何用得分做后验采样'的问题")
-print("   两者组合 $\\to$ 数据驱动的逆问题求解框架")
+print("   两者组合 → 数据驱动的逆问题求解框架")
 
 print(f"\n{'='*60}")
 print("第六章配套实验完成!")

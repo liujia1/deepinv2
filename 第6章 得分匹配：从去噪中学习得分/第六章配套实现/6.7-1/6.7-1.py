@@ -5,7 +5,7 @@
 
 知识点:
   - NCSN多噪声水平训练 (MNIST + ConditionalBatchNorm2d)
-  - DSM训练目标与 $\\lambda(\\sigma) = \\sigma^2$ 加权
+  - DSM训练目标与 λ(σ) = σ² 加权
   - 退火Langevin动力学无条件采样
   - 采样轨迹可视化: 从大噪声到小噪声逐步去噪
   - SMLD与扩散模型的桥梁
@@ -191,14 +191,14 @@ sigma_max = 1.0
 sigmas = torch.tensor([sigma_min * (sigma_max / sigma_min) ** (i / (L - 1))
                        for i in range(L)])
 sigmas_dev = sigmas.to(device)
-print(f"\n噪声调度 (L={L}): $\\sigma$ = {[f'{s:.4f}' for s in sigmas.tolist()]}")
+print(f"\n噪声调度 (L={L}): σ = {[f'{s:.4f}' for s in sigmas.tolist()]}")
 
 
 # ============================================================
 # NCSN网络架构 (ConditionalBatchNorm2d + UNet风格CNN)
 # ============================================================
 class ConditionalBatchNorm2d(torch.nn.Module):
-    """条件批归一化: 将噪声水平 $\\sigma$ 编码后注入每个残差块"""
+    """条件批归一化: 将噪声水平 σ 编码后注入每个残差块"""
     def __init__(self, num_features, num_sigmas):
         super().__init__()
         self.bn = torch.nn.BatchNorm2d(num_features, affine=False)
@@ -218,7 +218,7 @@ class NCSN_MNIST(torch.nn.Module):
     """NCSN得分网络 (MNIST, UNet风格 + 条件批归一化)
 
     输入: 含噪图像 x (B,1,28,28) + 噪声水平索引 sigma_idx (B,)
-    输出: 得分估计 $s_\\theta(x, \\sigma)$ (B,1,28,28)
+    输出: 得分估计 s_θ(x, σ) (B,1,28,28)
     """
     def __init__(self, num_sigmas=10, base_ch=64):
         super().__init__()
@@ -281,10 +281,10 @@ print(f"\n{'='*60}")
 print("步骤1: NCSN训练 (MNIST)")
 print(f"{'='*60}")
 print("\n[核心思想]")
-print("  使用 $L$ 个噪声水平 $\\sigma_1 > \\sigma_2 > \\cdots > \\sigma_L$ 训练NCSN,")
+print("  使用 L 个噪声水平 σ₁ > σ₂ > ... > σ_L 训练NCSN,")
 print("  大噪声'填满'低密度区域, 小噪声保留分布细节.")
-print("  DSM目标: $\\sigma^2 \\cdot \\|s_\\theta(\\tilde{x}, \\sigma) + z/\\sigma\\|^2$")
-print("  $\\lambda(\\sigma) = \\sigma^2$ 加权使各噪声水平贡献均匀.")
+print("  DSM目标: σ² · ||s_θ(x̃, σ) + z/σ||²")
+print("  λ(σ) = σ² 加权使各噪声水平贡献均匀.")
 
 # 加载MNIST数据集
 from torch.utils.data import DataLoader
@@ -362,7 +362,7 @@ if not is_final:
                 z = torch.randn_like(x_batch)
                 x_noisy = x_batch + sigma_i * z
 
-                # DSM目标: $\\sigma^2 \\cdot \\|s_\\theta(\\tilde{x}, \\sigma) + z/\\sigma\\|^2$
+                # DSM目标: σ² · ||s_θ(x̃, σ) + z/σ||²
                 pred = model(x_noisy, sigma_idx)
                 target = -z / sigma_i
                 loss = torch.mean((pred - target) ** 2 * sigma_i ** 2)
@@ -428,8 +428,8 @@ print("步骤2: 退火Langevin无条件采样生成图像")
 print(f"{'='*60}")
 print("\n[退火Langevin动力学]")
 print("  从纯噪声开始, 从大噪声到小噪声逐步采样:")
-print("  $x_{t+1} = x_t + \\frac{\\alpha_i}{2} s_\\theta(x_t, \\sigma_i) + \\sqrt{\\alpha_i} z$")
-print("  步长 $\\alpha_i = \\epsilon \\cdot \\sigma_i^2 / \\sigma_L^2$ 随噪声水平自适应调整.")
+print("  x_{t+1} = x_t + (α_i/2) · s_θ(x_t, σ_i) + √α_i · z")
+print("  步长 α_i = ε · σ_i² / σ_L² 随噪声水平自适应调整.")
 
 
 def annealed_langevin_sample(model, sigmas, n_samples=16, T=100, eps=2e-5):
@@ -463,7 +463,7 @@ def annealed_langevin_sample(model, sigmas, n_samples=16, T=100, eps=2e-5):
 
 
 n_samples = 16
-print(f"\n运行退火Langevin采样 (n_samples={n_samples}, T=100, $\\epsilon$=2e-5)...")
+print(f"\n运行退火Langevin采样 (n_samples={n_samples}, T=100, ε=2e-5)...")
 t_start = time.time()
 samples = annealed_langevin_sample(model, sigmas_dev, n_samples=n_samples, T=100, eps=2e-5)
 t_elapsed = time.time() - t_start
@@ -497,12 +497,14 @@ model.eval()
 x_traj = torch.randn(1, 1, 28, 28, device=device) * sigmas_dev[-1]  # 从最大噪声初始化
 trajectory = [x_traj[0, 0].cpu().numpy()]
 
-# 记录关键噪声水平处的图像
-checkpoints = [9, 7, 5, 3, 1, 0]
+# 记录关键噪声水平处的图像（动态生成）
+n_checkpoints = min(6, L)  # 最多6个checkpoint
+checkpoints = [int(i) for i in np.linspace(L-1, 0, n_checkpoints).astype(int)]
 cp_idx = 0
 with torch.no_grad():
     for i in range(L - 1, -1, -1):
         alpha = 2e-5 * (sigmas_dev[i] / sigmas_dev[-1]) ** 2
+        alpha = torch.clamp(alpha, min=0)  # 数值保护
         sigma_idx = torch.full((1,), i, dtype=torch.long, device=device)
         for t in range(100):
             score = model(x_traj, sigma_idx)
@@ -512,9 +514,10 @@ with torch.no_grad():
             trajectory.append(torch.clamp(x_traj, 0, 1)[0, 0].cpu().numpy())
             cp_idx += 1
 
-# 轨迹可视化
-sigma_labels = [r'$\mathrm{init}$', r'$\sigma\approx0.60$', r'$\sigma\approx0.36$',
-                r'$\sigma\approx0.13$', r'$\sigma\approx0.05$', r'$\sigma\approx0.01$']
+# 轨迹可视化（动态生成标签）
+sigma_labels = [r'$\mathrm{init}$']
+for idx in checkpoints:
+    sigma_labels.append(f'σ≈{sigmas[idx].item():.2f}')
 
 fig, axes = plt.subplots(1, len(trajectory), figsize=(12, 3))
 for j, (ax, img) in enumerate(zip(axes, trajectory)):
@@ -535,33 +538,24 @@ print(f"\n{'='*60}")
 print("实验6.7-1 总结")
 print(f"{'='*60}")
 print("\n1. NCSN训练 (步骤1):")
-print(f"   - 噪声调度: $\\sigma_1={sigmas[0]:.2f} \\to \\sigma_L={sigmas[-1]:.4f}$, 几何级数排列")
+print(f"   - 噪声调度: σ₁={sigmas[0]:.2f} → σ_L={sigmas[-1]:.4f}, 几何级数排列")
 print("   - ConditionalBatchNorm2d: 将噪声水平编码后注入每个残差块")
-print("   - DSM目标: $\\sigma^2 \\cdot \\|s_\\theta(\\tilde{x}, \\sigma) + z/\\sigma\\|^2$")
+print("   - DSM目标: σ² · ||s_θ(x̃, σ) + z/σ||²")
 if train_losses:
     print(f"   - 最终训练损失: {train_losses[-1]:.6f}")
 print("\n2. 退火Langevin采样 (步骤2):")
 print("   - 从纯噪声开始, 从大噪声到小噪声逐步采样")
-print("   - 步长 $\\alpha_i = \\epsilon \\cdot \\sigma_i^2 / \\sigma_L^2$ 自适应调整")
+print("   - 步长 α_i = ε · σ_i² / σ_L² 自适应调整")
 print("   - 生成结果: MNIST风格的手写数字图像")
 print("\n3. 采样轨迹 (步骤3):")
 print("   - 大噪声阶段: 粗粒度结构出现")
 print("   - 中噪声阶段: 形状和纹理清晰化")
 print("   - 小噪声阶段: 细节精细化")
 print("\n4. SMLD与扩散模型的桥梁:")
-print("   - 噪声调度 $\\leftrightarrow$ 时间步, 退火Langevin $\\leftrightarrow$ 逆向SDE")
+print("   - 噪声调度 <-> 时间步, 退火Langevin <-> 逆向SDE")
 print("   - NCSN = 离散化扩散模型, 第7章将展示连续化版本")
 print("   - 核心洞见: 得分匹配解决了'得分从哪来'的问题,")
 print("     退火Langevin解决了'如何用多时间步得分做高质量采样'的问题")
 
 print(f"\n{'='*60}")
 print("第六章配套实验完成!")
-print(f"{'='*60}")
-print("实验列表:")
-print("  6.1-1: 归一化常数困境与得分匹配动机")
-print("  6.2-1: ESM与ISM的验证")
-print("  6.3-1: 去噪得分匹配(DSM)训练与验证")
-print("  6.4-1: Hutchinson迹估计与切片得分匹配(SSM)")
-print("  6.5-1: 多尺度得分匹配与退火Langevin采样")
-print("  6.6-1: 从去噪器中提取得分函数(Tweedie等式实践)")
-print("  6.7-1: SMLD完整实现——从零训练到图像生成")
