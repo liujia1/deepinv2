@@ -185,7 +185,7 @@ CHECKPOINT_PATH = os.path.join(SAVE_DIR, 'ncsn_mnist_checkpoint.pth')
 # ============================================================
 # 噪声调度: 几何级数
 # ============================================================
-L = 10
+L = 6  # 简化: 减少噪声水平数量以加快训练
 sigma_min = 0.01
 sigma_max = 1.0
 sigmas = torch.tensor([sigma_min * (sigma_max / sigma_min) ** (i / (L - 1))
@@ -198,7 +198,13 @@ print(f"\n噪声调度 (L={L}): σ = {[f'{s:.4f}' for s in sigmas.tolist()]}")
 # NCSN网络架构 (ConditionalBatchNorm2d + UNet风格CNN)
 # ============================================================
 class ConditionalBatchNorm2d(torch.nn.Module):
-    """条件批归一化: 将噪声水平 σ 编码后注入每个残差块"""
+    """条件批归一化: 将噪声水平 σ 编码后注入每个残差块
+
+    与 NCSN 官方实现一致 (songyang/ncsn):
+    - BatchNorm2d(affine=False): 去除可学习 affine 参数
+    - 通过 Embedding 层根据噪声水平注入 gamma/beta
+    - 训练时依赖 batch 统计量, 需要足够大的 batch size
+    """
     def __init__(self, num_features, num_sigmas):
         super().__init__()
         self.bn = torch.nn.BatchNorm2d(num_features, affine=False)
@@ -266,8 +272,8 @@ class NCSN_MNIST(torch.nn.Module):
         d1 = self.dec1[0](b)            # Upsample: 7->14
         d1 = self.dec1[1](d1)           # Conv2d
         d1 = self.dec1[2](d1, sigma_idx)  # ConditionalBatchNorm2d
-        d1 = self.dec1[3](d1)           # SiLU  -> (B, base_ch, 14, 14)
-        d2 = self.dec2[0](d1 + e2)      # Upsample: 14->28, skip=e2(14x14)
+        d1 = self.dec1[3](d1)           # SiLU  -> (B, base_ch*2, 14, 14)
+        d2 = self.dec2[0](d1)           # Upsample: 14->28
         d2 = self.dec2[1](d2)           # Conv2d
         d2 = self.dec2[2](d2, sigma_idx)  # ConditionalBatchNorm2d
         d2 = self.dec2[3](d2)           # SiLU  -> (B, base_ch, 28, 28)
@@ -296,8 +302,9 @@ train_dataset = datasets.MNIST(root=os.path.join(SAVE_DIR, 'data'), train=True,
 train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=0)
 
 # 初始化模型
-model = NCSN_MNIST(num_sigmas=L).to(device)
+model = NCSN_MNIST(num_sigmas=L, base_ch=32).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.5)
 
 # Checkpoint加载逻辑
 start_epoch = 0
@@ -317,25 +324,45 @@ if os.path.exists(CHECKPOINT_PATH):
         print(f"✓ 这是最终训练完成的模型, 直接加载, 跳过训练过程")
         print(f"  训练轮数: {checkpoint['epoch']+1}")
         print(f"  最终损失: {checkpoint['loss']:.6f}")
-        model.load_state_dict(checkpoint['model_state_dict'])
+        try:
+            model.load_state_dict(checkpoint['model_state_dict'])
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"检测到 checkpoint 与当前模型架构不兼容:\n{e}\n"
+                f"可能原因: 模型架构已更新 (如 base_ch 或 skip connection 变更).\n"
+                f"请删除 checkpoint 文件后重新训练:\n"
+                f"  {CHECKPOINT_PATH}"
+            )
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        if 'scheduler_state_dict' in checkpoint:
+            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         train_losses = checkpoint.get('train_losses', [])
         start_epoch = checkpoint['epoch'] + 1
         is_final = True
     else:
         print(f"检测到未完成的训练, 从第 {checkpoint['epoch']+1} 轮继续")
-        model.load_state_dict(checkpoint['model_state_dict'])
+        try:
+            model.load_state_dict(checkpoint['model_state_dict'])
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"检测到 checkpoint 与当前模型架构不兼容:\n{e}\n"
+                f"可能原因: 模型架构已更新 (如 base_ch 或 skip connection 变更).\n"
+                f"请删除 checkpoint 文件后重新训练:\n"
+                f"  {CHECKPOINT_PATH}"
+            )
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        if 'scheduler_state_dict' in checkpoint:
+            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         train_losses = checkpoint.get('train_losses', [])
         start_epoch = checkpoint['epoch'] + 1
 
 # 训练循环
 if not is_final:
-    num_epochs = 50
-    # 快速验证模式: 设置环境变量 QUICK_TEST=1 可仅训练2轮
+    num_epochs = 30  # 简化: 减少训练轮数以加快实验
+    # 快速验证模式: 设置环境变量 QUICK_TEST=1 可仅训练3轮
     import os as _os
     if _os.environ.get('QUICK_TEST', '') == '1':
-        num_epochs = 2
+        num_epochs = 3
         print(f"\n[快速验证模式] 仅训练 {num_epochs} 轮")
     print(f"\n训练 NCSN ({L} 个噪声水平, 共 {num_epochs} 轮)...")
     t_start = time.time()
@@ -375,14 +402,17 @@ if not is_final:
 
             avg_loss = epoch_loss / len(train_loader)
             train_losses.append(avg_loss)
+            scheduler.step()
+            current_lr = optimizer.param_groups[0]['lr']
             if (epoch + 1) % (10 if num_epochs >= 10 else 1) == 0:
-                print(f"  Epoch {epoch+1}/{num_epochs}: DSM Loss = {avg_loss:.4f}")
+                print(f"  Epoch {epoch+1}/{num_epochs}: DSM Loss = {avg_loss:.4f}, LR = {current_lr:.6f}")
 
                 # 保存中间checkpoint
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
+                    'scheduler_state_dict': scheduler.state_dict(),
                     'loss': avg_loss,
                     'train_losses': train_losses,
                     'is_final': False
@@ -397,6 +427,7 @@ if not is_final:
             'epoch': start_epoch - 1 if start_epoch >= num_epochs else num_epochs - 1,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
             'loss': train_losses[-1],
             'train_losses': train_losses,
             'is_final': True
@@ -462,17 +493,18 @@ def annealed_langevin_sample(model, sigmas, n_samples=16, T=100, eps=2e-5):
     return torch.clamp(x, 0, 1)
 
 
-n_samples = 16
-print(f"\n运行退火Langevin采样 (n_samples={n_samples}, T=100, ε=2e-5)...")
+n_samples = 9  # 简化: 减少生成样本数
+# 退火Langevin采样超参数: 简化版 T=50
+print(f"\n运行退火Langevin采样 (n_samples={n_samples}, T=50, ε=2e-5)...")
 t_start = time.time()
-samples = annealed_langevin_sample(model, sigmas_dev, n_samples=n_samples, T=100, eps=2e-5)
+samples = annealed_langevin_sample(model, sigmas_dev, n_samples=n_samples, T=50, eps=2e-5)
 t_elapsed = time.time() - t_start
 print(f"采样完成, 耗时: {t_elapsed:.1f} 秒")
 
 # 可视化生成样本
-fig, axes = plt.subplots(4, 4, figsize=(6, 6))
+fig, axes = plt.subplots(3, 3, figsize=(6, 6))
 for i in range(n_samples):
-    row, col = i // 4, i % 4
+    row, col = i // 3, i % 3
     axes[row, col].imshow(samples[i, 0].cpu().numpy(), cmap='gray')
     axes[row, col].axis('off')
 plt.suptitle('步骤2: 退火Langevin生成样本')
@@ -498,7 +530,7 @@ x_traj = torch.randn(1, 1, 28, 28, device=device) * sigmas_dev[-1]  # 从最大�
 trajectory = [x_traj[0, 0].cpu().numpy()]
 
 # 记录关键噪声水平处的图像（动态生成）
-n_checkpoints = min(6, L)  # 最多6个checkpoint
+n_checkpoints = min(5, L)  # 简化: 减少checkpoint数量
 checkpoints = [int(i) for i in np.linspace(L-1, 0, n_checkpoints).astype(int)]
 cp_idx = 0
 with torch.no_grad():
@@ -506,7 +538,7 @@ with torch.no_grad():
         alpha = 2e-5 * (sigmas_dev[i] / sigmas_dev[-1]) ** 2
         alpha = torch.clamp(alpha, min=0)  # 数值保护
         sigma_idx = torch.full((1,), i, dtype=torch.long, device=device)
-        for t in range(100):
+        for t in range(50):  # 简化: 减少每级步数
             score = model(x_traj, sigma_idx)
             z = torch.randn_like(x_traj)
             x_traj = x_traj + alpha / 2 * score + torch.sqrt(alpha) * z
@@ -515,7 +547,7 @@ with torch.no_grad():
             cp_idx += 1
 
 # 轨迹可视化（动态生成标签）
-sigma_labels = [r'$\mathrm{init}$']
+sigma_labels = ['init']
 for idx in checkpoints:
     sigma_labels.append(f'σ≈{sigmas[idx].item():.2f}')
 
