@@ -23,6 +23,7 @@
 """
 
 import numpy as np
+from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
@@ -35,7 +36,7 @@ import logging
 
 # 设置控制台输出为 UTF-8 (Windows 下避免中文乱码)
 if sys.platform == 'win32':
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
 
 # 静默 matplotlib 相关警告
 logging.getLogger('matplotlib').setLevel(logging.ERROR)
@@ -377,7 +378,8 @@ if not is_final:
     if not is_final:
         for epoch in range(start_epoch, num_epochs):
             epoch_loss = 0.0
-            for x_batch, _ in train_loader:
+            pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{num_epochs}', leave=False, unit='batch')
+            for x_batch, _ in pbar:
                 x_batch = x_batch.to(device)
                 b = x_batch.size(0)
 
@@ -399,6 +401,7 @@ if not is_final:
                 optimizer.step()
 
                 epoch_loss += loss.item()
+                pbar.set_postfix(loss=f'{loss.item():.4f}')
 
             avg_loss = epoch_loss / len(train_loader)
             train_losses.append(avg_loss)
