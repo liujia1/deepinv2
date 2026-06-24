@@ -672,6 +672,7 @@ if HAS_MODEL:
     plt.savefig(os.path.join(SAVE_DIR, '步骤2_PnPULA收敛曲线.png'), dpi=150, bbox_inches='tight')
     plt.close()
     print(f"图表已保存: 步骤2_PnPULA收敛曲线.png")
+    print("[备注] 教学简化参数 (500步), 链尚未收敛; 实际PnP-ULA需数千~上万步迭代")
 
 
 # ============================================================
