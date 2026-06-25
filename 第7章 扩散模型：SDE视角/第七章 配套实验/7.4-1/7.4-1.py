@@ -36,6 +36,7 @@ import sys
 import io
 import warnings
 import logging
+from scipy import stats as sp_stats
 
 # 设置控制台输出为 UTF-8 (Windows 下避免中文乱码)
 if sys.platform == 'win32':
@@ -72,92 +73,6 @@ else:
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 
 os.makedirs(_chinese_path, exist_ok=True)
-
-# 在Colab或本地首次运行时自动创建chinese_font.py
-_chinese_font_path = os.path.join(_chinese_path, 'chinese_font.py')
-if not os.path.exists(_chinese_font_path):
-    print("正在创建中文字体配置模块...")
-    _chinese_font_code = '''# -*- coding: utf-8 -*-
-"""
-中文显示支持模块 - 兼容 Windows / Linux / Colab
-"""
-import os
-import sys
-import platform
-import warnings
-import logging
-import matplotlib.pyplot as plt
-from matplotlib.font_manager import FontManager
-
-logging.getLogger('matplotlib').setLevel(logging.ERROR)
-logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.filterwarnings("ignore", message=".*U\\\\+2212.*")
-warnings.filterwarnings("ignore", message=".*glyph.*")
-plt.rcParams['axes.unicode_minus'] = False
-
-def _find_chinese_font():
-    candidates = []
-    if platform.system() == 'Windows':
-        candidates = ['SimHei', 'Microsoft YaHei', 'KaiTi', 'FangSong']
-    else:
-        candidates = ['WenQuanYi Micro Hei', 'WenQuanYi Zen Hei', 'Noto Sans CJK SC', 'Noto Sans CJK', 'Source Han Sans SC', 'AR PL UMing CN', 'SimHei']
-    fm = FontManager()
-    available = set(f.name for f in fm.ttflist)
-    for font in candidates:
-        if font in available:
-            return font
-    import re
-    cjk_patterns = ['cjk', 'wqy', 'noto.*cjk', 'wenquan', 'chinese', 'simhei']
-    for f in fm.ttflist:
-        name_lower = f.name.lower()
-        fname_lower = (os.path.basename(f.fname) if hasattr(f, 'fname') else '').lower()
-        for pat in cjk_patterns:
-            if re.search(pat, name_lower) or re.search(pat, fname_lower):
-                return f.name
-    return None
-
-def setup_chinese_font(save_dir=None):
-    if save_dir is None:
-        save_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
-    _cn_font = _find_chinese_font()
-    if _cn_font:
-        plt.rcParams['font.sans-serif'] = [_cn_font] + plt.rcParams.get('font.sans-serif', [])
-        plt.rcParams['font.family'] = 'sans-serif'
-        print(f"[Font] 已检测到中文字体: {_cn_font}")
-        return _cn_font
-    if platform.system() != 'Windows':
-        _font_url = 'https://github.com/jsntn/webfonts/raw/master/NotoSansSC-Regular.ttf'
-        _font_file = os.path.join(save_dir, 'NotoSansSC-Regular.ttf')
-        if os.path.exists(_font_file):
-            from matplotlib.font_manager import fontManager
-            fontManager.addfont(_font_file)
-            plt.rcParams['font.sans-serif'] = ['Noto Sans SC'] + plt.rcParams.get('font.sans-serif', [])
-            plt.rcParams['font.family'] = 'sans-serif'
-            print(f"[Font] 已加载缓存字体: Noto Sans SC")
-            return 'Noto Sans SC'
-        else:
-            try:
-                import urllib.request
-                print(f"[Font] 正在下载中文字体 NotoSansSC...")
-                urllib.request.urlretrieve(_font_url, _font_file)
-                from matplotlib.font_manager import fontManager
-                fontManager.addfont(_font_file)
-                plt.rcParams['font.sans-serif'] = ['Noto Sans SC'] + plt.rcParams.get('font.sans-serif', [])
-                plt.rcParams['font.family'] = 'sans-serif'
-                print(f"[Font] 已下载并注册中文字体: Noto Sans SC")
-                return 'Noto Sans SC'
-            except Exception as e:
-                print(f"[Font] 字体下载失败: {e}")
-    else:
-        print("[Font] 未找到中文字体")
-    return None
-
-__all__ = ['setup_chinese_font']
-'''
-    with open(_chinese_font_path, 'w', encoding='utf-8') as f:
-        f.write(_chinese_font_code)
-    print(f"[Font] 已创建字体配置模块: {_chinese_font_path}")
 
 sys.path.insert(0, _chinese_path)
 try:
@@ -321,6 +236,8 @@ def ddim_sample_vp(score_fn, N_particles, N_steps, T=1.0, eta=0.0,
         dir_xt = np.sqrt(max(1 - alpha_bar_prev - sigma_eta**2, 0)) * eps_theta
 
         # DDIM更新
+        # 注：当 t_prev=0 时，alpha_bar_prev=1，sigma_eta=0，dir_xt系数为0
+        # 最后一步退化为 x = x0_hat（Tweedie估计），这是DDIM的标准设计
         noise = np.random.randn(N_particles) * sigma_eta if sigma_eta > 0 else 0
         x = np.sqrt(alpha_bar_prev) * x0_hat + dir_xt + noise
 
@@ -334,6 +251,15 @@ ddim_traj = ddim_sample_vp(vp_score_analytic, N_particles, 200, eta=0.0)
 ddim_final = ddim_traj[-1]
 
 print(f"DDIM(η=0)采样结果: μ={np.mean(ddim_final):.4f}, σ²={np.var(ddim_final):.4f}")
+
+# 验证DDIM(η=0)与PF-ODE的等价性
+# 使用相同初始噪声和步数，比较两者最终样本的KS距离
+try:
+    ks_ddim_vs_pde, _ = sp_stats.ks_2samp(ddim_final, pf_final)
+    print(f"DDIM(η=0) vs PF-ODE KS距离: {ks_ddim_vs_pde:.4f} (应接近0，验证等价性)")
+except:
+    ks_ddim_vs_pde = abs(np.mean(ddim_final) - np.mean(pf_final))
+    print(f"DDIM(η=0) vs PF-ODE 均值差: {ks_ddim_vs_pde:.4f}")
 
 # DDPM采样（η=1，随机）
 np.random.seed(42)
@@ -364,7 +290,6 @@ for eta in eta_values:
     eta_results[eta] = final
 
     # 用直方图与目标分布的交叉熵衡量质量
-    from scipy import stats as sp_stats
     try:
         ks_stat, _ = sp_stats.ks_2samp(final, x0_ref)
     except:
@@ -394,19 +319,20 @@ results = {'DDPM': [], 'DDIM': [], 'DDPM_time': [], 'DDIM_time': []}
 
 for n_steps in step_counts:
     # DDPM (η=1)
+    # 注：DDPM和DDIM使用相同的seed(42)和相同初始噪声，这是控制变量法
+    # 确保两者从相同的初始点出发，公平对比生成质量
     np.random.seed(42)
     t0 = time.time()
     traj_ddpm = ddim_sample_vp(vp_score_analytic, 3000, n_steps, eta=1.0)
     t_ddpm = time.time() - t0
 
     # DDIM (η=0)
-    np.random.seed(42)
+    np.random.seed(42)  # 重置seed，确保与DDPM使用相同的初始噪声
     t0 = time.time()
     traj_ddim = ddim_sample_vp(vp_score_analytic, 3000, n_steps, eta=0.0)
     t_ddim = time.time() - t0
 
     try:
-        from scipy import stats as sp_stats
         ks_ddpm, _ = sp_stats.ks_2samp(traj_ddpm[-1], x0_ref[:3000])
         ks_ddim, _ = sp_stats.ks_2samp(traj_ddim[-1], x0_ref[:3000])
     except:
@@ -457,12 +383,12 @@ for i, eta in enumerate(eta_values):
                  color=plt.cm.coolwarm(eta))
     axes[i].plot(x_grid, gm1d_pdf(x_grid), 'r--', lw=2, label='Target')
     label = 'DDIM' if eta == 0 else ('DDPM' if eta == 1 else '')
-    axes[i].set_title(f'η={eta:.2f} {label}')
+    axes[i].set_title(f'$\\eta$={eta:.2f} {label}')
     axes[i].set_xlim(-6, 6)
     axes[i].legend(fontsize=8)
     axes[i].grid(alpha=0.3)
 
-fig.suptitle('温度参数η：DDIM(η=0) ↔ DDPM(η=1) 连续插值', fontsize=13)
+fig.suptitle('温度参数$\\eta$：DDIM($\\eta$=0) $\\leftrightarrow$ DDPM($\\eta$=1) 连续插值', fontsize=13)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤3_η插值.png'), dpi=150, bbox_inches='tight')
 plt.close()
@@ -470,8 +396,8 @@ plt.close()
 # 图3：DDPM vs DDIM质量对比
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
-ax1.plot(step_counts, results['DDPM'], 'bo-', lw=2, markersize=8, label='DDPM (η=1)')
-ax1.plot(step_counts, results['DDIM'], 'gs-', lw=2, markersize=8, label='DDIM (η=0)')
+ax1.plot(step_counts, results['DDPM'], 'bo-', lw=2, markersize=8, label='DDPM ($\\eta$=1)')
+ax1.plot(step_counts, results['DDIM'], 'gs-', lw=2, markersize=8, label='DDIM ($\\eta$=0)')
 ax1.set_xlabel('采样步数')
 ax1.set_ylabel('KS统计量（越小越好）')
 ax1.set_title('DDPM vs DDIM 采样质量')
@@ -491,26 +417,21 @@ plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤4_DDPM_vs_DDIM.png'), dpi=150, bbox_inches='tight')
 plt.close()
 
-# 图4：DDPM vs DDIM vs PF-ODE 统一框架
-# ★ 原创设计：展示三种方法的关系
-fig, ax = plt.subplots(1, 1, figsize=(10, 6))
-ax.axis('off')
-table_text = [
-    ['方法', '逆向SDE', 'PF-ODE', 'DDPM', 'DDIM'],
-    ['连续方程', 'dx=[f-g²∇log p]dt+gd̄w', 'dx=[f-½g²∇log p]dt', '—', '—'],
-    ['离散化', 'Euler-Maruyama', 'Euler', 'EM on reverse VP', 'Euler on PF-ODE'],
-    ['随机性', '有(布朗运动)', '无(确定性)', '有(η=1)', '无(η=0)'],
-    ['温度η', '—', '—', 'η=1', 'η=0'],
-    ['边际分布', 'p_t(x)', 'p_t(x)（等价）', '≈p_t(x)', '≈p_t(x)'],
-    ['步数需求', '多(~1000)', '少(~20-50)', '多(~1000)', '少(~50)'],
-    ['可控性', '低', '高(插值/编辑)', '低', '高'],
-]
-ax.table(cellText=table_text[1:], colLabels=table_text[0],
-         loc='center', cellLoc='center')
-ax.set_title('DDPM、DDIM、逆向SDE、PF-ODE统一框架', fontsize=14, pad=20)
-plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤4_统一框架对比.png'), dpi=150, bbox_inches='tight')
-plt.close()
+# 统一框架对比（以文字形式输出，不单独生成图片）
+# ★ 原创设计：展示四种方法的关系
+print("\n" + "=" * 60)
+print("DDPM、DDIM、逆向SDE、PF-ODE 统一框架对比")
+print("=" * 60)
+print(f"{'方法':<10} {'逆向SDE':<22} {'PF-ODE':<22} {'DDPM':<14} {'DDIM':<14}")
+print(f"{'连续方程':<8} {'dx=[f-g²∇log p]dt+gd̄w':<22} {'dx=[f-½g²∇log p]dt':<22} {'—':<14} {'—':<14}")
+print(f"{'离散化':<8} {'Euler-Maruyama':<22} {'Euler':<22} {'EM on rev VP':<14} {'Euler on PF':<14}")
+print(f"{'随机性':<8} {'有(布朗运动)':<22} {'无(确定性)':<22} {'有(η=1)':<14} {'无(η=0)':<14}")
+print(f"{'温度η':<8} {'—':<22} {'—':<22} {'η=1':<14} {'η=0':<14}")
+print(f"{'边际分布':<8} {'p_t(x)':<22} {'p_t(x)（等价）':<22} {'≈p_t(x)':<14} {'≈p_t(x)':<14}")
+print(f"{'步数需求':<8} {'多(~1000)*':<22} {'少(~20-50)':<22} {'多(~1000)*':<14} {'少(~50)':<14}")
+print(f"{'可控性':<8} {'低':<22} {'高(插值/编辑)':<22} {'低':<14} {'高':<14}")
+print()
+print("注：带*的步数需求为文献中的典型经验值，本实验步骤4最大测试到500步")
 
 
 # ============================================================

@@ -35,87 +35,13 @@ if _IN_COLAB:
     SAVE_DIR = os.path.join(_gdrive, '实验5.6-2')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
     os.makedirs(_chinese_path, exist_ok=True)
-
-    # 在Colab中自动创建chinese_font.py
-    _chinese_font_path = os.path.join(_chinese_path, 'chinese_font.py')
-    if not os.path.exists(_chinese_font_path):
-        print("正在创建中文字体配置模块...")
-        _chinese_font_code = '''# -*- coding: utf-8 -*-
-import os
-import sys
-import platform
-import warnings
-import logging
-import matplotlib.pyplot as plt
-from matplotlib.font_manager import FontManager
-
-logging.getLogger('matplotlib').setLevel(logging.ERROR)
-logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.filterwarnings("ignore", message=".*U\\\\+2212.*")
-warnings.filterwarnings("ignore", message=".*glyph.*")
-plt.rcParams['axes.unicode_minus'] = False
-
-def _find_chinese_font():
-    candidates = []
-    if platform.system() == 'Windows':
-        candidates = ['SimHei', 'Microsoft YaHei', 'KaiTi', 'FangSong']
-    else:
-        candidates = ['WenQuanYi Micro Hei', 'WenQuanYi Zen Hei', 'Noto Sans CJK SC', 'Noto Sans CJK', 'Source Han Sans SC', 'AR PL UMing CN', 'SimHei']
-    fm = FontManager()
-    available = set(f.name for f in fm.ttflist)
-    for font in candidates:
-        if font in available:
-            return font
-    import re
-    cjk_patterns = ['cjk', 'wqy', 'noto.*cjk', 'wenquan', 'chinese', 'simhei']
-    for f in fm.ttflist:
-        name_lower = f.name.lower()
-        fname_lower = (os.path.basename(f.fname) if hasattr(f, 'fname') else '').lower()
-        for pat in cjk_patterns:
-            if re.search(pat, name_lower) or re.search(pat, fname_lower):
-                return f.name
-    return None
-
-def setup_chinese_font(save_dir=None):
-    if save_dir is None:
-        save_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
-    _cn_font = _find_chinese_font()
-    if _cn_font:
-        plt.rcParams['font.sans-serif'] = [_cn_font] + plt.rcParams.get('font.sans-serif', [])
-        plt.rcParams['font.family'] = 'sans-serif'
-        print(f"[Font] 已检测到中文字体: {_cn_font}")
-        return _cn_font
-    if platform.system() != 'Windows':
-        _font_url = 'https://github.com/jsntn/webfonts/raw/master/NotoSansSC-Regular.ttf'
-        _font_file = os.path.join(save_dir, 'NotoSansSC-Regular.ttf')
-        if os.path.exists(_font_file):
-            from matplotlib.font_manager import fontManager
-            fontManager.addfont(_font_file)
-            plt.rcParams['font.sans-serif'] = ['Noto Sans SC'] + plt.rcParams.get('font.sans-serif', [])
-            plt.rcParams['font.family'] = 'sans-serif'
-            return 'Noto Sans SC'
-        else:
-            try:
-                import urllib.request
-                urllib.request.urlretrieve(_font_url, _font_file)
-                from matplotlib.font_manager import fontManager
-                fontManager.addfont(_font_file)
-                plt.rcParams['font.sans-serif'] = ['Noto Sans SC'] + plt.rcParams.get('font.sans-serif', [])
-                return 'Noto Sans SC'
-            except: pass
-    return None
-
-__all__ = ['setup_chinese_font']
-'''
-        with open(_chinese_font_path, 'w', encoding='utf-8') as f:
-            f.write(_chinese_font_code)
 else:
     try:
         SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
     except NameError:
         SAVE_DIR = os.getcwd()
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+    os.makedirs(_chinese_path, exist_ok=True)
 
 sys.path.insert(0, _chinese_path)
 try:

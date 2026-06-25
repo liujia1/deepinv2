@@ -35,6 +35,7 @@ import sys
 import io
 import warnings
 import logging
+from scipy import stats as sp_stats
 
 # 设置控制台输出为 UTF-8 (Windows 下避免中文乱码)
 if sys.platform == 'win32':
@@ -71,92 +72,6 @@ else:
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 
 os.makedirs(_chinese_path, exist_ok=True)
-
-# 在Colab或本地首次运行时自动创建chinese_font.py
-_chinese_font_path = os.path.join(_chinese_path, 'chinese_font.py')
-if not os.path.exists(_chinese_font_path):
-    print("正在创建中文字体配置模块...")
-    _chinese_font_code = '''# -*- coding: utf-8 -*-
-"""
-中文显示支持模块 - 兼容 Windows / Linux / Colab
-"""
-import os
-import sys
-import platform
-import warnings
-import logging
-import matplotlib.pyplot as plt
-from matplotlib.font_manager import FontManager
-
-logging.getLogger('matplotlib').setLevel(logging.ERROR)
-logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.filterwarnings("ignore", message=".*U\\\\+2212.*")
-warnings.filterwarnings("ignore", message=".*glyph.*")
-plt.rcParams['axes.unicode_minus'] = False
-
-def _find_chinese_font():
-    candidates = []
-    if platform.system() == 'Windows':
-        candidates = ['SimHei', 'Microsoft YaHei', 'KaiTi', 'FangSong']
-    else:
-        candidates = ['WenQuanYi Micro Hei', 'WenQuanYi Zen Hei', 'Noto Sans CJK SC', 'Noto Sans CJK', 'Source Han Sans SC', 'AR PL UMing CN', 'SimHei']
-    fm = FontManager()
-    available = set(f.name for f in fm.ttflist)
-    for font in candidates:
-        if font in available:
-            return font
-    import re
-    cjk_patterns = ['cjk', 'wqy', 'noto.*cjk', 'wenquan', 'chinese', 'simhei']
-    for f in fm.ttflist:
-        name_lower = f.name.lower()
-        fname_lower = (os.path.basename(f.fname) if hasattr(f, 'fname') else '').lower()
-        for pat in cjk_patterns:
-            if re.search(pat, name_lower) or re.search(pat, fname_lower):
-                return f.name
-    return None
-
-def setup_chinese_font(save_dir=None):
-    if save_dir is None:
-        save_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
-    _cn_font = _find_chinese_font()
-    if _cn_font:
-        plt.rcParams['font.sans-serif'] = [_cn_font] + plt.rcParams.get('font.sans-serif', [])
-        plt.rcParams['font.family'] = 'sans-serif'
-        print(f"[Font] 已检测到中文字体: {_cn_font}")
-        return _cn_font
-    if platform.system() != 'Windows':
-        _font_url = 'https://github.com/jsntn/webfonts/raw/master/NotoSansSC-Regular.ttf'
-        _font_file = os.path.join(save_dir, 'NotoSansSC-Regular.ttf')
-        if os.path.exists(_font_file):
-            from matplotlib.font_manager import fontManager
-            fontManager.addfont(_font_file)
-            plt.rcParams['font.sans-serif'] = ['Noto Sans SC'] + plt.rcParams.get('font.sans-serif', [])
-            plt.rcParams['font.family'] = 'sans-serif'
-            print(f"[Font] 已加载缓存字体: Noto Sans SC")
-            return 'Noto Sans SC'
-        else:
-            try:
-                import urllib.request
-                print(f"[Font] 正在下载中文字体 NotoSansSC...")
-                urllib.request.urlretrieve(_font_url, _font_file)
-                from matplotlib.font_manager import fontManager
-                fontManager.addfont(_font_file)
-                plt.rcParams['font.sans-serif'] = ['Noto Sans SC'] + plt.rcParams.get('font.sans-serif', [])
-                plt.rcParams['font.family'] = 'sans-serif'
-                print(f"[Font] 已下载并注册中文字体: Noto Sans SC")
-                return 'Noto Sans SC'
-            except Exception as e:
-                print(f"[Font] 字体下载失败: {e}")
-    else:
-        print("[Font] 未找到中文字体")
-    return None
-
-__all__ = ['setup_chinese_font']
-'''
-    with open(_chinese_font_path, 'w', encoding='utf-8') as f:
-        f.write(_chinese_font_code)
-    print(f"[Font] 已创建字体配置模块: {_chinese_font_path}")
 
 sys.path.insert(0, _chinese_path)
 try:
@@ -221,9 +136,16 @@ def vp_drift(x, t):
     """VP-SDE漂移 f(x,t) = -β(t)/2 · x"""
     return -vp_beta(t) / 2 * x
 
-def vp_score_analytic(x, t):
-    """VP-SDE解析得分 ∇log p_t(x)"""
-    mean_t, std_t = vp_marginal(t)
+def vp_score_analytic(x, t, beta_min_val=None, beta_max_val=None):
+    """VP-SDE解析得分 ∇log p_t(x)
+
+    参数:
+        x: 粒子位置
+        t: 时间
+        beta_min_val, beta_max_val: VP-SDE参数，默认使用全局beta_min, beta_max
+            通过显式传参实现依赖注入，避免闭包捕获全局变量导致的隐藏耦合
+    """
+    mean_t, std_t = vp_marginal(t, beta_min_val, beta_max_val)
     pdf = np.zeros_like(x)
     dpdf = np.zeros_like(x)
     weights = [0.3, 0.7]
@@ -271,6 +193,10 @@ x_rev_init = np.random.randn(N_particles)  # 从N(0,I)开始
 rev_snapshots = {1.0: x_rev_init.copy()}
 rev_times = [0.8, 0.5, 0.2, 0.0]
 
+# 预先计算每个目标时间对应的步数索引，避免浮点容差判断
+# i_target表示从T=1.0走到目标时间st需要的步数：i_target = round((T - st) / dt)
+rev_time_to_step = {st: round((T - st) / dt) for st in rev_times}
+
 x_rev = x_rev_init.copy()
 for i in range(N_steps):
     t = T - i * dt  # 原始时间（从T到0）
@@ -281,9 +207,10 @@ for i in range(N_steps):
     # dx = [β/2·x + β·∇log p_t(x)] dτ + √β·dW̃
     x_rev = x_rev + beta_t * dt * (0.5 * x_rev + score) + np.sqrt(beta_t * dt) * np.random.randn(N_particles)
 
-    t_step = t - dt
-    for st in rev_times:
-        if abs(t_step - st) < dt / 2 and st not in rev_snapshots:
+    # 使用步数索引精确匹配，避免浮点累积误差导致的快照缺失
+    next_step = i + 1
+    for st, i_target in rev_time_to_step.items():
+        if next_step == i_target and st not in rev_snapshots:
             rev_snapshots[st] = x_rev.copy()
 
 print(f"DDPM逆向采样完成: Var(x_0)={np.var(x_rev):.4f}")
@@ -330,7 +257,8 @@ def ddpm_sample_vp(score_fn, N_particles, N_steps, T=1.0, beta_min=0.1, beta_max
     for i in range(N_steps):
         t = T - i * h  # 原始时间（从T到0）
         beta_t = beta_min + t * (beta_max - beta_min)
-        score = score_fn(x, t)
+        # 将beta参数显式传递给score_fn，实现依赖注入
+        score = score_fn(x, t, beta_min_val=beta_min, beta_max_val=beta_max)
 
         # DDPM更新（逆时参数化）
         x = x + beta_t * h * (0.5 * x + score) + np.sqrt(beta_t * h) * np.random.randn(N_particles)
@@ -346,9 +274,13 @@ for n_steps in [50, 200, 500, 1000]:
     final = traj[-1]
     mean_diff = abs(np.mean(final) - (0.3 * (-2) + 0.7 * 1))
     var_diff = abs(np.var(final) - np.var(x0))
-    print(f"  DDPM N_steps={n_steps}: mu_diff={mean_diff:.4f}, var_diff={var_diff:.4f}")
+    has_nan = np.isnan(final).any()
+    print(f"  DDPM N_steps={n_steps}: mu_diff={mean_diff:.4f}, var_diff={var_diff:.4f}, NaN={has_nan}")
 
-print("DDPM步数越多，采样质量越高（ε-prediction参数化，数值稳定）")
+print("DDPM步数越多，采样质量越高（解析得分+小步长Euler-Maruyama离散化，数值稳定）")
+print("注：此处'数值稳定'指本实验中解析得分+小步长Euler-Maruyama离散化不易发散（NaN检查可验证）")
+print("（注意：真实DDPM训练时常用ε-prediction参数化神经网络来提升训练稳定性，"
+      "但本实验直接使用解析得分，未涉及网络训练）")
 
 
 # ============================================================
@@ -398,6 +330,9 @@ def smld_sample_ve(score_fn, N_particles, N_steps, T=1.0, sigma_min=0.01, sigma_
         score = score_fn(x, t)
 
         # 退火Langevin步长（与sigma_t^2成正比，确保稳定性）
+        # 注：此公式是针对1D高斯混合示例调整的经验公式，用于教学演示
+        # 原始SMLD/NCSN论文中步长公式为 step_size = α * (σ_i/σ_min)^2
+        # 此处使用σ_max归一化是为了在当前示例中获得稳定的采样效果
         step_size = 0.1 * (sigma_t / sigma_max)**2 + 1e-5
 
         x = x + step_size * score + np.sqrt(2 * step_size) * np.random.randn(N_particles)
@@ -407,6 +342,8 @@ def smld_sample_ve(score_fn, N_particles, N_steps, T=1.0, sigma_min=0.01, sigma_
     return np.array(trajectory)
 
 # SMLD采样
+# 注：VE-SDE在大sigma_max下容易数值不稳定，因此步数只测试到500
+# 相比之下，VP-SDE（DDPM）可以稳定运行到1000步
 for n_steps in [50, 200, 500]:
     np.random.seed(42)
     traj = smld_sample_ve(ve_score_analytic, 5000, n_steps)
@@ -427,19 +364,25 @@ print("=" * 60)
 step_counts = [10, 25, 50, 100, 200, 500, 1000]
 vp_errors = []
 
+# 使用多粒子+多种子平均来降低KS统计量的采样噪声
+# 有限样本的KS估计存在方差（~1/√N），5000粒子不足以展现单调趋势
+N_eval = 20000  # 评估用粒子数（大于x0的10000）
+N_seeds = 3     # 多种子平均
+
 for n_steps in step_counts:
-    np.random.seed(42)
-    traj = ddpm_sample_vp(vp_score_analytic, 5000, n_steps)
-    final = traj[-1]
-    # 用KS统计量衡量与目标分布的距离
-    from scipy import stats as sp_stats
-    try:
-        ks_stat, _ = sp_stats.ks_2samp(final, x0)
-    except:
-        # 如果scipy不可用，用均值差近似
-        ks_stat = abs(np.mean(final) - np.mean(x0))
-    vp_errors.append(ks_stat)
-    print(f"  DDPM N_steps={n_steps}: KS={ks_stat:.4f}")
+    ks_vals = []
+    for seed_offset in range(N_seeds):
+        np.random.seed(42 + seed_offset * 7)
+        traj = ddpm_sample_vp(vp_score_analytic, N_eval, n_steps)
+        final = traj[-1]
+        try:
+            ks_stat, _ = sp_stats.ks_2samp(final, x0)
+        except:
+            ks_stat = abs(np.mean(final) - np.mean(x0))
+        ks_vals.append(ks_stat)
+    ks_mean = np.mean(ks_vals)
+    vp_errors.append(ks_mean)
+    print(f"  DDPM N_steps={n_steps}: KS={ks_mean:.4f} (std={np.std(ks_vals):.4f})")
 
 print("\n结论：步数增加->离散化误差减小->采样质量提升")
 print("这解释了为什么DDPM通常需要1000步，而高阶求解器（DPM-Solver）只需20步")
