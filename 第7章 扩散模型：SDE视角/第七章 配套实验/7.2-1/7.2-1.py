@@ -16,7 +16,6 @@
 """
 
 import numpy as np
-from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
@@ -156,8 +155,6 @@ np.random.seed(42)
 import torch
 torch.manual_seed(42)
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
-
 
 # ============================================================
 # 步骤1：VP-SDE正向加噪
@@ -168,6 +165,8 @@ print("步骤1：VP-SDE正向加噪——从数据到噪声")
 print("=" * 60)
 
 # VP-SDE参数
+# β_min=0.1, β_max=20.0 即 7.1-1 中 T_ddpm×(β̃_min, β̃_max)=1000×(0.0001, 0.02)
+# 这是 SDE 连续时间版本的标准参数化（Song et al. 2021）
 beta_min, beta_max = 0.1, 20.0
 
 def vp_sde_marginal_params(t, beta_min=0.1, beta_max=20.0):
@@ -200,7 +199,8 @@ for t in t_values:
     var_x = np.var(x_t)
     print(f"  t={t:.1f}: mean_t={mean_t:.4f}, std_t={std_t:.4f}, Var(x_t)={var_x:.4f}")
 
-print(f"\nVP-SDE关键性质：Var(x_t) ≤ 1（方差保持）")
+print(f"\nVP-SDE关键性质：Var(x_t) 有界且终态→N(0,1)（方差受控，对比VE-SDE的无界爆炸）")
+print(f"  注：严格的 Var≡1 仅在 Var(x_0)=1 时成立；本例 Var(x_0)≈2.89，终态仍趋于1")
 
 
 # ============================================================
@@ -215,8 +215,8 @@ print("=" * 60)
 sigma_min, sigma_max = 0.01, 50.0
 
 def ve_sde_sigma(t, sigma_min=0.01, sigma_max=50.0):
-    """VE-SDE的σ(t)：几何插值"""
-    return sigma_max * (sigma_min / sigma_max) ** t
+    """VE-SDE的σ(t)：几何插值（t=0: σ_min ≈ 0，t=1: σ_max，方差爆炸）"""
+    return sigma_min * (sigma_max / sigma_min) ** t
 
 # VE-SDE正向过程：x_t = x_0 + σ(t) * epsilon
 ve_trajectories = []
@@ -228,7 +228,7 @@ for t in t_values:
     var_x = np.var(x_t)
     print(f"  t={t:.1f}: σ(t)={sigma_t:.4f}, Var(x_t)={var_x:.4f}")
 
-print(f"\nVE-SDE关键性质：Var(x_t) → ∞（方差爆炸，当t→0时σ(t)→{ve_sde_sigma(0.0):.1f}）")
+print(f"\nVE-SDE关键性质：Var(x_t) → ∞（方差爆炸，当t→1时σ(t)→{ve_sde_sigma(1.0):.1f}）")
 
 
 # ============================================================
@@ -238,6 +238,9 @@ print(f"\nVE-SDE关键性质：Var(x_t) → ∞（方差爆炸，当t→0时σ(t
 print("\n" + "=" * 60)
 print("步骤3：VE-SDE vs VP-SDE系统对比")
 print("=" * 60)
+
+# 注：以下解析曲线以 Var(x_0)=1 为基准进行对比；
+# 步骤1/2的实际分布 Var(x_0)≈2.89，曲线的相对趋势（有界 vs 爆炸）不变。
 
 t_grid = np.linspace(0, 1, 200)
 
@@ -263,7 +266,7 @@ print("-" * 70)
 print(f"{'drift f(x,t)':<15s} | {'0':<25s} | {'-β(t)/2·x':<25s}")
 print(f"{'diffusion g(t)':<15s} | {'√(d[σ²]/dt)':<25s} | {'√β(t)':<25s}")
 print(f"{'discrete':<15s} | {'SMLD/NCSN':<25s} | {'DDPM':<25s}")
-print(f"{'Var(x_t)':<15s} | {'→∞ (explode)':<25s} | {'≤1 (preserve)':<25s}")
+print(f"{'Var(x_t)':<15s} | {'→∞ (爆炸)':<25s} | {'有界，终态→1':<25s}")
 print(f"{'signal scale':<15s} | {'no scaling':<25s} | {'√ᾱ_t decay':<25s}")
 print(f"{'terminal':<15s} | {'large-var Gaussian':<25s} | {'N(0,I)':<25s}")
 
@@ -271,7 +274,7 @@ print(f"{'terminal':<15s} | {'large-var Gaussian':<25s} | {'N(0,I)':<25s}")
 print(f"\nKarras et al. (2022) 统一框架（7.2节）：")
 print(f"  两种SDE可通过信号缩放s(t)统一")
 print(f"  VE-SDE: s(t)=1, σ(t)从σ_min增长到σ_max")
-print(f"  VP-SDE: s(t)=√ᾱ_t, σ(t)=(1-ᾱ_t)/ᾱ_t")
+print(f"  VP-SDE: s(t)=√ᾱ_t, σ(t)=√((1-ᾱ_t)/ᾱ_t)")
 
 
 # ============================================================
@@ -298,15 +301,15 @@ for i, (t, xt) in enumerate(zip(t_values, ve_trajectories)):
     axes2[row, col].grid(alpha=0.3)
 
 fig2.suptitle('VE-SDE正向加噪过程（注意方差爆炸）', fontsize=14)
-plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤2_VE-SDE加噪.png'), dpi=150, bbox_inches='tight')
-plt.close()
+fig2.tight_layout()
+fig2.savefig(os.path.join(SAVE_DIR, '步骤2_VE-SDE加噪.png'), dpi=150, bbox_inches='tight')
+plt.close(fig2)
 
 # VP-SDE加噪图
-fig.suptitle('VP-SDE正向加噪过程（方差保持≤1）', fontsize=14)
-plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤1_VP-SDE加噪.png'), dpi=150, bbox_inches='tight')
-plt.close()
+fig.suptitle('VP-SDE正向加噪过程（终态→N(0,1)，方差有界）', fontsize=14)
+fig.tight_layout()
+fig.savefig(os.path.join(SAVE_DIR, '步骤1_VP-SDE加噪.png'), dpi=150, bbox_inches='tight')
+plt.close(fig)
 
 # 对比图
 fig3, axes3 = plt.subplots(1, 3, figsize=(18, 5))
@@ -326,9 +329,9 @@ axes3[2].axhline(y=1, color='k', linestyle='--', alpha=0.3)
 axes3[2].set_xlabel('t'); axes3[2].set_ylabel('Var(x_t)')
 axes3[2].set_title('方差演化：保持 vs 爆炸'); axes3[2].legend(); axes3[2].grid(alpha=0.3)
 
-plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤3_VE_vs_VP对比.png'), dpi=150, bbox_inches='tight')
-plt.close()
+fig3.tight_layout()
+fig3.savefig(os.path.join(SAVE_DIR, '步骤3_VE_vs_VP对比.png'), dpi=150, bbox_inches='tight')
+plt.close(fig3)
 
 print(f"\n图表已保存:")
 print(f"  - 步骤1_VP-SDE加噪.png")
@@ -344,7 +347,7 @@ print("实验7.2-1 总结")
 print("=" * 60)
 print("1. VP-SDE正向加噪：x_t = √ᾱ_t·x_0 + √(1-ᾱ_t)·ε")
 print("   - 信号逐渐衰减（√ᾱ_t→0），噪声逐渐增强")
-print("   - Var(x_t) ≤ 1（方差保持），终态≈N(0,I)")
+print("   - Var(x_t) 有界（终态→1），相比VE-SDE的无界爆炸")
 print("2. VE-SDE正向加噪：x_t = x_0 + σ(t)·ε")
 print("   - 信号不缩放，纯噪声叠加")
 print("   - Var(x_t) → ∞（方差爆炸），终态≈大方差高斯")

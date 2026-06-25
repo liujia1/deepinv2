@@ -19,7 +19,6 @@
 """
 
 import numpy as np
-from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
@@ -159,8 +158,6 @@ np.random.seed(42)
 import torch
 torch.manual_seed(42)
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
-
 
 # ============================================================
 # 目标分布：1D高斯混合（与7.1-7.4实验一致）
@@ -216,11 +213,13 @@ def vp_marginal_cosine(t, s=0.008):
 def vp_beta_cosine(t, s=0.008):
     """VP-SDE余弦调度的β(t)（从ᾱ(t)反推）
     β(t) = -d/dt log ᾱ(t)
+    注意：余弦调度的 ᾱ(t) 在 t→1 时快速趋于 0，因此 β(t) 会发散到 +∞。
+    实际工程实现通常会在 t≈1 附近截断 β(t) 以保证数值稳定。
     """
     alpha_bar = vp_marginal_cosine(t, s)[0]**2
     alpha_bar_next = vp_marginal_cosine(t + 1e-5, s)[0]**2
     beta_t = -(np.log(alpha_bar_next + 1e-30) - np.log(alpha_bar + 1e-30)) / 1e-5
-    return np.clip(beta_t, 0, 20)
+    return np.clip(beta_t, 0, None)  # 仅保证 β(t)≥0，不截断上界
 
 def vp_score_analytic(x, t, marginal_fn):
     """VP-SDE解析得分（给定边际参数函数）"""
@@ -247,7 +246,7 @@ print("=" * 60)
 print("步骤1：噪声调度设计——线性vs余弦vs几何调度对比")
 print("=" * 60)
 
-t_grid = np.linspace(0, 1, 500)
+t_grid = np.linspace(0, 0.99, 500)  # 避开 t=1 处余弦 β(t) 的奇点
 
 # 线性调度（VP-SDE）
 mean_lin, std_lin = vp_marginal_linear(t_grid)
@@ -270,6 +269,9 @@ snr_ve = 1.0 / (sigma_ve**2 + 1e-30)
 snr_lin_db = 10 * np.log10(np.clip(snr_lin, 1e-10, 1e10))
 snr_cos_db = 10 * np.log10(np.clip(snr_cos, 1e-10, 1e10))
 snr_ve_db = 10 * np.log10(np.clip(snr_ve, 1e-10, 1e10))
+
+print("注：余弦调度的 β(t) = -d/dt log ᾱ(t) 在 t→1 时会发散到 +∞，")
+print("    因此 β(t) 对比图将 t 范围限制在 [0, 0.99] 以避免奇点。")
 
 print("三种噪声调度的SNR范围（dB）：")
 print(f"  线性调度(VP): SNR从{snr_lin_db[0]:.1f}dB到{snr_lin_db[-1]:.1f}dB")
@@ -349,8 +351,14 @@ print(f"\n7.6节核心洞见：")
 print(f"  - ε-prediction的预测目标（噪声ε）量级不随时间变化→训练更稳定")
 print(f"  - 余弦调度的损失更均匀→训练更高效")
 print(f"  - 线性调度的损失在中等t处集中→某些时间步训练不充分")
-print(f"  - 训练流程：1)采样x_0 2)采样t~U(0,1) 3)采样ε~N(0,I)")
-print(f"            4)计算x_t（一步闭式解）5)计算损失 6)梯度更新")
+
+print(f"\nVP-SDE训练流程（ε-prediction）：")
+print(f"  Step 1: 采样 x_0 ~ p_data")
+print(f"  Step 2: 采样 t ~ U(0,1)")
+print(f"  Step 3: 采样 ε ~ N(0,I)")
+print(f"  Step 4: 计算 x_t = √ᾱ_t · x_0 + √(1-ᾱ_t) · ε")
+print(f"  Step 5: 计算损失 ℓ = ||ε_θ(x_t, t) - ε||²")
+print(f"  Step 6: 梯度更新 θ ← θ - η ∇_θ ℓ")
 
 
 # ============================================================
@@ -594,17 +602,19 @@ axes[0, 0].plot(t_grid, snr_lin_db, 'b-', lw=2, label='Linear $\\beta(t)$')
 axes[0, 0].plot(t_grid, snr_cos_db, 'r-', lw=2, label='Cosine $\\bar{\\alpha}(t)$')
 axes[0, 0].plot(t_grid, snr_ve_db, 'g-', lw=2, label='Geometric $\\sigma(t)$ (VE)')
 axes[0, 0].set_xlabel('$t$')
-axes[0, 0].set_ylabel('SNR (dB)')
-axes[0, 0].set_title('SNR$\\mathrm{曲线对比}$')
+axes[0, 0].set_ylabel('$\\mathrm{SNR~(dB)}$')
+axes[0, 0].set_title('$\\mathrm{SNR曲线对比}$')
 axes[0, 0].legend()
 axes[0, 0].grid(alpha=0.3)
 
 # β(t)对比
+# ★ 余弦 β(t) 在 t→1 时发散，已把绘图范围限制在 [0,0.95]，避免奇点处 y 轴被拉伸
 axes[0, 1].plot(t_grid, beta_lin, 'b-', lw=2, label='Linear $\\beta(t)$')
 axes[0, 1].plot(t_grid, beta_cos, 'r-', lw=2, label='Cosine $\\beta(t)$')
 axes[0, 1].set_xlabel('$t$')
 axes[0, 1].set_ylabel('$\\beta(t)$')
-axes[0, 1].set_title('$\\beta(t)$对比')
+axes[0, 1].set_title('$\\beta(t)\\mathrm{对比}$')
+axes[0, 1].set_xlim(0, 0.95)
 axes[0, 1].legend()
 axes[0, 1].grid(alpha=0.3)
 
@@ -613,7 +623,7 @@ axes[1, 0].plot(t_grid, alpha_bar_lin, 'b-', lw=2, label='Linear $\\bar{\\alpha}
 axes[1, 0].plot(t_grid, alpha_bar_cos, 'r-', lw=2, label='Cosine $\\bar{\\alpha}(t)$')
 axes[1, 0].set_xlabel('$t$')
 axes[1, 0].set_ylabel('$\\bar{\\alpha}(t)$')
-axes[1, 0].set_title('$\\bar{\\alpha}(t)$对比')
+axes[1, 0].set_title('$\\bar{\\alpha}(t)\\mathrm{对比}$')
 axes[1, 0].legend()
 axes[1, 0].grid(alpha=0.3)
 
@@ -621,44 +631,29 @@ axes[1, 0].grid(alpha=0.3)
 axes[1, 1].plot(t_grid, snr_rate_lin, 'b-', lw=2, label='Linear')
 axes[1, 1].plot(t_grid, snr_rate_cos, 'r-', lw=2, label='Cosine')
 axes[1, 1].set_xlabel('$t$')
-axes[1, 1].set_ylabel('$|d\\,\\mathrm{SNR}/dt|$ (dB)')
-axes[1, 1].set_title('SNR变化率（越均匀越好）')
+axes[1, 1].set_ylabel('$|d\\mathrm{SNR}/dt|~\\mathrm{(dB)}$')
+axes[1, 1].set_title('$\\mathrm{SNR变化率（越均匀越好）}$')
 axes[1, 1].legend()
 axes[1, 1].grid(alpha=0.3)
 
-plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤1_噪声调度对比.png'), dpi=150, bbox_inches='tight')
-plt.close()
+fig.tight_layout()
+fig.savefig(os.path.join(SAVE_DIR, '步骤1_噪声调度对比.png'), dpi=150, bbox_inches='tight')
+plt.close(fig)
 
 # 图2：训练损失随时间变化
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+fig, ax = plt.subplots(1, 1, figsize=(8, 5))
 
-axes[0].plot(t_train, loss_vs_t, 'r-', lw=2, label='Cosine')
-axes[0].plot(t_train, loss_vs_t_linear, 'b--', lw=2, label='Linear')
-axes[0].set_xlabel('$t$')
-axes[0].set_ylabel('$\\|\\epsilon_\\theta - \\epsilon\\|^2$')
-axes[0].set_title('$\\epsilon$-prediction$\\mathrm{训练损失}$')
-axes[0].legend()
-axes[0].grid(alpha=0.3)
+ax.plot(t_train, loss_vs_t, 'r-', lw=2, label='Cosine')
+ax.plot(t_train, loss_vs_t_linear, 'b--', lw=2, label='Linear')
+ax.set_xlabel('$t$')
+ax.set_ylabel('$\\|\\epsilon_\\theta - \\epsilon\\|^2$')
+ax.set_title('$\\epsilon\\mathrm{-prediction训练损失}$')
+ax.legend()
+ax.grid(alpha=0.3)
 
-# 训练流程图解
-axes[1].axis('off')
-flow_text = [
-    ['Step', 'Operation', 'Formula'],
-    ['1', 'Sample $x_0$', '$x_0 \\sim p_{\\mathrm{data}}$'],
-    ['2', 'Sample $t$', '$t \\sim \\mathcal{U}(0,1)$'],
-    ['3', 'Sample $\\epsilon$', '$\\epsilon \\sim \\mathcal{N}(0,I)$'],
-    ['4', 'Compute $x_t$', '$x_t = \\sqrt{\\bar{\\alpha}_t} x_0 + \\sqrt{1-\\bar{\\alpha}_t} \\epsilon$'],
-    ['5', 'Compute loss', '$\\ell = \\|\\epsilon_\\theta(x_t, t) - \\epsilon\\|^2$'],
-    ['6', 'Gradient update', '$\\theta \\leftarrow \\theta - \\eta \\nabla_\\theta \\ell$'],
-]
-axes[1].table(cellText=flow_text[1:], colLabels=flow_text[0],
-              loc='center', cellLoc='center')
-axes[1].set_title('VP-SDE$\\mathrm{训练流程}$（$\\epsilon$-prediction）', fontsize=13, pad=20)
-
-plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤2_训练目标.png'), dpi=150, bbox_inches='tight')
-plt.close()
+fig.tight_layout()
+fig.savefig(os.path.join(SAVE_DIR, '步骤2_训练目标.png'), dpi=150, bbox_inches='tight')
+plt.close(fig)
 
 # 图3：采样器步数-质量曲线
 fig, ax = plt.subplots(1, 1, figsize=(8, 5))
@@ -667,15 +662,15 @@ ax.plot(step_counts, results['DDPM'], 'bo-', lw=2, markersize=8, label='DDPM')
 ax.plot(step_counts, results['DDIM'], 'gs-', lw=2, markersize=8, label='DDIM')
 ax.plot(step_counts, results['DPM-Solver(2)'], 'r^-', lw=2, markersize=8, label='DPM-Solver(2nd)')
 ax.set_xlabel('$\\mathrm{采样步数}$')
-ax.set_ylabel('KS$\\mathrm{统计量}$（越小越好）')
+ax.set_ylabel('$\\mathrm{KS统计量（越小越好）}$')
 ax.set_title('$\\mathrm{采样器步数-质量曲线}$')
 ax.legend()
 ax.grid(alpha=0.3)
 ax.set_xscale('log')
 
-plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤3_采样器对比.png'), dpi=150, bbox_inches='tight')
-plt.close()
+fig.tight_layout()
+fig.savefig(os.path.join(SAVE_DIR, '步骤3_采样器对比.png'), dpi=150, bbox_inches='tight')
+plt.close(fig)
 
 # 图4：采样轨迹可视化
 fig, axes = plt.subplots(2, 4, figsize=(20, 8))
@@ -703,10 +698,10 @@ axes[row, col].set_xlim(-6, 6)
 axes[row, col].legend(fontsize=8)
 axes[row, col].grid(alpha=0.3)
 
-fig.suptitle('DDIM$\\mathrm{采样轨迹}$：$\\mathrm{从噪声到数据}$', fontsize=14)
-plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤4_采样轨迹.png'), dpi=150, bbox_inches='tight')
-plt.close()
+fig.suptitle('$\\mathrm{DDIM采样轨迹：从噪声到数据}$', fontsize=14)
+fig.tight_layout()
+fig.savefig(os.path.join(SAVE_DIR, '步骤4_采样轨迹.png'), dpi=150, bbox_inches='tight')
+plt.close(fig)
 
 print(f"\n图表已保存:")
 print(f"  - 步骤1_噪声调度对比.png")
