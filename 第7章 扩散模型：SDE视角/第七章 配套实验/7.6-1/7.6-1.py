@@ -175,8 +175,11 @@ snr_cos = alpha_bar_cos / (1 - alpha_bar_cos + 1e-30)
 beta_cos = np.array([vp_beta_cosine(t) for t in t_grid])
 
 # 几何调度（VE-SDE）
+# 注意：VE-SDE的原始SMLD实现是从高噪声退火到低噪声（σ_max→σ_min），
+# 但为了与VP-SDE公平对比（t=0干净数据→t=1纯噪声），
+# 这里将时间方向统一为σ_min→σ_max，使SNR单调下降
 sigma_min_ve, sigma_max_ve = 0.01, 50.0
-sigma_ve = sigma_max_ve * (sigma_min_ve / sigma_max_ve)**t_grid
+sigma_ve = sigma_min_ve * (sigma_max_ve / sigma_min_ve)**t_grid
 snr_ve = 1.0 / (sigma_ve**2 + 1e-30)
 
 # SNR在dB尺度（裁剪极端值，避免log(0)问题）

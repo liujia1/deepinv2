@@ -246,14 +246,15 @@ def ddim_sample_vp(score_fn, N_particles, N_steps, T=1.0, eta=0.0,
     return np.array(trajectory)
 
 # DDIM采样（η=0，确定性）
+# 使用与PF-ODE相同的步数（500步），确保等价性验证的公平性
 np.random.seed(42)
-ddim_traj = ddim_sample_vp(vp_score_analytic, N_particles, 200, eta=0.0)
+ddim_traj = ddim_sample_vp(vp_score_analytic, N_particles, 500, eta=0.0)
 ddim_final = ddim_traj[-1]
 
 print(f"DDIM(η=0)采样结果: μ={np.mean(ddim_final):.4f}, σ²={np.var(ddim_final):.4f}")
 
 # 验证DDIM(η=0)与PF-ODE的等价性
-# 使用相同初始噪声和步数，比较两者最终样本的KS距离
+# 使用相同初始噪声、相同步数（500步），比较两者最终样本的KS距离
 try:
     ks_ddim_vs_pde, _ = sp_stats.ks_2samp(ddim_final, pf_final)
     print(f"DDIM(η=0) vs PF-ODE KS距离: {ks_ddim_vs_pde:.4f} (应接近0，验证等价性)")
@@ -261,9 +262,53 @@ except:
     ks_ddim_vs_pde = abs(np.mean(ddim_final) - np.mean(pf_final))
     print(f"DDIM(η=0) vs PF-ODE 均值差: {ks_ddim_vs_pde:.4f}")
 
-# DDPM采样（η=1，随机）
+# 更严格的验证：使用相同的初始噪声向量，逐步比较轨迹
+# 因为两者都是确定性映射，给定相同初始点应该走出几乎相同的轨迹
 np.random.seed(42)
-ddpm_as_ddim = ddim_sample_vp(vp_score_analytic, N_particles, 200, eta=1.0)
+x_init = np.random.randn(N_particles)  # 相同的初始噪声
+
+# 重新运行PF-ODE，使用显式传入的初始点
+pf_traj_strict = [x_init.copy()]
+x_pf = x_init.copy()
+for i in range(500):
+    t = 1.0 - i * (1.0 / 500)
+    beta_t = vp_beta(t)
+    score = vp_score_analytic(x_pf, t)
+    drift = beta_t * (1.0 / 500) * (0.5 * x_pf + 0.5 * score)
+    x_pf = x_pf + drift
+    pf_traj_strict.append(x_pf.copy())
+
+# 重新运行DDIM，使用相同的初始点
+ddim_traj_strict = [x_init.copy()]
+x_ddim = x_init.copy()
+for i in range(500):
+    t = 1.0 - i * (1.0 / 500)
+    t_prev = max(t - 1.0 / 500, 0)
+    mean_t, std_t = vp_marginal(t)
+    alpha_bar_t = mean_t**2
+    mean_prev, std_prev = vp_marginal(t_prev)
+    alpha_bar_prev = mean_prev**2
+    score = vp_score_analytic(x_ddim, t)
+    eps_theta = -std_t * score
+    x0_hat = (x_ddim - std_t * eps_theta) / (mean_t + 1e-10)
+    sigma_eta = 0.0  # η=0
+    dir_xt = np.sqrt(max(1 - alpha_bar_prev - sigma_eta**2, 0)) * eps_theta
+    x_ddim = np.sqrt(alpha_bar_prev) * x0_hat + dir_xt
+    ddim_traj_strict.append(x_ddim.copy())
+
+# 逐步比较轨迹差异（取几个关键步骤）
+print("\n轨迹逐步对比（相同初始噪声，500步）：")
+for step_idx in [100, 200, 300, 400, 500]:
+    pf_step = pf_traj_strict[step_idx]
+    ddim_step = ddim_traj_strict[step_idx]
+    max_diff = np.max(np.abs(pf_step - ddim_step))
+    mean_diff = np.mean(np.abs(pf_step - ddim_step))
+    print(f"  步骤{step_idx}: 最大差异={max_diff:.6f}, 平均差异={mean_diff:.6f}")
+
+# DDPM采样（η=1，随机）
+# 使用与DDIM相同的步数（500步），确保公平对比
+np.random.seed(42)
+ddpm_as_ddim = ddim_sample_vp(vp_score_analytic, N_particles, 500, eta=1.0)
 ddpm_final = ddpm_as_ddim[-1]
 
 print(f"DDPM(η=1)采样结果: μ={np.mean(ddpm_final):.4f}, σ²={np.var(ddpm_final):.4f}")
@@ -285,7 +330,7 @@ eta_results = {}
 
 for eta in eta_values:
     np.random.seed(42)
-    traj = ddim_sample_vp(vp_score_analytic, N_particles, 200, eta=eta)
+    traj = ddim_sample_vp(vp_score_analytic, N_particles, 500, eta=eta)
     final = traj[-1]
     eta_results[eta] = final
 
@@ -383,12 +428,12 @@ for i, eta in enumerate(eta_values):
                  color=plt.cm.coolwarm(eta))
     axes[i].plot(x_grid, gm1d_pdf(x_grid), 'r--', lw=2, label='Target')
     label = 'DDIM' if eta == 0 else ('DDPM' if eta == 1 else '')
-    axes[i].set_title(f'$\\eta$={eta:.2f} {label}')
+    axes[i].set_title(f'η={eta:.2f} {label}')
     axes[i].set_xlim(-6, 6)
     axes[i].legend(fontsize=8)
     axes[i].grid(alpha=0.3)
 
-fig.suptitle('温度参数$\\eta$：DDIM($\\eta$=0) $\\leftrightarrow$ DDPM($\\eta$=1) 连续插值', fontsize=13)
+fig.suptitle('温度参数η：DDIM(η=0) ↔ DDPM(η=1) 连续插值', fontsize=13)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤3_η插值.png'), dpi=150, bbox_inches='tight')
 plt.close()
@@ -396,8 +441,8 @@ plt.close()
 # 图3：DDPM vs DDIM质量对比
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
-ax1.plot(step_counts, results['DDPM'], 'bo-', lw=2, markersize=8, label='DDPM ($\\eta$=1)')
-ax1.plot(step_counts, results['DDIM'], 'gs-', lw=2, markersize=8, label='DDIM ($\\eta$=0)')
+ax1.plot(step_counts, results['DDPM'], 'bo-', lw=2, markersize=8, label='DDPM (η=1)')
+ax1.plot(step_counts, results['DDIM'], 'gs-', lw=2, markersize=8, label='DDIM (η=0)')
 ax1.set_xlabel('采样步数')
 ax1.set_ylabel('KS统计量（越小越好）')
 ax1.set_title('DDPM vs DDIM 采样质量')
