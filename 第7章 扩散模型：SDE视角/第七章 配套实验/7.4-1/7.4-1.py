@@ -154,8 +154,11 @@ def vp_marginal_params(t):
     return mean_coef, var_coef
 
 # 设定初始分布
+# ★ 注意：sigma_sq_0 不能取 1.0——此时 σ²_t = mean_coef²·σ²_0 + (1-mean_coef²)
+#   = mean_coef²·(σ²_0-1) + 1  会恒等于 1，导致方差演化在打印与图中都不可见。
+#   取 4.0 可以同时展示均值向 0 漂移、方差从 4 收缩到 1 的完整扩散行为。
 mu_0 = 2.0
-sigma_sq_0 = 1.0
+sigma_sq_0 = 4.0
 
 print(f"\n初始数据分布: p_0 = N(μ_0={mu_0}, σ²_0={sigma_sq_0})")
 

@@ -138,25 +138,34 @@ def pf_ode_sample_1d(x_init, N_steps=500, T=1.0):
     
     return np.array(trajectory)
 
-def reverse_sde_sample_1d(x_init, N_steps=500, T=1.0, seed=None):
-    """逆向SDE采样（随机）"""
-    if seed is not None:
+def reverse_sde_sample_1d(x_init, N_steps=500, T=1.0, seed=None, rng=None):
+    """逆向SDE采样（随机）
+
+    参数：
+      seed:  若指定则用 np.random.seed 重置全局随机源（向后兼容）
+      rng:   若指定则用传入的 RandomState/Generator 取噪声，
+             此时噪声流不会被重置——这是步骤3公平对照的关键，
+             让一条曲线的所有 α 点共享同一个随机数流
+    """
+    if seed is not None and rng is None:
         np.random.seed(seed)
-    
+
     dt = T / N_steps
     x = x_init.copy()
-    
+
     trajectory = [x.copy()]
-    
+
+    randn = rng.randn if rng is not None else np.random.randn
+
     for i in range(N_steps):
         t = T - i * dt
         beta_t = vp_beta(t)
         score = vp_gmm_1d_score(x, t)
-        
+
         # 逆向SDE更新：有随机项，score系数为1
-        x = x + beta_t * dt * (0.5 * x + score) + np.sqrt(beta_t * dt) * np.random.randn(len(x))
+        x = x + beta_t * dt * (0.5 * x + score) + np.sqrt(beta_t * dt) * randn(len(x))
         trajectory.append(x.copy())
-    
+
     return np.array(trajectory)
 
 
@@ -321,21 +330,28 @@ print("  - 无法保证插值路径的可复现性")
 
 # 对比：用逆向SDE尝试相同的插值
 print(f"\n尝试用逆向SDE做噪声插值（{len(alpha_values)}个点）：")
+print("  公平对照设计：")
+print("    - 每条曲线使用一个独立的RNG流贯穿全部α点（不重置）")
+print("    - 两条曲线各用一个不同的种子（42 与 142）")
+print("    - 这样插值曲线的'不平滑'完全来自SDE内在随机性的累积，")
+print("      而非'每个α点换一套独立噪声'的人为放大效果。")
 
 sde_interpolation_results_1 = []
 sde_interpolation_results_2 = []
 
+# 两条曲线各绑定一个 RNG 流；RNG 状态在 α 之间连续传递
+rng_run1 = np.random.RandomState(42)
+rng_run2 = np.random.RandomState(142)
+
 for alpha in alpha_values:
     z_interp = alpha * z_A + (1 - alpha) * z_B
-    
-    # 第一次运行
-    np.random.seed(int(alpha * 1000) + 42)
-    traj_sde_1 = reverse_sde_sample_1d(np.array([z_interp]), N_steps=500)
+
+    # Run 1: 同一RNG流(42)贯穿整条曲线
+    traj_sde_1 = reverse_sde_sample_1d(np.array([z_interp]), N_steps=500, rng=rng_run1)
     sde_interpolation_results_1.append(traj_sde_1[-1][0])
-    
-    # 第二次运行（不同种子）
-    np.random.seed(int(alpha * 1000) + 142)
-    traj_sde_2 = reverse_sde_sample_1d(np.array([z_interp]), N_steps=500)
+
+    # Run 2: 同一RNG流(142)贯穿整条曲线
+    traj_sde_2 = reverse_sde_sample_1d(np.array([z_interp]), N_steps=500, rng=rng_run2)
     sde_interpolation_results_2.append(traj_sde_2[-1][0])
 
 # 可视化对比
