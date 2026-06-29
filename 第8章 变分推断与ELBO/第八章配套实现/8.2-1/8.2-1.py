@@ -1,8 +1,15 @@
+# -*- coding: utf-8 -*-
 """
-实验8.1 ELBO计算——1D高斯混合模型
+实验8.2-1 ELBO计算——1D高斯混合模型
 对应章节：8.2（ELBO推导：证据下界）
 素材来源：🆕 新写（教学用简化案例）
 ★ 原创设计：1D高斯混合ELBO的完整数值验证
+
+知识点：
+  - ELBO的定义：ELBO(q) = E_q[log p(x,z)] - E_q[log q(z)]
+  - Jensen不等式推导：log p(x) ≥ ELBO(q)
+  - 两种ELBO分解形式：联合-熵 vs 重建-正则化
+  - 变分间隙：log p(x) - ELBO(q) = KL(q || p(z|x))
 
 实验内容：
   步骤1：Jensen不等式验证——ELBO ≤ log p(x)
@@ -13,51 +20,46 @@
 """
 
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # 非交互式后端
+import matplotlib.pyplot as plt
 import os
 import sys
+import io
 
-# ====== Windows控制台UTF-8输出 ======
+# 设置控制台输出为 UTF-8 (Windows 下避免中文乱码)
 if sys.platform == 'win32':
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
 
-import matplotlib.pyplot as plt
-import warnings
-import logging
+# ====== 中文字体配置(兼容本地和Google Colab) ======
+_gdrive = '/content/drive/MyDrive'
+_IN_COLAB = 'google.colab' in sys.modules
 
-# ====== 解决中文乱码的核心代码 ======
-logging.getLogger('matplotlib').setLevel(logging.ERROR)
-logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.filterwarnings("ignore", message=".*U\\+2212.*")
-warnings.filterwarnings("ignore", message=".*glyph.*")
-plt.rcParams['axes.unicode_minus'] = False
+if _IN_COLAB:
+    from google.colab import drive
+    if not os.path.isdir(_gdrive):
+        print("正在挂载 Google Drive...")
+        drive.mount('/content/drive')
+    SAVE_DIR = os.path.join(_gdrive, '实验8.2-1')
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+else:
+    try:
+        SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        SAVE_DIR = os.getcwd()
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 
-import platform
-from matplotlib.font_manager import FontManager
-def _find_chinese_font():
-    candidates = ['SimHei', 'Microsoft YaHei', 'KaiTi', 'FangSong'] if platform.system() == 'Windows' else ['WenQuanYi Micro Hei', 'Noto Sans CJK SC', 'SimHei']
-    fm = FontManager()
-    available = set(f.name for f in fm.ttflist)
-    for font in candidates:
-        if font in available:
-            return font
-    import os as _os, re
-    for f in fm.ttflist:
-        for pat in ['cjk', 'wqy', 'noto.*cjk', 'simhei']:
-            if re.search(pat, f.name.lower()):
-                return f.name
-    return None
+os.makedirs(_chinese_path, exist_ok=True)
 
-_cn_font = _find_chinese_font()
-if _cn_font:
-    plt.rcParams['font.sans-serif'] = [_cn_font] + plt.rcParams.get('font.sans-serif', [])
-    plt.rcParams['font.family'] = 'sans-serif'
-    print(f"[Font] 已检测到中文字体: {_cn_font}")
+sys.path.insert(0, _chinese_path)
+try:
+    from chinese_font import setup_chinese_font
+    setup_chinese_font(save_dir=_chinese_path)
+except ImportError:
+    print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
 # ========================================================
 
 np.random.seed(42)
-
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
 
 
 # ============================================================
@@ -77,7 +79,7 @@ sigma_obs = 0.5  # 观测噪声
 x_obs = 0.5
 
 print("=" * 60)
-print("实验8.1：1D高斯混合ELBO计算")
+print("实验8.2-1：1D高斯混合ELBO计算")
 print("=" * 60)
 print(f"\n模型设定：")
 print(f"  先验 p(z) = {prior_weights[0]}*N({prior_means[0]},{prior_stds[0]}²) + {prior_weights[1]}*N({prior_means[1]},{prior_stds[1]}²)")
@@ -285,26 +287,29 @@ for alpha in alphas:
 # 可视化
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
-# ELBO vs α
-ax1.plot(alphas, elbos, 'b-', lw=2, label='ELBO(q_α)')
-ax1.axhline(y=log_px, color='r', linestyle='--', lw=2, label=f'log p(x) = {log_px:.4f}')
-ax1.set_xlabel('α（0=先验, 1=后验）')
-ax1.set_ylabel('ELBO')
+# ELBO vs α - 使用LaTeX格式显示数学符号
+ax1.plot(alphas, elbos, 'b-', lw=2, label=r'$\mathrm{ELBO}(q_\alpha)$')
+ax1.axhline(y=log_px, color='r', linestyle='--', lw=2, 
+           label=r'$\log p(x) = ' + f'{log_px:.4f}$')
+ax1.set_xlabel(r'$\alpha$（0=先验, 1=后验）')
+ax1.set_ylabel(r'$\mathrm{ELBO}$')
 ax1.set_title('ELBO随q接近后验的变化')
 ax1.legend()
 ax1.grid(alpha=0.3)
 
-# 变分间隙 vs α
-ax2.plot(alphas, gaps, 'g-', lw=2, label='变分间隙 = log p(x) - ELBO')
-ax2.set_xlabel('α（0=先验, 1=后验）')
+# 变分间隙 vs α - 使用LaTeX格式显示数学符号
+ax2.plot(alphas, gaps, 'g-', lw=2, 
+        label=r'变分间隙 = $\log p(x) - \mathrm{ELBO}$')
+ax2.set_xlabel(r'$\alpha$（0=先验, 1=后验）')
 ax2.set_ylabel('变分间隙')
 ax2.set_title('变分间隙随q接近后验的变化')
 ax2.legend()
 ax2.grid(alpha=0.3)
 
 plt.tight_layout()
-plt.savefig(os.path.join(_SCRIPT_DIR, '步骤3_变分间隙.png'), dpi=150)
-plt.show()
+plt.savefig(os.path.join(SAVE_DIR, '步骤3_变分间隙.png'), dpi=150, bbox_inches='tight')
+plt.close()
+print(f"\n图表已保存: 步骤3_变分间隙.png")
 
 print(f"\n当α→1（q→p(z|x)）时：")
 print(f"  ELBO → log p(x) = {log_px:.4f}")
@@ -316,7 +321,7 @@ print(f"这验证了8.2节的核心结论：ELBO最大化的等价于最小化KL
 # 实验总结
 # ============================================================
 print("\n" + "=" * 60)
-print("实验8.1 总结")
+print("实验8.2-1 总结")
 print("=" * 60)
 print("1. Jensen不等式验证：对任意q，ELBO(q) ≤ log p(x)")
 print("   当q=p(z|x)时，ELBO=log p(x)，变分间隙=0")
@@ -325,3 +330,6 @@ print("   联合-熵：ELBO = E[log p(x,z)] + H(q)")
 print("   重建-正则：ELBO = E[log p(x|z)] - KL(q||p(z))")
 print("3. 变分间隙 = log p(x) - ELBO = KL(q||p(z|x))")
 print("   q越接近后验，间隙越小；q=p(z|x)时间隙=0")
+
+print(f"\n{'='*60}")
+print("第八章配套实验8.2-1完成！")
