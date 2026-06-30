@@ -82,6 +82,24 @@ torch.manual_seed(42)
 # Checkpoint路径（保存数值计算结果）
 RESULTS_CACHE_PATH = os.path.join(SAVE_DIR, 'numerical_results_cache.npz')
 
+# ====== 全局配置参数（字面常量，不需要缓存） ======
+# 步骤2使用的测试参数
+MU_TEST = 2.0
+SIGMA_TEST = 1.0
+L_SAMPLES = 50  # 每次估计使用的样本数
+TRUE_GRAD = 2 * MU_TEST  # ∇_μ E[z²] = 2μ
+SIGMA_SMALL = 0.1  # 小σ测试
+
+# 步骤3使用的参数（方差随σ变化）
+MU_FIXED = 2.0
+L_VAR = 50
+
+# 步骤4使用的参数（样本效率对比）
+MU_EFF = 2.0
+SIGMA_EFF = 0.5
+TRUE_GRAD_EFF = 2 * MU_EFF
+# ===================================================
+
 print(f"\n{'='*60}")
 print(f"实验9.2-1: 重参数化技巧的数值验证")
 print(f"{'='*60}")
@@ -110,7 +128,7 @@ loss.backward()
 
 print(f"重参数化: μ={mu.item():.1f}, σ={std.item():.1f}")
 print(f"  ∂loss/∂μ = {mu.grad.item():.4f}  (解析值: ∂E[z²]/∂μ = 2μ = {2*2.0:.1f})")
-print(f"  ∂loss/∂logvar = {logvar.grad.item():.4f}")
+print(f"  ∂loss/∂logvar = {logvar.grad.item():.4f}  (解析值: ∂E[z²]/∂logvar = σ² = {std.item()**2:.1f})")
 print("  → 梯度成功穿过随机采样节点！")
 
 # --- 直接采样（非重参数化）：使用 .sample() ---
@@ -121,7 +139,8 @@ dist = Normal(mu2, 1.0)
 # .sample() 不支持梯度传播
 z_no_grad = dist.sample()
 print(f"\n直接采样 (.sample()): z = {z_no_grad.item():.4f}")
-print("  → .sample() 产生的样本无法反传梯度")
+print(f"  requires_grad={z_no_grad.requires_grad}, grad_fn={z_no_grad.grad_fn}")
+print("  → .sample() 产生的样本无法反传梯度（requires_grad=False, grad_fn=None）")
 
 # .rsample() 使用重参数化技巧
 z_with_grad = dist.rsample()
@@ -201,30 +220,26 @@ if os.path.exists(RESULTS_CACHE_PATH):
 
 if cached_results is None:
     # 验证无偏性
-    mu_test, sigma_test = 2.0, 1.0
-    true_grad = 2 * mu_test
     n_trials = 5000
-    L = 50  # 每次估计使用的样本数
-    
+
     np.random.seed(42)
-    reinforce_estimates = np.array([reinforce_grad_mu(mu_test, sigma_test, L) for _ in range(n_trials)])
-    reparam_estimates = np.array([reparam_grad_mu(mu_test, sigma_test, L) for _ in range(n_trials)])
-    
+    reinforce_estimates = np.array([reinforce_grad_mu(MU_TEST, SIGMA_TEST, L_SAMPLES) for _ in range(n_trials)])
+    reparam_estimates = np.array([reparam_grad_mu(MU_TEST, SIGMA_TEST, L_SAMPLES) for _ in range(n_trials)])
+
     # σ=0.1 时的梯度估计
-    sigma_small = 0.1
-    reinforce_small = np.array([reinforce_grad_mu(mu_test, sigma_small, L) for _ in range(n_trials)])
-    reparam_small = np.array([reparam_grad_mu(mu_test, sigma_small, L) for _ in range(n_trials)])
+    reinforce_small = np.array([reinforce_grad_mu(MU_TEST, SIGMA_SMALL, L_SAMPLES) for _ in range(n_trials)])
+    reparam_small = np.array([reparam_grad_mu(MU_TEST, SIGMA_SMALL, L_SAMPLES) for _ in range(n_trials)])
 
 
-print(f"\n测试参数: μ={mu_test}, σ={sigma_test}, L={L}")
-print(f"真实梯度: ∇_μ E[z²] = 2μ = {true_grad:.4f}")
+print(f"\n测试参数: μ={MU_TEST}, σ={SIGMA_TEST}, L={L_SAMPLES}")
+print(f"真实梯度: ∇_μ E[z²] = 2μ = {TRUE_GRAD:.4f}")
 print(f"\nREINFORCE:  均值={np.mean(reinforce_estimates):.4f}, "
       f"标准差={np.std(reinforce_estimates):.4f}, "
       f"方差={np.var(reinforce_estimates):.4f}")
 print(f"重参数化:   均值={np.mean(reparam_estimates):.4f}, "
       f"标准差={np.std(reparam_estimates):.4f}, "
       f"方差={np.var(reparam_estimates):.4f}")
-print(f"\n→ 两种估计器均无偏（均值≈{true_grad}），但重参数化方差远低于REINFORCE")
+print(f"\n→ 两种估计器均无偏（均值≈{TRUE_GRAD}），但重参数化方差远低于REINFORCE")
 print(f"  方差比: REINFORCE/重参数化 = {np.var(reinforce_estimates)/np.var(reparam_estimates):.1f}x")
 
 
@@ -237,28 +252,26 @@ print(f"{'='*60}")
 
 if cached_results is None:
     sigma_list = np.logspace(-1.5, 0.7, 25)  # σ from ~0.03 to ~5
-    mu_fixed = 2.0
     n_trials_var = 3000
-    L_var = 50
-    
+
     np.random.seed(123)
     reinforce_vars = []
     reparam_vars = []
-    
+
     for sigma in sigma_list:
-        rg = [reinforce_grad_mu(mu_fixed, sigma, L_var) for _ in range(n_trials_var)]
-        rpg = [reparam_grad_mu(mu_fixed, sigma, L_var) for _ in range(n_trials_var)]
+        rg = [reinforce_grad_mu(MU_FIXED, sigma, L_VAR) for _ in range(n_trials_var)]
+        rpg = [reparam_grad_mu(MU_FIXED, sigma, L_VAR) for _ in range(n_trials_var)]
         reinforce_vars.append(np.var(rg))
         reparam_vars.append(np.var(rpg))
-    
+
     reinforce_vars = np.array(reinforce_vars)
     reparam_vars = np.array(reparam_vars)
 
 # 理论预测 (附录9A)
 # REINFORCE方差 ∝ (σ² + μ²/σ²) / L
 # 重参数化方差 = 4σ² / L
-theory_reinforce = (sigma_list**2 + mu_fixed**2 / sigma_list**2) / L_var
-theory_reparam = 4 * sigma_list**2 / L_var
+theory_reinforce = (sigma_list**2 + MU_FIXED**2 / sigma_list**2) / L_VAR
+theory_reparam = 4 * sigma_list**2 / L_VAR
 
 print("σ\t\tREINFORCE方差\t重参数化方差\t方差比")
 print("-" * 65)
@@ -282,24 +295,22 @@ print(f"{'='*60}")
 
 if cached_results is None:
     L_list = [10, 50, 100, 500, 1000, 5000]
-    mu_eff, sigma_eff = 2.0, 0.5
-    true_grad_eff = 2 * mu_eff
     n_trials_eff = 2000
-    
+
     np.random.seed(456)
     reinforce_mse = []
     reparam_mse = []
-    
+
     for L_eff in L_list:
-        rg = np.array([reinforce_grad_mu(mu_eff, sigma_eff, L_eff) for _ in range(n_trials_eff)])
-        rpg = np.array([reparam_grad_mu(mu_eff, sigma_eff, L_eff) for _ in range(n_trials_eff)])
-        reinforce_mse.append(np.mean((rg - true_grad_eff) ** 2))
-        reparam_mse.append(np.mean((rpg - true_grad_eff) ** 2))
-    
+        rg = np.array([reinforce_grad_mu(MU_EFF, SIGMA_EFF, L_eff) for _ in range(n_trials_eff)])
+        rpg = np.array([reparam_grad_mu(MU_EFF, SIGMA_EFF, L_eff) for _ in range(n_trials_eff)])
+        reinforce_mse.append(np.mean((rg - TRUE_GRAD_EFF) ** 2))
+        reparam_mse.append(np.mean((rpg - TRUE_GRAD_EFF) ** 2))
+
     reinforce_mse = np.array(reinforce_mse)
     reparam_mse = np.array(reparam_mse)
-    
-    # 保存所有数值结果到缓存
+
+    # 保存所有数值结果到缓存（不含字面常量）
     np.savez(RESULTS_CACHE_PATH,
              reinforce_estimates=reinforce_estimates,
              reparam_estimates=reparam_estimates,
@@ -310,16 +321,10 @@ if cached_results is None:
              reparam_vars=reparam_vars,
              L_list=L_list,
              reinforce_mse=reinforce_mse,
-             reparam_mse=reparam_mse,
-             mu_test=mu_test,
-             sigma_test=sigma_test,
-             mu_fixed=mu_fixed,
-             L_var=L_var,
-             mu_eff=mu_eff,
-             sigma_eff=sigma_eff)
+             reparam_mse=reparam_mse)
     print(f"\n✓ 数值计算完成, 结果已保存: {RESULTS_CACHE_PATH}")
 
-print(f"参数: μ={mu_eff}, σ={sigma_eff}, 真实梯度={true_grad_eff}")
+print(f"参数: μ={MU_EFF}, σ={SIGMA_EFF}, 真实梯度={TRUE_GRAD_EFF}")
 print(f"{'L':>6s}  {'REINFORCE MSE':>15s}  {'重参数化 MSE':>15s}  {'MSE比':>10s}")
 print("-" * 55)
 for i, L_eff in enumerate(L_list):
@@ -341,21 +346,42 @@ fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 ax = axes[0, 0]
 ax.hist(reinforce_estimates, bins=60, alpha=0.6, label='REINFORCE', density=True, color='#e74c3c')
 ax.hist(reparam_estimates, bins=60, alpha=0.6, label='Reparameterized', density=True, color='#3498db')
-ax.axvline(true_grad, color='black', linestyle='--', linewidth=2, label=f'True Gradient = {true_grad:.1f}')
+ax.axvline(TRUE_GRAD, color='black', linestyle='--', linewidth=2, label=f'True Gradient = {TRUE_GRAD:.1f}')
 ax.set_xlabel('Gradient Estimate', fontsize=12)
 ax.set_ylabel('Probability Density', fontsize=12)
-ax.set_title(f'(a) Gradient Distribution ($\\mu={mu_test}$, $\\sigma={sigma_test}$, $L={L}$)', fontsize=13)
+ax.set_title(f'(a) Gradient Distribution ($\\mu={MU_TEST}$, $\\sigma={SIGMA_TEST}$, $L={L_SAMPLES}$)', fontsize=13)
 ax.legend(fontsize=10)
 
-# (b) σ=0.1 时的梯度估计直方图
+# (b) σ=0.1 时的梯度估计直方图（双y轴）
+# REINFORCE在σ→0时方差发散(∝μ²/σ²)，标准差约5.2，密度峰值约0.077
+# 重参数化方差∝σ²趋于0，标准差约0.032，密度峰值约12.5
+# 两者密度峰值差~160倍，必须用双y轴才能同时显示
 ax = axes[0, 1]
-ax.hist(reinforce_small, bins=60, alpha=0.6, label='REINFORCE', density=True, color='#e74c3c')
+
+# 左轴：重参数化（窄尖峰，密度峰值大）
 ax.hist(reparam_small, bins=60, alpha=0.6, label='Reparameterized', density=True, color='#3498db')
-ax.axvline(true_grad, color='black', linestyle='--', linewidth=2, label=f'True Gradient = {true_grad:.1f}')
+ax.set_ylabel('Density (Reparameterized)', fontsize=11, color='#3498db')
+ax.tick_params(axis='y', labelcolor='#3498db')
+ax.set_ylim(0, 15)  # 重参数化密度峰值约12.5
+
+# 右轴：REINFORCE（宽散布，密度峰值小）
+ax2 = ax.twinx()
+ax2.hist(reinforce_small, bins=60, alpha=0.6, label='REINFORCE', density=True, color='#e74c3c')
+ax2.set_ylabel('Density (REINFORCE)', fontsize=11, color='#e74c3c')
+ax2.tick_params(axis='y', labelcolor='#e74c3c')
+ax2.set_ylim(0, 0.08)  # REINFORCE密度峰值约0.07
+
+# 真实梯度线（在左轴上）
+ax.axvline(TRUE_GRAD, color='black', linestyle='--', linewidth=2, label=f'True Gradient = {TRUE_GRAD:.1f}')
+
 ax.set_xlabel('Gradient Estimate', fontsize=12)
-ax.set_ylabel('Probability Density', fontsize=12)
-ax.set_title(f'(b) Gradient Distribution ($\\mu={mu_test}$, $\\sigma={sigma_small}$, $L={L}$)', fontsize=13)
-ax.legend(fontsize=10)
+ax.set_xlim(TRUE_GRAD - 1.0, TRUE_GRAD + 1.0)  # 缩窄x轴使重参数化尖峰可见
+ax.set_title(f'(b) Gradient Distribution ($\\mu={MU_TEST}$, $\\sigma={SIGMA_SMALL}$, $L={L_SAMPLES}$)', fontsize=13)
+
+# 合并两个轴的legend
+lines1, labels1 = ax.get_legend_handles_labels()
+lines2, labels2 = ax2.get_legend_handles_labels()
+ax.legend(lines1 + lines2, labels1 + labels2, fontsize=9, loc='upper left')
 
 # (c) 方差随σ变化 (log-log)
 ax = axes[1, 0]
@@ -365,7 +391,7 @@ ax.loglog(sigma_list, theory_reinforce, '--', label='Theory: $(\\sigma^2+\\mu^2/
 ax.loglog(sigma_list, theory_reparam, '--', label='Theory: $4\\sigma^2/L$', color='#3498db', alpha=0.5)
 ax.set_xlabel('$\\sigma$ (log scale)', fontsize=12)
 ax.set_ylabel('Gradient Variance (log scale)', fontsize=12)
-ax.set_title(f'(c) Variance vs $\\sigma$ ($\\mu={mu_fixed}$, $L={L_var}$)', fontsize=13)
+ax.set_title(f'(c) Variance vs $\\sigma$ ($\\mu={MU_FIXED}$, $L={L_VAR}$)', fontsize=13)
 ax.legend(fontsize=9, loc='upper left')
 ax.grid(True, alpha=0.3)
 
@@ -376,7 +402,7 @@ ax.semilogy(sigma_list, ratio, 'D-', color='#8e44ad', markersize=5)
 ax.axhline(1, color='gray', linestyle='--', alpha=0.5, label='Variance Ratio = 1')
 ax.set_xlabel('$\\sigma$', fontsize=12)
 ax.set_ylabel('Variance Ratio (REINFORCE / Reparameterized)', fontsize=12)
-ax.set_title(f'(d) Variance Ratio ($\\mu={mu_fixed}$)', fontsize=13)
+ax.set_title(f'(d) Variance Ratio ($\\mu={MU_FIXED}$)', fontsize=13)
 ax.grid(True, alpha=0.3)
 ax.legend(fontsize=10)
 
@@ -396,7 +422,7 @@ ax.loglog(L_list, reinforce_mse, 'o-', label='REINFORCE', color='#e74c3c', marke
 ax.loglog(L_list, reparam_mse, 's-', label='Reparameterized', color='#3498db', markersize=8)
 ax.set_xlabel('Number of Samples $L$ (log scale)', fontsize=12)
 ax.set_ylabel('MSE (log scale)', fontsize=12)
-ax.set_title(f'(a) Gradient MSE vs Sample Size ($\\mu={mu_eff}$, $\\sigma={sigma_eff}$)', fontsize=13)
+ax.set_title(f'(a) Gradient MSE vs Sample Size ($\\mu={MU_EFF}$, $\\sigma={SIGMA_EFF}$)', fontsize=13)
 ax.legend(fontsize=11)
 ax.grid(True, alpha=0.3)
 

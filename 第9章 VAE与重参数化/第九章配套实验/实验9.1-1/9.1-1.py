@@ -321,6 +321,11 @@ print("\n[对比实验]")
 print("  VAE (β=1) vs AE (β=0)：")
 print("  - VAE: 有KL正则化，隐空间连续 → 可生成")
 print("  - AE:  无KL约束，隐空间有空洞 → 无法生成")
+print("\n[实现说明]")
+print("  为复用同一套代码框架，AE在此实现为β=0的VAE退化形式")
+print("  （Encoder仍输出μ和logσ²，但KL项为0），而非架构上移除")
+print("  方差分支的纯确定性编码器。训练时logσ²会趋向很负值，")
+print("  效果上逼近确定性编码，但理论上不是'架构上'的AE。")
 
 # 加载MNIST数据集
 print("\n加载MNIST数据集...")
@@ -443,14 +448,17 @@ fig, axes = plt.subplots(2, n_show, figsize=(20, 6))
 for i in range(n_show):
     # 第一行：VAE先验采样（可识别的数字）
     axes[0, i].imshow(vae_samples[i].view(28, 28).cpu().numpy(), cmap='gray')
-    axes[0, i].axis('off')
+    # 不使用axis('off')，因为会抑制ylabel显示；改为只关掉刻度
+    axes[0, i].set_xticks([])
+    axes[0, i].set_yticks([])
     if i == 0:
         axes[0, i].set_ylabel('VAE Prior\n($z \\sim \\mathcal{N}(0,I)$)', 
                               fontsize=12, rotation=0, labelpad=60)
     
     # 第二行：AE先验采样（无意义的图像）
     axes[1, i].imshow(ae_samples[i].view(28, 28).cpu().numpy(), cmap='gray')
-    axes[1, i].axis('off')
+    axes[1, i].set_xticks([])
+    axes[1, i].set_yticks([])
     if i == 0:
         axes[1, i].set_ylabel('AE Prior\n($z \\sim \\mathcal{N}(0,I)$)', 
                               fontsize=12, rotation=0, labelpad=60)
@@ -486,6 +494,10 @@ print("\n4. AE重建能力强但无法生成：")
 print("   - AE 隐空间无 KL 约束，编码自由度高 → 重建更清晰")
 print("   - 但隐空间存在大量空洞，从 N(0,I) 采样解码无意义")
 print("   ✓ 实验验证: AE重建清晰（第三行），但AE先验采样为噪声（见对比图）")
+print("   [实现细节说明] 本实验AE为β=0的VAE退化形式（Encoder仍输出(μ, logσ²)），")
+print("                 故AE先验采样图像呈现'有结构但无语义'的特征而非完全随机噪声；")
+print("                 真正的纯AE（确定性编码，无方差分支）采样结果会更杂乱。")
+print("                 此实现选择便于复用同一套代码框架，不影响VAE/AE核心差异的展示。")
 print("\n5. VAE vs AE核心差异：")
 print("   - VAE: KL正则化牺牲部分重建精度，换取隐空间规律性 → 可生成")
 print("   - AE:  无KL约束，重建更清晰，但隐空间无保证 → 无法生成")
