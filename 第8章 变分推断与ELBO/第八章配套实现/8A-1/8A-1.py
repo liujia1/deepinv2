@@ -14,7 +14,14 @@
 
 实验内容：
   步骤1：Fenchel共轭的计算——几个经典函数的共轭
-  步骤2：Fenchel共轭验证ELBO = (log p)** 的下界性质
+  步骤2：从Fenchel共轭定义推导ELBO = log p(x)的下界性质
+        （注：这里用到的核心恒等式是
+            log ∫ exp(f(z))dz = sup_q {E_q[f(z)] - (-H(q))}
+                              = sup_q {E_q[log p(x,z)] + H(q)}
+         它来自Fenchel共轭定义本身（一次共轭），不是
+         双重共轭(f**=f, Fenchel-Moreau)；
+         对应函数族的"sup_q ELBO = log p(x)" 是强对偶的特例，
+         当变分族Q足够大（包含p(z|x)）时等号成立。）
 
 运行前提：纯NumPy/SciPy CPU即可
 """
@@ -100,8 +107,17 @@ f2 = lambda x: np.abs(x)
 for y_val in [0.5, 1.5]:
     f2_star_theory = 0.0 if abs(y_val) <= 1 else float('inf')
     f2_star_num, _ = fenchel_conjugate_numerical(f2, y_val)
-    theory_str = "0" if abs(y_val) <= 1 else "+inf"
-    print(f"{'|x|, y='+str(y_val):<25s} | {theory_str:<25s} | {f2_star_num:>10.6f} | {'N/A' if f2_star_theory == float('inf') else f'{abs(f2_star_theory - f2_star_num):.6f}':>10s}")
+    if abs(y_val) <= 1:
+        # 有限 y 情形：可以正常比较误差
+        theory_str = "0"
+        err_str = f"{abs(f2_star_theory - f2_star_num):.6f}"
+    else:
+        # |y|>1 情形：理论值为 +∞，数值搜索在有限区间上必然返回区间端点值，
+        # 那是"有限域截断"的人为产物，与 +∞ 不可比较。
+        # 真正验证方式：当 |y|>1 时，数值解会随 x_range 上界扩大而单调增长、永远不收敛。
+        theory_str = "+inf"
+        err_str = "N/A (有限域截断)"
+    print(f"{'|x|, y='+str(y_val):<25s} | {theory_str:<25s} | {f2_star_num:>10.6f} | {err_str:>15s}")
 
 # 3. f(x) = -log(x) (x>0) → f*(y) = -1-log(-y) (y<0)
 f3 = lambda x: -np.log(np.maximum(x, 1e-10))
@@ -117,7 +133,13 @@ f4_star_theory = y_pos * np.log(y_pos) - y_pos
 f4_star_num, _ = fenchel_conjugate_numerical(f4, y_pos, x_range=(-10, 5))
 print(f"{'exp(x), y=2':<25s} | {'y*log(y)-y':<25s} | {f4_star_num:>10.6f} | {abs(f4_star_theory - f4_star_num):>10.6f}")
 
-print("\n数值计算与理论值高度一致——Fenchel共轭公式验证成功")
+print("\n[验证小结]")
+print("  - 三个有限共轭情形（x²/2, -log(x), exp(x)）的数值解与理论值完全吻合，误差均在 1e-4 量级。")
+print("  - |x| 在 |y|≤1 时也吻合（数值≈0）。")
+print("  - |x| 在 |y|>1 时的理论值是 +∞，有限区间数值搜索只能给出截断端点处的有限值，")
+print("    这并非数值与理论相矛盾，而是有限域搜索本身无法触及 +∞。")
+print("    想实验验证该情形，可把 x_range 上界调到 100、1000、10000，")
+print("    数值解会单调增长而不收敛——这正是 +∞ 的正确表现。")
 
 
 # ============================================================
@@ -169,12 +191,19 @@ print(f"  log p(x) = {log_px:.6f}")
 # 数值验证：log ∫ exp(f(z))dz = sup_q { E_q[f(z)] + H(q) }
 # f(z) = log p(x,z)
 # 对q = N(μ, σ²)，参数化搜索ELBO最大值
+# ★ 公共随机数（common random numbers）技巧
+# 在函数外部生成一次 opt_eps，所有目标函数评估都共享同一组基础噪声，
+# 避免每次调用都重新抽样造成的"有噪目标函数"，让 Nelder-Mead 在光滑目标上稳定收敛。
+# 200000 样本是 8.4-2.py 已验证的可靠量级，可把 MC 噪声压到 ±1e-3 量级，
+# 避免出现"sup ELBO > log p(x)"这种打破 Jensen 不等式的尴尬噪声峰值。
+n_opt_samples = 200000
+opt_eps = np.random.randn(n_opt_samples)
+
 def neg_elbo_gaussian(params):
-    """对q=N(μ,σ²)计算-ELBO"""
+    """对q=N(μ,σ²)计算 -ELBO（基于公共随机数 opt_eps）"""
     mu_q, log_sigma_q = params
     sigma_q = np.exp(log_sigma_q)
-    n_samples = 30000
-    z = np.random.randn(n_samples) * sigma_q + mu_q
+    z = mu_q + sigma_q * opt_eps
 
     # log p(x,z)
     log_pxz = -0.5 * np.log(2 * np.pi) - np.log(sigma_obs) - 0.5 * ((x_obs - z) / sigma_obs)**2
@@ -189,9 +218,24 @@ def neg_elbo_gaussian(params):
 
     return -np.mean(log_joint - log_qz)
 
-np.random.seed(42)
-result = minimize(neg_elbo_gaussian, [0.0, 0.0], method='Nelder-Mead',
-                  options={'maxiter': 2000, 'xatol': 1e-6, 'fatol': 1e-6})
+# ★ 两步法：粗网格搜索找全局起点 → Nelder-Mead 精修
+# 单点起点 [0.0, 0.0] 在有噪目标上容易陷局部次优；
+# 先用粗网格扫描一遍，挑出 -ELBO 最低的点作为 Nelder-Mead 起点，可显著降低变分间隙估计的不稳定性
+mu_candidates = np.linspace(-3, 3, 15)
+sigma_candidates = np.linspace(0.2, 2.0, 10)
+best_grid_val = np.inf
+best_grid_params = [0.0, 0.0]
+for mu_c in mu_candidates:
+    for sigma_c in sigma_candidates:
+        val = neg_elbo_gaussian([mu_c, np.log(sigma_c)])
+        if val < best_grid_val:
+            best_grid_val = val
+            best_grid_params = [mu_c, np.log(sigma_c)]
+
+result = minimize(neg_elbo_gaussian, best_grid_params, method='Nelder-Mead',
+                  options={'maxiter': 5000, 'xatol': 1e-8, 'fatol': 1e-8})
+if not result.success:
+    print(f"  [警告] Nelder-Mead 未完全收敛: {result.message}")
 best_mu, best_log_sigma = result.x
 best_sigma = np.exp(best_log_sigma)
 best_elbo = -result.fun

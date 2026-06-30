@@ -114,13 +114,18 @@ print("  KL正则项：惩罚q偏离先验p(z)")
 
 # 定义计算重建项和KL项的函数
 def compute_reconstruction_and_kl(mu_q, sigma_q, n_samples=20000):
-    """计算ELBO的两个组成部分"""
+    """计算ELBO的两个组成部分
+
+    注意：每次调用都 np.random.seed(42) 重置随机种子——这是 common random numbers 技巧，
+    让不同 (μ_q, σ_q) 配置下的 MC 估计噪声完全相关，从而使扫描曲线更光滑、对比更干净。
+    这意味着这份代码适合用来画趋势图，但不能用于评估 MC 估计的方差或做收敛性分析。
+    """
     np.random.seed(42)
     z = np.random.randn(n_samples) * sigma_q + mu_q
-    
+
     # 重建项：E_q[log p(x|z)]
     reconstruction = np.mean(-0.5 * np.log(2 * np.pi) - np.log(sigma_obs) - 0.5 * ((x_obs - z) / sigma_obs)**2)
-    
+
     # KL项：KL(q||p(z)) = E_q[log q(z) - log p(z)]
     log_pz = np.full_like(z, -1e30)
     for w, mu, tau in zip(prior_weights, prior_means, prior_stds):
@@ -128,7 +133,7 @@ def compute_reconstruction_and_kl(mu_q, sigma_q, n_samples=20000):
         log_pz = np.logaddexp(log_pz, log_comp)
     log_qz = -0.5 * np.log(2 * np.pi) - np.log(sigma_q) - 0.5 * ((z - mu_q) / sigma_q)**2
     kl = np.mean(log_qz - log_pz)
-    
+
     return reconstruction, kl
 
 # 扫描不同的q参数，观察重建项和KL项的变化
@@ -152,6 +157,109 @@ print(f"  3. ELBO最大值 = 重建项与KL项的权衡")
 
 
 # ============================================================
+# ★ 新增：真正优化 q* 并量化变分间隙
+# 用 minimize 找出 argmax ELBO 的 q*，并报告 ELBO* vs log p(x) 的差距
+# 这是"ELBO是变分下界"这一核心结论的定量证据
+#
+# 关键设计：所有计算（优化目标、最终报告的重建项/KL项/ELBO）都使用同一组
+# 公共随机数 opt_eps，避免不同随机源造成 recon - kl ≠ elbo 的不一致。
+# ============================================================
+print("\n" + "=" * 60)
+print("★ 变分下界定量验证：优化 q* 并量化变分间隙")
+print("=" * 60)
+
+# 用 common random numbers 技巧让优化目标光滑（且与最终报告共享同一组样本）
+# 大样本量（200000）以降低MC噪声，确保 gap ≥ 0 的理论性质不被噪声打破
+n_opt_samples = 200000
+opt_eps = np.random.randn(n_opt_samples)  # 固定基础噪声，所有评估共享
+
+def neg_elbo_with_decomp(params):
+    """负ELBO（用于 minimize 优化）——同时返回重建项、KL项、ELBO 三元组
+
+    所有三项基于同一组公共随机数 opt_eps 计算，保证 recon - kl ≡ elbo（恒等式）。
+    优化器只用到 -elbo 部分，但返回完整三元组便于最终报告。
+    """
+    mu_q, log_sigma_q = params
+    sigma_q = np.exp(log_sigma_q)
+    z = mu_q + sigma_q * opt_eps
+    # 重建项
+    log_pxz = -0.5 * np.log(2 * np.pi) - np.log(sigma_obs) - 0.5 * ((x_obs - z) / sigma_obs)**2
+    # KL项需要的 log p(z)
+    log_pz = np.full_like(z, -1e30)
+    for w, mu, tau in zip(prior_weights, prior_means, prior_stds):
+        log_comp = np.log(w) - 0.5 * np.log(2 * np.pi) - np.log(tau) - 0.5 * ((z - mu) / tau)**2
+        log_pz = np.logaddexp(log_pz, log_comp)
+    # log q(z)
+    log_qz = -0.5 * np.log(2 * np.pi) - np.log(sigma_q) - 0.5 * ((z - mu_q) / sigma_q)**2
+
+    recon = np.mean(log_pxz)
+    kl = np.mean(log_qz - log_pz)
+    elbo = recon - kl  # 与 np.mean(log_pxz + log_pz - log_qz) 数值恒等
+    return -elbo, recon, kl
+
+
+def neg_elbo_only(params):
+    """包装函数：只返回 -ELBO（用于 minimize）"""
+    return neg_elbo_with_decomp(params)[0]
+
+
+# 网格搜索作为全局起点（粗网格即可，因为 Nelder-Mead 会精修）
+mu_candidates = np.linspace(-3, 3, 15)
+sigma_candidates = np.linspace(0.2, 2.0, 10)
+best_grid_val = np.inf
+best_grid_params = [0.0, 0.0]
+for mu_c in mu_candidates:
+    for sigma_c in sigma_candidates:
+        val = neg_elbo_only([mu_c, np.log(sigma_c)])
+        if val < best_grid_val:
+            best_grid_val = val
+            best_grid_params = [mu_c, np.log(sigma_c)]
+
+result = minimize(neg_elbo_only, best_grid_params, method='Nelder-Mead',
+                  options={'maxiter': 5000, 'xatol': 1e-8, 'fatol': 1e-8})
+if not result.success:
+    print(f"  [警告] Nelder-Mead 未完全收敛: {result.message}")
+mu_q_opt = result.x[0]
+sigma_q_opt = np.exp(result.x[1])
+
+# ★ 关键：用同一组 opt_eps 重新计算最优点的三项，保证 recon - kl = elbo 严格相等
+_, recon_opt, kl_opt = neg_elbo_with_decomp([mu_q_opt, np.log(sigma_q_opt)])
+elbo_opt = recon_opt - kl_opt  # 精确等于（同一组样本的代数恒等）
+variational_gap = log_px - elbo_opt
+
+print(f"\n[优化结果]")
+print(f"  q*(z) = N({mu_q_opt:.4f}, {sigma_q_opt:.4f}²)")
+print(f"  重建项 E_q*[log p(x|z)] = {recon_opt:.4f}")
+print(f"  KL正则项 KL(q*||p(z))   = {kl_opt:.4f}")
+print(f"  ELBO* = 重建项 - KL项 = {recon_opt:.4f} - {kl_opt:.4f} = {elbo_opt:.4f}  (代数恒等)")
+print(f"  log p(x) = {log_px:.4f}")
+print(f"  变分间隙 log p(x) - ELBO* = {variational_gap:.4f}")
+print(f"  相对间隙 = {variational_gap / abs(log_px) * 100:.2f}%")
+
+# 安全检查：理论上 variational_gap ≥ 0 必须成立（变分下界）
+# 但MC噪声可能让估计值出现微小负值，加保护避免学生误解
+if variational_gap < -1e-3:
+    # 显著为负：不应仅是MC噪声，可能是代码bug
+    print(f"\n  [警告] 变分间隙显著为负（{variational_gap:.4f}），")
+    print(f"         这不应仅由MC噪声引起，请检查代码逻辑。")
+elif variational_gap < 0:
+    # 微小负值：理论上不应出现，但MC噪声在 ±1e-3 量级属正常
+    print(f"\n  [注意] 变分间隙为微小负值（{variational_gap:.2e}），属于MC噪声范围，")
+    print(f"         理论上变分间隙 ≥ 0 严格成立（Jensen不等式）。")
+else:
+    print(f"\n[变分下界验证]")
+    print(f"  ✓ ELBO* ({elbo_opt:.4f}) ≤ log p(x) ({log_px:.4f}) —— 定量验证ELBO是下界")
+    print(f"  ✓ 变分间隙 ≥ 0：{variational_gap:.4f}（理论上严格成立）")
+
+print(f"\n[为什么ELBO永远不能碰到 log p(x)？]")
+print(f"  本例中真实后验 p(z|x) 是双分量高斯混合（双峰）")
+print(f"  而变分族 q=N(μ,σ²) 是单峰高斯，表达能力不足以拟合双峰结构")
+print(f"  即使优化到最优 q*，单高斯也无法同时覆盖两个模态")
+print(f"  → 变分间隙 = KL(q* || p(z|x)) > 0 永远成立")
+print(f"  → 缩小间隙的方法：扩大变分族（如混合高斯 q=N(μ₁,σ₁²)+N(μ₂,σ₂²)）")
+
+
+# ============================================================
 # 步骤2：重建-正则权衡的可视化
 # ★ 原创设计
 # ============================================================
@@ -162,12 +270,12 @@ print("=" * 60)
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
 # 左图：重建项随q均值的变化
-for sigma_q in sigma_range:
+for sigma_q_fixed in sigma_range:
     reconstruction_terms = []
     for mu_q in mu_range:
-        recon, _ = compute_reconstruction_and_kl(mu_q, sigma_q)
+        recon, _ = compute_reconstruction_and_kl(mu_q, sigma_q_fixed)
         reconstruction_terms.append(recon)
-    axes[0].plot(mu_range, reconstruction_terms, label=r'$\sigma_q=' + f'{sigma_q}$')
+    axes[0].plot(mu_range, reconstruction_terms, label=r'$\sigma_q=' + f'{sigma_q_fixed}$')
 
 axes[0].set_xlabel(r'$\mu_q$')
 axes[0].set_ylabel(r'$\mathbb{E}_q[\log p(x|z)]$')
@@ -199,7 +307,7 @@ axes[1].legend()
 axes[1].grid(alpha=0.3)
 
 plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤2_重建与正则.png'), dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, '步骤2_重建与正则.png'), dpi=100)
 plt.close()
 print(f"\n图表已保存: 步骤2_重建与正则.png")
 

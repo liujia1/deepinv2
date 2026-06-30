@@ -140,11 +140,11 @@ print("  对于复杂先验（如深度学习先验），Z 不可解析计算")
 
 # 1D情况：Z可计算
 print("\n[1D情况：Z可计算]")
+# Z = p(x) = Σ_k w_k · N(x; μ_k, σ_obs² + τ_k²)
 z_1d = 0.0
 for w, mu, tau in zip(prior_weights, prior_means, prior_stds):
     marginal_std = np.sqrt(sigma_obs**2 + tau**2)
-    z_1d += w * np.exp(-0.5 * ((x_obs - mu) / marginal_std)**2) / marginal_std
-z_1d *= np.sqrt(2 * np.pi)
+    z_1d += w * np.exp(-0.5 * ((x_obs - mu) / marginal_std)**2) / (np.sqrt(2 * np.pi) * marginal_std)
 print(f"  1D高斯混合: Z = {z_1d:.6f}（解析可算）")
 
 # 高维情况：维数诅咒
@@ -154,20 +154,25 @@ print("  数值积分需要 O(N^d) 个网格点，N=10, d=100 时:")
 print(f"    网格点数: 10^100 ≈ 10^100（宇宙原子数约 10^80）")
 print("  → 高维积分在计算上不可行")
 
-# 蒙特卡罗估计Z
+# 蒙特卡罗估计Z（重要性采样）
 print("\n[蒙特卡罗估计Z]")
 n_mc = 1000000
-z_samples = np.random.randn(n_mc) * 3  # 从宽分布采样
+proposal_std = 3.0
+z_samples = np.random.randn(n_mc) * proposal_std  # 从提议分布 q(z)=N(0, proposal_std²) 采样
+# 计算 log p(x,z)
 log_pz = np.full(n_mc, -1e30)
 for w, mu, tau in zip(prior_weights, prior_means, prior_stds):
     log_comp = np.log(w) - 0.5 * np.log(2 * np.pi) - np.log(tau) - 0.5 * ((z_samples - mu) / tau)**2
     log_pz = np.logaddexp(log_pz, log_comp)
 log_pxz = -0.5 * np.log(2 * np.pi) - np.log(sigma_obs) - 0.5 * ((x_obs - z_samples) / sigma_obs)**2
 log_joint = log_pxz + log_pz
-z_mc = np.mean(np.exp(log_joint - np.max(log_joint))) * np.exp(np.max(log_joint)) * 6  # 6是采样范围
-print(f"  蒙特卡罗估计 (N={n_mc}): Z ≈ {z_mc:.6f}")
+# 重要性采样：Z = E_q[p(x,z)/q(z)]，需要除以提议分布密度 q(z)
+log_q = -0.5 * np.log(2 * np.pi) - np.log(proposal_std) - 0.5 * (z_samples / proposal_std)**2
+log_weights = log_joint - log_q  # log[p(x,z)/q(z)]
+z_mc = np.mean(np.exp(log_weights - np.max(log_weights))) * np.exp(np.max(log_weights))
+print(f"  蒙特卡罗估计 (N={n_mc}, 重要性采样): Z ≈ {z_mc:.6f}")
 print(f"  与解析值比较: 误差 = {abs(z_mc - z_1d) / z_1d * 100:.2f}%")
-print("  → 即使1D，蒙特卡罗也有较大误差；高维时误差更大")
+print("  → 重要性采样可以准确估计Z，但高维时提议分布难以匹配目标分布")
 
 
 # ============================================================
@@ -297,8 +302,10 @@ print(f"  注意: Laplace只能捕获单峰，无法表示双峰后验")
 print("\n[策略3] MAP估计（点估计）")
 t_start = time.time()
 
-# MAP就是后验众数
-z_map_estimate = z_map
+# MAP独立优化：最大化后验（与Laplace共享众数，但独立计时）
+neg_log_post_map = lambda z: -log_unnormalized_posterior(z)
+result_map = minimize(neg_log_post_map, x0=0.0, method='Nelder-Mead')
+z_map_estimate = result_map.x[0]
 
 t_map = time.time() - t_start
 
@@ -316,15 +323,19 @@ t_start = time.time()
 # 目标：最小化 KL(q||p(z|x))
 # 等价于：最大化 ELBO = E_q[log p(x,z)] - E_q[log q(z)]
 
+# 使用公共随机数（common random numbers）消除蒙特卡罗噪声
+# 固定一组ε ~ N(0,1)，通过重参数化 z = μ + σ·ε 评估不同(μ,σ)
+n_vi_samples = 10000
+vi_eps = np.random.randn(n_vi_samples)  # 固定的基础噪声
+
 def compute_elbo_single_gaussian(mu, sigma):
-    """计算单高斯变分族的ELBO"""
-    # 从q采样
-    n_samples = 10000
-    z_samples = np.random.randn(n_samples) * sigma + mu
+    """计算单高斯变分族的ELBO（使用公共随机数）"""
+    # 重参数化：z = μ + σ·ε，ε固定
+    z_samples = mu + sigma * vi_eps
     
     # log p(x,z)
     log_pxz = -0.5 * np.log(2 * np.pi) - np.log(sigma_obs) - 0.5 * ((x_obs - z_samples) / sigma_obs)**2
-    log_pz = np.full(n_samples, -1e30)
+    log_pz = np.full(n_vi_samples, -1e30)
     for w, mu_prior, tau in zip(prior_weights, prior_means, prior_stds):
         log_comp = np.log(w) - 0.5 * np.log(2 * np.pi) - np.log(tau) - 0.5 * ((z_samples - mu_prior) / tau)**2
         log_pz = np.logaddexp(log_pz, log_comp)
@@ -441,10 +452,11 @@ for i, (strategy, kl) in enumerate(zip(kl_strategies, kl_values)):
 
 # 子图4：计算代价 vs 近似质量（权衡曲线）
 ax4 = plt.subplot(2, 2, 4)
-ax4.scatter(times, [kl_mcmc, kl_laplace, kl_vi], 
+kl_times = [t_mcmc, t_laplace, t_vi]
+ax4.scatter(kl_times, [kl_mcmc, kl_laplace, kl_vi], 
            c=['blue', 'red', 'green'], s=100, alpha=0.7)
 for i, strategy in enumerate(['MCMC', 'Laplace', 'VI']):
-    ax4.annotate(strategy, (times[i], [kl_mcmc, kl_laplace, kl_vi][i]), 
+    ax4.annotate(strategy, (kl_times[i], [kl_mcmc, kl_laplace, kl_vi][i]), 
                 textcoords="offset points", xytext=(10, 5), fontsize=10)
 
 ax4.set_xlabel('Computation Time (seconds)')
@@ -454,15 +466,15 @@ ax4.set_xscale('log')
 ax4.grid(alpha=0.3)
 
 # 添加说明文字
-ax4.text(0.02, 0.98, 
-        'Upper-left: Fast + Accurate (Ideal)\n'
-        'Lower-right: Slow + Inaccurate (Worst)',
+ax4.text(0.02, 0.02,
+        'Lower-left: Fast + Accurate (Ideal)\n'
+        'Upper-right: Slow + Inaccurate (Worst)',
         transform=ax4.transAxes, fontsize=9,
-        verticalalignment='top',
+        verticalalignment='bottom',
         bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
 plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤3_计算代价vs近似质量.png'), dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, '步骤3_计算代价vs近似质量.png'), dpi=100)
 plt.close()
 print(f"\n图表已保存: 步骤3_计算代价vs近似质量.png")
 
@@ -479,9 +491,9 @@ print(f"  子图3：近似质量对比（KL散度）")
 print(f"    - MCMC最精确（KL最小）")
 print(f"    - Laplace和VI有近似误差")
 print(f"  子图4：计算代价 vs 近似质量的权衡")
-print(f"    - 理想：左上角（快且准）")
+print(f"    - 理想：左下角（快且准）")
 print(f"    - MCMC：右下角（慢但准）")
-print(f"    - VI：中间（快且较准）——最佳权衡")
+print(f"    - VI：左中（快且较准）——最佳权衡")
 
 
 # ============================================================

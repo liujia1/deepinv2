@@ -252,7 +252,9 @@ for name, q_w, q_m, q_s in test_qs[:3]:  # 取前3个q
     print(f"    分解一（联合-熵）:  E[log p(x,z)]={eq_log_joint:.4f} + H(q)={H_q:.4f} = {elbo_decomp1:.4f}")
     print(f"    分解二（重建+正则）: E[log p(x|z)]={eq_log_pxz_cond:.4f} - KL(q||p)={kl_qp:.4f} = {elbo_decomp2:.4f}")
     print(f"    直接计算:           ELBO = {elbo_direct:.4f}")
-    print(f"    三者一致: {abs(elbo_decomp1 - elbo_decomp2) < 0.1 and abs(elbo_decomp1 - elbo_direct) < 0.1}")
+    # 三种分解本质上是同一组蒙特卡罗样本的代数重组，理论误差应为机器精度级别（<1e-10）
+    tol = 1e-9
+    print(f"    三者一致（容差{tol}）: {abs(elbo_decomp1 - elbo_decomp2) < tol and abs(elbo_decomp1 - elbo_direct) < tol}")
 
 
 # ============================================================
@@ -307,7 +309,7 @@ ax2.legend()
 ax2.grid(alpha=0.3)
 
 plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤3_变分间隙.png'), dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, '步骤3_变分间隙.png'), dpi=100)
 plt.close()
 print(f"\n图表已保存: 步骤3_变分间隙.png")
 

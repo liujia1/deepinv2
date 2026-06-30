@@ -63,12 +63,14 @@ np.random.seed(42)
 
 # ============================================================
 # 模型设定：1D高斯混合 + 高斯观测
+# ★ 注意：先验权重调整为 [0.5, 0.5]（对称），观测值x_obs=0.5处于两个峰中间，
+#   使真实后验的两个分量权重接近 [0.5, 0.5]，真正展示平均场近似的局限
 # ============================================================
-prior_weights = [0.3, 0.7]
-prior_means = [-2.0, 1.0]
+prior_weights = [0.5, 0.5]
+prior_means = [-2.0, 2.0]
 prior_stds = [1.0, 1.0]
-sigma_obs = 0.5
-x_obs = 0.5
+sigma_obs = 1.0
+x_obs = 0.0  # 观测值在两个峰中间
 
 print("=" * 60)
 print("实验8.3-1：变分推断与真实后验对比")
@@ -144,11 +146,19 @@ print("  CAVI：固定其他因子，交替优化每个因子")
 
 from scipy.optimize import minimize
 
+# 关键修复：用 common random numbers 技巧
+# 在函数外只生成一次基础噪声 epsilon ~ N(0,1)，优化时通过重参数化 z = μ + σ·ε 复用
+# 避免每次调用 neg_elbo_gaussian 都重新采样导致目标函数带 MC 噪声、Nelder-Mead 假收敛
+n_vi_samples = 30000
+np.random.seed(42)  # 固定基础噪声，确保可复现
+vi_eps = np.random.randn(n_vi_samples)  # 固定的基础噪声，z = mu + sigma * vi_eps
+
 def neg_elbo_gaussian(params):
-    """负ELBO（用于优化）"""
+    """负ELBO（用于优化）——使用公共随机数"""
     mu_q, log_sigma_q = params
     sigma_q = np.exp(log_sigma_q)
-    z = np.random.randn(30000) * sigma_q + mu_q
+    # 重参数化：z = mu + sigma * eps，复用固定的 epsilon
+    z = mu_q + sigma_q * vi_eps
     log_pxz = -0.5 * np.log(2 * np.pi) - np.log(sigma_obs) - 0.5 * ((x_obs - z) / sigma_obs)**2
     log_pz = np.full_like(z, -1e30)
     for w, mu, tau in zip(prior_weights, prior_means, prior_stds):
@@ -271,7 +281,7 @@ axes[1].legend()
 axes[1].grid(alpha=0.3)
 
 plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤2_平均场vs真实后验.png'), dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, '步骤2_平均场vs真实后验.png'), dpi=100)
 plt.close()
 print(f"\n图表已保存: 步骤2_平均场vs真实后验.png")
 
@@ -279,6 +289,24 @@ print(f"\n[平均场近似的局限]")
 print(f"  真实后验是双峰（w=[{post_w[0]:.3f}, {post_w[1]:.3f}]）")
 print(f"  单高斯q*只能覆盖一个峰，无法捕获多模态")
 print(f"  变分间隙 = {log_px - best_elbo:.4f}（来自平均场的表达能力限制）")
+
+# 直观展示"双峰被抹平"：对比真实后验与单高斯近似在关键点的密度值
+print(f"\n[关键点密度对比]——直观展示平均场丢失多模态结构:")
+for z_val, label in [(0.0, "两峰中间（真实后验的凹陷处）"),
+                     (-1.0, "左峰位置"),
+                     (1.0, "右峰位置")]:
+    # 真实后验密度
+    p_val = 0.0
+    for w, m, s in zip(post_w, post_m, post_s):
+        p_val += w * np.exp(-0.5 * ((z_val - m) / s)**2) / (s * np.sqrt(2 * np.pi))
+    # 单高斯近似密度
+    q_val = np.exp(-0.5 * ((z_val - best_mu) / best_sigma)**2) / (best_sigma * np.sqrt(2 * np.pi))
+    diff = q_val - p_val
+    flag = "  ← 错误地把低概率区标成高概率" if abs(z_val) < 0.1 and diff > 0 else ""
+    print(f"  z={z_val:+.1f} ({label}):")
+    print(f"    真实后验 p(z|x) = {p_val:.4f}")
+    print(f"    单高斯近似 q*(z) = {q_val:.4f}")
+    print(f"    差异 q*-p = {diff:+.4f}{flag}")
 
 print(f"\n[核心结论]")
 print(f"  1. CAVI算法：在平均场假设下交替优化变分因子")
