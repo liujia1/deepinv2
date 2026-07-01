@@ -102,6 +102,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
+from tqdm import tqdm  # 进度条显示
 
 
 class Encoder(nn.Module):
@@ -222,8 +223,7 @@ def train_vae_with_checkpoint(beta, train_loader, num_epochs=15, latent_dim=20):
     # 训练循环
     if not is_final:
         # 快速验证模式
-        import os as _os
-        if _os.environ.get('QUICK_TEST', '') == '1':
+        if os.environ.get('QUICK_TEST', '') == '1':
             num_epochs = 3
             print(f"\n[快速验证模式] 仅训练 {num_epochs} 轮")
         
@@ -242,7 +242,6 @@ def train_vae_with_checkpoint(beta, train_loader, num_epochs=15, latent_dim=20):
                 total_loss, total_bce, total_kld = 0, 0, 0
                 all_mu, all_logvar = [], []
                 
-                from tqdm import tqdm
                 pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{num_epochs}', 
                             leave=False, unit='batch')
                 
@@ -276,24 +275,23 @@ def train_vae_with_checkpoint(beta, train_loader, num_epochs=15, latent_dim=20):
                 history['kld'].append(total_kld / n)
                 history['active'].append(active)
                 
-                if (epoch + 1) % 5 == 0 or epoch == 0:
-                    print(f"  Epoch {epoch+1:3d}/{num_epochs}: "
-                          f"Loss={history['loss'][-1]:.2f}  "
-                          f"BCE={history['bce'][-1]:.2f}  "
-                          f"KL={history['kld'][-1]:.2f}  "
-                          f"Active={active}/20")
-                    
-                    # 保存中间checkpoint
-                    torch.save({
-                        'epoch': epoch,
-                        'beta': beta,
-                        'encoder_state_dict': encoder.state_dict(),
-                        'decoder_state_dict': decoder.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'loss': history['loss'][-1],
-                        'history': history,
-                        'is_final': False
-                    }, checkpoint_path)
+                # 每个epoch打印一次并保存checkpoint，避免训练3个模型时中断风险（最多丢1轮而非4轮）
+                print(f"  Epoch {epoch+1:3d}/{num_epochs}: "
+                      f"Loss={history['loss'][-1]:.2f}  "
+                      f"BCE={history['bce'][-1]:.2f}  "
+                      f"KL={history['kld'][-1]:.2f}  "
+                      f"Active={active}/20")
+                
+                torch.save({
+                    'epoch': epoch,
+                    'beta': beta,
+                    'encoder_state_dict': encoder.state_dict(),
+                    'decoder_state_dict': decoder.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'loss': history['loss'][-1],
+                    'history': history,
+                    'is_final': False
+                }, checkpoint_path)
             
             t_elapsed = time.time() - t_start
             print(f"\n训练完成, 最终损失: {history['loss'][-1]:.6f}, "
@@ -331,16 +329,17 @@ print("  - β↓ → KL↑ → 重建更清晰，但隐空间可能不规则")
 print("  - 后验坍缩：β过大时，q(z|x)≈p(z)，隐变量不携带信息")
 
 betas = [0, 1, 4]
-beta_names = ['$\\beta=0$ (AE)', '$\\beta=1$ (VAE)', '$\\beta=4$ ($\\beta$-VAE)']
+beta_names = ['$\\beta=0$ (AE)', '$\\beta=1$ (VAE)', '$\\beta=4$ ($\\beta$-VAE)']  # 用于matplotlib图表
+beta_names_print = ['beta=0 (AE)', 'beta=1 (VAE)', 'beta=4 (beta-VAE)']  # 用于print语句（人类可读）
 models = {}
 
-for beta, name in zip(betas, beta_names):
+for beta, name, name_print in zip(betas, beta_names, beta_names_print):
     print(f"\n{'='*60}")
-    print(f"训练 {name} ...")
+    print(f"训练 {name_print} ...")
     print(f"{'='*60}")
     encoder, decoder, history = train_vae_with_checkpoint(beta, train_loader, num_epochs=15)
     models[beta] = {'encoder': encoder, 'decoder': decoder, 'history': history}
-    print(f"\n{name} 训练结果:")
+    print(f"\n{name_print} 训练结果:")
     print(f"  最终: Loss={history['loss'][-1]:.2f}, "
           f"BCE={history['bce'][-1]:.2f}, "
           f"KL={history['kld'][-1]:.2f}, "
@@ -364,7 +363,7 @@ except ImportError:
 if has_tsne:
     fig, axes = plt.subplots(1, 3, figsize=(21, 6))
     
-    for idx, (beta, name) in enumerate(zip(betas, beta_names)):
+    for idx, (beta, name, name_print) in enumerate(zip(betas, beta_names, beta_names_print)):
         encoder = models[beta]['encoder']
         encoder.eval()
         
@@ -393,7 +392,7 @@ if has_tsne:
         
         # 活跃维度标注（通过print而非子图文字）
         active = models[beta]['history']['active'][-1]
-        print(f"{name}: 活跃维度 {active}/20")
+        print(f"{name_print}: 活跃维度 {active}/20")
     
     plt.colorbar(scatter, ax=axes[-1], label='Digit Class')
     plt.suptitle('Latent Space t-SNE: Effect of $\\beta$', fontsize=15, y=1.02)
@@ -430,15 +429,10 @@ test_iter = iter(test_loader)
 imgs1, labels1 = next(test_iter)
 imgs2, labels2 = next(test_iter)
 
-# 找不同数字的样本
-idx1, idx2 = 0, 0
-for i in range(len(labels1)):
-    for j in range(len(labels2)):
-        if labels1[i] != labels2[j]:
-            idx1, idx2 = i, j
-            break
-    if labels1[idx1] != labels2[idx2]:
-        break
+# 找两个不同数字的样本用于插值演示
+idx1, idx2 = next((i, j) for i in range(len(labels1)) 
+                         for j in range(len(labels2)) 
+                         if labels1[i] != labels2[j])
 
 x1 = imgs1[idx1].view(-1, 784).to(device)
 x2 = imgs2[idx2].view(-1, 784).to(device)
@@ -492,7 +486,7 @@ print("步骤3: 活跃维度与训练对比")
 print(f"{'='*60}")
 print("\n[核心验证]")
 print("  后验坍缩检测（对应9.3节核心结论）：")
-print("  - β=0: KL=0（无正则化），所有维度活跃但无结构")
+print("  - β=0: 无KL惩罚，隐空间不受约束（实际KL可能很大，仅未被优化）")
 print("  - β=1: KL适中，20/20活跃，隐空间有规律")
 print("  - β=4: KL被强力压制，活跃维度减少（后验坍缩）")
 
@@ -524,7 +518,8 @@ ax.grid(True, alpha=0.3)
 ax = axes[0, 2]
 for beta, name in zip(betas, beta_names):
     h = models[beta]['history']
-    ax.plot(h['active'], label=name, marker='o', markersize=3)
+    linestyle = '--' if beta == 1 else '-'
+    ax.plot(h['active'], label=name, marker='o', markersize=3, linestyle=linestyle)
 ax.set_xlabel('Epoch', fontsize=12)
 ax.set_ylabel('Active Dimensions', fontsize=12)
 ax.set_title('(c) Active Dimensions Comparison', fontsize=13)
@@ -575,7 +570,10 @@ print(f"{'='*60}")
 print("\n[核心观察]")
 print("  β对生成质量的影响：")
 print("  - β↑ → 生成更模糊（KL正则化更强，信息损失更多）")
-print("  - β↓ → 生成更清晰，但可能不如VAE有规律")
+print("  - β↓ → 生成更清晰，但隐空间未被约束匹配N(0,I)")
+print("  - 关键点：AE(β=0)的隐空间q(z|x)从未被约束去匹配N(0,I)，")
+print("    从标准正态直接采样很可能落在训练时未覆盖的区域，")
+print("    解码结果大概率是乱码/明显崩坏（而非'更清晰但不规律'）")
 
 n_gen = 10
 fig, axes = plt.subplots(3, n_gen, figsize=(20, 6))
@@ -610,9 +608,9 @@ print(f"\n{'='*60}")
 print("实验9.5-1 总结")
 print(f"{'='*60}")
 
-for beta, name in zip(betas, beta_names):
+for beta, name_print in zip(betas, beta_names_print):
     h = models[beta]['history']
-    print(f"\n{name}:")
+    print(f"\n{name_print}:")
     print(f"  最终Loss={h['loss'][-1]:.2f}, BCE={h['bce'][-1]:.2f}, "
           f"KL={h['kld'][-1]:.2f}, Active={h['active'][-1]}/20")
 

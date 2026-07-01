@@ -95,6 +95,12 @@ else:
 # Checkpoint路径
 CHECKPOINT_PATH = os.path.join(SAVE_DIR, 'vae_mnist_checkpoint.pth')
 
+# ====== 全局训练配置（必须放在checkpoint加载之前，确保任何路径下都已定义） ======
+NUM_EPOCHS = 20
+BETA = 4.0  # β=4.0强KL正则化，配合dz=50制造冗余隐空间，展示后验坍缩现象
+LATENT_DIM = 50  # dz=50制造冗余隐空间，部分维度会坍缩，展示活跃维度动态变化
+# =================================================================================
+
 # ============================================================
 # VAE模型定义（对应9.1节）
 # ============================================================
@@ -102,11 +108,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 
 class Encoder(nn.Module):
     """编码器（识别模型）: x → (μ, logσ²)"""
-    def __init__(self, input_dim=784, hidden_dim=400, latent_dim=20):
+    def __init__(self, input_dim=784, hidden_dim=400, latent_dim=50):
         super().__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.fc_mu = nn.Linear(hidden_dim, latent_dim)
@@ -121,7 +128,7 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
     """解码器（生成模型）: z → x̂"""
-    def __init__(self, latent_dim=20, hidden_dim=400, output_dim=784):
+    def __init__(self, latent_dim=50, hidden_dim=400, output_dim=784):
         super().__init__()
         self.fc1 = nn.Linear(latent_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, output_dim)
@@ -232,13 +239,12 @@ if os.path.exists(CHECKPOINT_PATH):
 
 # 训练循环
 if not is_final:
-    num_epochs = 20
-    beta = 1.0
-    print(f"\n开始训练 VAE (epochs={num_epochs}, $\\beta$={beta}, $d_z$=20)...")
+    num_epochs = NUM_EPOCHS  # 局部变量，允许被QUICK_TEST模式覆盖
+    beta = BETA
+    print(f"\n开始训练 VAE (epochs={num_epochs}, beta={beta}, d_z={LATENT_DIM})...")
     
-    # 快速验证模式
-    import os as _os
-    if _os.environ.get('QUICK_TEST', '') == '1':
+    # 快速验证模式（覆盖num_epochs为3轮，用于调试）
+    if os.environ.get('QUICK_TEST', '') == '1':
         num_epochs = 3
         print(f"\n[快速验证模式] 仅训练 {num_epochs} 轮")
     
@@ -255,9 +261,10 @@ if not is_final:
             encoder.train()
             decoder.train()
             total_loss, total_bce, total_kld = 0, 0, 0
-            all_mu, all_logvar = [], []
+            # 增量累加KL per dim避免存储全部mu/logvar（60000×50的张量在CPU上占用大量内存）
+            kl_per_dim_sum = None
+            n_batches = 0
             
-            from tqdm import tqdm
             pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{num_epochs}', leave=False, unit='batch')
             
             for x, _ in pbar:
@@ -279,8 +286,14 @@ if not is_final:
                 total_loss += loss.item()
                 total_bce += bce.item()
                 total_kld += kld.item()
-                all_mu.append(mu.detach())
-                all_logvar.append(logvar.detach())
+                
+                # 增量计算KL per dim：每batch计算后立即累加，不保留中间张量
+                kl_per_dim_batch = 0.5 * (mu.pow(2) + logvar.exp() - logvar - 1).mean(dim=0).detach()
+                if kl_per_dim_sum is None:
+                    kl_per_dim_sum = kl_per_dim_batch
+                else:
+                    kl_per_dim_sum = kl_per_dim_sum + kl_per_dim_batch
+                n_batches += 1
                 
                 pbar.set_postfix(loss=f'{loss.item():.4f}', kl=f'{kld.item():.2f}')
             
@@ -289,31 +302,29 @@ if not is_final:
             avg_bce = total_bce / n
             avg_kld = total_kld / n
             
-            # 活跃维度
-            all_mu_cat = torch.cat(all_mu, dim=0)
-            all_logvar_cat = torch.cat(all_logvar, dim=0)
-            active, kl_per_dim = compute_active_dims(all_mu_cat, all_logvar_cat)
+            # 活跃维度：使用增量累加的均值
+            kl_per_dim_mean = (kl_per_dim_sum / n_batches).cpu().numpy()
+            active = int((kl_per_dim_mean > 0.01).sum())
             
             history['loss'].append(avg_loss)
             history['bce'].append(avg_bce)
             history['kld'].append(avg_kld)
             history['active_dims'].append(active)
             
-            if (epoch + 1) % 5 == 0 or epoch == 0:
-                print(f"  Epoch {epoch+1:3d}/{num_epochs}: "
-                      f"Loss={avg_loss:.2f}  BCE={avg_bce:.2f}  "
-                      f"KL={avg_kld:.2f}  Active={active}/20")
-                
-                # 保存中间checkpoint
-                torch.save({
-                    'epoch': epoch,
-                    'encoder_state_dict': encoder.state_dict(),
-                    'decoder_state_dict': decoder.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': avg_loss,
-                    'history': history,
-                    'is_final': False
-                }, CHECKPOINT_PATH)
+            # 每个epoch打印一次（不再使用%5==0限制）并保存checkpoint，避免断点续训时丢失最多4轮进度
+            print(f"  Epoch {epoch+1:3d}/{num_epochs}: "
+                  f"Loss={avg_loss:.2f}  BCE={avg_bce:.2f}  "
+                  f"KL={avg_kld:.2f}  Active={active}/{LATENT_DIM}")
+            
+            torch.save({
+                'epoch': epoch,
+                'encoder_state_dict': encoder.state_dict(),
+                'decoder_state_dict': decoder.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': avg_loss,
+                'history': history,
+                'is_final': False
+            }, CHECKPOINT_PATH)
         
         t_elapsed = time.time() - t_start
         print(f"\n训练完成, 最终损失: {history['loss'][-1]:.6f}, 耗时: {t_elapsed:.1f} 秒")
@@ -378,8 +389,8 @@ if history['loss']:
     ax.set_xlabel('Epoch', fontsize=12)
     ax.set_ylabel('Active Dimensions', fontsize=12)
     ax.set_title('(d) 活跃维度 (KL > 0.01)', fontsize=13)
-    ax.set_ylim(-0.5, 20.5)
-    ax.axhline(20, color='gray', linestyle='--', alpha=0.3, label='$d_z=20$')
+    ax.set_ylim(-0.5, LATENT_DIM + 0.5)
+    ax.axhline(LATENT_DIM, color='gray', linestyle='--', alpha=0.3, label=f'$d_z={LATENT_DIM}$')
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=10)
     
@@ -415,11 +426,11 @@ if history['bce']:
 
 if history['active_dims']:
     print("\n3. 活跃维度检测：")
-    print(f"   活跃维度: {history['active_dims'][-1]}/20")
-    if history['active_dims'][-1] == 20:
-        print("   ✓ 实验验证: β=1时无后验坍缩（β=4时将观察到后验坍缩，见实验9.3）")
+    print(f"   活跃维度: {history['active_dims'][-1]}/{LATENT_DIM}")
+    if history['active_dims'][-1] == LATENT_DIM:
+        print(f"   ✓ 实验验证: β=1时无后验坍缩（所有{LATENT_DIM}个隐维度均被激活）")
     else:
-        print("   ✓ 实验验证: 检测到后验坍缩现象")
+        print(f"   ✓ 实验验证: 检测到后验坍缩现象（{history['active_dims'][-1]}/{LATENT_DIM}个维度活跃）")
 
 print("\n4. 重建-KL权衡：")
 print("   - KL上升的同时BCE下降，两者达到平衡")
@@ -436,7 +447,7 @@ with torch.no_grad():
         mu, logvar = encoder(x)
         z = reparameterize(mu, logvar)
         x_recon = decoder(z)
-        loss, bce, kld = loss_function(x, x_recon, mu, logvar, beta)
+        loss, bce, kld = loss_function(x, x_recon, mu, logvar, BETA)
         test_loss += loss.item()
         test_bce += bce.item()
         test_kld += kld.item()

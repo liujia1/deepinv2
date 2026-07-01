@@ -221,7 +221,7 @@ def train_model(beta, checkpoint_path, train_loader, num_epochs=20, model_name='
     
     # 训练循环
     if not is_final:
-        print(f"\n开始训练 {model_name} (epochs={num_epochs}, $\\beta$={beta}, $d_z$=20)...")
+        print(f"\n开始训练 {model_name} (epochs={num_epochs}, beta={beta}, d_z=20)...")
         
         # 快速验证模式
         import os as _os
