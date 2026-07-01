@@ -413,27 +413,27 @@ for i in range(n_show):
     axes[0, i].imshow(test_imgs[i, 0].numpy(), cmap='gray')
     axes[0, i].axis('off')
     if i == 0:
-        axes[0, i].set_title('Original', fontsize=12)
+        axes[0, i].set_title('原始图像', fontsize=12)
     
     # 第二行：VAE重建
     axes[1, i].imshow(vae_recon[i].view(28, 28).cpu().numpy(), cmap='gray')
     axes[1, i].axis('off')
     if i == 0:
-        axes[1, i].set_title('VAE Recon', fontsize=12)
+        axes[1, i].set_title('VAE重建', fontsize=12)
     
     # 第三行：AE重建
     axes[2, i].imshow(ae_recon[i].view(28, 28).cpu().numpy(), cmap='gray')
     axes[2, i].axis('off')
     if i == 0:
-        axes[2, i].set_title('AE Recon', fontsize=12)
+        axes[2, i].set_title('AE重建', fontsize=12)
     
     # 第四行：VAE先验采样
     axes[3, i].imshow(vae_samples[i].view(28, 28).cpu().numpy(), cmap='gray')
     axes[3, i].axis('off')
     if i == 0:
-        axes[3, i].set_title('VAE Prior', fontsize=12)
+        axes[3, i].set_title('VAE先验采样', fontsize=12)
 
-plt.suptitle('步骤2: VAE vs AE Reconstruction and Generation ($\\beta_{VAE}=1$, $\\beta_{AE}=0$)', 
+plt.suptitle('步骤2: VAE与AE重建与生成对比 ($\\beta_{VAE}=1$, $\\beta_{AE}=0$)', 
              fontsize=14, y=1.02)
 plt.tight_layout()
 fig_path = os.path.join(SAVE_DIR, '步骤2_VAE与AE重建对比.png')
@@ -452,7 +452,7 @@ for i in range(n_show):
     axes[0, i].set_xticks([])
     axes[0, i].set_yticks([])
     if i == 0:
-        axes[0, i].set_ylabel('VAE Prior\n($z \\sim \\mathcal{N}(0,I)$)', 
+        axes[0, i].set_ylabel('VAE先验采样\n($z \\sim \\mathcal{N}(0,I)$)', 
                               fontsize=12, rotation=0, labelpad=60)
     
     # 第二行：AE先验采样（无意义的图像）
@@ -460,10 +460,10 @@ for i in range(n_show):
     axes[1, i].set_xticks([])
     axes[1, i].set_yticks([])
     if i == 0:
-        axes[1, i].set_ylabel('AE Prior\n($z \\sim \\mathcal{N}(0,I)$)', 
+        axes[1, i].set_ylabel('AE先验采样\n($z \\sim \\mathcal{N}(0,I)$)', 
                               fontsize=12, rotation=0, labelpad=60)
 
-plt.suptitle('Prior Sampling Comparison: VAE can Generate, AE Cannot', fontsize=14, y=1.02)
+plt.suptitle('先验采样对比: VAE可生成, AE不能', fontsize=14, y=1.02)
 plt.tight_layout()
 fig_path = os.path.join(SAVE_DIR, '步骤3_AE无法生成对比.png')
 plt.savefig(fig_path, dpi=150, bbox_inches='tight')

@@ -345,11 +345,11 @@ fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 # (a) σ=1.0 时的梯度估计直方图
 ax = axes[0, 0]
 ax.hist(reinforce_estimates, bins=60, alpha=0.6, label='REINFORCE', density=True, color='#e74c3c')
-ax.hist(reparam_estimates, bins=60, alpha=0.6, label='Reparameterized', density=True, color='#3498db')
-ax.axvline(TRUE_GRAD, color='black', linestyle='--', linewidth=2, label=f'True Gradient = {TRUE_GRAD:.1f}')
-ax.set_xlabel('Gradient Estimate', fontsize=12)
-ax.set_ylabel('Probability Density', fontsize=12)
-ax.set_title(f'(a) Gradient Distribution ($\\mu={MU_TEST}$, $\\sigma={SIGMA_TEST}$, $L={L_SAMPLES}$)', fontsize=13)
+ax.hist(reparam_estimates, bins=60, alpha=0.6, label='重参数化', density=True, color='#3498db')
+ax.axvline(TRUE_GRAD, color='black', linestyle='--', linewidth=2, label=f'真实梯度 = {TRUE_GRAD:.1f}')
+ax.set_xlabel('梯度估计值', fontsize=12)
+ax.set_ylabel('概率密度', fontsize=12)
+ax.set_title(f'(a) 梯度分布 ($\\mu={MU_TEST}$, $\\sigma={SIGMA_TEST}$, $L={L_SAMPLES}$)', fontsize=13)
 ax.legend(fontsize=10)
 
 # (b) σ=0.1 时的梯度估计直方图（双y轴）
@@ -359,8 +359,8 @@ ax.legend(fontsize=10)
 ax = axes[0, 1]
 
 # 左轴：重参数化（窄尖峰，密度峰值大）
-ax.hist(reparam_small, bins=60, alpha=0.6, label='Reparameterized', density=True, color='#3498db')
-ax.set_ylabel('Density (Reparameterized)', fontsize=11, color='#3498db')
+ax.hist(reparam_small, bins=60, alpha=0.6, label='重参数化', density=True, color='#3498db')
+ax.set_ylabel('密度 (重参数化)', fontsize=11, color='#3498db')
 ax.tick_params(axis='y', labelcolor='#3498db')
 ax.set_ylim(0, 15)  # 重参数化密度峰值约12.5
 
@@ -385,13 +385,13 @@ ax.legend(lines1 + lines2, labels1 + labels2, fontsize=9, loc='upper left')
 
 # (c) 方差随σ变化 (log-log)
 ax = axes[1, 0]
-ax.loglog(sigma_list, reinforce_vars, 'o-', label='REINFORCE (Experiment)', color='#e74c3c', markersize=5)
-ax.loglog(sigma_list, reparam_vars, 's-', label='Reparameterized (Experiment)', color='#3498db', markersize=5)
-ax.loglog(sigma_list, theory_reinforce, '--', label='Theory: $(\\sigma^2+\\mu^2/\\sigma^2)/L$', color='#e74c3c', alpha=0.5)
-ax.loglog(sigma_list, theory_reparam, '--', label='Theory: $4\\sigma^2/L$', color='#3498db', alpha=0.5)
-ax.set_xlabel('$\\sigma$ (log scale)', fontsize=12)
-ax.set_ylabel('Gradient Variance (log scale)', fontsize=12)
-ax.set_title(f'(c) Variance vs $\\sigma$ ($\\mu={MU_FIXED}$, $L={L_VAR}$)', fontsize=13)
+ax.loglog(sigma_list, reinforce_vars, 'o-', label='REINFORCE (实验)', color='#e74c3c', markersize=5)
+ax.loglog(sigma_list, reparam_vars, 's-', label='重参数化 (实验)', color='#3498db', markersize=5)
+ax.loglog(sigma_list, theory_reinforce, '--', label='理论: $(\\sigma^2+\\mu^2/\\sigma^2)/L$', color='#e74c3c', alpha=0.5)
+ax.loglog(sigma_list, theory_reparam, '--', label='理论: $4\\sigma^2/L$', color='#3498db', alpha=0.5)
+ax.set_xlabel('$\\sigma$ (对数刻度)', fontsize=12)
+ax.set_ylabel('梯度方差 (对数刻度)', fontsize=12)
+ax.set_title(f'(c) 方差 vs $\\sigma$ ($\\mu={MU_FIXED}$, $L={L_VAR}$)', fontsize=13)
 ax.legend(fontsize=9, loc='upper left')
 ax.grid(True, alpha=0.3)
 
@@ -399,10 +399,10 @@ ax.grid(True, alpha=0.3)
 ax = axes[1, 1]
 ratio = reinforce_vars / np.maximum(reparam_vars, 1e-10)
 ax.semilogy(sigma_list, ratio, 'D-', color='#8e44ad', markersize=5)
-ax.axhline(1, color='gray', linestyle='--', alpha=0.5, label='Variance Ratio = 1')
+ax.axhline(1, color='gray', linestyle='--', alpha=0.5, label='方差比 = 1')
 ax.set_xlabel('$\\sigma$', fontsize=12)
-ax.set_ylabel('Variance Ratio (REINFORCE / Reparameterized)', fontsize=12)
-ax.set_title(f'(d) Variance Ratio ($\\mu={MU_FIXED}$)', fontsize=13)
+ax.set_ylabel('方差比 (REINFORCE / 重参数化)', fontsize=12)
+ax.set_title(f'(d) 方差比 ($\\mu={MU_FIXED}$)', fontsize=13)
 ax.grid(True, alpha=0.3)
 ax.legend(fontsize=10)
 
@@ -419,10 +419,10 @@ fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 # (a) MSE vs L
 ax = axes[0]
 ax.loglog(L_list, reinforce_mse, 'o-', label='REINFORCE', color='#e74c3c', markersize=8)
-ax.loglog(L_list, reparam_mse, 's-', label='Reparameterized', color='#3498db', markersize=8)
-ax.set_xlabel('Number of Samples $L$ (log scale)', fontsize=12)
-ax.set_ylabel('MSE (log scale)', fontsize=12)
-ax.set_title(f'(a) Gradient MSE vs Sample Size ($\\mu={MU_EFF}$, $\\sigma={SIGMA_EFF}$)', fontsize=13)
+ax.loglog(L_list, reparam_mse, 's-', label='重参数化', color='#3498db', markersize=8)
+ax.set_xlabel('样本数 $L$ (对数刻度)', fontsize=12)
+ax.set_ylabel('MSE (对数刻度)', fontsize=12)
+ax.set_title(f'(a) 梯度MSE vs 样本数 ($\\mu={MU_EFF}$, $\\sigma={SIGMA_EFF}$)', fontsize=13)
 ax.legend(fontsize=11)
 ax.grid(True, alpha=0.3)
 
@@ -441,11 +441,11 @@ try:
     print(f"  比值: {L_reinforce_needed/L_reparam_needed:.1f}x")
     
     ax = axes[1]
-    methods = ['REINFORCE', 'Reparameterized']
+    methods = ['REINFORCE', '重参数化']
     L_needed = [L_reinforce_needed, L_reparam_needed]
     bars = ax.bar(methods, L_needed, color=['#e74c3c', '#3498db'], alpha=0.8, edgecolor='black')
-    ax.set_ylabel('Required Samples $L$', fontsize=12)
-    ax.set_title(f'(b) Samples Needed to Reach MSE={target_mse}', fontsize=13)
+    ax.set_ylabel('所需样本数 $L$', fontsize=12)
+    ax.set_title(f'(b) 达到MSE={target_mse}所需样本数', fontsize=13)
     for bar, val in zip(bars, L_needed):
         ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 5,
                 f'{val:.0f}', ha='center', va='bottom', fontsize=12, fontweight='bold')

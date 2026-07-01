@@ -363,7 +363,7 @@ if history['loss']:
     ax = axes[0, 0]
     ax.plot(epochs, history['loss'], 'b-o', markersize=4)
     ax.set_xlabel('Epoch', fontsize=12)
-    ax.set_ylabel('ELBO Loss', fontsize=12)
+    ax.set_ylabel('ELBO损失', fontsize=12)
     ax.set_title('(a) 总损失 (BCE + $\\beta \\cdot$ KL)', fontsize=13)
     ax.grid(True, alpha=0.3)
     
@@ -379,7 +379,7 @@ if history['loss']:
     ax = axes[1, 0]
     ax.plot(epochs, history['kld'], 'g-o', markersize=4)
     ax.set_xlabel('Epoch', fontsize=12)
-    ax.set_ylabel('KL Divergence', fontsize=12)
+    ax.set_ylabel('KL散度', fontsize=12)
     ax.set_title('(c) KL正则化项', fontsize=13)
     ax.grid(True, alpha=0.3)
     
@@ -387,7 +387,7 @@ if history['loss']:
     ax = axes[1, 1]
     ax.plot(epochs, history['active_dims'], 'm-o', markersize=4)
     ax.set_xlabel('Epoch', fontsize=12)
-    ax.set_ylabel('Active Dimensions', fontsize=12)
+    ax.set_ylabel('活跃维度', fontsize=12)
     ax.set_title('(d) 活跃维度 (KL > 0.01)', fontsize=13)
     ax.set_ylim(-0.5, LATENT_DIM + 0.5)
     ax.axhline(LATENT_DIM, color='gray', linestyle='--', alpha=0.3, label=f'$d_z={LATENT_DIM}$')

@@ -394,8 +394,8 @@ if has_tsne:
         active = models[beta]['history']['active'][-1]
         print(f"{name_print}: 活跃维度 {active}/20")
     
-    plt.colorbar(scatter, ax=axes[-1], label='Digit Class')
-    plt.suptitle('Latent Space t-SNE: Effect of $\\beta$', fontsize=15, y=1.02)
+    plt.colorbar(scatter, ax=axes[-1], label='数字类别')
+    plt.suptitle('隐空间 t-SNE: $\\beta$ 的影响', fontsize=15, y=1.02)
     plt.tight_layout()
     fig_path = os.path.join(SAVE_DIR, '步骤1_β对比_tSNE.png')
     plt.savefig(fig_path, dpi=150, bbox_inches='tight')
@@ -470,7 +470,7 @@ for row, (enc, dec, name) in enumerate([
     axes[row, -1].imshow(imgs2[idx2, 0].numpy(), cmap='gray')
     axes[row, -1].axis('off')
 
-plt.suptitle('Latent Space Interpolation: AE vs VAE', fontsize=14, y=1.02)
+plt.suptitle('隐空间插值: AE vs VAE', fontsize=14, y=1.02)
 plt.tight_layout()
 fig_path = os.path.join(SAVE_DIR, '步骤2_插值对比.png')
 plt.savefig(fig_path, dpi=150, bbox_inches='tight')
@@ -498,8 +498,8 @@ for beta, name in zip(betas, beta_names):
     h = models[beta]['history']
     ax.plot(h['loss'], label=name, marker='o', markersize=3)
 ax.set_xlabel('Epoch', fontsize=12)
-ax.set_ylabel('ELBO Loss', fontsize=12)
-ax.set_title('(a) Training Loss Comparison', fontsize=13)
+ax.set_ylabel('ELBO损失', fontsize=12)
+ax.set_title('(a) 训练损失对比', fontsize=13)
 ax.legend(fontsize=10)
 ax.grid(True, alpha=0.3)
 
@@ -509,8 +509,8 @@ for beta, name in zip(betas, beta_names):
     h = models[beta]['history']
     ax.plot(h['kld'], label=name, marker='o', markersize=3)
 ax.set_xlabel('Epoch', fontsize=12)
-ax.set_ylabel('KL Divergence', fontsize=12)
-ax.set_title('(b) KL Divergence Comparison', fontsize=13)
+ax.set_ylabel('KL散度', fontsize=12)
+ax.set_title('(b) KL散度对比', fontsize=13)
 ax.legend(fontsize=10)
 ax.grid(True, alpha=0.3)
 
@@ -521,8 +521,8 @@ for beta, name in zip(betas, beta_names):
     linestyle = '--' if beta == 1 else '-'
     ax.plot(h['active'], label=name, marker='o', markersize=3, linestyle=linestyle)
 ax.set_xlabel('Epoch', fontsize=12)
-ax.set_ylabel('Active Dimensions', fontsize=12)
-ax.set_title('(c) Active Dimensions Comparison', fontsize=13)
+ax.set_ylabel('活跃维度', fontsize=12)
+ax.set_title('(c) 活跃维度对比', fontsize=13)
 ax.set_ylim(-0.5, 20.5)
 ax.legend(fontsize=10)
 ax.grid(True, alpha=0.3)
@@ -547,11 +547,11 @@ for idx, (beta, name) in enumerate(zip(betas, beta_names)):
     
     colors = ['#e74c3c' if v > 0.01 else '#bdc3c7' for v in kl_per_dim]
     ax.bar(range(20), kl_per_dim, color=colors, edgecolor='black', alpha=0.8)
-    ax.axhline(0.01, color='red', linestyle='--', alpha=0.5, label='Threshold=0.01')
+    ax.axhline(0.01, color='red', linestyle='--', alpha=0.5, label='阈值=0.01')
     active = sum(v > 0.01 for v in kl_per_dim)
-    ax.set_xlabel('Dimension $j$', fontsize=12)
+    ax.set_xlabel('维度 $j$', fontsize=12)
     ax.set_ylabel('$KL(q(z_j|x) \\|\\| p(z_j))$', fontsize=12)
-    ax.set_title(f'({chr(100+idx)}) {name}: {active}/20 Active', fontsize=13)
+    ax.set_title(f'({chr(100+idx)}) {name}: {active}/20 活跃', fontsize=13)
     ax.legend(fontsize=9)
 
 plt.tight_layout()
@@ -592,7 +592,7 @@ for row, (beta, name) in enumerate(zip(betas, beta_names)):
         if i == 0:
             axes[row, i].set_ylabel(name, fontsize=12, rotation=0, labelpad=50)
 
-plt.suptitle('Prior Sampling: $z \\sim \\mathcal{N}(0,I)$, $x = \\text{Decoder}(z)$', 
+plt.suptitle('先验采样: $z \\sim \\mathcal{N}(0,I)$, $x = \\text{Decoder}(z)$', 
              fontsize=14, y=1.02)
 plt.tight_layout()
 fig_path = os.path.join(SAVE_DIR, '步骤4_先验采样对比.png')
