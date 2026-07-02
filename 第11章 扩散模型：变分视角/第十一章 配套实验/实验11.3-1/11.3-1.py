@@ -133,14 +133,15 @@ wt_score = betas**2 / (2 * posterior_var * alphas)
 
 print(f"{'t':>5s}  {'w_t(ε)':>12s}  {'w_t(x₀)':>12s}  {'w_t(s)':>12s}  {'w_t(ε)/w_t(s)':>14s}")
 print("-" * 60)
-for t_idx in [1, 50, 100, 250, 500, 750, 999]:
-    t = t_idx
-    print(f"{t_idx:5d}  {wt_eps[t].item():12.6f}  {wt_x0[t].item():12.6f}  "
-          f"{wt_score[t].item():12.6f}  {wt_eps[t].item()/max(wt_score[t].item(),1e-30):14.6f}")
+# 注意：t=1时后验方差退化为0（alpha_bars_prev[0]=1导致分母为0），权重为inf，故从t=2开始采样
+for t_idx in [2, 50, 100, 250, 500, 750, 999]:
+    idx = t_idx - 1  # 数组下标idx对应物理时间步t=idx+1
+    print(f"{t_idx:5d}  {wt_eps[idx].item():12.6f}  {wt_x0[idx].item():12.6f}  "
+          f"{wt_score[idx].item():12.6f}  {wt_eps[idx].item()/max(wt_score[idx].item(),1e-30):14.6f}")
 
 print(f"\n[观察]")
-print(f"  w_t(ε) = β_t²/(2σ_t²α_t(1-ᾱ_t)): 小t时极大，大t时递减")
-print(f"  w_t(x₀) = ᾱ_{{t-1}}β_t²/(2σ_t²(1-ᾱ_t)²): 峰值在中间t")
+print(f"  w_t(ε) = β_t²/(2σ_t²α_t(1-ᾱ_t)): U形曲线，小t时大(~0.6)，中间t最小(~0.005)，大t时回升(~0.01)")
+print(f"  w_t(x₀) = ᾱ_{{t-1}}β_t²/(2σ_t²(1-ᾱ_t)²): 单调递减，t小时极大(~10³)，t大时趋于0")
 print(f"  w_t(ε)/w_t(s) = 1/(1-ᾱ_t): ε-prediction的权重比score-prediction多1/(1-ᾱ_t)因子")
 
 # L_0: 重建项
@@ -218,8 +219,8 @@ print(f"{'t':>5s}  {'ε̂→x̂₀→ε̂ 误差':>15s}  {'ε̂→ŝ→ε̂ 误�
 print("-" * 45)
 
 for t_idx in [10, 100, 500, 900]:
-    t = t_idx
-    ab = alpha_bars[t]
+    idx = t_idx - 1  # 数组下标idx对应物理时间步t=idx+1
+    ab = alpha_bars[idx]
     sqrt_ab = torch.sqrt(ab)
     sqrt_1mab = torch.sqrt(1 - ab)
 
@@ -249,17 +250,18 @@ print(f"\n三种参数化的VLB损失权重 w_t:")
 print(f"{'t':>5s}  {'ε-pred':>12s}  {'x₀-pred':>12s}  {'score-pred':>12s}  {'ε/x₀比':>8s}")
 print("-" * 55)
 
-for t_idx in [1, 10, 50, 100, 250, 500, 750, 999]:
-    t = t_idx
-    we = wt_eps[t].item()
-    wx = wt_x0[t].item()
-    ws = wt_score[t].item()
+# 注意：t=1时后验方差退化为0（alpha_bars_prev[0]=1导致分母为0），权重为inf，故从t=2开始采样
+for t_idx in [2, 10, 50, 100, 250, 500, 750, 999]:
+    idx = t_idx - 1  # 数组下标idx对应物理时间步t=idx+1
+    we = wt_eps[idx].item()
+    wx = wt_x0[idx].item()
+    ws = wt_score[idx].item()
     print(f"{t_idx:5d}  {we:12.6f}  {wx:12.6f}  {ws:12.6f}  {we/max(wx,1e-30):8.4f}")
 
 print(f"\n[观察]")
-print(f"  - ε-pred权重: 单调递减，小t时极大（~10⁴），大t时极小（~10⁻²）")
-print(f"  - x₀-pred权重: 峰值在中间t，两端较小")
-print(f"  - score-pred权重: 单调递减，但比ε-pred平滑")
+print(f"  - ε-pred权重: U形曲线，小t时大(~0.6)，中间t最小(~0.005，约t=350)，大t时回升(~0.01)")
+print(f"  - x₀-pred权重: 单调递减，t小时极大(~10³)，t大时趋于0")
+print(f"  - score-pred权重: 单调递增，小t时极小(~10⁻⁴)，大t时较大(~10⁻²)")
 
 
 # ============================================================
@@ -294,7 +296,7 @@ ax.set_ylabel('权重 (对数尺度)', fontsize=12)
 ax.set_title('(b) 三种参数化的VLB权重对比', fontsize=13)
 ax.legend(fontsize=10)
 ax.grid(True, alpha=0.3)
-ax.annotate('$x_0$-pred权重峰值在中间$t$\n$\\varepsilon$/s-pred权重单调递减',
+ax.annotate('$x_0$-pred权重单调递减\n$\\varepsilon$-pred权重U形，score-pred权重单调递增',
             xy=(0.35, 0.75), xycoords='axes fraction', fontsize=9,
             bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffeaa7', alpha=0.8))
 
@@ -374,8 +376,8 @@ print(f"{'t':>5s}  {'||ε-ε̂||²':>12s}  {'(1-ᾱ_t)·||s+s*||²':>18s}  {'比
 print("-" * 50)
 
 for t_idx in [10, 100, 500, 900]:
-    t = t_idx
-    ab = alpha_bars[t]
+    idx = t_idx - 1  # 数组下标idx对应物理时间步t=idx+1
+    ab = alpha_bars[idx]
     x_t = torch.sqrt(ab) * x0_v + torch.sqrt(1 - ab) * eps_v
 
     # ε-prediction损失: ||ε - ε̂||² (假设完美预测: ε̂=ε, 则误差=0)
@@ -414,7 +416,7 @@ print("""
 
 3. 三种参数化（11.3节）
    - ε/x₀/score三种参数化互推精确成立
-   - VLB权重: ε-pred单调递减, x₀-pred峰值在中间, score-pred与ε-pred差1/(1-ᾱ_t)因子
+   - VLB权重: ε-pred呈U形曲线, x₀-pred单调递减, score-pred单调递增
 
 4. VLB vs L_simple（11.4节）
    - VLB权重跨越多个数量级→训练不稳定
