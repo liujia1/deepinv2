@@ -112,11 +112,12 @@ print("    t      真实mu_t      x0-pred      eps-pred       score")
 print("-" * 70)
 
 for t_idx in [10, 100, 500, 900]:
-    t = t_idx
-    ab = alpha_bars[t]
-    a = alphas[t]
-    ab_prev = alpha_bars_prev[t]
-    b = betas[t]
+    # 注意：Python索引从0开始，时间步t从1开始，所以索引为t-1
+    idx = t_idx - 1
+    ab = alpha_bars[idx]
+    a = alphas[idx]
+    ab_prev = alpha_bars_prev[idx]
+    b = betas[idx]
 
     # 构造x_t
     x_t = torch.sqrt(ab) * x0_test + torch.sqrt(1 - ab) * eps_test
@@ -162,26 +163,34 @@ print("  VLB目标中的均值匹配项有权重:")
 print("  L_{t-1} ∝ (1-alpha_t)^2 / (alpha_t(1-ab_t)) * ||eps - hat_eps||^2")
 print("  L_simple对所有时间步赋等权重1，这是Ho et al. 2020的关键简化")
 
-x0_loss = torch.randn(100, 2)
-eps_loss = torch.randn_like(x0_loss)
-
 print("\n不同时间步的VLB权重:")
-print("    t       ab_t       VLB权重     L_simple权重     比值")
+print("    t       ab_t       VLB权重     L_simple权重   相对t=1")
 print("-" * 55)
 
+# 先计算t=1的权重作为基准
+weight_t1 = betas[0] / (2 * alphas[0] * (1 - alpha_bars[0]))
+
 for t_idx in [1, 10, 50, 100, 300, 500, 700, 900, 999]:
-    t = t_idx
-    ab = alpha_bars[t]
-    a = alphas[t]
+    # 注意：Python索引从0开始，时间步t从1开始，所以索引为t-1
+    idx = t_idx - 1
+    ab = alpha_bars[idx]
+    a = alphas[idx]
+    b = betas[idx]
 
-    # VLB权重系数: (1-alpha_t)^2 / (alpha_t(1-ab_t))
-    weight_vlb = (1 - a) ** 2 / (a * (1 - ab))
+    # VLB权重系数: 根据Ho et al. 2020 eq.14，使用σ_t²=β_t归一化
+    # L_{t-1} ∝ 1/(2σ_t²) · β_t²/(α_t(1-ᾱ_t)) · ||ε-ε_θ||²
+    # 取σ_t²=β_t时，权重系数 = β_t/(2α_t(1-ᾱ_t))
+    weight_vlb = b / (2 * a * (1 - ab))
 
-    print(str(t_idx).rjust(5) + "  " + str(round(ab.item(), 6)).rjust(10) + "  " + str(round(weight_vlb.item(), 6)).rjust(12) + "       1.000000      " + str(round(weight_vlb.item(), 4)).rjust(8))
+    # 计算相对于t=1的权重比值
+    ratio_to_t1 = weight_vlb / weight_t1
+
+    print(str(t_idx).rjust(5) + "  " + str(round(ab.item(), 6)).rjust(10) + "  " + str(round(weight_vlb.item(), 6)).rjust(12) + "       1.000000      " + str(round(ratio_to_t1.item(), 4)).rjust(8))
 
 print("\n关键观察:")
-print("  - t小(1-50): 权重极大 → 早期时间步对VLB贡献大")
-print("  - t大(700+): 权重极小 → 晚期时间步对VLB贡献小")
+print("  - t小(1-100): 权重随t增大而急剧下降(约100倍)，早期时间步主导VLB目标")
+print("  - t中段(t≈300附近): 权重达到谷值，对VLB贡献最小")
+print("  - t大(500+): 权重缓慢回升，但整体仍远小于t=1时的水平")
 print("  - L_simple对所有t赋等权重1，这是Ho et al. 2020的关键简化")
 print("  - 实际效果: L_simple忽略权重差异，但训练更稳定（10.3节）")
 
@@ -204,7 +213,9 @@ print("    t     ||x0-hat_x0||范围   ||eps-hat_eps||范围")
 print("-" * 45)
 
 for t_idx in [10, 100, 500, 900]:
-    ab = alpha_bars[t_idx]
+    # 注意：Python索引从0开始，时间步t从1开始，所以索引为t-1
+    idx = t_idx - 1
+    ab = alpha_bars[idx]
     # 假设预测误差为1
     err_eps = 1.0
     # 转换到x0空间的误差
@@ -229,7 +240,8 @@ fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
 # (a) VLB权重 vs L_simple权重
 ax = axes[0]
-weights = (1 - alphas) ** 2 / (alphas * (1 - alpha_bars))
+# 修正后的VLB权重公式：使用σ_t²=β_t归一化
+weights = betas / (2 * alphas * (1 - alpha_bars))
 ax.semilogy(range(1, T + 1), weights.numpy(), 'b-', linewidth=2, label='VLB权重')
 ax.axhline(1, color='r', linestyle='--', linewidth=1.5, label='$L_{simple}$权重 (=1)')
 ax.set_xlabel('时间步 $t$', fontsize=12)
@@ -237,7 +249,7 @@ ax.set_ylabel('损失权重 (对数尺度)', fontsize=12)
 ax.set_title('(a) VLB损失权重 vs $L_{simple}$', fontsize=13)
 ax.legend(fontsize=11)
 ax.grid(True, alpha=0.3)
-ax.annotate('VLB权重随t剧烈变化', xy=(0.3, 0.8), xycoords='axes fraction',
+ax.annotate('VLB权重: 小t占主导, t≈300后小幅回升', xy=(0.3, 0.8), xycoords='axes fraction',
             fontsize=10, color='blue',
             bbox=dict(boxstyle='round,pad=0.3', facecolor='#dfe6e9', alpha=0.8))
 
@@ -279,8 +291,8 @@ print("   - 转换关系:")
 print("     x0 = (x_t - sqrt(1-ab_t)·eps) / sqrt(ab_t)")
 print("     s = -eps / sqrt(1-ab_t)")
 print("\n2. VLB权重分析 (步骤2)")
-print("   - VLB权重 w_t = (1-alpha_t)^2 / (alpha_t(1-ab_t))")
-print("   - t小: 权重极大; t大: 权重极小")
+print("   - VLB权重 w_t = β_t / (2α_t(1-ᾱ_t))  (使用σ_t²=β_t归一化)")
+print("   - 权重呈U形: t小急剧下降，t≈300谷值，t大缓慢回升")
 print("   - L_simple对所有t赋等权重1")
 print("\n3. eps-prediction的优势 (步骤3)")
 print("   - 目标函数简单: ||eps - hat_eps||^2")

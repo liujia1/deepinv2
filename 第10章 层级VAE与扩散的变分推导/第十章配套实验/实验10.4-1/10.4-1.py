@@ -131,10 +131,10 @@ print("  用于确定性采样和似然计算")
 
 
 # ============================================================
-# 步骤3：层级ELBO→VLB对应关系
+# 步骤3：边际分布演化与连续极限
 # ============================================================
 print("\n" + "="*60)
-print("步骤3：层级ELBO→VLB对应关系")
+print("步骤3：边际分布演化与连续极限")
 print("="*60)
 print("\n[对应关系表]")
 print("""
@@ -153,22 +153,25 @@ ELBO                   →  VLB
   → 扩散模型的"推断"无需训练，VLB只优化解码器（去噪网络）
 """)
 
-# 数值验证: 不同L下的ELBO近似
+# 数值验证: 不同L下的边际分布到先验KL距离积分
 np.random.seed(42)
 # 简化的2D高斯混合数据
 x0_gmm = np.vstack([np.random.randn(500, 2) * 0.5 + [1, 0],
                      np.random.randn(500, 2) * 0.5 + [-1, 0]])
 
-print("不同层级数L下的ELBO近似（2D高斯混合, beta_total=1.0）:")
-print("     L      KL总和估计      每步beta")
-print("-" * 35)
+print("\n[数值验证] 边际分布演化: KL(q(x_t|x_0) || N(0,I))的积分收敛")
+print("  说明: 这衡量每一层边际分布到标准正态先验的距离")
+print("       L增大→积分收敛，体现离散到连续极限的数值稳定性")
+print("\n不同层级数L下的KL积分估计（2D高斯混合, beta_total=1.0）:")
+print("     L      KL积分估计      每步beta")
+print("-" * 40)
 
 for L in [5, 10, 50, 100]:
     dt = 1.0 / L
     beta_step = dt
     alpha_step = 1 - beta_step
 
-    # 简单估计: KL项的总和
+    # 简单估计: 边际分布到先验的KL距离积分（黎曼和形式）
     total_kl = 0
     for t in range(1, L + 1):
         ab_t = alpha_step ** t
@@ -179,11 +182,13 @@ for L in [5, 10, 50, 100]:
         mean_sq = ab_t * (mu2 + sigma2) + (1 - ab_t)
         log_var = np.log(ab_t * sigma2 + (1 - ab_t))
         kl_t = 0.5 * (mean_sq - 1 - log_var)
-        total_kl += kl_t
+        # 关键修正：添加步长dt归一化，形成黎曼和逼近积分
+        total_kl += kl_t * dt
 
     print(str(L).rjust(6) + "        " + str(round(total_kl, 4)).rjust(12) + "        " + str(round(beta_step, 6)).rjust(10))
 
-print("\n→ L增大时ELBO(=负KL)逐渐稳定，对应10.4节L→∞的连续极限")
+print("\n→ L增大时KL积分逐渐收敛，体现离散求和→连续积分的数值稳定性")
+print("  这验证了离散层级过程→VP-SDE连续极限的数学合理性")
 
 
 # ============================================================
@@ -243,12 +248,13 @@ alphas_linear = 1.0 - betas_linear
 alpha_bars_linear = torch.cumprod(alphas_linear, dim=0)
 
 # 改进调度 (cosine schedule)
-def cosine_beta_schedule(t, s=0.008):
-    """Cosine schedule as proposed in improved DDPM"""
-    return torch.cos((t + s) / (1 + s) * np.pi / 2) ** 2
+def cosine_alpha_bar_schedule(t, s=0.008):
+    """ᾱ(t)调度函数，来自Improved DDPM (Nichol & Dhariwal 2021)"""
+    f = lambda x: torch.cos((x + s) / (1 + s) * np.pi / 2) ** 2
+    return f(t) / f(torch.zeros_like(t))  # 归一化保证ᾱ(0)=1
 
 t_norm = torch.linspace(0, 1, T)
-alpha_bars_cosine = cosine_beta_schedule(t_norm)
+alpha_bars_cosine = cosine_alpha_bar_schedule(t_norm)
 
 ax.plot(range(1, T+1), alpha_bars_linear.numpy(), 'b-', linewidth=2, label='DDPM线性调度')
 ax.plot(range(1, T+1), alpha_bars_cosine.numpy(), 'g-', linewidth=2, label='Cosine调度')
@@ -304,7 +310,7 @@ print("\n2. VP-SDE形式 (步骤2)")
 print("   - 前向SDE: dx = -beta(t)/2 · x dt + sqrt(beta(t)) dW")
 print("   - 边际分布: ab(t) = exp(-int_0^t beta(s) ds)")
 print("   - 逆向SDE: 由得分函数或eps-prediction驱动")
-print("\n3. 层级ELBO→VLB对应 (步骤3)")
+print("\n3. 边际分布演化与连续极限 (步骤3)")
 print("   - 扩散模型 = 固定编码器的层级VAE连续极限")
 print("   - 编码器固定 → 无需训练推断网络")
 print("   - 只优化解码器（去噪网络）")
