@@ -105,6 +105,8 @@ sqrt_one_minus_alpha_bars = torch.sqrt(1 - alpha_bars)
 
 # 后验方差 (用于采样)
 posterior_var = betas * (1 - alpha_bars_prev) / (1 - alpha_bars)
+# 注: posterior_log_var保留用于展示DDPM原论文的方差选项(fixed small vs fixed large)
+# 但本实验采用学习到的方差(posterior_var)，故log_var仅作备用
 posterior_log_var = torch.log(posterior_var.clamp(min=1e-20))
 sqrt_recip_alphas = 1.0 / torch.sqrt(alphas)
 beta_over_sqrt_1m_ab = betas / sqrt_one_minus_alpha_bars
@@ -214,10 +216,7 @@ class SmallUNet(nn.Module):
         h2 = self.down2(self.pool(h1), t_emb)  # [B,32,14,14]
         h3 = self.down3(self.pool(h2), t_emb)  # [B,64,7,7]
 
-        # 瓶颈
-        h = self.bottleneck(self.pool(h3), t_emb)  # 这里pool会让7→3，所以用stride处理
-        # 实际上7x7 pool2 → 3x3，上采样回去是6x6，不匹配
-        # 改用直接在h3上做bottleneck
+        # 瓶颈（在7x7分辨率上处理，无需下采样）
         h = self.bottleneck(h3, t_emb)  # [B,64,7,7]
 
         # 解码器 + 跳跃连接
@@ -416,7 +415,11 @@ def train_ddpm(checkpoint_path, pred_type='epsilon', num_epochs=50):
 # ============================================================
 print("\n加载MNIST数据集...")
 data_dir = os.path.join(SAVE_DIR, 'data')
-transform = transforms.Compose([transforms.ToTensor()])
+# DDPM标准做法: 将数据归一化到[-1,1]，与标准高斯噪声先验匹配
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Lambda(lambda x: x * 2 - 1)  # [0,1] -> [-1,1]
+])
 train_dataset = datasets.MNIST(data_dir, train=True, download=True, transform=transform)
 test_dataset = datasets.MNIST(data_dir, train=False, download=True, transform=transform)
 train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=0)
@@ -475,7 +478,10 @@ for i, t_idx in enumerate(t_show):
     eps_t = torch.randn_like(x0_t)
     x_t = q_sample(x0_t, t_t, eps_t)
     row, col = i // 3, i % 3
-    axes_sub[row, col].imshow(x_t[0, 0].cpu().numpy(), cmap='gray')
+    # 反归一化到[0,1]用于可视化
+    img_show = (x_t[0, 0].cpu().numpy() + 1) / 2
+    img_show = np.clip(img_show, 0, 1)
+    axes_sub[row, col].imshow(img_show, cmap='gray')
     if t_idx == 0:
         axes_sub[row, col].set_title(r'$x_0$ (原始)', fontsize=11)
     else:
@@ -513,14 +519,18 @@ samples_x0 = ddpm_sample(model_x0, sample_shape, 'x0')
 fig, axes = plt.subplots(2, n_samples, figsize=(16, 4))
 
 for i in range(n_samples):
-    # ε-prediction
-    axes[0, i].imshow(samples_eps[i, 0].cpu().numpy(), cmap='gray')
+    # ε-prediction（反归一化并截断）
+    img_eps = (samples_eps[i, 0].cpu().numpy() + 1) / 2
+    img_eps = np.clip(img_eps, 0, 1)
+    axes[0, i].imshow(img_eps, cmap='gray')
     axes[0, i].axis('off')
     if i == 0:
         axes[0, i].set_ylabel(r'$\varepsilon$-prediction', fontsize=12, rotation=0, labelpad=60)
 
-    # x₀-prediction
-    axes[1, i].imshow(samples_x0[i, 0].cpu().numpy(), cmap='gray')
+    # x₀-prediction（反归一化并截断）
+    img_x0 = (samples_x0[i, 0].cpu().numpy() + 1) / 2
+    img_x0 = np.clip(img_x0, 0, 1)
+    axes[1, i].imshow(img_x0, cmap='gray')
     axes[1, i].axis('off')
     if i == 0:
         axes[1, i].set_ylabel(r'$x_0$-prediction', fontsize=12, rotation=0, labelpad=60)
@@ -574,7 +584,10 @@ with torch.no_grad():
 
 fig, axes = plt.subplots(1, len(denoise_trajectory), figsize=(20, 3))
 for i, (t_val, img) in enumerate(denoise_trajectory):
-    axes[i].imshow(img, cmap='gray')
+    # 反归一化到[0,1]用于可视化
+    img_show = (img + 1) / 2
+    img_show = np.clip(img_show, 0, 1)
+    axes[i].imshow(img_show, cmap='gray')
     if t_val == 0:
         axes[i].set_title(r'$x_0$ (去噪完成)', fontsize=11)
     else:
