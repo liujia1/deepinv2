@@ -149,10 +149,10 @@ def _load_model_local(model_cls, local_path, model_name, **kwargs):
         model.eval()
         return model
     else:
-        print(f"  -> 本地模型不存在 ({local_path})")
-        # 显式触发下载并显示进度
-        # 解析模型对应的权重 URL（NCSNpp 默认 'edm-ffhq-64x64-uncond-ve'）
+        print(f"  -> 本地模型不存在 ({local_path})，将使用 pretrained='download' 自动下载到 torch hub 缓存")
+        # 解析模型对应的权重 URL，并显示进度
         from deepinv.models.utils import get_weights_url
+        from torch.hub import load_state_dict_from_url
         if model_name == "NCSNpp":
             url_name = "edm-ffhq-64x64-uncond-ve.pt"
         elif model_name == "DiffUNet":
@@ -161,27 +161,17 @@ def _load_model_local(model_cls, local_path, model_name, **kwargs):
             url_name = None
         if url_name is not None:
             url = get_weights_url(model_name="edm", file_name=url_name)
-            print(f"  -> 正在从 HuggingFace 下载预训练权重: {url}")
-            print(f"  -> 文件大小约 500MB，请耐心等待（首次下载约需 1-3 分钟）...")
-            # 用 tqdm 显示下载进度
+            print(f"  -> 权重 URL: {url}")
+            print(f"  -> 缓存目录: {torch.hub.get_dir()}/checkpoints/")
+            # 先用官方 API 触发下载（会复用已缓存的文件，并显示 tqdm 进度条）
             try:
-                from tqdm import tqdm
-                import urllib.request
-                cache_root = torch.hub.get_dir()
-                os.makedirs(cache_root, exist_ok=True)
-                target = os.path.join(cache_root, url_name)
-                if os.path.isfile(target):
-                    print(f"  -> 已存在缓存: {target}")
-                else:
-                    with tqdm(unit="B", unit_scale=True, miniters=1, desc=url_name) as t:
-                        def reporthook(block_num, block_size, total_size):
-                            if total_size > 0:
-                                t.total = total_size
-                                t.update(block_size - t.n)
-                        urllib.request.urlretrieve(url, target, reporthook=reporthook)
-                    print(f"  -> 下载完成: {target}")
+                _ = load_state_dict_from_url(
+                    url,
+                    map_location=lambda storage, loc: storage,
+                    check_hash=False,  # 避免哈希校验失败导致重复下载
+                )
             except Exception as e:
-                print(f"  -> 进度条下载失败 ({e})，回退到默认方式")
+                print(f"  -> 下载过程出现警告（可忽略）: {e}")
         # 走 deepinv 内部加载（此时会复用上面的缓存，不再重复下载）
         return model_cls(pretrained="download", **kwargs)
 
