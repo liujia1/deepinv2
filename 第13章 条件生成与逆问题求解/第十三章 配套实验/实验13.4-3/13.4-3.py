@@ -1,0 +1,172 @@
+# -*- coding: utf-8 -*-
+"""
+实验13.4-3：Diffusers库基础与CFG
+对应章节：13.4.2节 Classifier-Free Guidance
+
+实验内容：
+  - Diffusers库基础（Pipeline/UNet/Scheduler架构）
+  - 文本到图像生成（Stable Diffusion v1.4）
+  - CFG（Classifier-Free Guidance）引导对比
+
+注意：本实验需要GPU和预训练模型下载（约4GB），CPU上运行极慢。
+"""
+
+import sys
+import io
+import os
+import matplotlib
+matplotlib.use('Agg')  # 非交互式后端
+import matplotlib.pyplot as plt
+
+# 设置控制台输出为 UTF-8 (Windows下避免中文乱码)
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+
+# 静默matplotlib相关警告
+import logging
+import warnings
+logging.getLogger('matplotlib').setLevel(logging.ERROR)
+logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*U\\+2212.*")
+warnings.filterwarnings("ignore", message=".*glyph.*")
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+# ====== 中文字体配置(兼容本地和Google Colab) ======
+_gdrive = '/content/drive/MyDrive'
+_IN_COLAB = 'google.colab' in sys.modules
+
+if _IN_COLAB:
+    from google.colab import drive
+    if not os.path.isdir(_gdrive):
+        print("正在挂载 Google Drive...")
+        drive.mount('/content/drive')
+    SAVE_DIR = os.path.join(_gdrive, '实验13.4-3')
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+else:
+    try:
+        SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        SAVE_DIR = os.getcwd()
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+
+os.makedirs(_chinese_path, exist_ok=True)
+sys.path.insert(0, _chinese_path)
+try:
+    from chinese_font import setup_chinese_font
+    setup_chinese_font(save_dir=_chinese_path)
+except ImportError:
+    print("警告: chinese_font模块未找到，中文字体可能无法正常显示")
+# ========================================================
+
+print("\n" + "=" * 60)
+print("实验13.4-3: Diffusers库基础与CFG")
+print("=" * 60)
+print("对应章节: 13.4.2节 Classifier-Free Guidance")
+print("知识点: Diffusers库架构, CFG核心公式, 引导强度guidance_scale")
+
+
+print("""
+Diffusers库架构（13.4节）：
+  Pipeline (高层API)
+    |
+  Model (UNet2DConditionModel, VAE, CLIP) + Scheduler (DDIM, PNDM)
+
+主要组件：
+  - UNet2DConditionModel: 预测噪声残差 eps_hat_theta(x_t, t, c)
+  - DDIMScheduler/PNDMScheduler: 控制去噪步
+  - VAE (AutoencoderKL): 潜空间编码/解码
+  - CLIP Text Encoder: 文本 -> 嵌入向量
+""")
+
+import torch
+try:
+    from diffusers import (
+        StableDiffusionPipeline,
+        DDIMScheduler,
+        UNet2DConditionModel,
+    )
+    HAS_DIFFUSERS = True
+except ImportError:
+    HAS_DIFFUSERS = False
+    print("Diffusers库未安装，请先安装: pip install diffusers transformers accelerate")
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"\n使用设备: {device}")
+if device == "cpu":
+    print("警告: CPU上运行极慢，建议使用GPU")
+
+if HAS_DIFFUSERS and device == "cuda":
+    try:
+        pipe = StableDiffusionPipeline.from_pretrained(
+            "CompVis/stable-diffusion-v1-4",
+            torch_dtype=torch.float16,
+            safety_checker=None,
+        )
+        pipe = pipe.to(device)
+
+        prompt = "a cat wearing sunglasses, high quality"
+        print(f"\n生成图像: '{prompt}'")
+        image = pipe(prompt, num_inference_steps=25).images[0]
+        image.save(os.path.join(SAVE_DIR, "文生图示例.png"))
+        print("文本到图像结果已保存")
+
+        # ---- CFG引导对比 ----
+        print("\n" + "=" * 60)
+        print("步骤2：CFG引导对比（13.4.2节 Classifier Guidance与CFG）")
+        print("=" * 60)
+
+        guidance_scales = [1, 3, 7.5, 15]
+        fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+        for idx, gs in enumerate(guidance_scales):
+            img = pipe(prompt,
+                       num_inference_steps=25,
+                       guidance_scale=gs,
+                       generator=torch.Generator(device=device).manual_seed(42)
+                       ).images[0]
+            axes[idx].imshow(img)
+            axes[idx].axis('off')
+            axes[idx].set_title(f'guidance_scale={gs}')
+
+        plt.suptitle('CFG Guidance Scale 效果对比（13.4.2节）', fontsize=14, y=1.02)
+        plt.tight_layout()
+        cfg_path = os.path.join(SAVE_DIR, "CFG引导对比.png")
+        plt.savefig(cfg_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"CFG对比图已保存: {cfg_path}")
+
+    except Exception as e:
+        print(f"执行出错: {e}")
+        print("可能原因：GPU内存不足、网络无法下载模型等")
+else:
+    print("\n跳过实际运行（需要GPU + Diffusers + 网络）")
+    print("以下为理论说明：")
+
+    print("""
+13.4.2节 CFG（Classifier-Free Guidance）核心：
+  eps_hat_cfg = eps_hat_uncond + s * (eps_hat_cond - eps_hat_uncond)
+  其中 s = guidance_scale
+
+  s=1:  无条件生成（cond和uncond混合）
+  s>1:  强引导（更接近文本描述，但多样性下降）
+  s=7.5: 常用默认值
+  s->INF: 完全忽略无条件分布，类似"硬约束"
+""")
+
+print("\n" + "=" * 60)
+print("实验13.4-3 完成!")
+print("=" * 60)
+print("""
+关键结论:
+1. Diffusers库架构（13.4节）
+   - Pipeline是高层API，组合Model + Scheduler
+   - UNet2DConditionModel是核心得分网络
+   - VAE/CLIP分别处理图像和文本
+   - Scheduler控制去噪步（DDIM/PNDM等）
+
+2. CFG（13.4.2节）
+   - eps_hat_cfg = eps_hat_uncond + s * (eps_hat_cond - eps_hat_uncond)
+   - s控制cond和uncond的混合比例
+   - s=1：无引导；s=7.5：常用默认；s>10：强引导
+   - 与13.4.3节的zeta类比：s对应条件生成的引导强度
+""")
