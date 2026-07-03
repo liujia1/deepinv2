@@ -111,13 +111,38 @@ def tweedie_estimate(x_t, t):
     score = vp_score_analytic(x_t, t)
     return (x_t + std_t**2 * score) / (mean_t + 1e-10)
 
+def compute_marginal_pxt(x_t, t):
+    """
+    边际概率密度 p(x_t)
+    用于归一化 p(x_0|x_t) = p(x_t|x_0) * p(x_0) / p(x_t)
+    """
+    mean_t, std_t = vp_marginal(t)
+    pdf = np.zeros_like(np.atleast_1d(x_t), dtype=float)
+    for w, m, s in zip(GM_WEIGHTS, GM_MEANS, GM_STDS):
+        new_mean = mean_t * m
+        new_std = np.sqrt(mean_t**2 * s**2 + std_t**2)
+        pdf += w * np.exp(-0.5 * ((x_t - new_mean) / new_std)**2) / (new_std * np.sqrt(2 * np.pi))
+    return pdf
+
 def _compute_likelihood(x_t, t, y_obs, A, sigma_y):
+    """
+    计算似然 p(y|x_t) - 归一化版本
+
+    数学推导:
+      p(y|x_t) = ∫ p(y|x_0) p(x_0|x_t) dx_0
+    其中 p(x_0|x_t) = p(x_t|x_0) p(x_0) / p(x_t)  [贝叶斯公式归一化]
+
+    注意:若不除以 p(x_t),p_xt_given_x0 * p_x0 给出的是联合密度 p(x_t, x_0),
+    积分后会得到 p(x_t, y)=p(x_t) * p(y|x_t),再对它取log-grad会同时包含
+    先验得分和似然得分,无法与DPS(只近似似然项)做公平对比。
+    """
     mean_t, std_t = vp_marginal(t)
     x0_grid = np.linspace(-8, 8, 2000)
     dx0 = x0_grid[1] - x0_grid[0]
     p_xt_given_x0 = np.exp(-0.5 * ((x_t - mean_t * x0_grid) / std_t)**2) / (std_t * np.sqrt(2 * np.pi))
     p_x0 = gm1d_pdf(x0_grid)
-    p_x0_given_xt = p_xt_given_x0 * p_x0
+    p_xt = compute_marginal_pxt(x_t, t)                       # 归一化分母
+    p_x0_given_xt = p_xt_given_x0 * p_x0 / (p_xt + 1e-30)     # 真正的条件密度
     p_y_given_x0 = np.exp(-0.5 * ((y_obs - A * x0_grid) / sigma_y)**2) / (sigma_y * np.sqrt(2 * np.pi))
     return np.sum(p_y_given_x0 * p_x0_given_xt) * dx0
 
@@ -125,7 +150,9 @@ def likelihood_grad_analytic(x_t, t, y_obs, A, sigma_y):
     eps = 1e-4
     p_plus = _compute_likelihood(x_t + eps, t, y_obs, A, sigma_y)
     p_minus = _compute_likelihood(x_t - eps, t, y_obs, A, sigma_y)
-    return (p_plus - p_minus) / (2 * eps * (p_plus + p_minus) / 2 + 1e-30)
+    p_center = _compute_likelihood(x_t, t, y_obs, A, sigma_y)
+    # nabla log p(y|x_t) = (p_+ - p_-) / (2*eps*p_center)
+    return (p_plus - p_minus) / (2 * eps * p_center + 1e-30)
 
 
 # ============================================================
@@ -160,7 +187,8 @@ for i, xi in enumerate(x_test):
     eps_d = 1e-4
     p_plus = _compute_likelihood(xi + eps_d, t_val, y_obs, A_val, sigma_y)
     p_minus = _compute_likelihood(xi - eps_d, t_val, y_obs, A_val, sigma_y)
-    exact_ll_scores[i] = (p_plus - p_minus) / (2 * eps_d * (p_plus + p_minus) / 2 + 1e-30)
+    p_center = _compute_likelihood(xi, t_val, y_obs, A_val, sigma_y)
+    exact_ll_scores[i] = (p_plus - p_minus) / (2 * eps_d * p_center + 1e-30)
 
 # DPS近似似然得分
 x0_hat = tweedie_estimate(x_test, t_val)
