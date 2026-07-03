@@ -219,7 +219,7 @@ def dps_sample(model, y, forward_op, sigma_y, shape, zeta=1.0, n_steps=None):
             else:
                 noise = torch.randn_like(x)
                 x = model_mean + torch.sqrt(posterior_var[t_idx]) * noise
-    return x.clamp(0, 1)
+    return x.clamp(-1, 1)
 
 
 @torch.no_grad()
@@ -237,7 +237,7 @@ def ddpm_sample(model, shape):
         else:
             noise = torch.randn_like(x)
             x = model_mean + torch.sqrt(posterior_var[t_idx]) * noise
-    return x.clamp(0, 1)
+    return x.clamp(-1, 1)
 
 
 class IdentityOperator:
@@ -332,7 +332,14 @@ def train_model(checkpoint_path, num_epochs=50):
 print("\n加载MNIST数据集...")
 data_dir = os.path.join(SAVE_DIR, 'data')
 os.makedirs(data_dir, exist_ok=True)
-transform = transforms.Compose([transforms.ToTensor()])
+# MNIST数据归一化到[-1,1] (与11.4-1修复一致):
+# 训练时网络看到的 x_T 分布(由 [-1,1] 数据前向扩散得到)与采样起点
+# torch.randn(标准高斯) 在统计意义上更匹配,避免系统性均值偏移拖累重建质量。
+# 采样函数末尾的 clamp 同步改为 [-1,1];PSNR 与可视化在转换回 [0,1] 空间后计算。
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Lambda(lambda x: x * 2 - 1),  # [0,1] -> [-1,1]
+])
 train_dataset = datasets.MNIST(data_dir, train=True, download=True, transform=transform)
 test_dataset = datasets.MNIST(data_dir, train=False, download=True, transform=transform)
 train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
@@ -363,8 +370,10 @@ print("""
 逆问题: y = x + n, n ~ N(0, sigma_y^2)
 DPS算法: 在逆向DDPM采样中注入似然梯度
   先验得分: -eps_hat_theta(x_t, t) / sqrt(1-alpha_bar_t)
-  似然梯度: (y - x_hat_{0|t}) / (sigma_y^2 * sqrt(alpha_bar_t))
-  修正得分: 先验得分 + zeta * 似然梯度
+  似然梯度方向: normalize(∇_x ||y - A x_hat_{0|t}||²)
+  修正噪声残差: eps_hat - zeta * sqrt(1-alpha_bar_t) * 似然梯度方向
+  注：为稳定不同图像/时间步下的梯度量级,这里只取梯度方向,
+      舍弃了标准DPS公式中残差大小对步长的调制作用
 """)
 
 test_images = next(iter(test_loader))[0][:4].to(device)
@@ -382,7 +391,10 @@ print("无条件DDPM采样中...")
 x_uncond = ddpm_sample(model, test_images.shape)
 
 def compute_psnr(pred, target):
-    mse = torch.mean((pred - target)**2).item()
+    """pred/target: 在 [-1,1] 空间,统一转换到 [0,1] 再用 MAX=1 计算 PSNR"""
+    pred_01 = (pred + 1) / 2
+    target_01 = (target + 1) / 2
+    mse = torch.mean((pred_01 - target_01)**2).item()
     return 10 * np.log10(1.0 / (mse + 1e-10))
 
 psnr_denoise = compute_psnr(x_hat_denoise, test_images)
@@ -391,17 +403,18 @@ print(f"  含噪观测PSNR: {psnr_noisy:.2f} dB")
 print(f"  DPS重建PSNR:   {psnr_denoise:.2f} dB")
 
 # 可视化
+# 数据在 [-1,1] 空间,imshow 之前统一转换到 [0,1]
 fig, axes = plt.subplots(3, 4, figsize=(16, 10))
 for i in range(4):
-    axes[0, i].imshow(test_images[i, 0].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+    axes[0, i].imshow(((test_images[i, 0] + 1) / 2).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
     axes[0, i].axis('off')
     if i == 0: axes[0, i].set_ylabel('真实x0', fontsize=12, rotation=0, labelpad=50)
 
-    axes[1, i].imshow(y_denoise[i, 0].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+    axes[1, i].imshow(((y_denoise[i, 0] + 1) / 2).clamp(0, 1).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
     axes[1, i].axis('off')
     if i == 0: axes[1, i].set_ylabel('观测y\n(噪声)', fontsize=11, rotation=0, labelpad=50)
 
-    axes[2, i].imshow(x_hat_denoise[i, 0].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+    axes[2, i].imshow(((x_hat_denoise[i, 0] + 1) / 2).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
     axes[2, i].axis('off')
     if i == 0: axes[2, i].set_ylabel('DPS重建', fontsize=12, rotation=0, labelpad=50)
 
