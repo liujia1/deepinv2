@@ -35,9 +35,11 @@ import warnings
 logging.getLogger('matplotlib').setLevel(logging.ERROR)
 logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", message=".*U\\+2212.*")
 warnings.filterwarnings("ignore", message=".*glyph.*")
-warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", message=".*Glyph.*")
+warnings.filterwarnings("ignore", message=".*cmap.*")
 
 # ====== 中文字体配置(兼容本地和Google Colab) ======
 _gdrive = '/content/drive/MyDrive'
@@ -57,6 +59,7 @@ else:
         SAVE_DIR = os.getcwd()
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 
+os.makedirs(SAVE_DIR, exist_ok=True)
 os.makedirs(_chinese_path, exist_ok=True)
 
 sys.path.insert(0, _chinese_path)
@@ -143,18 +146,43 @@ class VectorFieldNet(nn.Module):
 
 
 # ============================================================
-# CFM训练函数
+# CFM训练函数（带Resume能力）
 # ============================================================
-def train_cfm(n_epochs=2000, n_samples=256, coupling='independent', lr=1e-3):
-    """训练Conditional Flow Matching
+def train_cfm(n_epochs=2000, n_samples=256, coupling='independent', lr=1e-3,
+              checkpoint_path=None, final_checkpoint_path=None):
+    """训练Conditional Flow Matching（带checkpoint Resume能力）
 
     coupling: 'independent' 或 'ot'
     """
     model = VectorFieldNet()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     losses = []
+    start_epoch = 0
+    skip_training = False
 
-    for epoch in range(n_epochs):
+    # 检查是否有最终权重
+    if final_checkpoint_path and os.path.exists(final_checkpoint_path):
+        print(f"检测到最终权重: {final_checkpoint_path}")
+        print("直接加载，跳过训练过程")
+        checkpoint = torch.load(final_checkpoint_path, map_location='cpu', weights_only=False)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        losses = checkpoint.get('losses', [])
+        return model, losses
+
+    # 检查是否有中间权重
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        print(f"检测到中间权重: {checkpoint_path}")
+        print("继续训练...")
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint.get('epoch', 0) + 1
+        losses = checkpoint.get('losses', [])
+
+    print(f"训练 {coupling} CFM，从 epoch {start_epoch} 开始...")
+
+    for epoch in range(start_epoch, n_epochs):
         # 采样源和目标
         z = torch.FloatTensor(sample_source(n_samples))  # (B, 2)
         x0 = torch.FloatTensor(sample_target(n_samples))  # (B, 2)
@@ -190,6 +218,25 @@ def train_cfm(n_epochs=2000, n_samples=256, coupling='independent', lr=1e-3):
             losses.append(loss.item())
             if (epoch + 1) % 500 == 0:
                 print(f"  [{coupling}] Epoch {epoch+1}/{n_epochs} Loss={loss.item():.6f}")
+
+        # 每200轮保存中间checkpoint
+        if checkpoint_path and (epoch + 1) % 200 == 0:
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': loss.item(),
+                'losses': losses
+            }, checkpoint_path)
+
+    # 保存最终权重
+    if final_checkpoint_path:
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'losses': losses
+        }, final_checkpoint_path)
+        print(f"最终权重已保存: {final_checkpoint_path}")
 
     return model, losses
 
@@ -259,37 +306,77 @@ print("""
 
 # 训练初始模型（1-RF）
 print("\n训练 1-Rectified Flow (独立耦合)...")
-model_1rf, _ = train_cfm(n_epochs=2000, coupling='independent')
+model_1rf, _ = train_cfm(n_epochs=2000, coupling='independent',
+                         checkpoint_path=CHECKPOINT_PATH_1RF,
+                         final_checkpoint_path=FINAL_CHECKPOINT_PATH_1RF)
 
 # 训练OT-CFM作为对比基线
 print("\n训练 OT-CFM (OT耦合)...")
-model_ot, _ = train_cfm(n_epochs=2000, coupling='ot')
+model_ot, _ = train_cfm(n_epochs=2000, coupling='ot',
+                        checkpoint_path=CHECKPOINT_PATH_OT,
+                        final_checkpoint_path=FINAL_CHECKPOINT_PATH_OT)
 
 
 # ============================================================
-# Reflow过程
+# Reflow过程（带Resume能力）
 # ============================================================
-def reflow_step(model, n_samples=256, n_epochs=1500, lr=1e-3):
-    """执行一步Reflow：用当前模型的ODE端点重新配对"""
-    # 用当前模型生成端点对
-    model.eval()
-    with torch.no_grad():
-        z = torch.FloatTensor(sample_source(n_samples))
-        # 运行ODE得到终点
-        x_endpoint = z.clone()
-        dt = 1.0 / 50
-        for step in range(50):
-            t_val = step / 50
-            t = torch.full((x_endpoint.shape[0], 1), t_val)
-            v = model(x_endpoint, t)
-            x_endpoint = x_endpoint + v * dt
+def reflow_step(model, reflow_round, n_samples=256, n_epochs=1500, lr=1e-3,
+                checkpoint_path=None, final_checkpoint_path=None):
+    """执行一步Reflow：用当前模型的ODE端点重新配对（带checkpoint Resume能力）"""
+    
+    # 检查是否有最终权重
+    if final_checkpoint_path and os.path.exists(final_checkpoint_path):
+        print(f"检测到最终权重: {final_checkpoint_path}")
+        print("直接加载，跳过Reflow训练过程")
+        checkpoint = torch.load(final_checkpoint_path, map_location='cpu', weights_only=False)
+        new_model = VectorFieldNet()
+        new_model.load_state_dict(checkpoint['model_state_dict'])
+        return new_model
 
-    # 新的配对：(z, x_endpoint)作为训练数据
-    # 重新训练模型
-    new_model = VectorFieldNet()
-    optimizer = torch.optim.Adam(new_model.parameters(), lr=lr)
+    # 检查是否有中间权重
+    start_epoch = 0
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        print(f"检测到中间权重: {checkpoint_path}")
+        print("继续Reflow训练...")
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+        new_model = VectorFieldNet()
+        new_model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer = torch.optim.Adam(new_model.parameters(), lr=lr)
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint.get('epoch', 0) + 1
+        # 需要重新生成端点对
+        model.eval()
+        with torch.no_grad():
+            z = torch.FloatTensor(sample_source(n_samples))
+            x_endpoint = z.clone()
+            dt = 1.0 / 50
+            for step in range(50):
+                t_val = step / 50
+                t = torch.full((x_endpoint.shape[0], 1), t_val)
+                v = model(x_endpoint, t)
+                x_endpoint = x_endpoint + v * dt
+    else:
+        # 用当前模型生成端点对
+        model.eval()
+        with torch.no_grad():
+            z = torch.FloatTensor(sample_source(n_samples))
+            # 运行ODE得到终点
+            x_endpoint = z.clone()
+            dt = 1.0 / 50
+            for step in range(50):
+                t_val = step / 50
+                t = torch.full((x_endpoint.shape[0], 1), t_val)
+                v = model(x_endpoint, t)
+                x_endpoint = x_endpoint + v * dt
 
-    for epoch in range(n_epochs):
+        # 新的配对：(z, x_endpoint)作为训练数据
+        # 重新训练模型
+        new_model = VectorFieldNet()
+        optimizer = torch.optim.Adam(new_model.parameters(), lr=lr)
+
+    print(f"Reflow第{reflow_round}轮训练，从 epoch {start_epoch} 开始...")
+
+    for epoch in range(start_epoch, n_epochs):
         # 从固定配对中采样mini-batch
         idx = np.random.choice(n_samples, min(256, n_samples), replace=False)
         z_batch = z[idx]
@@ -306,15 +393,39 @@ def reflow_step(model, n_samples=256, n_epochs=1500, lr=1e-3):
         loss.backward()
         optimizer.step()
 
+        if (epoch + 1) % 200 == 0:
+            print(f"  [Reflow-{reflow_round}] Epoch {epoch+1}/{n_epochs} Loss={loss.item():.6f}")
+
+        # 每200轮保存中间checkpoint
+        if checkpoint_path and (epoch + 1) % 200 == 0:
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': new_model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': loss.item()
+            }, checkpoint_path)
+
+    # 保存最终权重
+    if final_checkpoint_path:
+        torch.save({
+            'model_state_dict': new_model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict()
+        }, final_checkpoint_path)
+        print(f"最终权重已保存: {final_checkpoint_path}")
+
     return new_model
 
 # 2-RF: Reflow一步
 print("\n训练 2-Rectified Flow (1次Reflow)...")
-model_2rf = reflow_step(model_1rf, n_samples=512, n_epochs=2000)
+model_2rf = reflow_step(model_1rf, reflow_round=1, n_samples=512, n_epochs=2000,
+                        checkpoint_path=CHECKPOINT_PATH_2RF,
+                        final_checkpoint_path=FINAL_CHECKPOINT_PATH_2RF)
 
 # 3-RF: Reflow两步
 print("\n训练 3-Rectified Flow (2次Reflow)...")
-model_3rf = reflow_step(model_2rf, n_samples=512, n_epochs=2000)
+model_3rf = reflow_step(model_2rf, reflow_round=2, n_samples=512, n_epochs=2000,
+                        checkpoint_path=CHECKPOINT_PATH_3RF,
+                        final_checkpoint_path=FINAL_CHECKPOINT_PATH_3RF)
 
 
 # ============================================================

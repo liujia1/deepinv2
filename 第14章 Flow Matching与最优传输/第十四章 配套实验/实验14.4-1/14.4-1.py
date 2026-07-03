@@ -20,28 +20,40 @@
   步骤2：Reflow蒸馏为少步模型（14.4.3节）
 """
 
+# ====== Windows UTF-8支持 ======
 import sys
 import io
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+# Windows控制台UTF-8输出
 if sys.platform == 'win32':
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-import os
-import numpy as np
+# ====== matplotlib非交互式后端（静默运行） ======
 import matplotlib
-matplotlib.use('Agg')  # 非交互式后端
+matplotlib.use('Agg')  # 非交互式后端，不弹出窗口
 import matplotlib.pyplot as plt
+
+# ====== 静默警告 ======
 import logging
 import warnings
-
-# 静默 matplotlib 相关警告
 logging.getLogger('matplotlib').setLevel(logging.ERROR)
 logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", message=".*U\\+2212.*")
 warnings.filterwarnings("ignore", message=".*glyph.*")
-warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", message=".*Glyph.*")
+warnings.filterwarnings("ignore", message=".*cmap.*")
 
-# ====== 中文字体配置(兼容本地和Google Colab) ======
+import os
+import numpy as np
+np.random.seed(42)
+
+# ====== Colab支持 ======
 _gdrive = '/content/drive/MyDrive'
 _IN_COLAB = 'google.colab' in sys.modules
 
@@ -59,39 +71,30 @@ else:
         SAVE_DIR = os.getcwd()
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 
+os.makedirs(SAVE_DIR, exist_ok=True)
 os.makedirs(_chinese_path, exist_ok=True)
-
 sys.path.insert(0, _chinese_path)
+
+# ====== 中文字体配置 ======
 try:
     from chinese_font import setup_chinese_font
     setup_chinese_font(save_dir=_chinese_path)
 except ImportError:
     print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
-# ========================================================
 
-np.random.seed(42)
 import torch
 torch.manual_seed(42)
 if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(42)
+    torch.cuda.manual_seed(42)
 
-# 设备配置
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"\n{'='*60}")
-print(f"实验14.4-1: Rectified Flow训练——图像生成实践")
-print(f"{'='*60}")
-print(f"使用设备: {device}")
-if device.type == 'cuda':
-    print(f"  GPU: {torch.cuda.get_device_name(0)}")
-else:
-    print("  未检测到 GPU, 使用 CPU 训练")
-    print("  提示: Colab 用户可在菜单 运行时 -> 更改运行时类型 中选择 GPU")
+print(f'使用设备: {device}')
 
-# Checkpoint路径
-CHECKPOINT_PATH = os.path.join(SAVE_DIR, 'model_checkpoint.pth')
-FINAL_CHECKPOINT_PATH = os.path.join(SAVE_DIR, 'model_final.pth')
-CHECKPOINT_PATH_2RF = os.path.join(SAVE_DIR, 'model_2rf_checkpoint.pth')
-FINAL_CHECKPOINT_PATH_2RF = os.path.join(SAVE_DIR, 'model_2rf_final.pth')
+# ====== Checkpoint路径 ======
+CHECKPOINT_PATH = os.path.join(SAVE_DIR, 'rf_checkpoint.pth')
+FINAL_CHECKPOINT_PATH = os.path.join(SAVE_DIR, 'rf_final.pth')
+CHECKPOINT_2RF_PATH = os.path.join(SAVE_DIR, '2rf_checkpoint.pth')
+FINAL_2RF_PATH = os.path.join(SAVE_DIR, '2rf_final.pth')
 
 
 # ============================================================
@@ -253,56 +256,63 @@ rf_model = SmallUNet().to(device)
 optimizer = torch.optim.Adam(rf_model.parameters(), lr=2e-4)
 
 # Resume检查：是否已有训练好的权重
-skip_training = False
+skip_training_1rf = False
 if os.path.exists(FINAL_CHECKPOINT_PATH):
     print(f"\n检测到最终权重: {FINAL_CHECKPOINT_PATH}")
     print("直接加载，跳过训练过程")
     rf_model.load_state_dict(torch.load(FINAL_CHECKPOINT_PATH, map_location=device))
-    skip_training = True
+    skip_training_1rf = True
 elif os.path.exists(CHECKPOINT_PATH):
     print(f"\n检测到中间权重: {CHECKPOINT_PATH}")
     print("继续训练...")
     rf_model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=device))
 
-if not skip_training:
+if not skip_training_1rf:
     for epoch in range(num_epochs):
         rf_model.train()
         total_loss = 0
         for x, _ in train_loader:
-        x = x.to(device)
-        batch = x.shape[0]
+            x = x.to(device)
+            batch = x.shape[0]
 
-        # 采样噪声z ~ N(0,I)
-        z = torch.randn_like(x)
+            # 采样噪声z ~ N(0,I)
+            z = torch.randn_like(x)
 
-        # 采样t ~ U[0,1]（映射到整数时间步）
-        t_continuous = torch.rand(batch, device=device)
-        # ★ 修正：RF中t_continuous=0是噪声，t_continuous=1是干净
-        # DDPM中t_int=0是干净，t_int=T-1是噪声
-        # 因此需要反转映射：t_int = (1 - t_continuous) * (T-1)
-        # 这样RF的"噪声时间"对应DDPM的"噪声时间"，正弦嵌入语义对齐
-        t_int = ((1 - t_continuous) * (T - 1)).long()
+            # 采样t ~ U[0,1]（映射到整数时间步）
+            t_continuous = torch.rand(batch, device=device)
+            # ★ 修正：RF中t_continuous=0是噪声，t_continuous=1是干净
+            # DDPM中t_int=0是干净，t_int=T-1是噪声
+            # 因此需要反转映射：t_int = (1 - t_continuous) * (T-1)
+            # 这样RF的"噪声时间"对应DDPM的"噪声时间"，正弦嵌入语义对齐
+            t_int = ((1 - t_continuous) * (T - 1)).long()
 
-        # 线性插值: x_t = (1-t)z + t*x_0
-        t_4d = t_continuous[:, None, None, None]
-        x_t = (1 - t_4d) * z + t_4d * x
+            # 线性插值: x_t = (1-t)z + t*x_0
+            t_4d = t_continuous[:, None, None, None]
+            x_t = (1 - t_4d) * z + t_4d * x
 
-        # 速度目标: v = x_0 - z
-        v_target = x - z
+            # 速度目标: v = x_0 - z
+            v_target = x - z
 
-        # 网络预测
-        v_pred = rf_model(x_t, t_int)
+            # 网络预测
+            v_pred = rf_model(x_t, t_int)
 
-        # RF损失
-        loss = F.mse_loss(v_pred, v_target)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item() * batch
+            # RF损失
+            loss = F.mse_loss(v_pred, v_target)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item() * batch
 
-    if (epoch + 1) % 10 == 0 or epoch == 0:
-        avg_loss = total_loss / len(train_loader.dataset)
-        print(f"  Epoch {epoch+1:3d}/{num_epochs}  Loss={avg_loss:.6f}")
+        if (epoch + 1) % 10 == 0 or epoch == 0:
+            avg_loss = total_loss / len(train_loader.dataset)
+            print(f"  Epoch {epoch+1:3d}/{num_epochs}  Loss={avg_loss:.6f}")
+
+        # 保存中间checkpoint
+        torch.save(rf_model.state_dict(), CHECKPOINT_PATH)
+
+    # 训练完成，保存最终权重
+    torch.save(rf_model.state_dict(), FINAL_CHECKPOINT_PATH)
+    print(f"\n最终权重已保存: {FINAL_CHECKPOINT_PATH}")
 
 print("Rectified Flow训练完成！")
 
@@ -358,32 +368,52 @@ optimizer_2rf = torch.optim.Adam(model_2rf.parameters(), lr=2e-4)
 reflow_dataset = torch.utils.data.TensorDataset(reflow_z, reflow_x0)
 reflow_loader = DataLoader(reflow_dataset, batch_size=128, shuffle=True)
 
-for epoch in range(num_epochs):
-    model_2rf.train()
-    total_loss = 0
-    for z_batch, x0_batch in reflow_loader:
-        z_batch = z_batch.to(device)
-        x0_batch = x0_batch.to(device)
-        batch = z_batch.shape[0]
+# Resume检查：是否已有2-RF训练好的权重
+skip_training_2rf = False
+if os.path.exists(FINAL_2RF_PATH):
+    print(f"\n检测到最终权重: {FINAL_2RF_PATH}")
+    print("直接加载，跳过训练过程")
+    model_2rf.load_state_dict(torch.load(FINAL_2RF_PATH, map_location=device))
+    skip_training_2rf = True
+elif os.path.exists(CHECKPOINT_2RF_PATH):
+    print(f"\n检测到中间权重: {CHECKPOINT_2RF_PATH}")
+    print("继续训练...")
+    model_2rf.load_state_dict(torch.load(CHECKPOINT_2RF_PATH, map_location=device))
 
-        t_continuous = torch.rand(batch, device=device)
-        # ★ 修正：与RF训练一致的反转映射
-        t_int = ((1 - t_continuous) * (T - 1)).long()
-        t_4d = t_continuous[:, None, None, None]
+if not skip_training_2rf:
+    for epoch in range(num_epochs):
+        model_2rf.train()
+        total_loss = 0
+        for z_batch, x0_batch in reflow_loader:
+            z_batch = z_batch.to(device)
+            x0_batch = x0_batch.to(device)
+            batch = z_batch.shape[0]
 
-        x_t = (1 - t_4d) * z_batch + t_4d * x0_batch
-        v_target = x0_batch - z_batch
-        v_pred = model_2rf(x_t, t_int)
+            t_continuous = torch.rand(batch, device=device)
+            # ★ 修正：与RF训练一致的反转映射
+            t_int = ((1 - t_continuous) * (T - 1)).long()
+            t_4d = t_continuous[:, None, None, None]
 
-        loss = F.mse_loss(v_pred, v_target)
-        optimizer_2rf.zero_grad()
-        loss.backward()
-        optimizer_2rf.step()
-        total_loss += loss.item() * batch
+            x_t = (1 - t_4d) * z_batch + t_4d * x0_batch
+            v_target = x0_batch - z_batch
+            v_pred = model_2rf(x_t, t_int)
 
-    if (epoch + 1) % 10 == 0:
-        avg_loss = total_loss / len(reflow_dataset)
-        print(f"  [2-RF] Epoch {epoch+1:3d}/{num_epochs}  Loss={avg_loss:.6f}")
+            loss = F.mse_loss(v_pred, v_target)
+            optimizer_2rf.zero_grad()
+            loss.backward()
+            optimizer_2rf.step()
+            total_loss += loss.item() * batch
+
+        if (epoch + 1) % 10 == 0:
+            avg_loss = total_loss / len(reflow_dataset)
+            print(f"  [2-RF] Epoch {epoch+1:3d}/{num_epochs}  Loss={avg_loss:.6f}")
+
+        # 保存中间checkpoint
+        torch.save(model_2rf.state_dict(), CHECKPOINT_2RF_PATH)
+
+    # 训练完成，保存最终权重
+    torch.save(model_2rf.state_dict(), FINAL_2RF_PATH)
+    print(f"\n最终权重已保存: {FINAL_2RF_PATH}")
 
 # 对比1-RF和2-RF的少步采样
 print("\n少步采样对比...")

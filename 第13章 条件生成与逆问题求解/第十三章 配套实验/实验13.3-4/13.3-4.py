@@ -146,7 +146,7 @@ if HAS_DEEPINV:
     if device.type == "cuda":
         try:
             print("正在加载预训练模型NCSNpp（VE-SDE得分网络，FFHQ 64x64）...")
-            denoiser = _load_model_local(dinov.models.NCSNpp, _NCSNPP_LOCAL, "NCSNpp").to(device)
+            denoiser = _load_model_local(dinv.models.NCSNpp, _NCSNPP_LOCAL, "NCSNpp").to(device)
             print("模型加载成功")
 
             print("加载模糊核...")
@@ -154,7 +154,7 @@ if HAS_DEEPINV:
             physics = dinv.physics.Blur(
                 filter=kernel_t.unsqueeze(0).unsqueeze(0),
                 device=device,
-                noise_model=dinov.physics.GaussianNoise(sigma=0.02)
+                noise_model=dinv.physics.GaussianNoise(sigma=0.02)
             )
 
             try:
@@ -232,9 +232,11 @@ if HAS_DEEPINV:
             print(f"\n图已保存: {fig_path}")
 
         except Exception as e:
+            import traceback
             print(f"步骤执行出错: {e}")
-            print("可能原因：GPU内存不足、模型文件损坏等")
-            print("请确保：1) 有GPU可用  2) models/目录下有正确的模型文件  3) 至少4GB GPU内存")
+            traceback.print_exc()
+            print("如果以上报错来自 deepinv API 调用本身，请检查 GPU/模型文件；"
+                  "如果是 NameError/AttributeError 等，通常是代码本身的问题，请先检查拼写和导入。")
     else:
         print("未检测到GPU，跳过图像实验（需要GPU运行扩散模型）")
 

@@ -33,9 +33,11 @@ import warnings
 logging.getLogger('matplotlib').setLevel(logging.ERROR)
 logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", message=".*U\\+2212.*")
 warnings.filterwarnings("ignore", message=".*glyph.*")
-warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", message=".*Glyph.*")
+warnings.filterwarnings("ignore", message=".*cmap.*")
 
 # ====== 中文字体配置(兼容本地和Google Colab) ======
 _gdrive = '/content/drive/MyDrive'
@@ -55,6 +57,7 @@ else:
         SAVE_DIR = os.getcwd()
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 
+os.makedirs(SAVE_DIR, exist_ok=True)
 os.makedirs(_chinese_path, exist_ok=True)
 
 sys.path.insert(0, _chinese_path)
