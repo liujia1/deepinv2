@@ -450,20 +450,19 @@ samples_b_img = (samples_b + 1) / 2
 samples_b_img = samples_b_img.clamp(0, 1)
 
 fig, axes = plt.subplots(2, n_samples, figsize=(16, 4))
+fig.subplots_adjust(left=0.10, right=0.98, top=0.85, bottom=0.05)
 for i in range(n_samples):
     axes[0, i].imshow(samples_a_img[i, 0].cpu().numpy(), cmap='gray')
     axes[0, i].axis('off')
-    if i == 0:
-        axes[0, i].set_ylabel('采样路径\n(DSM→Score→SDE)', fontsize=10, rotation=0, labelpad=70)
     axes[1, i].imshow(samples_b_img[i, 0].cpu().numpy(), cmap='gray')
     axes[1, i].axis('off')
-    if i == 0:
-        axes[1, i].set_ylabel('变分路径\n(VLB→μ_θ→DDPM)', fontsize=10, rotation=0, labelpad=70)
 
-plt.suptitle('两条路径的采样结果对比', fontsize=14, y=1.02)
-plt.tight_layout()
+fig.text(0.02, 0.70, '采样路径\n(DSM→Score→SDE)', fontsize=10, ha='left', va='center', rotation=0)
+fig.text(0.02, 0.30, '变分路径\n(VLB→μ_θ→DDPM)', fontsize=10, ha='left', va='center', rotation=0)
+
 fig_path2 = os.path.join(SAVE_DIR, '步骤2_采样结果对比.png')
-plt.savefig(fig_path2, dpi=150, bbox_inches='tight')
+fig.suptitle('两条路径的采样结果对比', fontsize=14, y=0.98)
+plt.savefig(fig_path2, dpi=150)
 plt.close()
 print(f"图表已保存: 步骤2_采样结果对比.png")
 
