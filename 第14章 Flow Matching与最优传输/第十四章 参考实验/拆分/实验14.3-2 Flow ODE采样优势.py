@@ -1,6 +1,6 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
-实验14.2-2 Flow ODE采样优势：少步采样与DDPM对比
+实验14.3-2 Flow ODE采样优势：少步采样与DDPM对比
 对应知识点：
   - 14.3.4节 Flow ODE采样（少步采样）
   - 14.3.6节 DDIM=FM with diffusion coupling
@@ -245,7 +245,7 @@ print(f"训练集: {len(train_dataset)}, 测试集: {len(test_dataset)}")
 # 步骤1：训练Rectified Flow与DDPM基线
 # ============================================================
 print(f"\n{'='*60}")
-print("实验14.2-2 步骤1：训练Rectified Flow与DDPM基线")
+print("实验14.3-2 步骤1：训练Rectified Flow与DDPM基线")
 print("=" * 60)
 
 num_epochs = 50
@@ -322,7 +322,7 @@ print("\n两个模型训练完成！")
 # 步骤2：Flow ODE采样——少步采样对比（14.3.4节）
 # ============================================================
 print(f"\n{'='*60}")
-print("实验14.2-2 步骤2：Flow ODE采样——少步采样对比（14.3.4节）")
+print("实验14.3-2 步骤2：Flow ODE采样——少步采样对比（14.3.4节）")
 print("=" * 60)
 
 print("""
@@ -357,7 +357,7 @@ for row, n_steps in enumerate(step_counts):
         if col == 0:
             axes[row, col].set_ylabel(f'{n_steps}步', fontsize=12, rotation=0, labelpad=40)
 
-plt.suptitle('实验14.2-2：Rectified Flow少步采样（14.3.4节）', fontsize=14, y=1.01)
+plt.suptitle('实验14.3-2：Rectified Flow少步采样（14.3.4节）', fontsize=14, y=1.01)
 plt.tight_layout()
 fig_path1 = os.path.join(SAVE_DIR, '步骤2_少步采样.png')
 plt.savefig(fig_path1, dpi=150, bbox_inches='tight')
@@ -369,7 +369,7 @@ print(f"图2已保存: {fig_path1}")
 # 步骤3：DDPM vs Rectified Flow少步采样对比（14.3.6节）
 # ============================================================
 print(f"\n{'='*60}")
-print("实验14.2-2 步骤3：DDPM vs Rectified Flow少步采样对比（14.3.6节）")
+print("实验14.3-2 步骤3：DDPM vs Rectified Flow少步采样对比（14.3.6节）")
 print("=" * 60)
 
 print("""
@@ -410,7 +410,7 @@ for row, (samples, label) in enumerate(methods):
         if col == 0:
             axes[row, col].set_ylabel(label, fontsize=10, rotation=0, labelpad=80)
 
-plt.suptitle('实验14.2-2：DDPM vs Rectified Flow 少步采样对比（14.3.6节）', fontsize=14, y=1.01)
+plt.suptitle('实验14.3-2：DDPM vs Rectified Flow 少步采样对比（14.3.6节）', fontsize=14, y=1.01)
 plt.tight_layout()
 fig_path2 = os.path.join(SAVE_DIR, '步骤3_DDPM_vs_RF.png')
 plt.savefig(fig_path2, dpi=150, bbox_inches='tight')
@@ -422,7 +422,7 @@ print(f"图3已保存: {fig_path2}")
 # 总结
 # ============================================================
 print(f"\n{'='*60}")
-print("实验14.2-2 完成!")
+print("实验14.3-2 完成!")
 print("=" * 60)
 print("""
 关键结论:
@@ -436,7 +436,7 @@ print("""
    - 同一UNet架构，不同训练目标
    - DDPM预测噪声ε，RF预测速度v
    - DDPM 200步 ≈ RF 50步 ≈ RF 10步（质量接近）
-   - RF 1步质量较差，但Reflow可以改善（见实验14.2-1）
+   - RF 1步质量较差，但Reflow可以改善（见实验14.4-1）
 
 3. 路径形态差异（14.3.5节）
    - DDPM路径弯曲（扩散耦合），需要多步

@@ -1,6 +1,6 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
-实验14.1-3 Reflow迭代变直：轨迹逐步变直
+实验14.4-2 Reflow迭代变直：轨迹逐步变直
 对应知识点：
   - 14.4节 Rectified Flow（直线插值、轨迹交叉、Reflow）
   - 14.4.1节 Rectified Flow训练
@@ -226,7 +226,7 @@ def compute_straightness(traj):
 # Rectified Flow与Reflow（14.4节）
 # ============================================================
 print("=" * 60)
-print("实验14.1-3：Rectified Flow与Reflow（14.4节）")
+print("实验14.4-2：Rectified Flow与Reflow（14.4节）")
 print("=" * 60)
 
 print("""
@@ -395,7 +395,7 @@ ax.legend(fontsize=10)
 ax.grid(alpha=0.3)
 ax.set_xscale('log')
 
-plt.suptitle('实验14.1-3：Reflow逐步变直（14.4节）', fontsize=14, y=1.01)
+plt.suptitle('实验14.4-2：Reflow逐步变直（14.4节）', fontsize=14, y=1.01)
 plt.tight_layout()
 fig_path3 = os.path.join(SAVE_DIR, '步骤3_Reflow.png')
 plt.savefig(fig_path3, dpi=150, bbox_inches='tight')
@@ -416,7 +416,7 @@ print(f"\n  → Reflow逐步降低曲率（轨迹变直），趋近OT映射")
 # 总结
 # ============================================================
 print(f"\n{'='*60}")
-print("实验14.1-3 完成!")
+print("实验14.4-2 完成!")
 print("=" * 60)
 print("""
 关键结论:

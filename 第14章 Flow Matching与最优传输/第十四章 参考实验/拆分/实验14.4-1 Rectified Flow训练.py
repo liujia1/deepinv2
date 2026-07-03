@@ -1,6 +1,6 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
-实验14.2-1 Rectified Flow训练与蒸馏：图像生成实践
+实验14.4-1 Rectified Flow训练：图像生成实践
 对应知识点：
   - 14.3.4节 高斯条件路径（直线插值）
   - 14.4.1节 Rectified Flow训练
@@ -224,7 +224,7 @@ print(f"训练集: {len(train_dataset)}, 测试集: {len(test_dataset)}")
 # 步骤1：训练Rectified Flow（速度预测，14.4.1节）
 # ============================================================
 print(f"\n{'='*60}")
-print("实验14.2-1 步骤1：训练Rectified Flow（速度预测，14.4.1节）")
+print("实验14.4-1 步骤1：训练Rectified Flow（速度预测，14.4.1节）")
 print("=" * 60)
 
 print("""
@@ -288,7 +288,7 @@ print("Rectified Flow训练完成！")
 # 步骤2：Reflow蒸馏为少步模型（14.4.3节）
 # ============================================================
 print(f"\n{'='*60}")
-print("实验14.2-1 步骤2：Reflow蒸馏为少步模型（14.4.3节）")
+print("实验14.4-1 步骤2：Reflow蒸馏为少步模型（14.4.3节）")
 print("=" * 60)
 
 print("""
@@ -388,7 +388,7 @@ for row, (samples, label) in enumerate(methods):
         if col == 0:
             axes[row, col].set_ylabel(label, fontsize=12, rotation=0, labelpad=50)
 
-plt.suptitle('实验14.2-1：Reflow蒸馏少步采样对比（14.4.3节）', fontsize=14, y=1.01)
+plt.suptitle('实验14.4-1：Reflow蒸馏少步采样对比（14.4.3节）', fontsize=14, y=1.01)
 plt.tight_layout()
 fig_path1 = os.path.join(SAVE_DIR, '步骤1_Reflow蒸馏.png')
 plt.savefig(fig_path1, dpi=150, bbox_inches='tight')
@@ -400,7 +400,7 @@ print(f"图1已保存: {fig_path1}")
 # 总结
 # ============================================================
 print(f"\n{'='*60}")
-print("实验14.2-1 完成!")
+print("实验14.4-1 完成!")
 print("=" * 60)
 print("""
 关键结论:

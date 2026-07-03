@@ -189,7 +189,13 @@ class SmallUNet(nn.Module):
 # ============================================================
 # DPS采样算法
 # ============================================================
-def dps_sample(model, y, forward_op, sigma_y, shape, zeta=1.0, n_steps=None):
+def dps_sample(model, y, forward_op, shape, zeta=1.0, n_steps=None):
+    """
+    DPS 采样。
+    注：本实现对似然梯度做单位范数归一化,只取其方向,
+        残差强度统一由外部超参 zeta 控制,不依赖 sigma_y,
+        故函数签名中未保留 sigma_y。
+    """
     model.eval()
     if n_steps is None:
         n_steps = T
@@ -375,7 +381,7 @@ def compute_psnr(pred, target):
     return 10 * np.log10(1.0 / (mse + 1e-10))
 
 for zeta in zeta_values:
-    x_hat = dps_sample(model, y_single, identity_op, sigma_y_denoise,
+    x_hat = dps_sample(model, y_single, identity_op,
                         shape=single_img.shape, zeta=zeta)
     psnr = compute_psnr(x_hat, single_img)
     psnr_results.append(psnr)
@@ -385,7 +391,7 @@ for zeta in zeta_values:
 fig, axes = plt.subplots(2, len(zeta_values), figsize=(20, 6))
 
 for idx, zeta in enumerate(zeta_values):
-    x_hat = dps_sample(model, y_single, identity_op, sigma_y_denoise,
+    x_hat = dps_sample(model, y_single, identity_op,
                         shape=single_img.shape, zeta=zeta)
     axes[0, idx].imshow(((x_hat[0, 0] + 1) / 2).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
     axes[0, idx].axis('off')

@@ -405,7 +405,7 @@ sigma_y_blur = 0.02
 y_blur = blur_op(test_images) + torch.randn_like(test_images) * sigma_y_blur
 
 print("\nDPS去模糊采样中...")
-x_hat_blur = dps_sample(model, y_blur, blur_op, sigma_y_blur,
+x_hat_blur = dps_sample(model, y_blur, blur_op,
                         shape=test_images.shape, zeta=1.0)
 
 psnr_blur_obs = compute_psnr(y_blur, test_images)
@@ -419,7 +419,7 @@ inpaint_op = InpaintingOperator(mask_ratio=0.3, device=device)
 sigma_y_inpaint = 0.01
 y_inpaint = inpaint_op(test_images) + torch.randn_like(test_images) * sigma_y_inpaint
 
-x_hat_inpaint = dps_sample(model, y_inpaint, inpaint_op, sigma_y_inpaint,
+x_hat_inpaint = dps_sample(model, y_inpaint, inpaint_op,
                             shape=test_images.shape, zeta=1.0)
 
 psnr_inpaint_obs = compute_psnr(y_inpaint, test_images)

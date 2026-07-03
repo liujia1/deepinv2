@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-实验14.1-2 Flow Matching核心：CFM训练与路径对比
+实验14.3-1 Flow Matching核心：CFM训练与路径对比
 对应知识点：
   - 14.3节 Flow Matching（CFM定理、高斯条件路径、OT-CFM）
   - 14.3.3节 CFM定理（条件向量场可计算）
@@ -21,56 +21,63 @@
 """
 
 import sys
-if hasattr(sys.stdout, 'reconfigure'):
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+import io
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
 
 import os
 import numpy as np
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
 import logging
 import warnings
 
-# ====== 解决中文乱码的核心代码 ======
+# 静默 matplotlib 相关警告
 logging.getLogger('matplotlib').setLevel(logging.ERROR)
 logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*U\\+2212.*")
 warnings.filterwarnings("ignore", message=".*glyph.*")
-import platform
-from matplotlib.font_manager import FontManager
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-def _find_chinese_font():
-    candidates = ['SimHei', 'Microsoft YaHei', 'KaiTi', 'FangSong'] if platform.system() == 'Windows' else ['WenQuanYi Micro Hei', 'Noto Sans CJK SC', 'SimHei']
-    fm = FontManager()
-    available = set(f.name for f in fm.ttflist)
-    for font in candidates:
-        if font in available:
-            return font
-    import os as _os, re
-    for f in fm.ttflist:
-        for pat in ['cjk', 'wqy', 'noto.*cjk', 'simhei']:
-            if re.search(pat, f.name.lower()):
-                return f.name
-    return None
+# ====== 中文字体配置(兼容本地和Google Colab) ======
+_gdrive = '/content/drive/MyDrive'
+_IN_COLAB = 'google.colab' in sys.modules
 
-_cn_font = _find_chinese_font()
-if _cn_font:
-    plt.rcParams['font.sans-serif'] = [_cn_font] + plt.rcParams.get('font.sans-serif', [])
-    plt.rcParams['font.family'] = 'sans-serif'
-    print(f"[Font] 已检测到中文字体: {_cn_font}")
+if _IN_COLAB:
+    from google.colab import drive
+    if not os.path.isdir(_gdrive):
+        print("正在挂载 Google Drive...")
+        drive.mount('/content/drive')
+    SAVE_DIR = os.path.join(_gdrive, '实验14.3-1')
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
-    plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'WenQuanYi Micro Hei', 'Noto Sans CJK SC']
-    plt.rcParams['font.family'] = 'sans-serif'
-plt.rcParams['axes.unicode_minus'] = False
+    try:
+        SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        SAVE_DIR = os.getcwd()
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+
+os.makedirs(_chinese_path, exist_ok=True)
+
+sys.path.insert(0, _chinese_path)
+try:
+    from chinese_font import setup_chinese_font
+    setup_chinese_font(save_dir=_chinese_path)
+except ImportError:
+    print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
 # ========================================================
 
 np.random.seed(42)
 import torch
 torch.manual_seed(42)
 
-SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
+# Checkpoint路径
+CHECKPOINT_PATH_IND = os.path.join(SAVE_DIR, 'cfm_independent_checkpoint.pth')
+CHECKPOINT_PATH_OT = os.path.join(SAVE_DIR, 'cfm_ot_checkpoint.pth')
+FINAL_CHECKPOINT_PATH_IND = os.path.join(SAVE_DIR, 'cfm_independent_final.pth')
+FINAL_CHECKPOINT_PATH_OT = os.path.join(SAVE_DIR, 'cfm_ot_final.pth')
 
 
 # ============================================================
@@ -101,7 +108,7 @@ def ot_coupling(source, target):
     这对应14.1节Kantorovich问题的离散解
     """
     from scipy.optimize import linear_sum_assignment
-    # 代价矩阵: C[i,j] = ||source[i] - target[j||^2
+    # 代价矩阵: C[i,j] = ||source[i] - target[j]||^2
     diff = source[:, None, :] - target[None, :, :]  # (n, n, 2)
     cost = np.sum(diff**2, axis=-1)  # (n, n)
     row_ind, col_ind = linear_sum_assignment(cost)
@@ -122,7 +129,7 @@ def linear_interp(z, x0, t):
     return (1 - t) * z + t * x0
 
 def diffusion_interp(z, x0, t, beta_min=0.1, beta_max=20.0):
-    """★ 修正版：扩散路径（14.3.6节，VP-SDE条件路径）
+    """扩散路径（14.3.6节，VP-SDE条件路径）
     x_t = sqrt(ᾱ_t) * x_0 + sqrt(1-ᾱ_t) * ε
     使用cosine schedule: ᾱ_t = cos²(π/2 * (1-t))，t∈[0,1]
     z作为噪声源ε
@@ -136,7 +143,7 @@ def diffusion_interp(z, x0, t, beta_min=0.1, beta_max=20.0):
 # 步骤1：CFM训练——学习向量场（14.3.3节/14.3.4节）
 # ============================================================
 print("=" * 60)
-print("实验14.1-2 步骤1：CFM训练——学习向量场（14.3.3节/14.3.4节）")
+print("实验14.3-1 步骤1：CFM训练——学习向量场（14.3.3节/14.3.4节）")
 print("=" * 60)
 
 print("""
@@ -174,17 +181,45 @@ class VectorFieldNet(nn.Module):
         inp = torch.cat([x_t, t], dim=-1)
         return self.net(inp)
 
-# 训练CFM
-def train_cfm(n_epochs=2000, n_samples=256, coupling='independent', lr=1e-3):
-    """训练Conditional Flow Matching
+# 训练CFM（带Resume能力）
+def train_cfm(n_epochs=2000, n_samples=256, coupling='independent', lr=1e-3, checkpoint_path=None, final_checkpoint_path=None):
+    """训练Conditional Flow Matching（带checkpoint Resume能力）
 
     coupling: 'independent' 或 'ot'
     """
     model = VectorFieldNet()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     losses = []
+    start_epoch = 0
+    is_final = False
 
-    for epoch in range(n_epochs):
+    # 检查是否有最终权重
+    if final_checkpoint_path and os.path.exists(final_checkpoint_path):
+        print(f"检测到最终权重: {final_checkpoint_path}")
+        print("直接加载，跳过训练过程")
+        checkpoint = torch.load(final_checkpoint_path, map_location='cpu', weights_only=False)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        losses = checkpoint.get('losses', [])
+        is_final = True
+        return model, losses
+
+    # 检查是否有中间权重
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        print(f"检测到中间权重: {checkpoint_path}")
+        print("继续训练...")
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint.get('epoch', 0) + 1
+        losses = checkpoint.get('losses', [])
+
+    if is_final:
+        return model, losses
+
+    print(f"训练 {coupling} CFM，从 epoch {start_epoch} 开始...")
+
+    for epoch in range(start_epoch, n_epochs):
         # 采样源和目标
         z = torch.FloatTensor(sample_source(n_samples))  # (B, 2)
         x0 = torch.FloatTensor(sample_target(n_samples))  # (B, 2)
@@ -221,13 +256,36 @@ def train_cfm(n_epochs=2000, n_samples=256, coupling='independent', lr=1e-3):
             if (epoch + 1) % 500 == 0:
                 print(f"  [{coupling}] Epoch {epoch+1}/{n_epochs} Loss={loss.item():.6f}")
 
+        # 每200轮保存中间checkpoint
+        if checkpoint_path and (epoch + 1) % 200 == 0:
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': loss.item(),
+                'losses': losses
+            }, checkpoint_path)
+
+    # 保存最终权重
+    if final_checkpoint_path:
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'losses': losses
+        }, final_checkpoint_path)
+        print(f"最终权重已保存: {final_checkpoint_path}")
+
     return model, losses
 
 # 训练两个模型
 print("\n训练独立耦合CFM...")
-model_ind, losses_ind = train_cfm(n_epochs=2000, coupling='independent')
+model_ind, losses_ind = train_cfm(n_epochs=2000, coupling='independent',
+                                   checkpoint_path=CHECKPOINT_PATH_IND,
+                                   final_checkpoint_path=FINAL_CHECKPOINT_PATH_IND)
 print("\n训练OT耦合CFM (OT-CFM)...")
-model_ot, losses_ot = train_cfm(n_epochs=2000, coupling='ot')
+model_ot, losses_ot = train_cfm(n_epochs=2000, coupling='ot',
+                                 checkpoint_path=CHECKPOINT_PATH_OT,
+                                 final_checkpoint_path=FINAL_CHECKPOINT_PATH_OT)
 
 
 # ============================================================
@@ -271,7 +329,7 @@ print(f"OT-CFM采样 W1距离:      {wd_ot:.4f}")
 # 步骤2：扩散路径 vs FM路径 vs OT-CFM路径（14.3.5节/14.3.6节）
 # ============================================================
 print(f"\n{'='*60}")
-print("实验14.1-2 步骤2：扩散路径 vs FM路径 vs OT-CFM路径（14.3.5节/14.3.6节）")
+print("实验14.3-1 步骤2：扩散路径 vs FM路径 vs OT-CFM路径（14.3.5节/14.3.6节）")
 print("=" * 60)
 
 print("""
@@ -301,14 +359,14 @@ np.random.seed(123)
 ind_idx = independent_coupling(n_points)
 target_ind = target[ind_idx]
 
-# 可视化三种路径（★ 修正：增加真正的扩散耦合路径）
+# 可视化三种路径
 fig, axes = plt.subplots(1, 4, figsize=(24, 6))
 
 # 只画10条轨迹以避免过于密集
 n_show = 10
 t_vals = np.linspace(0, 1, 100)
 
-# (a) ★ 扩散耦合条件路径（VP-SDE，14.3.6节）
+# (a) 扩散耦合条件路径（VP-SDE，14.3.6节）
 ax = axes[0]
 for i in range(n_show):
     path = np.array([diffusion_interp(source[i], target_ind[i], t) for t in t_vals])
@@ -380,7 +438,7 @@ labels = ['扩散耦合\n(条件路径)', '独立耦合CFM\n(边际路径)', 'OT
 values = [kappa_diff, S_ind, S_ot]
 colors = ['red', 'purple', 'green']
 bars = ax.bar(labels, values, color=colors, alpha=0.7, width=0.5)
-ax.set_ylabel('曲率 κ (0=完全直线)', fontsize=12)
+ax.set_ylabel(r'曲率 $\kappa$ (0=完全直线)', fontsize=12)
 ax.set_title('(d) 路径曲率对比（14.4.2节）', fontsize=12)
 ax.set_ylim(0, max(values) * 1.3 + 0.01)
 for bar, val in zip(bars, values):
@@ -388,7 +446,7 @@ for bar, val in zip(bars, values):
             ha='center', fontsize=11, fontweight='bold')
 ax.grid(alpha=0.3, axis='y')
 
-plt.suptitle('实验14.1-2：扩散耦合 vs OT耦合路径对比（14.3.5/14.3.6节）', fontsize=14, y=1.01)
+plt.suptitle('实验14.3-1：扩散耦合 vs OT耦合路径对比（14.3.5/14.3.6节）', fontsize=14, y=1.01)
 plt.tight_layout()
 fig_path2 = os.path.join(SAVE_DIR, '步骤2_路径对比.png')
 plt.savefig(fig_path2, dpi=150, bbox_inches='tight')
@@ -404,7 +462,7 @@ print(f"  → 扩散耦合路径弯曲(κ大)，OT-CFM路径最直(κ小)")
 # 总结
 # ============================================================
 print(f"\n{'='*60}")
-print("实验14.1-2 完成!")
+print("实验14.3-1 完成!")
 print("=" * 60)
 print("""
 关键结论:

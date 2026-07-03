@@ -188,7 +188,13 @@ class SmallUNet(nn.Module):
 # ============================================================
 # DPS采样算法
 # ============================================================
-def dps_sample(model, y, forward_op, sigma_y, shape, zeta=1.0, n_steps=None):
+def dps_sample(model, y, forward_op, shape, zeta=1.0, n_steps=None):
+    """
+    DPS 采样。
+    注：本实现对似然梯度做单位范数归一化,只取其方向,
+        残差强度统一由外部超参 zeta 控制,不依赖 sigma_y,
+        故函数签名中未保留 sigma_y。
+    """
     model.eval()
     if n_steps is None:
         n_steps = T
@@ -387,7 +393,7 @@ y_denoise = test_images + noise_obs
 
 identity_op = IdentityOperator()
 print("DPS去噪采样中...")
-x_hat_denoise = dps_sample(model, y_denoise, identity_op, sigma_y_denoise,
+x_hat_denoise = dps_sample(model, y_denoise, identity_op,
                             shape=test_images.shape, zeta=1.0)
 
 print("无条件DDPM采样中...")
