@@ -67,6 +67,7 @@ import torch
 torch.manual_seed(42)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(42)
+from tqdm.auto import tqdm
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'使用设备: {device}')
@@ -273,7 +274,8 @@ def train_model(checkpoint_path, num_epochs=50):
             for epoch in range(start_epoch, num_epochs):
                 model.train()
                 total_loss = 0
-                for x, _ in train_loader:
+                pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}", ascii=True, leave=False)
+                for x, _ in pbar:
                     x = x.to(device)
                     batch = x.shape[0]
                     t = torch.randint(0, T, (batch,), device=device)
@@ -285,6 +287,7 @@ def train_model(checkpoint_path, num_epochs=50):
                     loss.backward()
                     optimizer.step()
                     total_loss += loss.item() * batch
+                    pbar.set_postfix(loss=f"{loss.item():.4f}")
                 avg_loss = total_loss / len(train_loader.dataset)
                 print(f"Epoch {epoch+1:3d}/{num_epochs}  Loss={avg_loss:.6f}")
                 torch.save({

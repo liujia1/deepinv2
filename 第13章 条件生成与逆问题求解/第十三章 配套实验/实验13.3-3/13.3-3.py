@@ -65,6 +65,7 @@ import torch
 torch.manual_seed(42)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(42)
+from tqdm.auto import tqdm
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'使用设备: {device}')
@@ -186,7 +187,13 @@ class SmallUNet(nn.Module):
 # ============================================================
 # DPS采样算法
 # ============================================================
-def dps_sample(model, y, forward_op, sigma_y, shape, zeta=1.0, n_steps=None):
+def dps_sample(model, y, forward_op, shape, zeta=1.0, n_steps=None):
+    """
+    DPS 采样。
+    注：本实现对似然梯度做单位范数归一化,只取其方向,
+        残差强度统一由外部超参 zeta 控制,不依赖 sigma_y,
+        故函数签名中未保留 sigma_y。
+    """
     model.eval()
     if n_steps is None:
         n_steps = T
@@ -243,8 +250,10 @@ class GaussianBlurOperator:
 class InpaintingOperator:
     """遮挡算子 A: x -> mask * x"""
     def __init__(self, mask_ratio=0.3, device='cpu'):
-        torch.manual_seed(42)
-        self.mask = (torch.rand(1, 1, 28, 28, device=device) > mask_ratio).float()
+        # 用局部 Generator 生成 mask,保证可复现的同时不污染全局 RNG 状态,
+        # 避免影响脚本后续 y 的观测噪声、dps_sample 内部采样起点等随机操作。
+        gen = torch.Generator(device=device).manual_seed(42)
+        self.mask = (torch.rand(1, 1, 28, 28, device=device, generator=gen) > mask_ratio).float()
 
     def __call__(self, x):
         return self.mask * x
@@ -295,7 +304,8 @@ def train_model(checkpoint_path, num_epochs=50):
             for epoch in range(start_epoch, num_epochs):
                 model.train()
                 total_loss = 0
-                for x, _ in train_loader:
+                pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}", ascii=True, leave=False)
+                for x, _ in pbar:
                     x = x.to(device)
                     batch = x.shape[0]
                     t = torch.randint(0, T, (batch,), device=device)
@@ -307,6 +317,7 @@ def train_model(checkpoint_path, num_epochs=50):
                     loss.backward()
                     optimizer.step()
                     total_loss += loss.item() * batch
+                    pbar.set_postfix(loss=f"{loss.item():.4f}")
                 avg_loss = total_loss / len(train_loader.dataset)
                 print(f"Epoch {epoch+1:3d}/{num_epochs}  Loss={avg_loss:.6f}")
                 torch.save({
