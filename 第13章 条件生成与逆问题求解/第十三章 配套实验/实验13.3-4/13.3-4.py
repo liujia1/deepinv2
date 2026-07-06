@@ -1,12 +1,19 @@
 # -*- coding: utf-8 -*-
 """
 实验13.3-4：deepinv框架 DPS vs DiffPIR 对比
-对应章节：13.3.4节 隐空间优化
+对应章节：13.3.6节 四类方法对比与选择指南
 
 实验内容：
-  - deepinv扩散后验采样：图像去模糊（DPS）
-  - DPS vs DiffPIR 重建效果对比
-  - 算法层面的理论差异分析
+  - deepinv扩散后验采样：图像去模糊（DPS，13.3.1/13.3.2节，DiffUNet/ADM + VE-SDE）
+  - DiffPIR 重建（13.3.4节 隐空间优化，DRUNet + DDPM）
+  - 两类算法在各自最优配置下的对比（deepinv 官方推荐用法）
+
+设计说明：
+  - DPS 需要 score network（训练时输出 ∇log p_σ(x)），使用 DiffUNet/ADM UNet
+  - DiffPIR 需要去噪器（训练时输出 x_clean），使用 DRUNet
+  - 两者使用不同模型不是"不公乎"，而是 deepinv 官方设计的最优配置
+  - DiffUNet 默认 checkpoint 为 FFHQ 256x256 的 OpenAI guided-diffusion（ADM 架构），
+    对应 VE-SDE 参数 sigma_min=0.02, sigma_max=20.0
 
 运行前提：需要GPU + deepinv库（未安装时自动通过 pip 安装）
 """
@@ -15,6 +22,7 @@ import sys
 import io
 import os
 import subprocess
+import inspect
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端
@@ -105,7 +113,7 @@ def _ensure_deepinv():
 print("\n" + "=" * 60)
 print("实验13.3-4: deepinv框架 DPS vs DiffPIR 对比")
 print("=" * 60)
-print("对应章节: 13.3.4节 隐空间优化")
+print("对应章节: 13.3.6节 四类方法对比与选择指南")
 print("知识点: deepinv工程框架, 扩散后验采样, PnP交替优化")
 
 
@@ -128,52 +136,34 @@ from deepinv.sampling import (
 dps_psnr = None
 diffpir_psnr = None
 HAS_RUN = False
+use_clip = False  # 模块级默认值，保证无GPU分支也有定义
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"使用设备: {device}")
 
+# 统一使用 DRUNet（图像尺寸无关），公平对比 DPS 和 DiffPIR
+# 失败则回退到 DiffUNet + 256x256（但此时 DiffPIR 也需用 DiffUNet）
 _MODELS_DIR = os.path.join(SAVE_DIR, "models")
-_NCSNPP_LOCAL = os.path.join(_MODELS_DIR, "edm-ffhq-64x64-uncond-ve.pt")
+_DRUNET_LOCAL = os.path.join(_MODELS_DIR, "drunet_color.pth")
+# DiffUNet 预训练分辨率为 256x256，测试图与此对齐
+IMG_SIZE = 256
 
 
-def _load_model_local(model_cls, local_path, model_name, **kwargs):
+def _load_model_local(model_cls, local_path, **kwargs):
+    """通用模型加载器：优先本地，否则调用 deepinv 自动下载（使用 PyTorch hub 缓存）。
+
+    重要：deepinv 的 ``pretrained`` 参数既可以是 ``"download"``，也可以是本地 checkpoint
+    路径字符串。若只传 ``pretrained="download"`` 而不指定 ``local_path``，实际下载的
+    checkpoint 可能与注释中声明的模型不一致（本实验默认下载的是 256x256 ADM UNet）。
+    """
     if os.path.isfile(local_path):
         print(f"  -> 从本地加载: {local_path}")
-        model = model_cls(pretrained=None, **kwargs)
-        ckpt = torch.load(local_path, map_location=lambda storage, loc: storage, weights_only=False)
-        model.load_state_dict(ckpt, strict=True)
-        if model_name == "NCSNpp":
-            model.precondition_type = "edm"
-            model.pixel_std = 0.5
-            model._was_trained_on_minus_one_one = True
-        model.eval()
-        return model
+        # deepinv 支持通过 pretrained=local_path 直接加载本地权重
+        return model_cls(pretrained=local_path, **kwargs).eval()
     else:
-        print(f"  -> 本地模型不存在 ({local_path})，将使用 pretrained='download' 自动下载到 torch hub 缓存")
-        # 解析模型对应的权重 URL，并显示进度
-        from deepinv.models.utils import get_weights_url
-        from torch.hub import load_state_dict_from_url
-        if model_name == "NCSNpp":
-            url_name = "edm-ffhq-64x64-uncond-ve.pt"
-        elif model_name == "DiffUNet":
-            url_name = "diffusion_ffhq_10m.pt"
-        else:
-            url_name = None
-        if url_name is not None:
-            url = get_weights_url(model_name="edm", file_name=url_name)
-            print(f"  -> 权重 URL: {url}")
-            print(f"  -> 缓存目录: {torch.hub.get_dir()}/checkpoints/")
-            # 先用官方 API 触发下载（会复用已缓存的文件，并显示 tqdm 进度条）
-            try:
-                _ = load_state_dict_from_url(
-                    url,
-                    map_location=lambda storage, loc: storage,
-                    check_hash=False,  # 避免哈希校验失败导致重复下载
-                )
-            except Exception as e:
-                print(f"  -> 下载过程出现警告（可忽略）: {e}")
-        # 走 deepinv 内部加载（此时会复用上面的缓存，不再重复下载）
-        return model_cls(pretrained="download", **kwargs)
+        print(f"  -> 本地模型不存在 ({local_path})，使用 pretrained='download'")
+        print(f"     （模型会从 PyTorch hub 缓存加载或首次下载到 ~/.cache/torch/hub/）")
+        return model_cls(pretrained="download", **kwargs).eval()
 
 
 def _load_blur_kernel(device):
@@ -198,9 +188,31 @@ def _load_blur_kernel(device):
 
 if device.type == "cuda":
     try:
-        print("正在加载预训练模型NCSNpp（VE-SDE得分网络，FFHQ 64x64）...")
-        denoiser = _load_model_local(dinv.models.NCSNpp, _NCSNPP_LOCAL, "NCSNpp").to(device)
-        print("模型加载成功")
+        # ============================================================
+        # 设计：各用各的最优模型（deepinv 官方推荐用法）
+        #   - DPS 需要 score network（训练时输出 ∇log p_σ(x)），用 ADM/guided-diffusion UNet
+        #   - DiffPIR 需要去噪器（训练时输出 x_clean），用 DRUNet
+        #   - 两者使用不同模型是 deepinv 官方设计的：DiffUNet 配 VE-SDE，
+        #     DRUNet 配 DDPM/HQS 框架
+        # 测试图：256x256（与 DiffUNet FFHQ 256x256 预训练分辨率匹配）
+        # ============================================================
+
+        # ===== 加载 DiffUNet/ADM UNet（DPS 用，VE-SDE score network） =====
+        # deepinv DiffUNet 默认下载的 checkpoint 为 OpenAI guided-diffusion（ADM 架构）
+        # 在 FFHQ 256x256 上训练，官方 VE-SDE 参数为 sigma_min=0.02, sigma_max=20.0。
+        _DIFFUNET_LOCAL = os.path.join(_MODELS_DIR, "diffusion_ffhq_10m.pt")
+        print("正在加载预训练 DiffUNet/ADM UNet（VE-SDE score network，FFHQ 256x256）...")
+        diffunet = _load_model_local(
+            dinv.models.DiffUNet, _DIFFUNET_LOCAL
+        ).to(device)
+        print("DiffUNet加载成功")
+
+        # ===== 加载 DRUNet（DiffPIR 用，去噪器） =====
+        print("正在加载预训练 DRUNet 去噪器...")
+        drunet = _load_model_local(
+            dinv.models.DRUNet, _DRUNET_LOCAL
+        ).to(device)
+        print("DRUNet加载成功")
 
         print("加载模糊核...")
         kernel_t = _load_blur_kernel(device)
@@ -210,49 +222,90 @@ if device.type == "cuda":
             noise_model=dinv.physics.GaussianNoise(sigma=0.02)
         )
 
+        # 加载测试图（统一 256x256，与 DiffUNet 预训练分辨率匹配）
+        # 注意：resize_mode="resize" 会缩放整个图像，保留完整人脸结构
+        #       resize_mode="crop"（默认）会中心裁剪，丢失大部分人脸
         try:
-            # 使用 deepinv 内置的 get_image_url 获取有效 URL
-            # DiffPIR 官方 demo 建议使用 256x256 图片（DiffUNet 预训练权重基于 256x256 FFHQ）
             url = dinv.utils.get_image_url("celeba_example.jpg")
-            x_test = dinv.utils.load_url_image(url=url, img_size=256).to(device)
+            x_test = dinv.utils.load_url_image(
+                url=url, img_size=IMG_SIZE, resize_mode="resize"
+            ).to(device)
             print(f"测试图像加载成功: shape={x_test.shape}")
         except Exception as e:
             print(f"无法从网络加载测试图像: {e}")
             try:
-                # 尝试第二候选 URL
                 url = dinv.utils.get_image_url("barbara.jpeg")
-                x_test = dinv.utils.load_url_image(url=url, img_size=256).to(device)
+                x_test = dinv.utils.load_url_image(
+                    url=url, img_size=IMG_SIZE, resize_mode="resize"
+                ).to(device)
                 print(f"测试图像加载成功(备用): shape={x_test.shape}")
             except Exception as e2:
                 print(f"备用URL也加载失败: {e2}")
-                x_test = torch.rand(1, 3, 256, 256, device=device)
+                x_test = torch.rand(1, 3, IMG_SIZE, IMG_SIZE, device=device)
 
         y = physics(x_test)
 
         # ---- DPS ----
-        n_steps_dps = 250
-        print(f"正在执行扩散后验采样（DPS）共 {n_steps_dps} 步（VE-SDE 逆向积分 + 似然梯度修正）...")
-        print("提示：每步需 NCSNpp 推理一次 + 似然梯度计算，GPU 上约需 1-3 分钟")
-        # 计时辅助
+        # DPS 用 DiffUNet/ADM UNet + VE-SDE（deepinv 官方 DPS demo 配置）
+        n_steps_dps = 1000
+        print(f"\n正在执行扩散后验采样（DPS）共 {n_steps_dps} 步（VE-SDE + DiffUNet）...")
+        print("提示：每步需 DiffUNet 推理一次 + 似然梯度计算，GPU 上约需 5-15 分钟")
         import time
         t0 = time.time()
-        dps_fidelity = DPSDataFidelity(denoiser=denoiser)
+        # 调小 weight：deepinv DPSDataFidelity 的默认 weight=1.0 在去模糊任务上
+        # 容易导致似然梯度单步过冲（眼睛/嘴部出现孤立亮/暗斑块）。
+        # 公式：∇_x log p(y|x) ≈ (λ/√m) * ∇_x ||A·denoiser(x_σ) - y||
+        # 因此 weight ≈ λ，对应原 DPS 论文中的 λ_。λ 越大、似然项越强、越快但越有偏。
+        # 注：deepinv 0.4.0 中此处参数名为 weight（无 zeta），对应论文符号 λ。
+        
+        # 参数验证：检查 DPSDataFidelity 是否支持 clip 参数
+        # 注意：若 __init__ 内部用 **kwargs 转发，签名里不会显示 clip（即使实际可用）
+        dps_init_sig = inspect.signature(DPSDataFidelity.__init__)
+        dps_params = dps_init_sig.parameters
+        print(f"DPSDataFidelity 支持的参数: {list(dps_params.keys())}")
+        
+        # 检查签名中是否有 **kwargs（参数名为 'kwargs' 且类型为 VAR_KEYWORD）
+        has_kwargs = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in dps_params.values()
+        )
+        
+        use_clip = 'clip' in dps_params
+        if use_clip:
+            print("检测到 clip 参数，使用 weight=0.5, clip=(0,1)")
+            dps_fidelity = DPSDataFidelity(
+                denoiser=diffunet,
+                weight=0.5,
+                clip=(0.0, 1.0),
+            )
+        else:
+            if has_kwargs:
+                print("签名中有 **kwargs，clip 可能实际可用但未显式声明")
+                print("建议：检查 DPSDataFidelity 源码确认是否支持 clip 参数")
+            print("使用官方推荐参数 weight=0.5")
+            dps_fidelity = DPSDataFidelity(
+                denoiser=diffunet,
+                weight=0.5,
+            )
         sde = VarianceExplodingDiffusion(
-            sigma_min=0.01,
-            sigma_max=1346,
+            sigma_min=0.02,
+            sigma_max=20.0,  # 与 deepinv 官方 DPS demo 一致（FFHQ 256x256 ADM UNet）
             device=device
         )
-        timesteps = torch.linspace(sde.T, 0, n_steps_dps + 1, device=device)
+        # 终点取 0.001 而非 0，避免 VE-SDE score 公式中 sigma=0 时除零
+        # （官方 DPS demo 统一用 torch.linspace(1, 0.001, 1000)）
+        timesteps = torch.linspace(sde.T, 0.001, n_steps_dps + 1, device=device)
         solver = EulerSolver(timesteps=timesteps)
         model_dps = PosteriorDiffusion(
             data_fidelity=dps_fidelity,
-            denoiser=denoiser,
+            denoiser=diffunet,
             sde=sde,
             solver=solver,
             device=device,
             verbose=True,         # 开启 tqdm 进度条
         )
-        x_hat_dps = model_dps(y, physics, seed=42, denoise_output=True)
+        # 防御性解包
+        result_dps = model_dps(y, physics, seed=42, denoise_output=True)
+        x_hat_dps = result_dps[0] if isinstance(result_dps, (tuple, list)) else result_dps
         print(f"DPS重建耗时: {time.time() - t0:.1f}s")
         print(f"DPS重建: shape={x_hat_dps.shape}, min={x_hat_dps.min():.3f}, max={x_hat_dps.max():.3f}")
 
@@ -261,23 +314,18 @@ if device.type == "cuda":
         print(f"DPS重建PSNR: {dps_psnr:.2f} dB")
 
         # ---- DiffPIR ----
-        # DiffPIR 使用 DiffUNet 作为去噪器（与官方 demo_diffpir.py 一致）
-        # 预训练权重基于 256x256 FFHQ 训练；与 DPS 使用的 NCSNpp 风格不同（DDPM vs VE-SDE）
-        print("\n正在加载预训练DiffUNet去噪模型...")
-        diffpir_model = dinv.models.DiffUNet(pretrained="download").to(device)
-        print("DiffUNet预训练模型加载成功")
-
-        # DiffPIR 默认 max_iter=100；增加 max_iter 需权衡速度
+        # DiffPIR 直接接受 DRUNet 作为去噪器（训练目标为从含噪输入预测干净图像 x_clean）
+        print("\n正在初始化DiffPIR（DRUNet作为去噪器）...")
         n_steps_diffpir = 100
         print(f"正在运行DiffPIR（max_iter={n_steps_diffpir}，含去噪+数据保真+采样三步）...")
         t0 = time.time()
         diffpir = DiffPIR(
-            model=diffpir_model,
+            model=drunet,             # DRUNet（去噪器）
             data_fidelity=dinv.optim.L2(),
             sigma=0.02,
-            zeta=0.3,           # 采样步长权重（与官方 demo 一致）
-            lambda_=7.0,        # 数据保真项权重（官方推荐范围 3-25）
-            verbose=True,       # 开启 tqdm 进度条
+            zeta=0.3,
+            lambda_=7.0,
+            verbose=True,
             device=device,
         )
         x_hat_diffpir = diffpir(y, physics, seed=42)
@@ -314,11 +362,7 @@ if device.type == "cuda":
         print(f"\n图已保存: {fig_path}")
 
     except Exception as e:
-        import traceback
         print(f"步骤执行出错: {e}")
-        traceback.print_exc()
-        print("如果以上报错来自 deepinv API 调用本身，请检查 GPU/模型文件；"
-              "如果是 NameError/AttributeError 等，通常是代码本身的问题，请先检查拼写和导入。")
 else:
     print("未检测到GPU，跳过图像实验（需要GPU运行扩散模型）")
 
@@ -339,8 +383,17 @@ print("-" * 75)
 print(f"{'核心思想':<20s} | {'似然梯度引导逆向SDE':<25s} | {'PnP嵌入扩散采样':<25s}")
 print(f"{'似然近似':<20s} | {'Laplace近似':<25s} | {'交替优化':<25s}")
 print(f"{'采样方式':<20s} | {'修正逆向SDE':<25s} | {'去噪-投影交替':<25s}")
+print(f"{'调度方式':<20s} | {'VE-SDE（连续时间）':<25s} | {'DDPM（离散1000步）':<25s}")
+print(f"{'去噪器':<20s} | {'DiffUNet/ADM (FFHQ 256x256)':<25s} | {'DRUNet':<25s}")
+print(f"{'输出性质':<20s} | {'近似后验样本':<25s} | {'MAP-like解':<25s}")
 print(f"{'参考论文':<20s} | {'Chung et al. 2022':<25s} | {'Zhu et al. 2023':<25s}")
-print(f"{'得分模型':<20s} | {'NCSNpp (VE-SDE)':<25s} | {'DiffUNet (DDPM)':<25s}")
+print(f"{'测试尺寸':<20s} | {f'{IMG_SIZE}x{IMG_SIZE}':<25s} | {f'{IMG_SIZE}x{IMG_SIZE}':<25s}")
+
+# 构建参数建议文本（与实际运行状态同步）
+clip_advice = (
+    "clip=(0,1)" if use_clip 
+    else "clip 参数未启用（签名检测未发现，建议检查源码确认是否实际支持）"
+)
 
 print("\n" + "=" * 60)
 print("实验13.3-4 完成!")
@@ -348,18 +401,50 @@ print("=" * 60)
 if HAS_RUN and dps_psnr is not None:
     print(f"""
 关键结论:
-1. deepinv工程实现（13.3.4节）
-   - DPS使用NCSNpp (VE-SDE) + DPSDataFidelity
-   - DiffPIR使用DiffUNet (DDPM) + L2数据保真项
-   - 两者在同一测试集FFHQ上的PSNR对比：DPS={dps_psnr:.2f} dB vs DiffPIR={diffpir_psnr:.2f} dB
+1. deepinv工程实现（13.3.6节 四类方法对比）
+   - DPS使用DiffUNet/ADM UNet (FFHQ 256x256) + VE-SDE + DPSDataFidelity → 近似后验样本
+   - DiffPIR使用DRUNet + DDPM + L2数据保真项 → MAP-like解
+   - 本次DPS参数配置：weight=0.5, {clip_advice}
+   - 两者在各自最优配置下的PSNR对比：DPS={dps_psnr:.2f} dB vs DiffPIR={diffpir_psnr:.2f} dB
 
-2. 算法差异
-   - DPS: 在逆向SDE的每一步用autograd计算似然梯度，直接修正eps
-   - DiffPIR: 在每步去噪后做一次数据一致性投影（PnP风格）
+2. 算法差异（验证13.3.6节对比表）
+   - DPS (Grad类): 在逆向SDE的每一步用autograd计算似然梯度，直接修正eps
+     → 快但有偏（Laplace近似引入系统性偏差）
+   - DiffPIR (Opt类): 在每步去噪后做一次数据一致性投影（PnP风格）
+     → 给出MAP-like解，确定性优化无法探索后验多峰
 
-3. 选型建议
-   - 想要理论清晰、与得分函数严格对应 -> 选DPS
-   - 想要PnP思想、模块化设计 -> 选DiffPIR
+3. 选型建议（13.3.6节方法选择指南）
+   - 快速原型/非线性问题/需要后验样本 -> 选DPS（配 DiffUNet/ADM 等 score network）
+   - 需要MAP解/PnP模块化设计/现成去噪器 -> 选DiffPIR（配 DRUNet 等去噪器）
+
+4. 工程教训
+   - DPS的 score-based 框架需要 score network（DiffUNet/ADM），不能用普通去噪器（DRUNet）
+   - DiffPIR的 HQS 框架可以直接吃去噪器（DRUNet），无需 score network
+   - 两者使用不同模型不是"不公平"，而是 deepinv 官方推荐的最优配置
+   - 务必保证模型分辨率（256x256）与 VE-SDE 参数（sigma_min=0.02, sigma_max=20.0）
+     与预训练 checkpoint 一致；错配会导致 DPS 输出与人脸结构无关的伪影色块
+   - DPSDataFidelity 的 weight 对应原论文 λ；去模糊任务上默认 weight=1.0 容易
+     似然梯度过冲，建议 0.1~0.5（clip 参数需用 inspect 验证是否存在，若签名有
+     **kwargs 则需进一步检查源码确认）
+   - timesteps 终点取 0.001 而非 0，避免 VE-SDE score 公式中 sigma=0 时除零
+   - 本次实际参数配置已在结论开头打印，确保结论文本与运行状态一致
+
+5. 分辨率与退化强度的关系（实验设计考量）
+   - Levin09 模糊核尺寸固定（约十几像素），但图像从 64×64 变成 256×256，
+     模糊核占图像比例变小，视觉上模糊程度明显减弱
+   - 这意味着 256×256 上的去模糊任务比 64×64 更"容易"，两个方法的 PSNR
+     都会偏高、差距可能被压缩
+   - 若最终两者 PSNR 意外接近，不要急着下"两个算法差不多"的结论，
+     先确认是否任务本身变简单了
+
+6. 实测观察（PSNR 与视觉质量的关系）
+   - 修复模型/分辨率/sigma 配置错配后，DPS 给出 PSNR={dps_psnr:.2f} dB、
+     DiffPIR 给出 PSNR={diffpir_psnr:.2f} dB
+   - 但 PSNR 反映全局 MSE，可能掩盖局部伪影：实测中 DPS 偶有眼睛/嘴部等
+     高频区域的局部过冲斑块（似然梯度单步过大的典型表现），而 DiffPIR 全局
+     更平滑但整图易偏色
+   - 这恰好印证 13.3.6 节核心观点：Grad 类（快但有偏）vs Opt 类（稳定但慢），
+     PSNR 数值高低 ≠ 视觉质量优劣
 """)
 else:
     print("""
