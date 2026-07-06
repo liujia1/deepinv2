@@ -82,7 +82,7 @@ print("知识点: 引导权重zeta, PSNR倒U形曲线, 实际权重选择")
 # ============================================================
 # 噪声调度
 # ============================================================
-T = 200
+T = 1000  # 标准DDPM时间步
 beta_min, beta_max = 1e-4, 0.02
 betas = torch.linspace(beta_min, beta_max, T).to(device)
 alphas = 1.0 - betas
@@ -189,36 +189,47 @@ class SmallUNet(nn.Module):
 # ============================================================
 # DPS采样算法
 # ============================================================
-def dps_sample(model, y, forward_op, shape, zeta=1.0, n_steps=None):
+def dps_sample(model, y, forward_op, shape, zeta=1.0, seed=None):
     """
     DPS 采样。
-    注：本实现对似然梯度做单位范数归一化,只取其方向,
-        残差强度统一由外部超参 zeta 控制,不依赖 sigma_y,
-        故函数签名中未保留 sigma_y。
+    注: 本实现对似然梯度做单位范数归一化, 只取其方向, 残差强度统一由
+        外部超参 zeta 控制, 不依赖 sigma_y. 故函数签名中未保留 sigma_y.
+        这与 Chung et al. (2022) 原论文"步长∝1/‖y-Ax̂₀‖"的自适应方案不同,
+        故本实验中 zeta=1 仅代表本实验定义下的"标准强度", 而非论文原版公式.
+
+    修正 eps 的符号推导:
+      Chung 原代码: x_{t-1} -= scale · g_chung, 其中
+        g_chung = ∂‖y-Ax̂₀‖/∂x_t = -(1/√ᾱ)·A^T r / ‖r‖, r=y-Ax̂₀
+      等价转换到 "通过 eps 改 mean" 形式, 对 g_loss=∂‖y-Ax̂₀‖²/∂x_t
+        应当使用 + 号: eps_pred + ζ·√(1-ᾱ)·g_loss
+      (其中 g_loss 方向同 g_chung, 即 x_t 增大→loss 减小, 与 Chung 一致)
+      之前实现误用 - 号, 导致 ζ 越大 x_hat 离真值越远, 与 Chung 方向相反.
+
+    seed: 若不为 None, 在采样开始前固定随机种子, 使不同 zeta 共享同一条
+          反向过程噪声路径(公共随机数 CRN), 排除采样随机性对 zeta-PSNR
+          曲线形状的干扰(与 13.4-1 做法一致)
     """
     model.eval()
-    if n_steps is None:
-        n_steps = T
+    if seed is not None:
+        torch.manual_seed(seed)
     x = torch.randn(shape, device=device)
     for t_idx in reversed(range(T)):
         t = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
         sqrt_ab_t = sqrt_alpha_bars[t_idx]
         sqrt_1mab_t = sqrt_one_minus_alpha_bars[t_idx]
-        with torch.no_grad():
-            eps_pred = model(x, t)
+        # 单次前向传播: 带 grad 的输出同时用于 x0_hat 估计与噪声预测
         x = x.detach().requires_grad_(True)
-        eps_pred_grad = model(x, t)
-        x0_hat = (x - sqrt_1mab_t * eps_pred_grad) / sqrt_ab_t
+        eps_pred = model(x, t)
+        x0_hat = (x - sqrt_1mab_t * eps_pred) / sqrt_ab_t
         Ax0_hat = forward_op(x0_hat)
         likelihood_loss = torch.sum((y - Ax0_hat) ** 2)
         likelihood_grad = torch.autograd.grad(likelihood_loss, x)[0]
         grad_norm = likelihood_grad.norm()
         if grad_norm > 1e-8:
             likelihood_grad = likelihood_grad / grad_norm
-        x = x.detach()
-        eps_pred = eps_pred.detach()
-        eps_corrected = eps_pred - zeta * sqrt_1mab_t * likelihood_grad
         with torch.no_grad():
+            # 关键: 这里是 + 号, 与 Chung 原论文方向一致
+            eps_corrected = eps_pred.detach() + zeta * sqrt_1mab_t * likelihood_grad
             model_mean = sqrt_recip_alphas[t_idx] * (
                 x - beta_over_sqrt_1m_ab[t_idx] * eps_corrected
             )
@@ -245,30 +256,45 @@ def train_model(checkpoint_path, num_epochs=50):
     start_epoch = 0
     is_final = False
 
+    # 噪声调度超参指纹, 用于加载 checkpoint 时一致性校验
+    # (模型架构不变但 T/beta 范围变化时, 旧 checkpoint 会被静默接受,
+    # 引发训练-采样不一致, 这里存一份指纹以便在加载时拦截)
+    schedule_fingerprint = {'T': T, 'beta_min': beta_min, 'beta_max': beta_max}
+
     if os.path.exists(checkpoint_path):
         print(f"\n检测到已保存的模型: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-        if checkpoint.get('is_final', False):
-            print(f"已检测到最终训练完成的模型, 直接加载, 跳过训练过程")
-            print(f"  训练轮数: {checkpoint['epoch']+1}")
-            print(f"  最终损失: {checkpoint['loss']:.6f}")
-            try:
-                model.load_state_dict(checkpoint['model_state_dict'])
-                is_final = True
-            except RuntimeError as e:
-                print(f"警告: checkpoint与当前模型架构不兼容, 删除后重新训练")
-                os.remove(checkpoint_path)
-                is_final = False
+        saved_fp = checkpoint.get('schedule_fingerprint', None)
+        fp_mismatch = (saved_fp is not None) and (saved_fp != schedule_fingerprint)
+        if fp_mismatch:
+            print(f"警告: checkpoint的噪声调度与当前脚本不一致, 删除后重新训练")
+            print(f"  checkpoint: T={saved_fp['T']}, beta=[{saved_fp['beta_min']:.1e}, {saved_fp['beta_max']:.4f}]")
+            print(f"  当前脚本:  T={schedule_fingerprint['T']}, beta=[{schedule_fingerprint['beta_min']:.1e}, {schedule_fingerprint['beta_max']:.4f}]")
+            os.remove(checkpoint_path)
         else:
-            try:
-                model.load_state_dict(checkpoint['model_state_dict'])
-                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                start_epoch = checkpoint['epoch'] + 1
-                print(f"检测到未完成的训练, 从第 {start_epoch+1} 轮继续")
-            except RuntimeError as e:
-                print(f"警告: checkpoint与当前模型架构不兼容, 删除后重新训练")
-                os.remove(checkpoint_path)
-                start_epoch = 0
+            if saved_fp is None:
+                print(f"  提示: checkpoint未包含噪声调度指纹(旧版), 仅按架构加载")
+            if checkpoint.get('is_final', False):
+                print(f"已检测到最终训练完成的模型, 直接加载, 跳过训练过程")
+                print(f"  训练轮数: {checkpoint['epoch']+1}")
+                print(f"  最终损失: {checkpoint['loss']:.6f}")
+                try:
+                    model.load_state_dict(checkpoint['model_state_dict'])
+                    is_final = True
+                except RuntimeError as e:
+                    print(f"警告: checkpoint与当前模型架构不兼容, 删除后重新训练")
+                    os.remove(checkpoint_path)
+                    is_final = False
+            else:
+                try:
+                    model.load_state_dict(checkpoint['model_state_dict'])
+                    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                    start_epoch = checkpoint['epoch'] + 1
+                    print(f"检测到未完成的训练, 从第 {start_epoch+1} 轮继续")
+                except RuntimeError as e:
+                    print(f"警告: checkpoint与当前模型架构不兼容, 删除后重新训练")
+                    os.remove(checkpoint_path)
+                    start_epoch = 0
 
     if not is_final:
         if start_epoch >= num_epochs:
@@ -301,14 +327,16 @@ def train_model(checkpoint_path, num_epochs=50):
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': avg_loss,
-                    'is_final': False
+                    'is_final': False,
+                    'schedule_fingerprint': schedule_fingerprint,
                 }, checkpoint_path)
             torch.save({
                 'epoch': num_epochs - 1,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': avg_loss,
-                'is_final': True
+                'is_final': True,
+                'schedule_fingerprint': schedule_fingerprint,
             }, checkpoint_path)
             print(f"模型已保存: {checkpoint_path}")
     else:
@@ -366,6 +394,10 @@ print("""
 zeta_values = [0.0, 0.3, 0.7, 1.0, 1.5, 3.0]
 psnr_results = []
 
+# 公共随机数(CRN)种子: 不同 zeta 共享同一条反向过程噪声路径,
+# 排除采样随机性对 zeta-PSNR 曲线形状的干扰(与 13.4-1 做法一致)
+CRN_SEED = 42
+
 test_images = next(iter(test_loader))[0][:4].to(device)
 single_img = test_images[:1]
 sigma_y_denoise = 0.3
@@ -380,43 +412,71 @@ def compute_psnr(pred, target):
     mse = torch.mean((pred_01 - target_01)**2).item()
     return 10 * np.log10(1.0 / (mse + 1e-10))
 
+# 一次性采样并缓存 x_hat, 供下方可视化复用
+# 避免之前"PSNR 来自第一次采样, 图片来自第二次独立采样"导致图与数字不对应
+# 同时省掉重复采样的 6 次 dps_sample 算力
+x_hat_list = []
 for zeta in zeta_values:
     x_hat = dps_sample(model, y_single, identity_op,
-                        shape=single_img.shape, zeta=zeta)
+                        shape=single_img.shape, zeta=zeta, seed=CRN_SEED)
     psnr = compute_psnr(x_hat, single_img)
     psnr_results.append(psnr)
+    x_hat_list.append(x_hat)
     print(f"  zeta={zeta:4.1f}: PSNR={psnr:.2f} dB")
 
-# 可视化
-fig, axes = plt.subplots(2, len(zeta_values), figsize=(20, 6))
-
+# 可视化: 复用上面已采样的 x_hat, 保证子图标题 PSNR 与图像严格对应
+# 拆分为两个独立文件: 数字重建图(2x3) + zeta-PSNR 曲线图(单独)
+fig1, axes1 = plt.subplots(2, 3, figsize=(12, 8))
 for idx, zeta in enumerate(zeta_values):
-    x_hat = dps_sample(model, y_single, identity_op,
-                        shape=single_img.shape, zeta=zeta)
-    axes[0, idx].imshow(((x_hat[0, 0] + 1) / 2).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-    axes[0, idx].axis('off')
+    row, col = idx // 3, idx % 3
+    x_hat = x_hat_list[idx]
+    axes1[row, col].imshow(((x_hat[0, 0] + 1) / 2).cpu().numpy(),
+                            cmap='gray', vmin=0, vmax=1)
+    axes1[row, col].axis('off')
     label = "无条件" if zeta == 0 else r"$\zeta={}$".format(zeta)
-    axes[0, idx].set_title(f'{label}\nPSNR={psnr_results[idx]:.1f}dB', fontsize=10)
+    axes1[row, col].set_title(f'{label}\nPSNR={psnr_results[idx]:.1f}dB', fontsize=11)
 
-# zeta-PSNR曲线
-axes[1, 0].plot(zeta_values, psnr_results, 'ro-', markersize=8, lw=2)
-axes[1, 0].set_xlabel(r'引导权重 $\zeta$', fontsize=12)
-axes[1, 0].set_ylabel('PSNR (dB)', fontsize=12)
-axes[1, 0].set_title(r'$\zeta$-重建质量权衡（13.4.3节）', fontsize=13)
-axes[1, 0].grid(alpha=0.3)
-axes[1, 0].annotate('zeta=0: 无条件采样\nzeta=1: 标准DPS\nzeta>1: 强数据一致性',
-                    xy=(0.55, 0.3), xycoords='axes fraction', fontsize=9,
-                    bbox=dict(boxstyle='round,pad=0.3', facecolor='#dfe6e9', alpha=0.8))
+fig1.tight_layout()
+fig1_path = os.path.join(SAVE_DIR, '重建结果对比.png')
+fig1.savefig(fig1_path, dpi=150, bbox_inches='tight')
+plt.close(fig1)
+print(f"\n图1(2x3数字重建对比)已保存: {fig1_path}")
 
-# 隐藏空子图
-for i in range(1, len(zeta_values)):
-    axes[1, i].axis('off')
+# zeta-PSNR 曲线图: 单独一张, 带最优点标注, 突出倒U形
+fig2, ax2 = plt.subplots(1, 1, figsize=(8, 6))
+ax2.plot(zeta_values, psnr_results, 'ro-', markersize=10, lw=2)
+ax2.set_xlabel(r'引导权重 $\zeta$', fontsize=12)
+ax2.set_ylabel('PSNR (dB)', fontsize=12)
+ax2.set_title(r'$\zeta$-重建质量权衡曲线（13.4.3节）', fontsize=13)
+ax2.grid(alpha=0.3)
 
-plt.tight_layout()
-fig_path = os.path.join(SAVE_DIR, '引导权重zeta对PSNR的影响.png')
-plt.savefig(fig_path, dpi=150, bbox_inches='tight')
-plt.close()
-print(f"\n图已保存: {fig_path}")
+# 标注倒U形峰值点(用竖线+散点+文本框三件套, 与13.4-1风格一致)
+best_idx = int(np.argmax(psnr_results))
+best_zeta = zeta_values[best_idx]
+best_psnr = psnr_results[best_idx]
+ax2.axvline(best_zeta, color='gray', linestyle='--', alpha=0.5, lw=1)
+ax2.plot(best_zeta, best_psnr, 'b*', markersize=18, zorder=5,
+         markeredgecolor='navy', markeredgewidth=0.5)
+ax2.annotate(rf'最优 $\zeta$={best_zeta}' + '\n' + rf'PSNR={best_psnr:.2f}dB',
+             xy=(best_zeta, best_psnr),
+             xytext=(best_zeta + 0.4, best_psnr - 1.5),
+             fontsize=10, ha='left',
+             arrowprops=dict(arrowstyle='->', color='gray', alpha=0.7),
+             bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffeaa7', alpha=0.8))
+
+# 三段说明放在左下空白区
+ax2.text(0.02, 0.05,
+         r'$\zeta$=0: 无条件采样' + '\n' +
+         r'$\zeta$=1: 本实验标准强度' + '\n' +
+         r'$\zeta$>1: 强数据一致性',
+         transform=ax2.transAxes, fontsize=9, va='bottom',
+         bbox=dict(boxstyle='round,pad=0.3', facecolor='#dfe6e9', alpha=0.8))
+
+fig2.tight_layout()
+fig2_path = os.path.join(SAVE_DIR, '引导权重zeta与PSNR关系曲线.png')
+fig2.savefig(fig2_path, dpi=150, bbox_inches='tight')
+plt.close(fig2)
+print(f"图2(zeta-PSNR曲线)已保存: {fig2_path}")
 
 print("\n" + "=" * 60)
 print("实验13.4-2 完成!")
@@ -425,7 +485,10 @@ print(f"""
 关键结论:
 1. zeta-重建质量权衡（13.4.3节）
    - zeta=0: 无条件采样（忽略观测，PSNR低）
-   - zeta=1: 标准DPS（平衡先验与似然，通常PSNR最高）
+   - zeta=1: 本实验定义下的标准强度（平衡先验与似然，通常PSNR最高）
+     注: 本实现对似然梯度做单位范数归一化, 故zeta直接控制修正量模长,
+         与Chung et al. (2022)原论文"步长∝1/‖y-Ax̂₀‖"的自适应方案不同,
+         此处zeta=1仅代表本实验的标定基准, 而非论文原版公式
    - zeta过大: 过度拟合观测噪声，PSNR下降
    - 最优zeta通常在0.5-1.5之间
 
@@ -433,4 +496,7 @@ print(f"""
    - 单一图像的最优zeta可能因图而异
    - 工程上常用 zeta=1 作为默认起点
    - zeta-PSNR曲线呈倒U形——这是质量-多样性权衡的具体表现
+   - 不同zeta之间的PSNR对比采用公共随机数(CRN, seed=42)实现公平采样,
+     排除采样随机性对曲线形状的干扰(与13.4-1做法一致)
+   - 实验配置: T={T} 步DDPM, 训练 {num_epochs} 轮 MNIST UNet.
 """)

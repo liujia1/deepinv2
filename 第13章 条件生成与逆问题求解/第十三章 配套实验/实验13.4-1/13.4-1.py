@@ -329,7 +329,7 @@ ax.set_ylabel(r'数据一致性（$|x-y|$均值）', fontsize=12)
 ax.set_title('质量-多样性权衡曲线（13.4.3节）', fontsize=13)
 ax.grid(alpha=0.3)
 ax.legend(fontsize=9, loc='upper right')
-ax.annotate('右上: 弱引导(高多样性, 低一致性)\n左下: 强引导(低多样性, 高一致性)\n★绿色星形: 真实后验（解析）\n对应第2-3章的正则化参数lambda',
+ax.annotate('右下: 弱引导(高多样性, 低一致性)\n左上: 强引导(低多样性, 高一致性)\n★绿色星形: 真实后验（解析）\n对应第2-3章的正则化参数lambda',
             xy=(0.05, 0.95), xycoords='axes fraction', fontsize=9, va='top',
             bbox=dict(boxstyle='round,pad=0.3', facecolor='#dfe6e9', alpha=0.8))
 

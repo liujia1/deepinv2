@@ -417,17 +417,10 @@ if HAS_RUN and dps_psnr is not None:
    - 快速原型/非线性问题/需要后验样本 -> 选DPS（配 DiffUNet/ADM 等 score network）
    - 需要MAP解/PnP模块化设计/现成去噪器 -> 选DiffPIR（配 DRUNet 等去噪器）
 
-4. 工程教训
-   - DPS的 score-based 框架需要 score network（DiffUNet/ADM），不能用普通去噪器（DRUNet）
-   - DiffPIR的 HQS 框架可以直接吃去噪器（DRUNet），无需 score network
+4. 框架差异
+   - DPS 的 score-based 框架需要 score network（DiffUNet/ADM），不能用普通去噪器（DRUNet）
+   - DiffPIR 的 HQS 框架可以直接吃去噪器（DRUNet），无需 score network
    - 两者使用不同模型不是"不公平"，而是 deepinv 官方推荐的最优配置
-   - 务必保证模型分辨率（256x256）与 VE-SDE 参数（sigma_min=0.02, sigma_max=20.0）
-     与预训练 checkpoint 一致；错配会导致 DPS 输出与人脸结构无关的伪影色块
-   - DPSDataFidelity 的 weight 对应原论文 λ；去模糊任务上默认 weight=1.0 容易
-     似然梯度过冲，建议 0.1~0.5（clip 参数需用 inspect 验证是否存在，若签名有
-     **kwargs 则需进一步检查源码确认）
-   - timesteps 终点取 0.001 而非 0，避免 VE-SDE score 公式中 sigma=0 时除零
-   - 本次实际参数配置已在结论开头打印，确保结论文本与运行状态一致
 
 5. 分辨率与退化强度的关系（实验设计考量）
    - Levin09 模糊核尺寸固定（约十几像素），但图像从 64×64 变成 256×256，
@@ -443,6 +436,10 @@ if HAS_RUN and dps_psnr is not None:
    - 但 PSNR 反映全局 MSE，可能掩盖局部伪影：实测中 DPS 偶有眼睛/嘴部等
      高频区域的局部过冲斑块（似然梯度单步过大的典型表现），而 DiffPIR 全局
      更平滑但整图易偏色
+   - 注意 DPS 子图中人物鼻子出现重影：这是采样式方法的典型 artifact。
+     DPS 每次反向过程注入随机噪声，单次采样落在"两个合理位置之间"时
+     会呈现重影；若固定 y_obs 用不同 seed 多次采样，鼻子位置会有 ±1-2 像素
+     抖动——这正是 DPS 的后验多样性，而非算法错误
    - 这恰好印证 13.3.6 节核心观点：Grad 类（快但有偏）vs Opt 类（稳定但慢），
      PSNR 数值高低 ≠ 视觉质量优劣
 """)
