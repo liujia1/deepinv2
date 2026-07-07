@@ -5,8 +5,8 @@
 
 实验内容：
   - 使用Diffusers的StableDiffusionImg2ImgPipeline
-  - 文本到图像 + 退化算子A的逆问题框架
-  - img2img作为闭环案例：扩散模型是通用的逆问题求解器
+  - img2img与逆问题求解的本质区别：z_0已知完整 vs y有信息损失
+  - 扩散模型引入外部信息的多种方式：初始化位置、似然梯度、CFG
 
 注意：本实验需要GPU和预训练模型下载。
 """
@@ -64,7 +64,7 @@ print("\n" + "=" * 60)
 print("实验13.6-2: Diffusers img2img管线")
 print("=" * 60)
 print("对应章节: 13.6节 闭环：回到逆问题求解")
-print("知识点: img2img作为逆问题求解器, DPS到img2img的统一")
+print("知识点: img2img与逆问题求解的本质区别, 扩散模型统一框架")
 
 
 import torch
@@ -80,20 +80,22 @@ print(f"\n使用设备: {device}")
 
 
 print("=" * 60)
-print("步骤1：img2img作为逆问题求解器（13.6节 统一框架）")
+print("步骤1：img2img与逆问题求解器的对比（13.6节）")
 print("=" * 60)
 
 print("""
-13.6节核心观点：img2img是逆问题求解的特殊形式
-  逆问题: y = A(x) + n
-  img2img的A: 加噪算子 A(z) = sqrt(alpha_bar_t) * z + sqrt(1-alpha_bar_t) * eps
-            (VLB框架下的简化前向算子)
-  观测 y: 加噪后的潜空间表示
-  文本prompt通过CFG提供额外约束
+img2img与真正逆问题求解器（DPS/DiffPIR）的对比（而非"img2img是逆问题的特例"）：
+  - DPS/DiffPIR: 存在真实的退化y=A(x)+n，A有信息损失，需要用似然梯度∇log p(y|x_t)引导采样以恢复x
+  - img2img: z_0已知且完整，无信息损失，"加噪"只是选择一个中间噪声水平作为采样起点，
+    不涉及似然约束，本质是用strength参数在"忠于原图"与"服从文本"之间做插值
+  - 两者共享的框架元素：都利用同一个预训练扩散模型的先验，只是"引入外部信息"的方式不同
+    （img2img通过初始化位置，DPS/DiffPIR通过每步的似然梯度修正）
 
-  通用公式: eps_hat = eps_hat_uncond + s * (eps_hat_cond - eps_hat_uncond)
-  对比DPS:   eps_hat = eps_hat_theta - zeta * sqrt(1-alpha_bar_t) * grad_x
-  两者在数学上形式类似，但作用对象不同
+CFG与DPS对比的进一步说明：
+  - CFG: 两次模型输出的线性插值/外推（同一UNet对同一x_t的不同条件预测）
+  - DPS: 在score预测基础上加一个来自似然函数梯度的修正项（梯度来自观测约束）
+  - 共同点：都是在原始预测基础上叠加一个加权修正项
+  - 本质差异：修正项来源不同（CFG来自同一模型的条件差异，DPS来自外部似然约束）
 """)
 
 if HAS_DIFFUSERS and device == "cuda":
@@ -136,7 +138,7 @@ if HAS_DIFFUSERS and device == "cuda":
                 axes[idx].set_title(prompt[:30] + "..." if len(prompt) > 30 else prompt,
                                     fontsize=10)
 
-            plt.suptitle('img2img作为闭环逆问题求解器（13.6节）', fontsize=13, y=1.02)
+            plt.suptitle('img2img与文本引导生成对比（13.6节）', fontsize=13, y=1.02)
             plt.tight_layout()
             img2img_path = os.path.join(SAVE_DIR, "img2img闭环对比.png")
             plt.savefig(img2img_path, dpi=150, bbox_inches='tight')
@@ -147,20 +149,22 @@ if HAS_DIFFUSERS and device == "cuda":
         print("可能原因：GPU内存不足、网络无法下载模型等")
 else:
     print("跳过实际运行（需要GPU + Diffusers）")
-    print("以下是img2img作为逆问题求解器的理论说明：")
+    print("以下是img2img与逆问题求解器的对比理论说明：")
     print("""
-img2img与逆问题求解的统一视图（13.6节）：
+img2img与逆问题求解器的对比（13.6节）：
 
 通用逆问题形式: y = A(x) + n, 已知y和A, 求x
-  - DPS: A=任意算子（去噪、去模糊等）
-  - DiffPIR: A=任意算子，交替去噪+投影
-  - img2img: A=加噪算子（VLB框架），y=加噪潜空间表示
-  - CFG: y=文本嵌入，A=CLIP, 通过s参数控制sampling
+  - DPS/DiffPIR: A=真实退化算子（模糊、下采样等），y=观测数据，存在信息损失
+  - img2img: z_0已知且完整，无真实退化，"加噪"是主动选择而非被动测量
+  - 本质区别：逆问题求解是从残缺观测恢复真值，img2img是从已知起点重新生成
 
-13.6节统一框架的启示:
-  1. 同一预训练扩散模型可作为多种逆问题求解器
-  2. 改变A的数学形式即可适配新问题
-  3. 引导强度(s/zeta)统一控制数据一致性的强度
+扩散模型框架的统一视角:
+  1. 预训练扩散模型提供强大的图像先验（无条件采样能力）
+  2. 引入外部信息的不同方式：
+     - img2img: 通过初始化位置（strength参数）在"忠于原图"与"自由生成"间插值
+     - DPS/DiffPIR: 通过每步似然梯度修正，将采样拉向满足观测约束的区域
+     - CFG: 通过条件与无条件输出的差异放大文本引导
+  3. 这些技术可组合使用（如img2img+CFG）
 """)
 
 print("\n" + "=" * 60)
@@ -168,13 +172,12 @@ print("实验13.6-2 完成!")
 print("=" * 60)
 print("""
 关键结论:
-1. img2img是逆问题求解的特殊形式（13.6节）
-   - A = 加噪算子 (VLB前向算子)
-   - y = 加噪后的潜空间表示
-   - 文本prompt提供额外约束
+1. img2img与逆问题求解的本质区别（13.6节）
+   - img2img: z_0已知且完整，无真实退化，strength参数控制"忠于原图"程度
+   - 逆问题求解: y=A(x)+n中y有信息损失，需似然梯度引导恢复x
 
-2. 统一框架的实践验证
-   - StableDiffusionImg2ImgPipeline封装了CFG和加噪逻辑
-   - strength参数控制加噪程度（与DPS的t_start等价）
-   - guidance_scale对应CFG的s（与DPS的zeta类比）
+2. 扩散模型统一框架的启示
+   - 预训练扩散模型提供强大先验，可通过不同方式引入外部信息
+   - StableDiffusionImg2ImgPipeline封装了初始化位置+CFG的组合
+   - 这些技术可相互组合（如img2img+CFG），实现更灵活的生成控制
 """)

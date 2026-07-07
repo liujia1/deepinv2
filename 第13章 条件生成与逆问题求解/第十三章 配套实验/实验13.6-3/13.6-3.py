@@ -91,10 +91,17 @@ print("""
   strength=0.5: 中等加噪，保留中等结构信息
   strength=1.0: 满噪声，相当于text-to-image（图文一致性强，多样性高）
 
-与DPS和CFG的类比（13.4.3节 + 13.6节）:
-  strength(大) <-> zeta(小) <-> guidance_scale(小): 弱一致性，高多样性
-  strength(小) <-> zeta(大) <-> guidance_scale(大): 强一致性，低多样性
-  （注意：DPS的zeta与strength的关系是反向的，因zeta控制的是修正项强度）
+与DPS的zeta参数类比（图像一致性维度）:
+  strength(小) <-> zeta(大): 都倾向于强图像一致性、低多样性
+  strength(大) <-> zeta(小): 都倾向于弱图像一致性、高多样性
+  （注：这里的"一致性"指与初始/观测图像的接近程度）
+
+与CFG的guidance_scale参数类比（独立的文本一致性维度）:
+  guidance_scale(大): 更贴合文本prompt描述，但与"像不像原图"无直接关系
+  guidance_scale(小): 更接近无条件生成的自然多样性
+
+注意：strength和zeta控制图像层面的观测一致性，而guidance_scale控制文本语义一致性，
+      两者是独立的维度，不应混为一谈。
 """)
 
 if HAS_DEPS and device == "cuda":
@@ -170,9 +177,11 @@ print("""
    - strength大 -> 多样性高、图文一致性低
    - strength小 -> 多样性低、保留原图
 
-2. 统一的质量-多样性权衡
-   - DPS: zeta控制似然修正强度
-   - CFG: s控制条件/无条件混合
-   - img2img: strength控制加噪程度
+2. 统一的质量-多样性权衡框架
+   - DPS: zeta控制似然修正强度（约束对象：观测图像y）
+   - CFG: s控制条件/无条件混合（约束对象：文本prompt）
+   - img2img: strength控制加噪程度（约束对象：初始图像）
    - 三者本质上都是"先验强度 vs 条件强度"的tradeoff
+   - 但需注意：zeta和strength约束的是图像层面的观测一致性，
+     而CFG约束的是文本语义一致性，两者是独立的维度
 """)
