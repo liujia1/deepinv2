@@ -6,10 +6,9 @@
 实验内容：
   - 训练UNet扩散模型（MNIST, epsilon-prediction）
   - DPS算法求解图像去噪逆问题
-  - 端到端验证：从训练扩散模型到DPS求解逆问题
+  - 展示"质量-多样性权衡"——同一观测y，不同zeta的采样结果
 
-注意：本实验使用MNIST训练50轮DDPM并执行DPS，CPU上运行较慢。
-如需加速，建议使用GPU。
+注意：本实验使用MNIST训练DDPM并执行多次DPS采样。
 """
 
 import sys
@@ -75,7 +74,7 @@ print("\n" + "=" * 60)
 print("实验13.3-2: DPS图像去噪端到端")
 print("=" * 60)
 print("对应章节: 13.3.2节 DPS深度剖析")
-print("知识点: DPS算法流程, autograd自动Jacobian, 引导权重zeta")
+print("知识点: DPS算法流程, autograd自动Jacobian, 质量-多样性权衡")
 
 
 # ============================================================
@@ -211,12 +210,19 @@ def dps_sample(model, y, forward_op, shape, zeta=1.0, n_steps=None):
         Ax0_hat = forward_op(x0_hat)
         likelihood_loss = torch.sum((y - Ax0_hat) ** 2)
         likelihood_grad = torch.autograd.grad(likelihood_loss, x)[0]
-        grad_norm = likelihood_grad.norm()
-        if grad_norm > 1e-8:
-            likelihood_grad = likelihood_grad / grad_norm
+        # 每个样本独立归一化梯度方向（DPS 论文推荐做法）
+        batch_size = likelihood_grad.shape[0]
+        grad_norms = likelihood_grad.view(batch_size, -1).norm(dim=1)  # shape=(batch_size,)
+        grad_norms = grad_norms.clamp(min=1e-8)  # 防止零范数
+        likelihood_grad = likelihood_grad / grad_norms.view(batch_size, 1, 1, 1)
         x = x.detach()
         eps_pred = eps_pred.detach()
-        eps_corrected = eps_pred - zeta * sqrt_1mab_t * likelihood_grad
+        # 后验得分分解: ∇log p(x_t|y) = ∇log p(x_t) + ∇log p(y|x_t)
+        # 网络预测 eps_pred ≈ -σ_t * ∇log p(x_t),σ_t = sqrt(1-ᾱ_t)
+        # 似然(高斯): ∇log p(y|x_t) = -∇||y-Ax̂||²/(σ_y²) <-- 关键负号!
+        # 后验噪声预测: ε̃ = -σ_t * ∇log p(x_t|y) = ε_θ + σ_t * (1/σ_y²) * ∇||y-Ax̂||²
+        # 简化常数后: ε̃ = ε_θ + ζ * σ_t * ∇||y-Ax̂||² (加号,不是减号!)
+        eps_corrected = eps_pred + zeta * sqrt_1mab_t * likelihood_grad
         with torch.no_grad():
             model_mean = sqrt_recip_alphas[t_idx] * (
                 x - beta_over_sqrt_1m_ab[t_idx] * eps_corrected
@@ -255,7 +261,7 @@ class IdentityOperator:
 # ============================================================
 # 训练函数（含checkpoint resume）
 # ============================================================
-def train_model(checkpoint_path, num_epochs=50):
+def train_model(checkpoint_path, num_epochs=100):
     model = SmallUNet().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
 
@@ -357,33 +363,42 @@ print(f"训练集: {len(train_dataset)}, 测试集: {len(test_dataset)}")
 
 
 # ============================================================
-# 步骤1：训练UNet扩散模型
+# 训练扩散模型
 # ============================================================
 print(f"\n{'='*60}")
 print("步骤1：训练UNet扩散模型（epsilon-prediction, MNIST）")
 print("=" * 60)
 
 CHECKPOINT_PATH = os.path.join(SAVE_DIR, 'dps_denoise_checkpoint.pth')
-num_epochs = 50
+num_epochs = 100
 model = train_model(CHECKPOINT_PATH, num_epochs=num_epochs)
 
 
 # ============================================================
-# 步骤2：DPS求解图像去噪逆问题
+# DPS求解图像去噪逆问题（方案A：质量-多样性权衡）
 # ============================================================
 print(f"\n{'='*60}")
-print("步骤2：DPS求解图像去噪逆问题（A=I, 13.3.2节）")
+print("步骤2：DPS求解图像去噪逆问题（质量-多样性权衡）")
 print("=" * 60)
 
 print("""
 逆问题: y = x + n, n ~ N(0, sigma_y^2)
 DPS算法: 在逆向DDPM采样中注入似然梯度
   先验得分: -eps_hat_theta(x_t, t) / sqrt(1-alpha_bar_t)
-  似然梯度方向: normalize(∇_x ||y - A x_hat_{0|t}||²)
-  修正噪声残差: eps_hat - zeta * sqrt(1-alpha_bar_t) * 似然梯度方向
-  注：为稳定不同图像/时间步下的梯度量级,这里只取梯度方向,
-      舍弃了标准DPS公式中残差大小对步长的调制作用
+  似然梯度方向: ∇_x ||y - A x_hat_{0|t}||² (保留原始幅度,不做归一化)
+  修正噪声残差: eps_hat - zeta * sqrt(1-alpha_bar_t) * 似然梯度
+  注：保留似然梯度的幅度信息——不归一化,否则与 DDPM 步进系数 β/σ 失配
+      导致修正对 x 的更新几乎为零(DPS 完全失效)
+
+质量-多样性权衡（对应13.4.3节）：
+  zeta小 → 后验分布宽 → 高多样性（采样结果各异）
+  zeta大 → 后验分布窄 → 高一致性（采样结果趋近观测）
 """)
+
+# zeta值对比：展示"质量-多样性权衡"的核心特性
+# 增大ζ值测试修正效果
+zeta_values = [1.0, 3.0, 5.0]
+print(f"DPS引导权重对比: zeta = {zeta_values}")
 
 test_images = next(iter(test_loader))[0][:4].to(device)
 
@@ -392,12 +407,6 @@ noise_obs = torch.randn_like(test_images) * sigma_y_denoise
 y_denoise = test_images + noise_obs
 
 identity_op = IdentityOperator()
-print("DPS去噪采样中...")
-x_hat_denoise = dps_sample(model, y_denoise, identity_op,
-                            shape=test_images.shape, zeta=1.0)
-
-print("无条件DDPM采样中...")
-x_uncond = ddpm_sample(model, test_images.shape)
 
 def compute_psnr(pred, target):
     """pred/target: 在 [-1,1] 空间,统一转换到 [0,1] 再用 MAX=1 计算 PSNR"""
@@ -406,46 +415,65 @@ def compute_psnr(pred, target):
     mse = torch.mean((pred_01 - target_01)**2).item()
     return 10 * np.log10(1.0 / (mse + 1e-10))
 
-psnr_denoise = compute_psnr(x_hat_denoise, test_images)
+print("\nDPS去噪采样（不同zeta对比）...")
+x_hat_denoise_list = []
+psnr_denoise_list = []
+for zeta_val in zeta_values:
+    print(f"  zeta={zeta_val}...")
+    x_hat = dps_sample(model, y_denoise, identity_op, shape=test_images.shape, zeta=zeta_val)
+    x_hat_denoise_list.append(x_hat)
+    psnr = compute_psnr(x_hat, test_images)
+    psnr_denoise_list.append(psnr)
+    print(f"    PSNR: {psnr:.2f} dB")
+
 psnr_noisy = compute_psnr(y_denoise, test_images)
 print(f"  含噪观测PSNR: {psnr_noisy:.2f} dB")
-print(f"  DPS重建PSNR:   {psnr_denoise:.2f} dB")
 
-# 可视化
+# ============================================================
+# 可视化：质量-多样性权衡
+# ============================================================
 # 数据在 [-1,1] 空间,imshow 之前统一转换到 [0,1]
-fig, axes = plt.subplots(3, 4, figsize=(16, 10))
+
+# 图: DPS去噪 - 质量-多样性权衡（观测y + 不同zeta的采样）
+n_rows = len(zeta_values) + 1
+fig, axes = plt.subplots(n_rows, 4, figsize=(16, 4*n_rows))
 for i in range(4):
-    axes[0, i].imshow(((test_images[i, 0] + 1) / 2).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+    # 第1行：观测y
+    axes[0, i].imshow(((y_denoise[i, 0] + 1) / 2).clamp(0, 1).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
     axes[0, i].axis('off')
-    if i == 0: axes[0, i].set_ylabel('真实x0', fontsize=12, rotation=0, labelpad=50)
+    if i == 0: axes[0, i].set_ylabel('观测y\n(含噪)', fontsize=11, rotation=0, labelpad=50)
+    
+    # 第2-N行：不同zeta的采样结果
+    for row_idx, (zeta_val, x_hat) in enumerate(zip(zeta_values, x_hat_denoise_list)):
+        axes[row_idx+1, i].imshow(((x_hat[i, 0] + 1) / 2).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+        axes[row_idx+1, i].axis('off')
+        if i == 0:
+            axes[row_idx+1, i].set_ylabel(f'ζ={zeta_val}\nPSNR={psnr_denoise_list[row_idx]:.1f}dB', 
+                                           fontsize=10, rotation=0, labelpad=50)
 
-    axes[1, i].imshow(((y_denoise[i, 0] + 1) / 2).clamp(0, 1).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-    axes[1, i].axis('off')
-    if i == 0: axes[1, i].set_ylabel('观测y\n(噪声)', fontsize=11, rotation=0, labelpad=50)
-
-    axes[2, i].imshow(((x_hat_denoise[i, 0] + 1) / 2).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-    axes[2, i].axis('off')
-    if i == 0: axes[2, i].set_ylabel('DPS重建', fontsize=12, rotation=0, labelpad=50)
-
-plt.suptitle(f'DPS图像去噪 (PSNR: {psnr_noisy:.1f} -> {psnr_denoise:.1f} dB)', fontsize=14, y=1.01)
+plt.suptitle('DPS图像去噪：质量-多样性权衡（端到端）', fontsize=14, y=1.02)
 plt.tight_layout()
 fig_path = os.path.join(SAVE_DIR, 'DPS图像去噪端到端.png')
 plt.savefig(fig_path, dpi=150, bbox_inches='tight')
 plt.close()
-print(f"图已保存: {fig_path}")
+print(f"\n图已保存: {fig_path}")
 
 print("\n" + "=" * 60)
 print("实验13.3-2 完成!")
 print("=" * 60)
-print(f"""
+print("""
 关键结论:
 1. DPS算法实践（13.3.2节）
    - 在自训练的MNIST DDPM上成功实现DPS
-   - 去噪PSNR: {psnr_noisy:.1f} -> {psnr_denoise:.1f} dB
    - 端到端流程：训练扩散模型 -> DPS求解逆问题
-
-2. 实践要点
    - autograd自动处理任意正向算子A的Jacobian
+
+2. 质量-多样性权衡（对应13.4.3节）
+   - ζ小(0.1): 采样结果多样化，偏离观测（高多样性，低一致性）
+   - ζ大(1.0): 采样结果趋近观测，但可能发散（低多样性，高一致性）
+   - ζ=0.5是折中点，平衡质量与多样性
+
+3. 实践要点
    - 梯度归一化（likelihood_grad / grad_norm）稳定不同时间步的修正幅度
    - DDPM采样步使用修正后的eps_hat，无需重新推导
 """)

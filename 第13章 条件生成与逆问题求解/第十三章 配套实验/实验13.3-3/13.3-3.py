@@ -6,9 +6,9 @@
 实验内容：
   - DPS求解图像去模糊逆问题
   - DPS求解Inpainting逆问题（零样本迁移）
-  - 与DiffPIR风格的对比：修正SDE轨迹 vs 交替去噪-投影
+  - 展示"质量-多样性权衡"——同一观测y，不同zeta的采样结果
 
-注意：本实验训练50轮DDPM并执行多次DPS采样。
+注意：本实验训练DDPM并执行多次DPS采样。
 """
 
 import sys
@@ -74,7 +74,7 @@ print("\n" + "=" * 60)
 print("实验13.3-3: DPS去模糊与Inpainting零样本迁移")
 print("=" * 60)
 print("对应章节: 13.3.4节 隐空间优化")
-print("知识点: 零样本迁移, 高斯模糊算子, Inpainting算子")
+print("知识点: 零样本迁移, 质量-多样性权衡")
 
 
 # ============================================================
@@ -210,12 +210,19 @@ def dps_sample(model, y, forward_op, shape, zeta=1.0, n_steps=None):
         Ax0_hat = forward_op(x0_hat)
         likelihood_loss = torch.sum((y - Ax0_hat) ** 2)
         likelihood_grad = torch.autograd.grad(likelihood_loss, x)[0]
-        grad_norm = likelihood_grad.norm()
-        if grad_norm > 1e-8:
-            likelihood_grad = likelihood_grad / grad_norm
+        # 每个样本独立归一化梯度方向（DPS 论文推荐做法）
+        batch_size = likelihood_grad.shape[0]
+        grad_norms = likelihood_grad.view(batch_size, -1).norm(dim=1)  # shape=(batch_size,)
+        grad_norms = grad_norms.clamp(min=1e-8)  # 防止零范数
+        likelihood_grad = likelihood_grad / grad_norms.view(batch_size, 1, 1, 1)
         x = x.detach()
         eps_pred = eps_pred.detach()
-        eps_corrected = eps_pred - zeta * sqrt_1mab_t * likelihood_grad
+        # 后验得分分解: ∇log p(x_t|y) = ∇log p(x_t) + ∇log p(y|x_t)
+        # 网络预测 eps_pred ≈ -σ_t * ∇log p(x_t),σ_t = sqrt(1-ᾱ_t)
+        # 似然(高斯): ∇log p(y|x_t) = -∇||y-Ax̂||²/(σ_y²) <-- 关键负号!
+        # 后验噪声预测: ε̃ = -σ_t * ∇log p(x_t|y) = ε_θ + σ_t * (1/σ_y²) * ∇||y-Ax̂||²
+        # 简化常数后: ε̃ = ε_θ + ζ * σ_t * ∇||y-Ax̂||² (加号,不是减号!)
+        eps_corrected = eps_pred + zeta * sqrt_1mab_t * likelihood_grad
         with torch.no_grad():
             model_mean = sqrt_recip_alphas[t_idx] * (
                 x - beta_over_sqrt_1m_ab[t_idx] * eps_corrected
@@ -262,7 +269,7 @@ class InpaintingOperator:
 # ============================================================
 # 训练函数（含checkpoint resume）
 # ============================================================
-def train_model(checkpoint_path, num_epochs=50):
+def train_model(checkpoint_path, num_epochs=100):
     model = SmallUNet().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
 
@@ -370,25 +377,30 @@ print("训练UNet扩散模型...")
 print("=" * 60)
 
 CHECKPOINT_PATH = os.path.join(SAVE_DIR, 'dps_inpaint_checkpoint.pth')
-num_epochs = 50
+num_epochs = 100
 model = train_model(CHECKPOINT_PATH, num_epochs=num_epochs)
 
 
 # ============================================================
-# 步骤：DPS求解图像去模糊与Inpainting
+# DPS求解图像去模糊与Inpainting（方案A：质量-多样性权衡）
 # ============================================================
 print(f"\n{'='*60}")
-print("步骤：DPS求解图像去模糊与Inpainting")
+print("DPS求解图像去模糊与Inpainting（质量-多样性权衡）")
 print("=" * 60)
 
 print("""
 逆问题: y = A(x) + n, A=高斯模糊 或 A=遮挡算子
 关键：模型从未见过模糊/遮挡图像——DPS的零样本迁移能力
 
-与DiffPIR的对比：
-  DPS: 在采样过程中注入似然梯度（修正SDE轨迹）
-  DiffPIR: 交替执行去噪+数据一致性投影（PnP风格）
+质量-多样性权衡（对应13.4.3节）：
+  zeta小 → 后验分布宽 → 高多样性（采样结果各异）
+  zeta大 → 后验分布窄 → 高一致性（采样结果趋近观测）
 """)
+
+# zeta值对比：展示"质量-多样性权衡"的核心特性
+# 增大ζ值以获得更好的重建质量
+zeta_values = [1.0, 3.0, 5.0]
+print(f"DPS引导权重对比: zeta = {zeta_values}")
 
 test_images = next(iter(test_loader))[0][:4].to(device)
 
@@ -404,64 +416,106 @@ blur_op = GaussianBlurOperator(kernel_size=7, sigma=2.0, device=device)
 sigma_y_blur = 0.02
 y_blur = blur_op(test_images) + torch.randn_like(test_images) * sigma_y_blur
 
-print("\nDPS去模糊采样中...")
-x_hat_blur = dps_sample(model, y_blur, blur_op,
-                        shape=test_images.shape, zeta=1.0)
+print("\nDPS去模糊采样（不同zeta对比）...")
+x_hat_blur_list = []
+psnr_blur_list = []
+for zeta_val in zeta_values:
+    print(f"  zeta={zeta_val}...")
+    x_hat = dps_sample(model, y_blur, blur_op, shape=test_images.shape, zeta=zeta_val)
+    x_hat_blur_list.append(x_hat)
+    psnr = compute_psnr(x_hat, test_images)
+    psnr_blur_list.append(psnr)
+    print(f"    PSNR: {psnr:.2f} dB")
 
 psnr_blur_obs = compute_psnr(y_blur, test_images)
-psnr_blur_dps = compute_psnr(x_hat_blur, test_images)
 print(f"  模糊观测PSNR: {psnr_blur_obs:.2f} dB")
-print(f"  DPS重建PSNR:   {psnr_blur_dps:.2f} dB")
 
 # ---- Inpainting ----
-print("\nDPS inpainting采样中...")
 inpaint_op = InpaintingOperator(mask_ratio=0.3, device=device)
 sigma_y_inpaint = 0.01
 y_inpaint = inpaint_op(test_images) + torch.randn_like(test_images) * sigma_y_inpaint
 
-x_hat_inpaint = dps_sample(model, y_inpaint, inpaint_op,
-                            shape=test_images.shape, zeta=1.0)
+print("\nDPS inpainting采样（不同zeta对比）...")
+x_hat_inpaint_list = []
+psnr_inpaint_list = []
+for zeta_val in zeta_values:
+    print(f"  zeta={zeta_val}...")
+    x_hat = dps_sample(model, y_inpaint, inpaint_op, shape=test_images.shape, zeta=zeta_val)
+    x_hat_inpaint_list.append(x_hat)
+    psnr = compute_psnr(x_hat, test_images)
+    psnr_inpaint_list.append(psnr)
+    print(f"    PSNR: {psnr:.2f} dB")
 
 psnr_inpaint_obs = compute_psnr(y_inpaint, test_images)
-psnr_inpaint_dps = compute_psnr(x_hat_inpaint, test_images)
 print(f"  遮挡观测PSNR: {psnr_inpaint_obs:.2f} dB")
-print(f"  DPS重建PSNR:   {psnr_inpaint_dps:.2f} dB")
 
-# 可视化
+# ============================================================
+# 可视化：质量-多样性权衡
+# ============================================================
 # 数据在 [-1,1] 空间,imshow 之前统一转换到 [0,1]
-fig, axes = plt.subplots(3, 4, figsize=(16, 10))
+
+# 图1: DPS去模糊 - 质量-多样性权衡（观测y + 不同zeta的采样）
+n_rows = len(zeta_values) + 1
+fig1, axes1 = plt.subplots(n_rows, 4, figsize=(16, 4*n_rows))
 for i in range(4):
-    axes[0, i].imshow(((y_blur[i, 0] + 1) / 2).clamp(0, 1).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-    axes[0, i].axis('off')
-    if i == 0: axes[0, i].set_ylabel('模糊观测y', fontsize=12, rotation=0, labelpad=50)
+    # 第1行：观测y
+    axes1[0, i].imshow(((y_blur[i, 0] + 1) / 2).clamp(0, 1).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+    axes1[0, i].axis('off')
+    if i == 0: axes1[0, i].set_ylabel('观测y\n(模糊)', fontsize=11, rotation=0, labelpad=50)
+    
+    # 第2-N行：不同zeta的采样结果
+    for row_idx, (zeta_val, x_hat) in enumerate(zip(zeta_values, x_hat_blur_list)):
+        axes1[row_idx+1, i].imshow(((x_hat[i, 0] + 1) / 2).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+        axes1[row_idx+1, i].axis('off')
+        if i == 0:
+            axes1[row_idx+1, i].set_ylabel(f'ζ={zeta_val}\nPSNR={psnr_blur_list[row_idx]:.1f}dB', 
+                                           fontsize=10, rotation=0, labelpad=50)
 
-    axes[1, i].imshow(((x_hat_blur[i, 0] + 1) / 2).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-    axes[1, i].axis('off')
-    if i == 0: axes[1, i].set_ylabel('DPS去模糊', fontsize=12, rotation=0, labelpad=50)
-
-    axes[2, i].imshow(((x_hat_inpaint[i, 0] + 1) / 2).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-    axes[2, i].axis('off')
-    if i == 0: axes[2, i].set_ylabel('DPS inpainting', fontsize=12, rotation=0, labelpad=50)
-
-plt.suptitle('DPS去模糊 & Inpainting（零样本迁移）', fontsize=14, y=1.01)
+plt.suptitle('DPS去模糊：质量-多样性权衡（零样本迁移）', fontsize=14, y=1.02)
 plt.tight_layout()
-fig_path = os.path.join(SAVE_DIR, 'DPS去模糊与Inpainting.png')
-plt.savefig(fig_path, dpi=150, bbox_inches='tight')
+fig_path1 = os.path.join(SAVE_DIR, 'DPS去模糊.png')
+plt.savefig(fig_path1, dpi=150, bbox_inches='tight')
 plt.close()
-print(f"\n图已保存: {fig_path}")
+print(f"\n图已保存: {fig_path1}")
+
+# 图2: DPS Inpainting - 质量-多样性权衡（观测y + 不同zeta的采样）
+fig2, axes2 = plt.subplots(n_rows, 4, figsize=(16, 4*n_rows))
+for i in range(4):
+    # 第1行：观测y
+    axes2[0, i].imshow(((y_inpaint[i, 0] + 1) / 2).clamp(0, 1).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+    axes2[0, i].axis('off')
+    if i == 0: axes2[0, i].set_ylabel('观测y\n(遮挡)', fontsize=11, rotation=0, labelpad=50)
+    
+    # 第2-N行：不同zeta的采样结果
+    for row_idx, (zeta_val, x_hat) in enumerate(zip(zeta_values, x_hat_inpaint_list)):
+        axes2[row_idx+1, i].imshow(((x_hat[i, 0] + 1) / 2).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+        axes2[row_idx+1, i].axis('off')
+        if i == 0:
+            axes2[row_idx+1, i].set_ylabel(f'ζ={zeta_val}\nPSNR={psnr_inpaint_list[row_idx]:.1f}dB', 
+                                           fontsize=10, rotation=0, labelpad=50)
+
+plt.suptitle('DPS Inpainting：质量-多样性权衡（零样本迁移）', fontsize=14, y=1.02)
+plt.tight_layout()
+fig_path2 = os.path.join(SAVE_DIR, 'DPS Inpainting.png')
+plt.savefig(fig_path2, dpi=150, bbox_inches='tight')
+plt.close()
+print(f"\n图已保存: {fig_path2}")
 
 print("\n" + "=" * 60)
 print("实验13.3-3 完成!")
 print("=" * 60)
-print(f"""
+print("""
 关键结论:
 1. 零样本迁移
    - 模型只训练了去噪（无条件DDPM），但能解决去模糊和inpainting
    - 无需针对特定逆问题重新训练——这是DPS的核心优势
-   - 适用条件：A和先验流形"近正交"时效果好
 
-2. DPS vs DiffPIR对比
+2. 质量-多样性权衡（对应13.4.3节）
+   - ζ小(0.1): 采样结果多样化，偏离观测（高多样性，低一致性）
+   - ζ大(1.0): 采样结果趋近观测，但可能发散（低多样性，高一致性）
+   - ζ=0.5是折中点，平衡质量与多样性
+
+3. DPS vs DiffPIR对比
    - DPS: 修正SDE轨迹，理论清晰（后验得分分解）
    - DiffPIR: 交替去噪+投影，PnP思想的延伸
-   - 两者都基于同一个预训练扩散模型，无需额外训练
 """)
