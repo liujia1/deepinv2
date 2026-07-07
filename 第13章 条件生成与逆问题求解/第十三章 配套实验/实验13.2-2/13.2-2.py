@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 实验13.2-2：后验得分分解定理验证
-对应章节：13.2.2节 后验得分分解定理
 
 实验内容：
   - 验证后验得分分解定理：nabla log p(x_t|y) = nabla log p(x_t) + nabla log p(y|x_t)
@@ -66,7 +65,6 @@ np.random.seed(42)
 print("\n" + "=" * 60)
 print("实验13.2-2: 后验得分分解定理验证")
 print("=" * 60)
-print("对应章节: 13.2.2节 后验得分分解定理")
 print("知识点: nabla log p(x_t|y) = nabla log p(x_t) + nabla log p(y|x_t)")
 
 

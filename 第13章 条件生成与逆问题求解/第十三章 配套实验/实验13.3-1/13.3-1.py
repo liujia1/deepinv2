@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 实验13.3-1：DPS的Tweedie闭环验证
-对应章节：13.3.2节 DPS深度剖析
 
 ★ 原创设计：DPS的Tweedie闭环验证
   DPS核心近似：p(x_0|x_t) ~ delta(x_0 - x_hat_{0|t})
@@ -69,7 +68,6 @@ np.random.seed(42)
 print("\n" + "=" * 60)
 print("实验13.3-1: DPS的Tweedie闭环验证")
 print("=" * 60)
-print("对应章节: 13.3.2节 DPS深度剖析")
 print("知识点: Tweedie等式, delta函数近似, 似然得分的Laplace近似")
 
 

@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 实验13.6-2：Diffusers img2img管线
-对应章节：13.6节 闭环：回到逆问题求解
 
 实验内容：
   - 使用Diffusers的StableDiffusionImg2ImgPipeline
@@ -63,7 +62,6 @@ except ImportError:
 print("\n" + "=" * 60)
 print("实验13.6-2: Diffusers img2img管线")
 print("=" * 60)
-print("对应章节: 13.6节 闭环：回到逆问题求解")
 print("知识点: img2img与逆问题求解的本质区别, 扩散模型统一框架")
 
 
@@ -80,7 +78,7 @@ print(f"\n使用设备: {device}")
 
 
 print("=" * 60)
-print("步骤1：img2img与逆问题求解器的对比（13.6节）")
+print("步骤1：img2img与逆问题求解器的对比")
 print("=" * 60)
 
 print("""

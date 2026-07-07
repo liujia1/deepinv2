@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 实验13.4-4：自定义img2img Pipeline
-对应章节：13.4.2节 Classifier-Free Guidance
 
 实验内容：
   - 自定义Stable Diffusion img2img管线
@@ -63,7 +62,6 @@ except ImportError:
 print("\n" + "=" * 60)
 print("实验13.4-4: 自定义img2img Pipeline")
 print("=" * 60)
-print("对应章节: 13.4.2节 Classifier-Free Guidance")
 print("知识点: img2img管线, CFG显式实现, uncond/cond拼接")
 
 

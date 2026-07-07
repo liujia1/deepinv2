@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 实验13.3-2：DPS图像去噪端到端
-对应章节：13.3.2节 DPS深度剖析
 
 实验内容：
   - 训练UNet扩散模型（MNIST, epsilon-prediction）
@@ -73,7 +72,6 @@ print(f'使用设备: {device}')
 print("\n" + "=" * 60)
 print("实验13.3-2: DPS图像去噪端到端")
 print("=" * 60)
-print("对应章节: 13.3.2节 DPS深度剖析")
 print("知识点: DPS算法流程, autograd自动Jacobian, 质量-多样性权衡")
 
 

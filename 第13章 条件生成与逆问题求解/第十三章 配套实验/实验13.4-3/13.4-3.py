@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 实验13.4-3：Diffusers库基础与CFG
-对应章节：13.4.2节 Classifier-Free Guidance
 
 实验内容：
   - Diffusers库基础（Pipeline/UNet/Scheduler架构）
@@ -65,12 +64,11 @@ except ImportError:
 print("\n" + "=" * 60)
 print("实验13.4-3: Diffusers库基础与CFG")
 print("=" * 60)
-print("对应章节: 13.4.2节 Classifier-Free Guidance")
 print("知识点: Diffusers库架构, CFG核心公式, 引导强度guidance_scale")
 
 
 print("""
-Diffusers库架构（13.4节）：
+Diffusers库架构：
   Pipeline (高层API)
     |
   Model (UNet2DConditionModel, VAE, CLIP) + Scheduler (PNDM)

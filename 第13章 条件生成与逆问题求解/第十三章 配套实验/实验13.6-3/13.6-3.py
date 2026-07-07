@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 实验13.6-3：img2img strength参数效应
-对应章节：13.6节 闭环：回到逆问题求解
 
 实验内容：
   - 使用同一初始图像 + 不同strength参数
@@ -63,7 +62,6 @@ except ImportError:
 print("\n" + "=" * 60)
 print("实验13.6-3: img2img strength参数效应")
 print("=" * 60)
-print("对应章节: 13.6节 闭环：回到逆问题求解")
 print("知识点: strength参数, 质量-多样性权衡的实践验证")
 
 
@@ -81,11 +79,11 @@ print(f"\n使用设备: {device}")
 
 
 print("=" * 60)
-print("步骤1：strength参数与质量-多样性权衡（13.6节）")
+print("步骤1：strength参数与质量-多样性权衡")
 print("=" * 60)
 
 print("""
-13.6节 strength参数含义:
+strength参数含义:
   strength in [0, 1]: 控制加噪程度
   strength=0:   几乎不加噪，输出几乎等于原图（多样性极低）
   strength=0.5: 中等加噪，保留中等结构信息

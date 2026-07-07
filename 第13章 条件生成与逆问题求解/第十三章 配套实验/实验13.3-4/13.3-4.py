@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 实验13.3-4：deepinv框架 DPS vs DiffPIR 对比
-对应章节：13.3.6节 四类方法对比与选择指南
 
 实验内容：
-  - deepinv扩散后验采样：图像去模糊（DPS，13.3.1/13.3.2节，DiffUNet/ADM + VE-SDE）
-  - DiffPIR 重建（13.3.4节 隐空间优化，DRUNet + DDPM）
+  - deepinv扩散后验采样：图像去模糊（DPS，DiffUNet/ADM + VE-SDE）
+  - DiffPIR 重建（隐空间优化，DRUNet + DDPM）
   - 两类算法在各自最优配置下的对比（deepinv 官方推荐用法）
 
 设计说明：
