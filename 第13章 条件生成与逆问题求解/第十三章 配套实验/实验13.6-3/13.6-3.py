@@ -64,7 +64,7 @@ print("\n" + "=" * 60)
 print("实验13.6-3: img2img strength参数效应")
 print("=" * 60)
 print("对应章节: 13.6节 闭环：回到逆问题求解")
-print("知识点: strength参数, 质量-多样性权衡的工程实现")
+print("知识点: strength参数, 质量-多样性权衡的实践验证")
 
 
 import torch

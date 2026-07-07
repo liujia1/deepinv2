@@ -173,7 +173,7 @@ print("""
    - y = 加噪后的潜空间表示
    - 文本prompt提供额外约束
 
-2. 统一框架的工程实现
+2. 统一框架的实践验证
    - StableDiffusionImg2ImgPipeline封装了CFG和加噪逻辑
    - strength参数控制加噪程度（与DPS的t_start等价）
    - guidance_scale对应CFG的s（与DPS的zeta类比）

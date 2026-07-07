@@ -401,7 +401,7 @@ print("=" * 60)
 if HAS_RUN and dps_psnr is not None:
     print(f"""
 关键结论:
-1. deepinv工程实现（13.3.6节 四类方法对比）
+1. deepinv库实现（13.3.6节 四类方法对比）
    - DPS使用DiffUNet/ADM UNet (FFHQ 256x256) + VE-SDE + DPSDataFidelity → 近似后验样本
    - DiffPIR使用DRUNet + DDPM + L2数据保真项 → MAP-like解
    - 本次DPS参数配置：weight=0.5, {clip_advice}

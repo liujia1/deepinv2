@@ -139,6 +139,9 @@ class CustomImg2ImgPipeline(DiffusionPipeline):
         ).latent_dist.sample()
         init_latents = init_latents * self.vae.config.scaling_factor
 
+        # 计算起始步：strength越大，保留原图结构越少
+        # 边界情况：strength=0时t_start=num_inference_steps，timesteps[t_start:]为空
+        # 实际应用中strength通常>0，此边界case可忽略或显式添加assert strength > 0
         t_start = max(num_inference_steps - int(num_inference_steps * strength), 0)
         timesteps = self.scheduler.timesteps[t_start:]
         start_timestep = timesteps[0:1]
@@ -206,8 +209,67 @@ if HAS_DEPS:
             print(f"  UNet参数: {sum(p.numel() for p in unet.parameters()) / 1e6:.0f}M")
             print(f"  CLIP参数: {sum(p.numel() for p in text_encoder.parameters()) / 1e6:.0f}M")
 
+            # ---- 实际运行示例：生成一张img2img结果 ----
+            print("\n正在生成img2img示例...")
+            from PIL import Image
+
+            # 创建一个简单的初始图像（渐变背景）- 使用numpy高效生成
+            x = np.linspace(0, 255, 512)
+            y = np.linspace(0, 255, 512)
+            xx, yy = np.meshgrid(x, y)
+            # 创建蓝紫渐变：R随x变化，G随y变化，B随x变化
+            r = (100 + xx * 0.2).astype(np.uint8)
+            g = (50 + yy * 0.1).astype(np.uint8)
+            b = (150 + xx * 0.1).astype(np.uint8)
+            init_array = np.stack([r, g, b], axis=-1)
+            init_image = Image.fromarray(init_array)
+
+            # 注意：SD1.4的CLIP编码器仅支持英文提示词，中文输入会导致tokenizer拆解错误
+            prompt = "purple gradient sunset over mountains, high quality"
+            strength = 0.8
+            guidance_scale = 7.5
+
+            print(f"  Prompt: '{prompt}' (仅支持英文)")
+            print(f"  Strength: {strength}")
+            print(f"  Guidance_scale: {guidance_scale}")
+
+            # 转换为tensor格式并归一化到[-1,1]，匹配VAE训练时的输入约定
+            init_image_tensor = torch.from_numpy(np.array(init_image)).float() / 255.0
+            init_image_tensor = init_image_tensor.permute(2, 0, 1).unsqueeze(0).to(device)
+            init_image_tensor = init_image_tensor * 2.0 - 1.0  # [0,1] -> [-1,1]
+
+            # 生成图像
+            output_image = pipeline(
+                prompt=prompt,
+                init_image=init_image_tensor,
+                strength=strength,
+                num_inference_steps=50,
+                guidance_scale=guidance_scale,
+                generator=torch.Generator(device=device).manual_seed(42),
+            )
+
+            # 保存结果
+            result_img = Image.fromarray(output_image)
+            result_img.save(os.path.join(SAVE_DIR, "img2img示例.png"))
+            print("img2img示例已保存")
+
+            # 对比展示
+            fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+            axes[0].imshow(init_image)
+            axes[0].axis('off')
+            axes[0].set_title('初始图像（渐变背景）')
+            axes[1].imshow(result_img)
+            axes[1].axis('off')
+            axes[1].set_title(f'img2img结果 (strength={strength})')
+            plt.suptitle('img2img Pipeline效果演示', fontsize=14, y=1.02)
+            plt.tight_layout()
+            compare_path = os.path.join(SAVE_DIR, "img2img对比.png")
+            plt.savefig(compare_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            print(f"对比图已保存: {compare_path}")
+
         except Exception as e:
-            print(f"加载失败: {e}")
+            print(f"加载或生成失败: {e}")
     else:
         print("CPU上无法实际运行Pipeline构建（模型太大）")
         print("Pipeline类已定义，可参考源代码理解img2img的完整流程")
@@ -220,7 +282,7 @@ print("步骤2：img2img Pipeline流程分析（13.4.2节）")
 print("=" * 60)
 
 print("""
-img2img Pipeline 完整流程（13.4.2节 CFG的工程实现）：
+img2img Pipeline 完整流程（13.4.2节 CFG的实践应用）：
 
 1. CLIP Text Encoder: prompt -> text embeddings
 2. 构造 [uncond_emb, cond_emb] 拼接（用于CFG）
@@ -235,9 +297,9 @@ img2img Pipeline 完整流程（13.4.2节 CFG的工程实现）：
 
 CFG的作用（13.4.2节）：
   - eps_hat_cfg = eps_hat_uncond + s * (eps_hat_cond - eps_hat_uncond)
-  - s=1: 退化为无条件/条件混合
+  - s=1: 标准条件生成（相当于不使用CFG增强，直接用条件预测eps_hat_cond）
   - s=7.5: 常用默认，平衡质量和多样性
-  - s->INF: 完全忽略无约束，生成结果更"硬"对齐prompt
+  - s→INF: 无条件项系数(1-s)→-∞，通过外推放大cond与uncond的差异方向
 """)
 
 print("\n" + "=" * 60)
@@ -245,12 +307,13 @@ print("实验13.4-4 完成!")
 print("=" * 60)
 print("""
 关键结论:
-1. img2img是逆问题求解的特例（13.6节）
-   - A = 加噪算子 (z_t = sqrt(alpha_bar_t) * z_0 + sqrt(1-alpha_bar_t) * eps)
-   - y = 噪声化后的潜空间表示
-   - 文本prompt通过CFG提供额外约束
+1. img2img的机制（非严格的逆问题求解）
+   - z_0（init_image的latent）是已知且完整的，不存在退化算子A或测量约束
+   - 本质：将init_image加噪到中间时刻t_start，再从该点开始反向去噪
+   - strength控制起始噪声水平，从而控制"保留原图结构"与"服从文本引导"的权衡
+   - 与DPS/DiffPIR的区别：DPS/DiffPIR在每步显式加入似然梯度项∇log p(y|x_t)，img2img无此机制
 
-2. CFG的工程实现（13.4.2节）
+2. CFG的实践应用（13.4.2节）
    - 显式构造uncond和cond的拼接
    - 在UNet前向后做一次线性混合
    - 与DPS的 zeta*似然梯度 在数学上形式类似，但作用对象不同

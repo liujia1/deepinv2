@@ -22,15 +22,18 @@ import matplotlib.pyplot as plt
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
 
-# 静默matplotlib相关警告
+# 静默matplotlib和diffusers相关警告
 import logging
 import warnings
 logging.getLogger('matplotlib').setLevel(logging.ERROR)
 logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
+logging.getLogger('diffusers').setLevel(logging.ERROR)  # 过滤Flax弃用警告
+logging.getLogger('huggingface_hub').setLevel(logging.ERROR)  # 过滤未认证请求警告
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*U\\+2212.*")
 warnings.filterwarnings("ignore", message=".*glyph.*")
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", message=".*safety_checker.*")  # 过滤安全检查器禁用警告
 
 # ====== 中文字体配置(兼容本地和Google Colab) ======
 _gdrive = '/content/drive/MyDrive'
@@ -70,11 +73,11 @@ print("""
 Diffusers库架构（13.4节）：
   Pipeline (高层API)
     |
-  Model (UNet2DConditionModel, VAE, CLIP) + Scheduler (DDIM, PNDM)
+  Model (UNet2DConditionModel, VAE, CLIP) + Scheduler (PNDM)
 
 主要组件：
   - UNet2DConditionModel: 预测噪声残差 eps_hat_theta(x_t, t, c)
-  - DDIMScheduler/PNDMScheduler: 控制去噪步
+  - Scheduler: 控制去噪步（默认PNDM）
   - VAE (AutoencoderKL): 潜空间编码/解码
   - CLIP Text Encoder: 文本 -> 嵌入向量
 """)
@@ -83,7 +86,6 @@ import torch
 try:
     from diffusers import (
         StableDiffusionPipeline,
-        DDIMScheduler,
         UNet2DConditionModel,
     )
     HAS_DIFFUSERS = True
@@ -107,7 +109,10 @@ if HAS_DIFFUSERS and device == "cuda":
 
         prompt = "a cat wearing sunglasses, high quality"
         print(f"\n生成图像: '{prompt}'")
-        image = pipe(prompt, num_inference_steps=25).images[0]
+        image = pipe(prompt,
+                     num_inference_steps=25,
+                     generator=torch.Generator(device=device).manual_seed(42)
+                     ).images[0]
         image.save(os.path.join(SAVE_DIR, "文生图示例.png"))
         print("文本到图像结果已保存")
 
@@ -147,10 +152,14 @@ else:
   eps_hat_cfg = eps_hat_uncond + s * (eps_hat_cond - eps_hat_uncond)
   其中 s = guidance_scale
 
-  s=1:  无条件生成（cond和uncond混合）
-  s>1:  强引导（更接近文本描述，但多样性下降）
-  s=7.5: 常用默认值
-  s->INF: 完全忽略无条件分布，类似"硬约束"
+  s=0:   纯无条件生成（仅用eps_hat_uncond）
+  s=1:   标准条件生成（相当于不使用CFG增强，直接用条件预测eps_hat_cond）
+  s∈(1,~5):   温和引导（轻微增强条件性）
+  s∈(~5,~15): 常用/较强引导（7.5为经典默认值）
+  s过大(>15-20): 过度饱和、多样性显著下降
+  s→INF: 无条件项系数(1-s)→-∞，通过外推放大cond与uncond的差异方向
+
+  注：diffusers内部当guidance_scale ≤ 1.0时跳过uncond分支计算，等价于纯条件生成
 """)
 
 print("\n" + "=" * 60)
@@ -166,7 +175,11 @@ print("""
 
 2. CFG（13.4.2节）
    - eps_hat_cfg = eps_hat_uncond + s * (eps_hat_cond - eps_hat_uncond)
-   - s控制cond和uncond的混合比例
-   - s=1：无引导；s=7.5：常用默认；s>10：强引导
+   - s控制cond和uncond的混合比例：
+     * s=0：纯无条件生成
+     * s=1：标准条件生成（无CFG增强）
+     * s∈(1,~5)：温和引导
+     * s∈(~5,~15)：常用/较强引导（7.5为经典默认）
+     * s>15：过度饱和
    - 与13.4.3节的zeta类比：s对应条件生成的引导强度
 """)
