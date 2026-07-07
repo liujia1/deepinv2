@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-实验13.6-3：img2img strength参数效应
+实验13.6-2：Diffusers img2img管线
 
 实验内容：
-  - 使用同一初始图像 + 不同strength参数
-  - 演示图文一致性与多样性的权衡
-  - strength与DPS的zeta、CFG的s的类比
+  - 使用Diffusers的StableDiffusionImg2ImgPipeline
+  - img2img与逆问题求解的本质区别：z_0已知完整 vs y有信息损失
+  - 扩散模型引入外部信息的多种方式：初始化位置、似然梯度、CFG
 
 注意：本实验需要GPU和预训练模型下载。
 """
@@ -41,7 +41,7 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    SAVE_DIR = os.path.join(_gdrive, '实验13.6-3')
+    SAVE_DIR = os.path.join(_gdrive, '实验13.6-2')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
     try:
@@ -60,49 +60,43 @@ except ImportError:
 # ========================================================
 
 print("\n" + "=" * 60)
-print("实验13.6-3: img2img strength参数效应")
+print("实验13.6-2: Diffusers img2img管线")
 print("=" * 60)
-print("知识点: strength参数, 质量-多样性权衡的实践验证")
+print("知识点: img2img与逆问题求解的本质区别, 扩散模型统一框架")
 
 
 import torch
 try:
     from diffusers import StableDiffusionImg2ImgPipeline
-    from PIL import Image
-    HAS_DEPS = True
+    HAS_DIFFUSERS = True
 except ImportError:
-    HAS_DEPS = False
-    print("diffusers/PIL库未安装，请先安装")
+    HAS_DIFFUSERS = False
+    print("diffusers库未安装，请先安装: pip install diffusers transformers accelerate")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"\n使用设备: {device}")
 
 
 print("=" * 60)
-print("步骤1：strength参数与质量-多样性权衡")
+print("步骤1：img2img与逆问题求解器的对比")
 print("=" * 60)
 
 print("""
-strength参数含义:
-  strength in [0, 1]: 控制加噪程度
-  strength=0:   几乎不加噪，输出几乎等于原图（多样性极低）
-  strength=0.5: 中等加噪，保留中等结构信息
-  strength=1.0: 满噪声，相当于text-to-image（图文一致性强，多样性高）
+img2img与真正逆问题求解器（DPS/DiffPIR）的对比（而非"img2img是逆问题的特例"）：
+  - DPS/DiffPIR: 存在真实的退化y=A(x)+n，A有信息损失，需要用似然梯度∇log p(y|x_t)引导采样以恢复x
+  - img2img: z_0已知且完整，无信息损失，"加噪"只是选择一个中间噪声水平作为采样起点，
+    不涉及似然约束，本质是用strength参数在"忠于原图"与"服从文本"之间做插值
+  - 两者共享的框架元素：都利用同一个预训练扩散模型的先验，只是"引入外部信息"的方式不同
+    （img2img通过初始化位置，DPS/DiffPIR通过每步的似然梯度修正）
 
-与DPS的zeta参数类比（图像一致性维度）:
-  strength(小) <-> zeta(大): 都倾向于强图像一致性、低多样性
-  strength(大) <-> zeta(小): 都倾向于弱图像一致性、高多样性
-  （注：这里的"一致性"指与初始/观测图像的接近程度）
-
-与CFG的guidance_scale参数类比（独立的文本一致性维度）:
-  guidance_scale(大): 更贴合文本prompt描述，但与"像不像原图"无直接关系
-  guidance_scale(小): 更接近无条件生成的自然多样性
-
-注意：strength和zeta控制图像层面的观测一致性，而guidance_scale控制文本语义一致性，
-      两者是独立的维度，不应混为一谈。
+CFG与DPS对比的进一步说明：
+  - CFG: 两次模型输出的线性插值/外推（同一UNet对同一x_t的不同条件预测）
+  - DPS: 在score预测基础上加一个来自似然函数梯度的修正项（梯度来自观测约束）
+  - 共同点：都是在原始预测基础上叠加一个加权修正项
+  - 本质差异：修正项来源不同（CFG来自同一模型的条件差异，DPS来自外部似然约束）
 """)
 
-if HAS_DEPS and device == "cuda":
+if HAS_DIFFUSERS and device == "cuda":
     try:
         pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
             "runwayml/stable-diffusion-v1-5",
@@ -113,6 +107,7 @@ if HAS_DEPS and device == "cuda":
 
         init_image_pil = None
         try:
+            from PIL import Image
             import urllib.request
             url = "https://raw.githubusercontent.com/CompVis/stable-diffusion/main/assets/stable-samples/img2img/sketch-mountains-input.jpg"
             urllib.request.urlretrieve(url, os.path.join(SAVE_DIR, "init_image.jpg"))
@@ -122,64 +117,65 @@ if HAS_DEPS and device == "cuda":
             print(f"无法下载初始图像: {e}")
 
         if init_image_pil is not None:
-            strengths = [0.1, 0.3, 0.5, 0.75, 0.95]
-            prompt = "a beautiful sunset over mountains, oil painting style"
+            prompts = [
+                "a beautiful landscape painting of mountains, oil painting style",
+                "a photorealistic photo of mountains, sunny day",
+                "a sketch of mountains with pencil",
+            ]
+            fig, axes = plt.subplots(1, len(prompts), figsize=(15, 5))
 
-            fig, axes = plt.subplots(1, len(strengths) + 1, figsize=(18, 4))
-            axes[0].imshow(init_image_pil)
-            axes[0].set_title('原图', fontsize=12)
-            axes[0].axis('off')
-
-            for idx, strength in enumerate(strengths):
+            for idx, prompt in enumerate(prompts):
                 img = pipe(
                     prompt=prompt,
                     image=init_image_pil,
-                    strength=strength,
+                    strength=0.75,
                     guidance_scale=7.5,
-                    generator=torch.Generator(device=device).manual_seed(42),
                 ).images[0]
-                axes[idx + 1].imshow(img)
-                axes[idx + 1].axis('off')
-                axes[idx + 1].set_title(f'strength={strength}', fontsize=12)
+                axes[idx].imshow(img)
+                axes[idx].axis('off')
+                axes[idx].set_title(prompt[:30] + "..." if len(prompt) > 30 else prompt,
+                                    fontsize=10)
 
-            plt.suptitle(f'strength参数效应：图文一致性与多样性的权衡（13.6节）\nprompt: "{prompt}"',
-                         fontsize=13, y=1.05)
+            plt.suptitle('img2img与文本引导生成对比（13.6节）', fontsize=13, y=1.02)
             plt.tight_layout()
-            strength_path = os.path.join(SAVE_DIR, "strength参数效应.png")
-            plt.savefig(strength_path, dpi=150, bbox_inches='tight')
+            img2img_path = os.path.join(SAVE_DIR, "img2img闭环对比.png")
+            plt.savefig(img2img_path, dpi=150, bbox_inches='tight')
             plt.close()
-            print(f"strength参数对比图已保存: {strength_path}")
+            print(f"img2img对比图已保存: {img2img_path}")
     except Exception as e:
         print(f"执行出错: {e}")
+        print("可能原因：GPU内存不足、网络无法下载模型等")
 else:
     print("跳过实际运行（需要GPU + Diffusers）")
-    print("以下是strength参数的理论说明：")
+    print("以下是img2img与逆问题求解器的对比理论说明：")
     print("""
-strength参数效应（13.6节）:
-  strength=0.1: 几乎保留原图，多样性低
-  strength=0.5: 平衡点
-  strength=0.95: 几乎重新生成，多样性高
+img2img与逆问题求解器的对比（13.6节）：
 
-  对应DPS的t_start:
-    DPS的t_start = int(strength * T)
-    t_start大 -> 起始噪声大 -> 多样性高、一致性低
+通用逆问题形式: y = A(x) + n, 已知y和A, 求x
+  - DPS/DiffPIR: A=真实退化算子（模糊、下采样等），y=观测数据，存在信息损失
+  - img2img: z_0已知且完整，无真实退化，"加噪"是主动选择而非被动测量
+  - 本质区别：逆问题求解是从残缺观测恢复真值，img2img是从已知起点重新生成
+
+扩散模型框架的统一视角:
+  1. 预训练扩散模型提供强大的图像先验（无条件采样能力）
+  2. 引入外部信息的不同方式：
+     - img2img: 通过初始化位置（strength参数）在"忠于原图"与"自由生成"间插值
+     - DPS/DiffPIR: 通过每步似然梯度修正，将采样拉向满足观测约束的区域
+     - CFG: 通过条件与无条件输出的差异放大文本引导
+  3. 这些技术可组合使用（如img2img+CFG）
 """)
 
 print("\n" + "=" * 60)
-print("实验13.6-3 完成!")
+print("实验13.6-2 完成!")
 print("=" * 60)
 print("""
 关键结论:
-1. strength参数（13.6节）
-   - 控制加噪程度，对应DPS的t_start
-   - strength大 -> 多样性高、图文一致性低
-   - strength小 -> 多样性低、保留原图
+1. img2img与逆问题求解的本质区别（13.6节）
+   - img2img: z_0已知且完整，无真实退化，strength参数控制"忠于原图"程度
+   - 逆问题求解: y=A(x)+n中y有信息损失，需似然梯度引导恢复x
 
-2. 统一的质量-多样性权衡框架
-   - DPS: zeta控制似然修正强度（约束对象：观测图像y）
-   - CFG: s控制条件/无条件混合（约束对象：文本prompt）
-   - img2img: strength控制加噪程度（约束对象：初始图像）
-   - 三者本质上都是"先验强度 vs 条件强度"的tradeoff
-   - 但需注意：zeta和strength约束的是图像层面的观测一致性，
-     而CFG约束的是文本语义一致性，两者是独立的维度
+2. 扩散模型统一框架的启示
+   - 预训练扩散模型提供强大先验，可通过不同方式引入外部信息
+   - StableDiffusionImg2ImgPipeline封装了初始化位置+CFG的组合
+   - 这些技术可相互组合（如img2img+CFG），实现更灵活的生成控制
 """)

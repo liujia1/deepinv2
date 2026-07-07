@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-实验13.4-2：引导权重zeta对PSNR的影响
+实验13.4-1：引导权重ζ权衡曲线
 
-★ 原创设计：固定测试图像，用不同zeta执行DPS去噪，对比PSNR和视觉效果
+★ 原创设计：固定随机种子，用不同zeta执行后验采样，
+  对比采样分布的均值（->数据一致性）和方差（->多样性）
 
 实验内容：
-  - 训练UNet扩散模型（MNIST, epsilon-prediction）
-  - 用不同zeta值执行DPS去噪
-  - 绘制zeta-PSNR曲线
+  - 不同zeta值下的后验采样分布
+  - zeta-数据一致性 / zeta-多样性权衡曲线
+  - 与第2-3章正则化参数lambda的类比
 
-注意：本实验训练50轮DDPM并执行多次DPS采样。
+本实验不需要GPU，通过1D解析情形研究zeta效应。
 """
 
 import sys
@@ -43,7 +44,7 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    SAVE_DIR = os.path.join(_gdrive, '实验13.4-2')
+    SAVE_DIR = os.path.join(_gdrive, '实验13.4-1')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
     try:
@@ -62,439 +63,314 @@ except ImportError:
 # ========================================================
 
 np.random.seed(42)
-import torch
-torch.manual_seed(42)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(42)
-from tqdm.auto import tqdm
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f'使用设备: {device}')
 
 print("\n" + "=" * 60)
-print("实验13.4-2: 引导权重zeta对PSNR的影响")
+print("实验13.4-1: 引导权重zeta权衡曲线")
 print("=" * 60)
-print("知识点: 引导权重zeta, PSNR倒U形曲线, 实际权重选择")
+print("知识点: 引导权重zeta, 质量-多样性权衡, Tweedie一致性")
 
 
 # ============================================================
-# 噪声调度
+# 1D高斯混合先验 + VP-SDE框架
 # ============================================================
-T = 1000  # 标准DDPM时间步
-beta_min, beta_max = 1e-4, 0.02
-betas = torch.linspace(beta_min, beta_max, T).to(device)
-alphas = 1.0 - betas
-alpha_bars = torch.cumprod(alphas, dim=0)
-alpha_bars_prev = torch.cat([torch.ones(1, device=device), alpha_bars[:-1]])
-sqrt_alpha_bars = torch.sqrt(alpha_bars)
-sqrt_one_minus_alpha_bars = torch.sqrt(1 - alpha_bars)
-posterior_var = betas * (1 - alpha_bars_prev) / (1 - alpha_bars)
-sqrt_recip_alphas = 1.0 / torch.sqrt(alphas)
-beta_over_sqrt_1m_ab = betas / sqrt_one_minus_alpha_bars
+GM_WEIGHTS = [0.3, 0.7]
+GM_MEANS = [-2.0, 1.0]
+GM_STDS = [1.0, 1.0]
+
+BETA_MIN, BETA_MAX = 0.1, 20.0
+
+def gm1d_pdf(x):
+    pdf = np.zeros_like(x)
+    for w, m, s in zip(GM_WEIGHTS, GM_MEANS, GM_STDS):
+        pdf += w * np.exp(-0.5 * ((x - m) / s)**2) / (s * np.sqrt(2 * np.pi))
+    return pdf
+
+def vp_marginal(t):
+    log_mean = -0.25 * t**2 * (BETA_MAX - BETA_MIN) - 0.5 * t * BETA_MIN
+    mean_t = np.exp(log_mean)
+    std_t = np.sqrt(1 - np.exp(2 * log_mean))
+    return mean_t, std_t
+
+def vp_beta(t):
+    return BETA_MIN + t * (BETA_MAX - BETA_MIN)
+
+def vp_score_analytic(x, t):
+    mean_t, std_t = vp_marginal(t)
+    pdf = np.zeros_like(x)
+    dpdf = np.zeros_like(x)
+    for w, m, s in zip(GM_WEIGHTS, GM_MEANS, GM_STDS):
+        new_mean = mean_t * m
+        new_std = np.sqrt(mean_t**2 * s**2 + std_t**2)
+        pdf += w * np.exp(-0.5 * ((x - new_mean) / new_std)**2) / (new_std * np.sqrt(2 * np.pi))
+        dpdf += w * (-(x - new_mean) / new_std**2) * np.exp(-0.5 * ((x - new_mean) / new_std)**2) / (new_std * np.sqrt(2 * np.pi))
+    return dpdf / (pdf + 1e-30)
 
 
-def q_sample(x_0, t, noise=None):
-    if noise is None:
-        noise = torch.randn_like(x_0)
-    return (
-        sqrt_alpha_bars[t][:, None, None, None] * x_0 +
-        sqrt_one_minus_alpha_bars[t][:, None, None, None] * noise
-    )
-
-
-# ============================================================
-# 去噪网络: 小型UNet
-# ============================================================
-import torch.nn as nn
-import torch.nn.functional as F
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
-
-
-class SinusoidalTimeEmbedding(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.dim = dim
-
-    def forward(self, t):
-        half_dim = self.dim // 2
-        emb = np.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, device=t.device, dtype=torch.float32) * -emb)
-        emb = t[:, None].float() * emb[None, :]
-        return torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
-
-
-class ConvBlock(nn.Module):
-    def __init__(self, in_ch, out_ch, time_dim):
-        super().__init__()
-        gn_groups = min(4, out_ch)
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(in_ch, out_ch, 3, padding=1),
-            nn.GroupNorm(gn_groups, out_ch),
-            nn.SiLU(),
-        )
-        self.time_proj = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(time_dim, out_ch),
-        )
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(out_ch, out_ch, 3, padding=1),
-            nn.GroupNorm(gn_groups, out_ch),
-            nn.SiLU(),
-        )
-        self.shortcut = nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else nn.Identity()
-
-    def forward(self, x, t_emb):
-        h = self.conv1(x)
-        h = h + self.time_proj(t_emb)[:, :, None, None]
-        h = self.conv2(h)
-        return h + self.shortcut(x)
-
-
-class SmallUNet(nn.Module):
-    def __init__(self, time_dim=64):
-        super().__init__()
-        ch = [1, 16, 32, 64]
-        self.time_mlp = nn.Sequential(
-            SinusoidalTimeEmbedding(time_dim),
-            nn.Linear(time_dim, time_dim),
-            nn.SiLU(),
-        )
-        self.down1 = ConvBlock(ch[0], ch[1], time_dim)
-        self.down2 = ConvBlock(ch[1], ch[2], time_dim)
-        self.down3 = ConvBlock(ch[2], ch[3], time_dim)
-        self.bottleneck = ConvBlock(ch[3], ch[3], time_dim)
-        self.up3 = ConvBlock(ch[3] + ch[2], ch[2], time_dim)
-        self.up2 = ConvBlock(ch[2] + ch[1], ch[1], time_dim)
-        self.up1 = ConvBlock(ch[1] + ch[0], ch[0], time_dim)
-        self.out_conv = nn.Conv2d(ch[0], 1, 1)
-        self.pool = nn.MaxPool2d(2)
-
-    def forward(self, x_t, t):
-        t_emb = self.time_mlp(t)
-        h1 = self.down1(x_t, t_emb)
-        h2 = self.down2(self.pool(h1), t_emb)
-        h3 = self.down3(self.pool(h2), t_emb)
-        h = self.bottleneck(h3, t_emb)
-        h = F.interpolate(h, size=(14, 14), mode='nearest')
-        h = self.up3(torch.cat([h, h2], dim=1), t_emb)
-        h = F.interpolate(h, size=(28, 28), mode='nearest')
-        h = self.up2(torch.cat([h, h1], dim=1), t_emb)
-        h = self.up1(torch.cat([h, x_t], dim=1), t_emb)
-        return self.out_conv(h)
-
-
-# ============================================================
-# DPS采样算法
-# ============================================================
-def dps_sample(model, y, forward_op, shape, zeta=1.0, seed=None):
+def analytic_posterior_gm_gaussian(y_obs, A, sigma_y, gm_weights, gm_means, gm_stds):
+    """解析计算GM先验+高斯似然的共轭后验。
+    
+    对于高斯混合先验 p(x) = Σ_k w_k * N(x; μ_k, σ_k²) 和高斯似然
+    p(y|x) = N(y; Ax, σ_y²)，后验仍然是高斯混合：
+    
+    p(x|y) = Σ_k [w_k' * N(x; μ_k|y, σ_k|y²)]
+    
+    其中：
+      - μ_k|y = (σ_y² * μ_k + σ_k² * y/A) / (σ_y² + σ_k²)  （假设A=1）
+      - σ_k|y² = σ_y² * σ_k² / (σ_y² + σ_k²)
+      - w_k' = w_k * N(y; Aμ_k, σ_y² + σ_k²) / p(y)
+    
+    返回：后验均值、后验标准差、后验pdf函数
     """
-    DPS 采样。
-    注: 本实现对似然梯度做单位范数归一化, 只取其方向, 残差强度统一由
-        外部超参 zeta 控制, 不依赖 sigma_y. 故函数签名中未保留 sigma_y.
-        这与 Chung et al. (2022) 原论文"步长∝1/‖y-Ax̂₀‖"的自适应方案不同,
-        故本实验中 zeta=1 仅代表本实验定义下的"标准强度", 而非论文原版公式.
+    # 后验各分量的参数
+    post_weights = []
+    post_means = []
+    post_stds = []
+    
+    # 计算各分量的权重（需要归一化）
+    log_weights_unnorm = []
+    for w, m, s in zip(gm_weights, gm_means, gm_stds):
+        # 后验均值和方差（假设A=1的线性情形）
+        post_mean = (sigma_y**2 * m + s**2 * y_obs) / (sigma_y**2 + s**2)
+        post_std = sigma_y * s / np.sqrt(sigma_y**2 + s**2)
+        post_means.append(post_mean)
+        post_stds.append(post_std)
+        
+        # 边缘似然 p(y|μ_k) = N(y; μ_k, σ_y² + σ_k²)
+        marginal_var = sigma_y**2 + s**2
+        log_marginal = -0.5 * ((y_obs - m)**2 / marginal_var) - 0.5 * np.log(2 * np.pi * marginal_var)
+        log_weights_unnorm.append(np.log(w) + log_marginal)
+    
+    # 归一化权重（避免数值溢出）
+    max_log = max(log_weights_unnorm)
+    weights_unnorm = [np.exp(lw - max_log) for lw in log_weights_unnorm]
+    total = sum(weights_unnorm)
+    post_weights = [wu / total for wu in weights_unnorm]
+    
+    # 后验均值 = Σ_k w_k' * μ_k|y
+    posterior_mean = sum(w * m for w, m in zip(post_weights, post_means))
+    
+    # 后验方差 = Σ_k w_k' * (σ_k|y² + μ_k|y²) - posterior_mean²
+    posterior_var = sum(w * (s**2 + m**2) for w, s, m in zip(post_weights, post_stds, post_means)) - posterior_mean**2
+    posterior_std = np.sqrt(posterior_var)
+    
+    # 后验pdf函数
+    def posterior_pdf(x):
+        pdf = np.zeros_like(x)
+        for w, m, s in zip(post_weights, post_means, post_stds):
+            pdf += w * np.exp(-0.5 * ((x - m) / s)**2) / (s * np.sqrt(2 * np.pi))
+        return pdf
+    
+    return posterior_mean, posterior_std, posterior_pdf, post_weights, post_means, post_stds
 
-    修正 eps 的符号推导:
-      Chung 原代码: x_{t-1} -= scale · g_chung, 其中
-        g_chung = ∂‖y-Ax̂₀‖/∂x_t = -(1/√ᾱ)·A^T r / ‖r‖, r=y-Ax̂₀
-      等价转换到 "通过 eps 改 mean" 形式, 对 g_loss=∂‖y-Ax̂₀‖²/∂x_t
-        应当使用 + 号: eps_pred + ζ·√(1-ᾱ)·g_loss
-      (其中 g_loss 方向同 g_chung, 即 x_t 增大→loss 减小, 与 Chung 一致)
-      之前实现误用 - 号, 导致 ζ 越大 x_hat 离真值越远, 与 Chung 方向相反.
 
-    seed: 若不为 None, 在采样开始前固定随机种子, 使不同 zeta 共享同一条
-          反向过程噪声路径(公共随机数 CRN), 排除采样随机性对 zeta-PSNR
-          曲线形状的干扰(与 13.4-1 做法一致)
+def dps_posterior_sample(y_obs, A, sigma_y, zeta, N_particles=5000, N_steps=300, T=1.0, seed=42):
+    """VP-SDE后验采样（DPS近似），可调引导权重zeta
+
+    注意：likelihood_grad 公式中的 mean_t 缩放因子不是简单的链式法则 1/mean_t，
+    而是 mean_t 本身。直觉上可能认为 dx0_hat/dx_t ≈ 1/mean_t（将 prior_score 视为常数，
+    只考虑 x0_hat = (x + std_t² * prior_score) / mean_t 对 x 的显式依赖），但这种
+    "朴素链式法则"忽略了 score 本身对 x_t 的强依赖。
+
+    数值验证（t=0.9时，本实验的双峰GM先验）：
+      - 真实 dx0_hat/dx_t（有限差分） ≈ 0.049
+      - mean_t ≈ 0.017，二者量级一致
+      - 1/mean_t ≈ 58.8，差三个数量级
+    严格推导：x0_hat = (x_t + std_t² · score(x_t)) / mean_t。
+      - 对单峰高斯先验，score 是 x_t 的线性函数，链式法则精确给出
+        dx0_hat/dx_t = mean_t，公式完全成立；
+      - 对本实验的双峰GM先验，score 还包含"responsibility 权重随 x_t 变化"
+        的非线性项，单分量公式不再精确，实际比值约为 0.049 / 0.017 ≈ 2.9。
+    因此结论需保守表述：用 mean_t 作缩放在量级方向上正确（比 1/mean_t
+    合理得多），但对 GM 先验仅有量级一致，会带来约 3 倍的近似误差——
+    这可能是均值偏差随 ζ 呈非单调的部分来源（见结论段）。
     """
-    model.eval()
-    if seed is not None:
-        torch.manual_seed(seed)
-    x = torch.randn(shape, device=device)
-    for t_idx in reversed(range(T)):
-        t = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
-        sqrt_ab_t = sqrt_alpha_bars[t_idx]
-        sqrt_1mab_t = sqrt_one_minus_alpha_bars[t_idx]
-        # 单次前向传播: 带 grad 的输出同时用于 x0_hat 估计与噪声预测
-        x = x.detach().requires_grad_(True)
-        eps_pred = model(x, t)
-        x0_hat = (x - sqrt_1mab_t * eps_pred) / sqrt_ab_t
-        Ax0_hat = forward_op(x0_hat)
-        likelihood_loss = torch.sum((y - Ax0_hat) ** 2)
-        likelihood_grad = torch.autograd.grad(likelihood_loss, x)[0]
-        grad_norm = likelihood_grad.norm()
-        if grad_norm > 1e-8:
-            likelihood_grad = likelihood_grad / grad_norm
-        with torch.no_grad():
-            # 关键: 这里是 + 号, 与 Chung 原论文方向一致
-            eps_corrected = eps_pred.detach() + zeta * sqrt_1mab_t * likelihood_grad
-            model_mean = sqrt_recip_alphas[t_idx] * (
-                x - beta_over_sqrt_1m_ab[t_idx] * eps_corrected
-            )
-            if t_idx == 0:
-                x = model_mean
-            else:
-                noise = torch.randn_like(x)
-                x = model_mean + torch.sqrt(posterior_var[t_idx]) * noise
-    return x.clamp(-1, 1)
-
-
-class IdentityOperator:
-    def __call__(self, x):
-        return x
+    np.random.seed(seed)
+    h = T / N_steps
+    x = np.random.randn(N_particles)
+    for i in range(N_steps):
+        t = T - i * h
+        beta_t = vp_beta(t)
+        mean_t, std_t = vp_marginal(t)
+        prior_score = vp_score_analytic(x, t)
+        # 数值稳定性保护：mean_t 在 t→T（1.0）时最小（本配置下约 0.0066），
+        # 在 t→0 时最大（接近 1）。clip 在 1e-6 仅在 T 取得极端大值时才会触发，
+        # 当前 BETA_MAX=20.0 配置下最小值 0.0066 离阈值还有三个数量级，
+        # 故此 clip 在本实验中实际未激活，但保留以防参数极端化时除零
+        mean_t_safe = max(mean_t, 1e-6)
+        x0_hat = (x + std_t**2 * prior_score) / mean_t_safe
+        # 似然梯度：∇_x_t log p(y|x_t) ≈ mean_t * (y - A * x0_hat) / σ_y²
+        # （不是 1/mean_t，详见函数文档字符串）
+        likelihood_grad = mean_t * (y_obs - A * x0_hat) / sigma_y**2
+        posterior_score = prior_score + zeta * likelihood_grad
+        x = x + beta_t * h * (0.5 * x + posterior_score) + np.sqrt(beta_t * h) * np.random.randn(N_particles)
+    return x
 
 
 # ============================================================
-# 训练函数（含checkpoint resume）
+# 步骤1：引导权重zeta与质量-多样性权衡
 # ============================================================
-def train_model(checkpoint_path, num_epochs=50):
-    model = SmallUNet().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
-
-    start_epoch = 0
-    is_final = False
-
-    # 噪声调度超参指纹, 用于加载 checkpoint 时一致性校验
-    # (模型架构不变但 T/beta 范围变化时, 旧 checkpoint 会被静默接受,
-    # 引发训练-采样不一致, 这里存一份指纹以便在加载时拦截)
-    schedule_fingerprint = {'T': T, 'beta_min': beta_min, 'beta_max': beta_max}
-
-    if os.path.exists(checkpoint_path):
-        print(f"\n检测到已保存的模型: {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-        saved_fp = checkpoint.get('schedule_fingerprint', None)
-        fp_mismatch = (saved_fp is not None) and (saved_fp != schedule_fingerprint)
-        if fp_mismatch:
-            print(f"警告: checkpoint的噪声调度与当前脚本不一致, 删除后重新训练")
-            print(f"  checkpoint: T={saved_fp['T']}, beta=[{saved_fp['beta_min']:.1e}, {saved_fp['beta_max']:.4f}]")
-            print(f"  当前脚本:  T={schedule_fingerprint['T']}, beta=[{schedule_fingerprint['beta_min']:.1e}, {schedule_fingerprint['beta_max']:.4f}]")
-            os.remove(checkpoint_path)
-        else:
-            if saved_fp is None:
-                print(f"  提示: checkpoint未包含噪声调度指纹(旧版), 仅按架构加载")
-            if checkpoint.get('is_final', False):
-                print(f"已检测到最终训练完成的模型, 直接加载, 跳过训练过程")
-                print(f"  训练轮数: {checkpoint['epoch']+1}")
-                print(f"  最终损失: {checkpoint['loss']:.6f}")
-                try:
-                    model.load_state_dict(checkpoint['model_state_dict'])
-                    is_final = True
-                except RuntimeError as e:
-                    print(f"警告: checkpoint与当前模型架构不兼容, 删除后重新训练")
-                    os.remove(checkpoint_path)
-                    is_final = False
-            else:
-                try:
-                    model.load_state_dict(checkpoint['model_state_dict'])
-                    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                    start_epoch = checkpoint['epoch'] + 1
-                    print(f"检测到未完成的训练, 从第 {start_epoch+1} 轮继续")
-                except RuntimeError as e:
-                    print(f"警告: checkpoint与当前模型架构不兼容, 删除后重新训练")
-                    os.remove(checkpoint_path)
-                    start_epoch = 0
-
-    if not is_final:
-        if start_epoch >= num_epochs:
-            print(f"  注意: start_epoch({start_epoch}) >= num_epochs({num_epochs}), 无需继续训练")
-            is_final = True
-        else:
-            print(f"\n开始训练 epsilon-prediction DDPM (T={T}, epochs={num_epochs})...")
-            print("-" * 75)
-            for epoch in range(start_epoch, num_epochs):
-                model.train()
-                total_loss = 0
-                pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}", ascii=True, leave=False)
-                for x, _ in pbar:
-                    x = x.to(device)
-                    batch = x.shape[0]
-                    t = torch.randint(0, T, (batch,), device=device)
-                    noise = torch.randn_like(x)
-                    x_t = q_sample(x, t, noise)
-                    pred = model(x_t, t)
-                    loss = F.mse_loss(pred, noise)
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-                    total_loss += loss.item() * batch
-                    pbar.set_postfix(loss=f"{loss.item():.4f}")
-                avg_loss = total_loss / len(train_loader.dataset)
-                print(f"Epoch {epoch+1:3d}/{num_epochs}  Loss={avg_loss:.6f}")
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': avg_loss,
-                    'is_final': False,
-                    'schedule_fingerprint': schedule_fingerprint,
-                }, checkpoint_path)
-            torch.save({
-                'epoch': num_epochs - 1,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'loss': avg_loss,
-                'is_final': True,
-                'schedule_fingerprint': schedule_fingerprint,
-            }, checkpoint_path)
-            print(f"模型已保存: {checkpoint_path}")
-    else:
-        print(f"\n使用已训练完成的模型, 跳过训练过程")
-
-    return model
-
-
-# ============================================================
-# 数据加载
-# ============================================================
-print("\n加载MNIST数据集...")
-data_dir = os.path.join(SAVE_DIR, 'data')
-os.makedirs(data_dir, exist_ok=True)
-# MNIST数据归一化到[-1,1] (与11.4-1、13.3-2修复一致):
-# 训练时网络看到的 x_T 分布(由 [-1,1] 数据前向扩散得到)与采样起点
-# torch.randn(标准高斯) 在统计意义上更匹配,避免系统性均值偏移拖累重建质量。
-# 采样函数末尾的 clamp 同步改为 [-1,1];PSNR 与可视化在转换回 [0,1] 空间后计算。
-transform = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Lambda(lambda x: x * 2 - 1),  # [0,1] -> [-1,1]
-])
-train_dataset = datasets.MNIST(data_dir, train=True, download=True, transform=transform)
-test_dataset = datasets.MNIST(data_dir, train=False, download=True, transform=transform)
-train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
-
-
-# ============================================================
-# 训练
-# ============================================================
-print(f"\n{'='*60}")
-print("训练UNet扩散模型...")
-print("=" * 60)
-
-CHECKPOINT_PATH = os.path.join(SAVE_DIR, 'zeta_psnr_checkpoint.pth')
-num_epochs = 50
-model = train_model(CHECKPOINT_PATH, num_epochs=num_epochs)
-
-
-# ============================================================
-# 步骤：引导权重zeta对重建质量的影响
-# ============================================================
-print(f"\n{'='*60}")
-print("步骤：引导权重zeta对重建质量的影响（13.4.3节）")
+print("\n" + "=" * 60)
+print("步骤1：引导权重zeta与质量-多样性权衡（13.4.3节）")
 print("=" * 60)
 
 print("""
-13.4.3节：zeta控制先验与似然的相对强度
-  zeta=0: 纯先验（无条件采样，忽略观测）
-  zeta=1: 标准DPS（平衡先验与似然）
-  zeta>1: 强数据一致性（类似MAP，多样性低）
+13.4.3节：引导权重zeta控制先验与似然的相对强度
+  nabla log p(x_t|y) ~ nabla log p(x_t) + zeta * nabla log p(y|x_hat_{0|t})
+
+  zeta大 -> 强数据一致性（低多样性）-> 类似MAP
+  zeta小 -> 强先验（高多样性）-> 类似无条件采样
 """)
 
-zeta_values = [0.0, 0.3, 0.7, 1.0, 1.5, 3.0]
-psnr_results = []
+# 逆问题设置
+A_val = 1.0
+sigma_y = 0.5
+y_obs = 0.5
 
-# 公共随机数(CRN)种子: 不同 zeta 共享同一条反向过程噪声路径,
-# 排除采样随机性对 zeta-PSNR 曲线形状的干扰(与 13.4-1 做法一致)
-CRN_SEED = 42
+# ★ 解析计算真实后验（GM先验+高斯似然的共轭情形）
+post_mean_true, post_std_true, post_pdf_true, post_w_true, post_m_true, post_s_true = \
+    analytic_posterior_gm_gaussian(y_obs, A_val, sigma_y, GM_WEIGHTS, GM_MEANS, GM_STDS)
+print(f"\n真实后验（解析）: mean={post_mean_true:.4f}, std={post_std_true:.4f}")
+print(f"  后验分量: w={post_w_true}, μ={post_m_true}, σ={post_s_true}")
 
-test_images = next(iter(test_loader))[0][:4].to(device)
-single_img = test_images[:1]
-sigma_y_denoise = 0.3
-y_single = single_img + torch.randn_like(single_img) * sigma_y_denoise
+zeta_values = [0.0, 0.3, 0.7, 1.0, 2.0, 5.0]
+sampling_results = {}
 
-identity_op = IdentityOperator()
-
-def compute_psnr(pred, target):
-    """pred/target: 在 [-1,1] 空间,统一转换到 [0,1] 再用 MAX=1 计算 PSNR"""
-    pred_01 = (pred + 1) / 2
-    target_01 = (target + 1) / 2
-    mse = torch.mean((pred_01 - target_01)**2).item()
-    return 10 * np.log10(1.0 / (mse + 1e-10))
-
-# 一次性采样并缓存 x_hat, 供下方可视化复用
-# 避免之前"PSNR 来自第一次采样, 图片来自第二次独立采样"导致图与数字不对应
-# 同时省掉重复采样的 6 次 dps_sample 算力
-x_hat_list = []
+print("\nDPS采样 vs 真实后验对比：")
+print(f"{'zeta':>6s} | {'采样均值':>8s} | {'均值偏差':>8s} | {'采样std':>7s} | {'std偏差':>7s} | {'std低估率':>9s}")
+print("-" * 65)
+# 注：'std低估率' = (真值std − 采样std) / 真值std × 100%
+#   - 正值：采样std < 真值std（低估多样性）
+#   - 负值：采样std > 真值std（实际为高估，常见于小ζ如zeta=0的无条件采样）
+print("  (注: 'std低估率' 正值=低估, 负值=高估)")
 for zeta in zeta_values:
-    x_hat = dps_sample(model, y_single, identity_op,
-                        shape=single_img.shape, zeta=zeta, seed=CRN_SEED)
-    psnr = compute_psnr(x_hat, single_img)
-    psnr_results.append(psnr)
-    x_hat_list.append(x_hat)
-    print(f"  zeta={zeta:4.1f}: PSNR={psnr:.2f} dB")
+    samples = dps_posterior_sample(y_obs, A_val, sigma_y, zeta)
+    sampling_results[zeta] = samples
+    mean_s = np.mean(samples)
+    std_s = np.std(samples)
+    mean_bias = mean_s - post_mean_true
+    std_bias = std_s - post_std_true
+    std_underest = (post_std_true - std_s) / post_std_true * 100  # 方差低估百分比
+    print(f"{zeta:6.1f} | {mean_s:8.3f} | {mean_bias:+8.3f} | {std_s:7.3f} | {std_bias:+7.3f} | {std_underest:8.1f}%")
 
-# 可视化: 复用上面已采样的 x_hat, 保证子图标题 PSNR 与图像严格对应
-# 拆分为两个独立文件: 数字重建图(2x3) + zeta-PSNR 曲线图(单独)
-fig1, axes1 = plt.subplots(2, 3, figsize=(12, 8))
+# 可视化
+fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+x_hist = np.linspace(-6, 6, 500)
+
 for idx, zeta in enumerate(zeta_values):
-    row, col = idx // 3, idx % 3
-    x_hat = x_hat_list[idx]
-    axes1[row, col].imshow(((x_hat[0, 0] + 1) / 2).cpu().numpy(),
-                            cmap='gray', vmin=0, vmax=1)
-    axes1[row, col].axis('off')
-    label = "无条件" if zeta == 0 else r"$\zeta={}$".format(zeta)
-    axes1[row, col].set_title(f'{label}\nPSNR={psnr_results[idx]:.1f}dB', fontsize=11)
+    ax = axes[idx // 3, idx % 3]
+    samples = sampling_results[zeta]
+    ax.hist(samples, bins=60, density=True, alpha=0.5, color='steelblue',
+            range=(-6, 6), label=r'后验采样 ($\zeta={}$)'.format(zeta))
+    ax.plot(x_hist, gm1d_pdf(x_hist), 'k--', lw=1.5, alpha=0.7, label='先验 p(x)')
+    # ★ 添加真实后验曲线
+    ax.plot(x_hist, post_pdf_true(x_hist), 'g-', lw=2, alpha=0.8, label='真实后验（解析）')
+    ax.axvline(y_obs, color='red', linestyle=':', lw=2, label=r'观测 $y={}$'.format(y_obs))
+    # ★ 真实后验均值参考线
+    ax.axvline(post_mean_true, color='green', linestyle='--', lw=1.5, alpha=0.7, 
+               label=r'真实均值={:.2f}'.format(post_mean_true))
+    mean_s = np.mean(samples)
+    ax.axvline(mean_s, color='blue', linestyle='-', lw=1.5, alpha=0.7, 
+               label=r'采样均值={:.2f}'.format(mean_s))
+    ax.set_title(r'$\zeta$ = {} ({})'.format(zeta, "无条件" if zeta == 0 else "弱引导" if zeta < 0.5 else "标准" if zeta < 1.5 else "强引导"), fontsize=12)
+    ax.legend(fontsize=8, loc='upper left')
+    ax.grid(alpha=0.3)
+    ax.set_xlim(-6, 6)
+    # 自适应y上限：各zeta的histogram峰值不同（zeta=5峰值约2.3，真后验约0.87），
+    # 固定ylim会截断关键的多样性坍缩形状，故改用None自动缩放
+    ax.set_ylim(0, None)
 
-fig1.tight_layout()
-fig1_path = os.path.join(SAVE_DIR, '重建结果对比.png')
-fig1.savefig(fig1_path, dpi=150, bbox_inches='tight')
-plt.close(fig1)
-print(f"\n图1(2x3数字重建对比)已保存: {fig1_path}")
+fig.suptitle('引导权重zeta与质量-多样性权衡（13.4.3节）', fontsize=14, y=1.01)
+plt.tight_layout()
+fig_path1 = os.path.join(SAVE_DIR, '引导权重权衡.png')
+plt.savefig(fig_path1, dpi=150, bbox_inches='tight')
+plt.close()
+print(f"\n图1已保存: {fig_path1}")
 
-# zeta-PSNR 曲线图: 单独一张, 带最优点标注, 突出倒U形
-fig2, ax2 = plt.subplots(1, 1, figsize=(8, 6))
-ax2.plot(zeta_values, psnr_results, 'ro-', markersize=10, lw=2)
-ax2.set_xlabel(r'引导权重 $\zeta$', fontsize=12)
-ax2.set_ylabel('PSNR (dB)', fontsize=12)
-ax2.set_title(r'$\zeta$-重建质量权衡曲线（13.4.3节）', fontsize=13)
-ax2.grid(alpha=0.3)
+# 权衡曲线
+consistency_list = []
+diversity_list = []
+for zeta in zeta_values:
+    samples = sampling_results[zeta]
+    consistency_list.append(np.mean(np.abs(samples - y_obs)))
+    diversity_list.append(np.std(samples))
 
-# 标注倒U形峰值点(用竖线+散点+文本框三件套, 与13.4-1风格一致)
-best_idx = int(np.argmax(psnr_results))
-best_zeta = zeta_values[best_idx]
-best_psnr = psnr_results[best_idx]
-ax2.axvline(best_zeta, color='gray', linestyle='--', alpha=0.5, lw=1)
-ax2.plot(best_zeta, best_psnr, 'b*', markersize=18, zorder=5,
-         markeredgecolor='navy', markeredgewidth=0.5)
-ax2.annotate(rf'最优 $\zeta$={best_zeta}' + '\n' + rf'PSNR={best_psnr:.2f}dB',
-             xy=(best_zeta, best_psnr),
-             xytext=(best_zeta + 0.4, best_psnr - 1.5),
-             fontsize=10, ha='left',
-             arrowprops=dict(arrowstyle='->', color='gray', alpha=0.7),
-             bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffeaa7', alpha=0.8))
+# ★ 真实后验的多样性（std）和一致性（E|X−y|）
+# 关键：DPS曲线的一致性定义为 E|X−y| = mean(|samples - y_obs|)，
+# 真实后验的参考点必须用同口径统计量 E_{x∼p(x|y)}[|X-y|]，
+# 不能用 Jensen 不等式两边不相等的 |E[X]−y|。下面在解析后验 pdf 上
+# 做数值积分得到精确的 E|X−y|（避免蒙特卡洛噪声）
+true_diversity = post_std_true
+x_consistency_grid = np.linspace(-10, 10, 100000)
+true_consistency = np.trapezoid(
+    np.abs(x_consistency_grid - y_obs) * post_pdf_true(x_consistency_grid),
+    x_consistency_grid,
+)
+# 同步打印，便于交叉验证
+print(f"\n真实后验 E|X−y|（与DPS曲线同口径） = {true_consistency:.4f}")
+print(f"  提示：若误用 |E[X]−y| = {np.abs(post_mean_true - y_obs):.4f}，"
+      f"由Jensen不等式两者不等（前者>>后者），会扭曲图2参考点位置")
 
-# 三段说明放在左下空白区
-ax2.text(0.02, 0.05,
-         r'$\zeta$=0: 无条件采样' + '\n' +
-         r'$\zeta$=1: 本实验标准强度' + '\n' +
-         r'$\zeta$>1: 强数据一致性',
-         transform=ax2.transAxes, fontsize=9, va='bottom',
-         bbox=dict(boxstyle='round,pad=0.3', facecolor='#dfe6e9', alpha=0.8))
+fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+ax.plot(diversity_list, consistency_list, 'ro-', markersize=8, lw=2, label='DPS采样')
+for i, zeta in enumerate(zeta_values):
+    ax.annotate(r'$\zeta={}$'.format(zeta), (diversity_list[i], consistency_list[i]),
+                textcoords="offset points", xytext=(10, 5), fontsize=10)
 
-fig2.tight_layout()
-fig2_path = os.path.join(SAVE_DIR, '引导权重zeta与PSNR关系曲线.png')
-fig2.savefig(fig2_path, dpi=150, bbox_inches='tight')
-plt.close(fig2)
-print(f"图2(zeta-PSNR曲线)已保存: {fig2_path}")
+# ★ 添加真实后验参考点（绿色星形）
+ax.scatter([true_diversity], [true_consistency], s=150, c='green', marker='*', 
+           zorder=5, label=r'真实后验 ($\sigma={:.2f}$)'.format(true_diversity))
+ax.axvline(true_diversity, color='green', linestyle='--', lw=1.5, alpha=0.7,
+           label=r'真实多样性={:.2f}'.format(true_diversity))
+
+ax.set_xlabel('多样性（采样标准差）', fontsize=12)
+ax.set_ylabel(r'数据一致性（$|x-y|$均值）', fontsize=12)
+ax.set_title('质量-多样性权衡曲线（13.4.3节）', fontsize=13)
+ax.grid(alpha=0.3)
+ax.legend(fontsize=9, loc='upper right')
+ax.annotate('右下: 弱引导(高多样性, 低一致性)\n左上: 强引导(低多样性, 高一致性)\n★绿色星形: 真实后验（解析）\n对应第2-3章的正则化参数lambda',
+            xy=(0.05, 0.95), xycoords='axes fraction', fontsize=9, va='top',
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='#dfe6e9', alpha=0.8))
+
+plt.tight_layout()
+fig_path2 = os.path.join(SAVE_DIR, '权衡曲线.png')
+plt.savefig(fig_path2, dpi=150, bbox_inches='tight')
+plt.close()
+print(f"图2已保存: {fig_path2}")
 
 print("\n" + "=" * 60)
-print("实验13.4-2 完成!")
+print("实验13.4-1 完成!")
 print("=" * 60)
-print(f"""
+print("""
 关键结论:
-1. zeta-重建质量权衡（13.4.3节）
-   - zeta=0: 无条件采样（忽略观测，PSNR低）
-   - zeta=1: 本实验定义下的标准强度（平衡先验与似然，通常PSNR最高）
-     注: 本实现对似然梯度做单位范数归一化, 故zeta直接控制修正量模长,
-         与Chung et al. (2022)原论文"步长∝1/‖y-Ax̂₀‖"的自适应方案不同,
-         此处zeta=1仅代表本实验的标定基准, 而非论文原版公式
-   - zeta过大: 过度拟合观测噪声，PSNR下降
-   - 最优zeta通常在0.5-1.5之间
+1. 引导权重zeta（13.4.3节）原创设计
+   - zeta控制先验与似然的相对强度
+   - zeta大->数据一致性强、多样性低
+   - zeta小->先验贡献大、多样性高
+   - 对应第2-3章正则化参数lambda的角色
 
-2. 实践要点
-   - 单一图像的最优zeta可能因图而异
-   - 工程上常用 zeta=1 作为默认起点
-   - zeta-PSNR曲线呈倒U形——这是质量-多样性权衡的具体表现
-   - 不同zeta之间的PSNR对比采用公共随机数(CRN, seed=42)实现公平采样,
-     排除采样随机性对曲线形状的干扰(与13.4-1做法一致)
-   - 实验配置: T={T} 步DDPM, 训练 {num_epochs} 轮 MNIST UNet.
-""")
+2. DPS有偏性的定量证据（本实验独特优势）
+   - GM先验+高斯似然是共轭情形，真实后验可解析计算
+   - 真实后验: mean={:.4f}, std={:.4f}
+   - 关键发现：没有任何固定zeta能同时匹配真实后验的均值和方差
+     - 方差随zeta单调收缩：在zeta≈0.7附近穿过真值（0.4615），
+       小zeta（如0.3）反而高估std（先验未被充分约束），大zeta（≥2）系统性低估
+     - 均值偏差呈非单调：zeta≈0.7时最小（约−0.038），
+       继续增大zeta（→1.0/2.0/5.0）偏差反而变差（−0.053/−0.070/−0.075）
+     - 这一非单调性可能与dps_posterior_sample中mean_t缩放在GM先验下
+       约3倍的近似误差有关（详见该函数docstring）
+   - 这印证13.3.2节：Laplace近似（delta函数近似）系统性低估后验方差
+
+3. 似然梯度公式说明
+   - likelihood_grad使用mean_t缩放，而非朴素链式法则的1/mean_t
+   - 原因：score本身对x_t有强依赖，完整梯度包含这一贡献
+   - 数值验证（t=0.9，双峰GM先验）：真实dx0_hat/dx_t≈0.049，mean_t≈0.017，
+     1/mean_t≈58.8——量级方向一致，但mean_t是量级近似，差约2.9倍
+   - 注意：对单峰高斯先验该缩放精确成立；对GM先验仅量级一致
+
+4. 实际启示
+   - zeta=0: 无条件采样（忽略观测），std远大于真后验（高估）
+   - zeta≈0.7: 本实验的"甜蜜点"——均值偏差最小，方差也最接近真值
+   - zeta=1: 标准DPS（平衡先验与似然），但方差仍有低估
+   - zeta过大: 类似MAP，多样性坍缩；且均值偏差反而不如0.7好
+   - 建议区间：先做小批量扫描找到偏差最小点，而非简单取1.0
+""".format(post_mean_true, post_std_true))

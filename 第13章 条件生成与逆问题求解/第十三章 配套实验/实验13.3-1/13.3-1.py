@@ -1,17 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-实验13.3-1：DPS的Tweedie闭环验证
-
-★ 原创设计：DPS的Tweedie闭环验证
-  DPS核心近似：p(x_0|x_t) ~ delta(x_0 - x_hat_{0|t})
-  -> p(y|x_t) ~ p(y|x_hat_{0|t})（积分坍缩为单点求值）
+实验13.3-2：DPS图像去噪端到端
 
 实验内容：
-  - 验证DPS近似似然得分 vs 精确似然得分
-  - 含Jacobian与忽略Jacobian两种DPS变体
-  - 误差随噪声水平t的变化规律
+  - 训练UNet扩散模型（MNIST, epsilon-prediction）
+  - DPS算法求解图像去噪逆问题
+  - 展示"质量-多样性权衡"——同一观测y，不同zeta的采样结果
 
-本实验不需要GPU，通过1D解析情形验证DPS近似质量。
+注意：本实验使用MNIST训练DDPM并执行多次DPS采样。
 """
 
 import sys
@@ -45,7 +41,7 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    SAVE_DIR = os.path.join(_gdrive, '实验13.3-1')
+    SAVE_DIR = os.path.join(_gdrive, '实验13.3-2')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
     try:
@@ -64,230 +60,418 @@ except ImportError:
 # ========================================================
 
 np.random.seed(42)
+import torch
+torch.manual_seed(42)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(42)
+from tqdm.auto import tqdm
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f'使用设备: {device}')
 
 print("\n" + "=" * 60)
-print("实验13.3-1: DPS的Tweedie闭环验证")
+print("实验13.3-2: DPS图像去噪端到端")
 print("=" * 60)
-print("知识点: Tweedie等式, delta函数近似, 似然得分的Laplace近似")
+print("知识点: DPS算法流程, autograd自动Jacobian, 质量-多样性权衡")
 
 
 # ============================================================
-# 1D高斯混合先验 + VP-SDE框架
+# 噪声调度
 # ============================================================
-GM_WEIGHTS = [0.3, 0.7]
-GM_MEANS = [-2.0, 1.0]
-GM_STDS = [1.0, 1.0]
+T = 200
+beta_min, beta_max = 1e-4, 0.02
+betas = torch.linspace(beta_min, beta_max, T).to(device)
+alphas = 1.0 - betas
+alpha_bars = torch.cumprod(alphas, dim=0)
+alpha_bars_prev = torch.cat([torch.ones(1, device=device), alpha_bars[:-1]])
+sqrt_alpha_bars = torch.sqrt(alpha_bars)
+sqrt_one_minus_alpha_bars = torch.sqrt(1 - alpha_bars)
+posterior_var = betas * (1 - alpha_bars_prev) / (1 - alpha_bars)
+sqrt_recip_alphas = 1.0 / torch.sqrt(alphas)
+beta_over_sqrt_1m_ab = betas / sqrt_one_minus_alpha_bars
 
-BETA_MIN, BETA_MAX = 0.1, 20.0
 
-def gm1d_pdf(x):
-    pdf = np.zeros_like(x)
-    for w, m, s in zip(GM_WEIGHTS, GM_MEANS, GM_STDS):
-        pdf += w * np.exp(-0.5 * ((x - m) / s)**2) / (s * np.sqrt(2 * np.pi))
-    return pdf
-
-def vp_marginal(t):
-    log_mean = -0.25 * t**2 * (BETA_MAX - BETA_MIN) - 0.5 * t * BETA_MIN
-    mean_t = np.exp(log_mean)
-    std_t = np.sqrt(1 - np.exp(2 * log_mean))
-    return mean_t, std_t
-
-def vp_score_analytic(x, t):
-    mean_t, std_t = vp_marginal(t)
-    pdf = np.zeros_like(x)
-    dpdf = np.zeros_like(x)
-    for w, m, s in zip(GM_WEIGHTS, GM_MEANS, GM_STDS):
-        new_mean = mean_t * m
-        new_std = np.sqrt(mean_t**2 * s**2 + std_t**2)
-        pdf += w * np.exp(-0.5 * ((x - new_mean) / new_std)**2) / (new_std * np.sqrt(2 * np.pi))
-        dpdf += w * (-(x - new_mean) / new_std**2) * np.exp(-0.5 * ((x - new_mean) / new_std)**2) / (new_std * np.sqrt(2 * np.pi))
-    return dpdf / (pdf + 1e-30)
-
-def tweedie_estimate(x_t, t):
-    """Tweedie估计: E[x_0 | x_t] = (x_t + std_t^2 * score) / mean_t"""
-    mean_t, std_t = vp_marginal(t)
-    score = vp_score_analytic(x_t, t)
-    return (x_t + std_t**2 * score) / (mean_t + 1e-10)
-
-def compute_marginal_pxt(x_t, t):
-    """
-    边际概率密度 p(x_t)
-    用于归一化 p(x_0|x_t) = p(x_t|x_0) * p(x_0) / p(x_t)
-    """
-    mean_t, std_t = vp_marginal(t)
-    pdf = np.zeros_like(np.atleast_1d(x_t), dtype=float)
-    for w, m, s in zip(GM_WEIGHTS, GM_MEANS, GM_STDS):
-        new_mean = mean_t * m
-        new_std = np.sqrt(mean_t**2 * s**2 + std_t**2)
-        pdf += w * np.exp(-0.5 * ((x_t - new_mean) / new_std)**2) / (new_std * np.sqrt(2 * np.pi))
-    return pdf
-
-def _compute_likelihood(x_t, t, y_obs, A, sigma_y):
-    """
-    计算似然 p(y|x_t) - 归一化版本
-
-    数学推导:
-      p(y|x_t) = ∫ p(y|x_0) p(x_0|x_t) dx_0
-    其中 p(x_0|x_t) = p(x_t|x_0) p(x_0) / p(x_t)  [贝叶斯公式归一化]
-
-    注意:若不除以 p(x_t),p_xt_given_x0 * p_x0 给出的是联合密度 p(x_t, x_0),
-    积分后会得到 p(x_t, y)=p(x_t) * p(y|x_t),再对它取log-grad会同时包含
-    先验得分和似然得分,无法与DPS(只近似似然项)做公平对比。
-    """
-    mean_t, std_t = vp_marginal(t)
-    x0_grid = np.linspace(-8, 8, 2000)
-    dx0 = x0_grid[1] - x0_grid[0]
-    p_xt_given_x0 = np.exp(-0.5 * ((x_t - mean_t * x0_grid) / std_t)**2) / (std_t * np.sqrt(2 * np.pi))
-    p_x0 = gm1d_pdf(x0_grid)
-    p_xt = compute_marginal_pxt(x_t, t)                       # 归一化分母
-    p_x0_given_xt = p_xt_given_x0 * p_x0 / (p_xt + 1e-30)     # 真正的条件密度
-    p_y_given_x0 = np.exp(-0.5 * ((y_obs - A * x0_grid) / sigma_y)**2) / (sigma_y * np.sqrt(2 * np.pi))
-    return np.sum(p_y_given_x0 * p_x0_given_xt) * dx0
-
-def likelihood_grad_analytic(x_t, t, y_obs, A, sigma_y):
-    eps = 1e-4
-    p_plus = _compute_likelihood(x_t + eps, t, y_obs, A, sigma_y)
-    p_minus = _compute_likelihood(x_t - eps, t, y_obs, A, sigma_y)
-    p_center = _compute_likelihood(x_t, t, y_obs, A, sigma_y)
-    # nabla log p(y|x_t) = (p_+ - p_-) / (2*eps*p_center)
-    return (p_plus - p_minus) / (2 * eps * p_center + 1e-30)
+def q_sample(x_0, t, noise=None):
+    if noise is None:
+        noise = torch.randn_like(x_0)
+    return (
+        sqrt_alpha_bars[t][:, None, None, None] * x_0 +
+        sqrt_one_minus_alpha_bars[t][:, None, None, None] * noise
+    )
 
 
 # ============================================================
-# 步骤1：DPS的Tweedie闭环验证（13.3.2节）
+# 去噪网络: 小型UNet
 # ============================================================
-print("\n" + "=" * 60)
-print("步骤1：DPS的Tweedie闭环验证（13.3.2节）")
+import torch.nn as nn
+import torch.nn.functional as F
+from torchvision import datasets, transforms
+from torch.utils.data import DataLoader
+
+
+class SinusoidalTimeEmbedding(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, t):
+        half_dim = self.dim // 2
+        emb = np.log(10000) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, device=t.device, dtype=torch.float32) * -emb)
+        emb = t[:, None].float() * emb[None, :]
+        return torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
+
+
+class ConvBlock(nn.Module):
+    def __init__(self, in_ch, out_ch, time_dim):
+        super().__init__()
+        gn_groups = min(4, out_ch)
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, 3, padding=1),
+            nn.GroupNorm(gn_groups, out_ch),
+            nn.SiLU(),
+        )
+        self.time_proj = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(time_dim, out_ch),
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(out_ch, out_ch, 3, padding=1),
+            nn.GroupNorm(gn_groups, out_ch),
+            nn.SiLU(),
+        )
+        self.shortcut = nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else nn.Identity()
+
+    def forward(self, x, t_emb):
+        h = self.conv1(x)
+        h = h + self.time_proj(t_emb)[:, :, None, None]
+        h = self.conv2(h)
+        return h + self.shortcut(x)
+
+
+class SmallUNet(nn.Module):
+    def __init__(self, time_dim=64):
+        super().__init__()
+        ch = [1, 16, 32, 64]
+        self.time_mlp = nn.Sequential(
+            SinusoidalTimeEmbedding(time_dim),
+            nn.Linear(time_dim, time_dim),
+            nn.SiLU(),
+        )
+        self.down1 = ConvBlock(ch[0], ch[1], time_dim)
+        self.down2 = ConvBlock(ch[1], ch[2], time_dim)
+        self.down3 = ConvBlock(ch[2], ch[3], time_dim)
+        self.bottleneck = ConvBlock(ch[3], ch[3], time_dim)
+        self.up3 = ConvBlock(ch[3] + ch[2], ch[2], time_dim)
+        self.up2 = ConvBlock(ch[2] + ch[1], ch[1], time_dim)
+        self.up1 = ConvBlock(ch[1] + ch[0], ch[0], time_dim)
+        self.out_conv = nn.Conv2d(ch[0], 1, 1)
+        self.pool = nn.MaxPool2d(2)
+
+    def forward(self, x_t, t):
+        t_emb = self.time_mlp(t)
+        h1 = self.down1(x_t, t_emb)
+        h2 = self.down2(self.pool(h1), t_emb)
+        h3 = self.down3(self.pool(h2), t_emb)
+        h = self.bottleneck(h3, t_emb)
+        h = F.interpolate(h, size=(14, 14), mode='nearest')
+        h = self.up3(torch.cat([h, h2], dim=1), t_emb)
+        h = F.interpolate(h, size=(28, 28), mode='nearest')
+        h = self.up2(torch.cat([h, h1], dim=1), t_emb)
+        h = self.up1(torch.cat([h, x_t], dim=1), t_emb)
+        return self.out_conv(h)
+
+
+# ============================================================
+# DPS采样算法
+# ============================================================
+def dps_sample(model, y, forward_op, shape, zeta=1.0, n_steps=None):
+    """
+    DPS 采样。
+    注：本实现对似然梯度做单位范数归一化,只取其方向,
+        残差强度统一由外部超参 zeta 控制,不依赖 sigma_y,
+        故函数签名中未保留 sigma_y。
+    """
+    model.eval()
+    if n_steps is None:
+        n_steps = T
+    x = torch.randn(shape, device=device)
+    for t_idx in reversed(range(T)):
+        t = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
+        sqrt_ab_t = sqrt_alpha_bars[t_idx]
+        sqrt_1mab_t = sqrt_one_minus_alpha_bars[t_idx]
+        with torch.no_grad():
+            eps_pred = model(x, t)
+        x = x.detach().requires_grad_(True)
+        eps_pred_grad = model(x, t)
+        x0_hat = (x - sqrt_1mab_t * eps_pred_grad) / sqrt_ab_t
+        Ax0_hat = forward_op(x0_hat)
+        likelihood_loss = torch.sum((y - Ax0_hat) ** 2)
+        likelihood_grad = torch.autograd.grad(likelihood_loss, x)[0]
+        # 每个样本独立归一化梯度方向（DPS 论文推荐做法）
+        batch_size = likelihood_grad.shape[0]
+        grad_norms = likelihood_grad.view(batch_size, -1).norm(dim=1)  # shape=(batch_size,)
+        grad_norms = grad_norms.clamp(min=1e-8)  # 防止零范数
+        likelihood_grad = likelihood_grad / grad_norms.view(batch_size, 1, 1, 1)
+        x = x.detach()
+        eps_pred = eps_pred.detach()
+        # 后验得分分解: ∇log p(x_t|y) = ∇log p(x_t) + ∇log p(y|x_t)
+        # 网络预测 eps_pred ≈ -σ_t * ∇log p(x_t),σ_t = sqrt(1-ᾱ_t)
+        # 似然(高斯): ∇log p(y|x_t) = -∇||y-Ax̂||²/(σ_y²) <-- 关键负号!
+        # 后验噪声预测: ε̃ = -σ_t * ∇log p(x_t|y) = ε_θ + σ_t * (1/σ_y²) * ∇||y-Ax̂||²
+        # 简化常数后: ε̃ = ε_θ + ζ * σ_t * ∇||y-Ax̂||² (加号,不是减号!)
+        eps_corrected = eps_pred + zeta * sqrt_1mab_t * likelihood_grad
+        with torch.no_grad():
+            model_mean = sqrt_recip_alphas[t_idx] * (
+                x - beta_over_sqrt_1m_ab[t_idx] * eps_corrected
+            )
+            if t_idx == 0:
+                x = model_mean
+            else:
+                noise = torch.randn_like(x)
+                x = model_mean + torch.sqrt(posterior_var[t_idx]) * noise
+    return x.clamp(-1, 1)
+
+
+@torch.no_grad()
+def ddpm_sample(model, shape):
+    model.eval()
+    x = torch.randn(shape, device=device)
+    for t_idx in reversed(range(T)):
+        t = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
+        pred = model(x, t)
+        model_mean = sqrt_recip_alphas[t_idx] * (
+            x - beta_over_sqrt_1m_ab[t_idx] * pred
+        )
+        if t_idx == 0:
+            x = model_mean
+        else:
+            noise = torch.randn_like(x)
+            x = model_mean + torch.sqrt(posterior_var[t_idx]) * noise
+    return x.clamp(-1, 1)
+
+
+class IdentityOperator:
+    def __call__(self, x):
+        return x
+
+
+# ============================================================
+# 训练函数（含checkpoint resume）
+# ============================================================
+def train_model(checkpoint_path, num_epochs=100):
+    model = SmallUNet().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
+
+    start_epoch = 0
+    is_final = False
+
+    if os.path.exists(checkpoint_path):
+        print(f"\n检测到已保存的模型: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        if checkpoint.get('is_final', False):
+            print(f"已检测到最终训练完成的模型, 直接加载, 跳过训练过程")
+            print(f"  训练轮数: {checkpoint['epoch']+1}")
+            print(f"  最终损失: {checkpoint['loss']:.6f}")
+            try:
+                model.load_state_dict(checkpoint['model_state_dict'])
+                is_final = True
+            except RuntimeError as e:
+                print(f"警告: checkpoint与当前模型架构不兼容, 删除后重新训练")
+                print(f"  错误信息: {e}")
+                os.remove(checkpoint_path)
+                is_final = False
+        else:
+            try:
+                model.load_state_dict(checkpoint['model_state_dict'])
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                start_epoch = checkpoint['epoch'] + 1
+                print(f"检测到未完成的训练, 从第 {start_epoch+1} 轮继续")
+            except RuntimeError as e:
+                print(f"警告: checkpoint与当前模型架构不兼容, 删除后重新训练")
+                os.remove(checkpoint_path)
+                start_epoch = 0
+
+    if not is_final:
+        if start_epoch >= num_epochs:
+            print(f"  注意: start_epoch({start_epoch}) >= num_epochs({num_epochs}), 无需继续训练")
+            is_final = True
+        else:
+            print(f"\n开始训练 epsilon-prediction DDPM (T={T}, epochs={num_epochs})...")
+            print("-" * 75)
+            for epoch in range(start_epoch, num_epochs):
+                model.train()
+                total_loss = 0
+                pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}", ascii=True, leave=False)
+                for x, _ in pbar:
+                    x = x.to(device)
+                    batch = x.shape[0]
+                    t = torch.randint(0, T, (batch,), device=device)
+                    noise = torch.randn_like(x)
+                    x_t = q_sample(x, t, noise)
+                    pred = model(x_t, t)
+                    loss = F.mse_loss(pred, noise)
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+                    total_loss += loss.item() * batch
+                    pbar.set_postfix(loss=f"{loss.item():.4f}")
+                avg_loss = total_loss / len(train_loader.dataset)
+                print(f"Epoch {epoch+1:3d}/{num_epochs}  Loss={avg_loss:.6f}")
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'loss': avg_loss,
+                    'is_final': False
+                }, checkpoint_path)
+            torch.save({
+                'epoch': num_epochs - 1,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': avg_loss,
+                'is_final': True
+            }, checkpoint_path)
+            print(f"模型已保存: {checkpoint_path}")
+    else:
+        print(f"\n使用已训练完成的模型, 跳过训练过程")
+
+    return model
+
+
+# ============================================================
+# 数据加载
+# ============================================================
+print("\n加载MNIST数据集...")
+data_dir = os.path.join(SAVE_DIR, 'data')
+os.makedirs(data_dir, exist_ok=True)
+# MNIST数据归一化到[-1,1] (与11.4-1修复一致):
+# 训练时网络看到的 x_T 分布(由 [-1,1] 数据前向扩散得到)与采样起点
+# torch.randn(标准高斯) 在统计意义上更匹配,避免系统性均值偏移拖累重建质量。
+# 采样函数末尾的 clamp 同步改为 [-1,1];PSNR 与可视化在转换回 [0,1] 空间后计算。
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Lambda(lambda x: x * 2 - 1),  # [0,1] -> [-1,1]
+])
+train_dataset = datasets.MNIST(data_dir, train=True, download=True, transform=transform)
+test_dataset = datasets.MNIST(data_dir, train=False, download=True, transform=transform)
+train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+print(f"训练集: {len(train_dataset)}, 测试集: {len(test_dataset)}")
+
+
+# ============================================================
+# 训练扩散模型
+# ============================================================
+print(f"\n{'='*60}")
+print("步骤1：训练UNet扩散模型（epsilon-prediction, MNIST）")
+print("=" * 60)
+
+CHECKPOINT_PATH = os.path.join(SAVE_DIR, 'dps_denoise_checkpoint.pth')
+num_epochs = 100
+model = train_model(CHECKPOINT_PATH, num_epochs=num_epochs)
+
+
+# ============================================================
+# DPS求解图像去噪逆问题（方案A：质量-多样性权衡）
+# ============================================================
+print(f"\n{'='*60}")
+print("步骤2：DPS求解图像去噪逆问题（质量-多样性权衡）")
 print("=" * 60)
 
 print("""
-DPS核心近似（13.3.2节）：
-  p(x_0|x_t) ~ delta(x_0 - x_hat_{0|t})  （delta函数近似）
-  -> p(y|x_t) ~ p(y|x_hat_{0|t})       （积分坍缩为单点求值）
+逆问题: y = x + n, n ~ N(0, sigma_y^2)
+DPS算法: 在逆向DDPM采样中注入似然梯度
+  先验得分: -eps_hat_theta(x_t, t) / sqrt(1-alpha_bar_t)
+  似然梯度方向: ∇_x ||y - A x_hat_{0|t}||² (保留原始幅度,不做归一化)
+  修正噪声残差: eps_hat - zeta * sqrt(1-alpha_bar_t) * 似然梯度
+  注：保留似然梯度的幅度信息——不归一化,否则与 DDPM 步进系数 β/σ 失配
+      导致修正对 x 的更新几乎为零(DPS 完全失效)
 
-Tweedie闭环（13.2.3节）：
-  得分函数 -> Tweedie估计x_hat_0 -> 一致性梯度 -> 似然得分近似 -> 修正得分
-
-验证：比较DPS近似的似然得分与精确似然得分
+质量-多样性权衡（对应13.4.3节）：
+  zeta小 → 后验分布宽 → 高多样性（采样结果各异）
+  zeta大 → 后验分布窄 → 高一致性（采样结果趋近观测）
 """)
 
-# 逆问题设置
-A_val = 1.0
-sigma_y = 0.5
-y_obs = 0.5
+# zeta值对比：展示"质量-多样性权衡"的核心特性
+# 增大ζ值测试修正效果
+zeta_values = [1.0, 3.0, 5.0]
+print(f"DPS引导权重对比: zeta = {zeta_values}")
 
-t_val = 0.3
-x_test = np.linspace(-4, 4, 200)
+test_images = next(iter(test_loader))[0][:4].to(device)
 
-# 精确似然得分
-exact_ll_scores = np.zeros_like(x_test)
-for i, xi in enumerate(x_test):
-    eps_d = 1e-4
-    p_plus = _compute_likelihood(xi + eps_d, t_val, y_obs, A_val, sigma_y)
-    p_minus = _compute_likelihood(xi - eps_d, t_val, y_obs, A_val, sigma_y)
-    p_center = _compute_likelihood(xi, t_val, y_obs, A_val, sigma_y)
-    exact_ll_scores[i] = (p_plus - p_minus) / (2 * eps_d * p_center + 1e-30)
+sigma_y_denoise = 0.3
+noise_obs = torch.randn_like(test_images) * sigma_y_denoise
+y_denoise = test_images + noise_obs
 
-# DPS近似似然得分
-x0_hat = tweedie_estimate(x_test, t_val)
-dps_residual = (y_obs - A_val * x0_hat) / sigma_y**2
+identity_op = IdentityOperator()
 
-eps_j = 1e-4
-x0_hat_plus = tweedie_estimate(x_test + eps_j, t_val)
-x0_hat_minus = tweedie_estimate(x_test - eps_j, t_val)
-grad_x0_hat = (x0_hat_plus - x0_hat_minus) / (2 * eps_j)
+def compute_psnr(pred, target):
+    """pred/target: 在 [-1,1] 空间,统一转换到 [0,1] 再用 MAX=1 计算 PSNR"""
+    pred_01 = (pred + 1) / 2
+    target_01 = (target + 1) / 2
+    mse = torch.mean((pred_01 - target_01)**2).item()
+    return 10 * np.log10(1.0 / (mse + 1e-10))
 
-dps_approx_full = grad_x0_hat * dps_residual
-dps_approx_simple = dps_residual
+print("\nDPS去噪采样（不同zeta对比）...")
+x_hat_denoise_list = []
+psnr_denoise_list = []
+for zeta_val in zeta_values:
+    print(f"  zeta={zeta_val}...")
+    x_hat = dps_sample(model, y_denoise, identity_op, shape=test_images.shape, zeta=zeta_val)
+    x_hat_denoise_list.append(x_hat)
+    psnr = compute_psnr(x_hat, test_images)
+    psnr_denoise_list.append(psnr)
+    print(f"    PSNR: {psnr:.2f} dB")
 
-print("DPS近似 vs 精确似然得分 (t=0.3, y=0.5, A=1, sigma_y=0.5):")
-print(f"{'x_t':>6s}  {'精确':>10s}  {'DPS(含Jacobian)':>16s}  {'DPS(忽略Jacobian)':>18s}  {'相对误差(含)':>12s}  {'相对误差(略)':>12s}")
-print("-" * 80)
-for idx in [40, 60, 80, 100, 120, 140, 160]:
-    xi = x_test[idx]
-    exact = exact_ll_scores[idx]
-    dps_f = dps_approx_full[idx]
-    dps_s = dps_approx_simple[idx]
-    err_f = abs(dps_f - exact) / (abs(exact) + 1e-10)
-    err_s = abs(dps_s - exact) / (abs(exact) + 1e-10)
-    print(f"{xi:6.2f}  {exact:10.4f}  {dps_f:16.4f}  {dps_s:18.4f}  {err_f:12.4f}  {err_s:12.4f}")
+psnr_noisy = compute_psnr(y_denoise, test_images)
+print(f"  含噪观测PSNR: {psnr_noisy:.2f} dB")
 
-# 可视化
-fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+# ============================================================
+# 可视化：质量-多样性权衡
+# ============================================================
+# 数据在 [-1,1] 空间,imshow 之前统一转换到 [0,1]
 
-# (a) Tweedie估计
-axes[0].plot(x_test, x_test, 'k--', lw=1, alpha=0.5, label=r'$x_t$ (恒等)')
-axes[0].plot(x_test, x0_hat, 'b-', lw=2, label=r'Tweedie $\hat{x}_{0|t}$')
-axes[0].axhline(y_obs, color='r', linestyle=':', lw=1.5, label=r'观测 $y={}$'.format(y_obs))
-axes[0].set_xlabel(r'$x_t$', fontsize=12)
-axes[0].set_ylabel('去噪估计', fontsize=12)
-axes[0].set_title(f'(a) Tweedie估计 (t={t_val})', fontsize=13)
-axes[0].legend(fontsize=10)
-axes[0].grid(alpha=0.3)
+# 图: DPS去噪 - 质量-多样性权衡（观测y + 不同zeta的采样）
+n_rows = len(zeta_values) + 1
+fig, axes = plt.subplots(n_rows, 4, figsize=(16, 4*n_rows))
+for i in range(4):
+    # 第1行：观测y
+    axes[0, i].imshow(((y_denoise[i, 0] + 1) / 2).clamp(0, 1).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+    axes[0, i].axis('off')
+    if i == 0: axes[0, i].set_ylabel('观测y\n(含噪)', fontsize=11, rotation=0, labelpad=50)
+    
+    # 第2-N行：不同zeta的采样结果
+    for row_idx, (zeta_val, x_hat) in enumerate(zip(zeta_values, x_hat_denoise_list)):
+        axes[row_idx+1, i].imshow(((x_hat[i, 0] + 1) / 2).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+        axes[row_idx+1, i].axis('off')
+        if i == 0:
+            axes[row_idx+1, i].set_ylabel(f'ζ={zeta_val}\nPSNR={psnr_denoise_list[row_idx]:.1f}dB', 
+                                           fontsize=10, rotation=0, labelpad=50)
 
-# (b) 似然得分对比
-mask = np.abs(x_test) < 3.5
-axes[1].plot(x_test[mask], exact_ll_scores[mask], 'b-', lw=2, label=r'精确 $\nabla\log p(y|x_t)$')
-axes[1].plot(x_test[mask], dps_approx_full[mask], 'r--', lw=2, label='DPS近似 (含Jacobian)')
-axes[1].plot(x_test[mask], dps_approx_simple[mask], 'g:', lw=2, label='DPS近似 (忽略Jacobian)')
-axes[1].set_xlabel(r'$x_t$', fontsize=12)
-axes[1].set_ylabel('似然得分', fontsize=12)
-axes[1].set_title(f'(b) DPS近似 vs 精确似然得分 (t={t_val})', fontsize=13)
-axes[1].legend(fontsize=9)
-axes[1].grid(alpha=0.3)
-
-# (c) DPS误差随t的变化
-t_range = np.linspace(0.05, 0.95, 20)
-x_test_point = 0.5
-dps_errors_full = []
-dps_errors_simple = []
-for t_r in t_range:
-    exact_val = float(likelihood_grad_analytic(np.array([x_test_point]), t_r, y_obs, A_val, sigma_y))
-    x0h = float(tweedie_estimate(np.array([x_test_point]), t_r))
-    x0h_p = float(tweedie_estimate(np.array([x_test_point + eps_j]), t_r))
-    x0h_m = float(tweedie_estimate(np.array([x_test_point - eps_j]), t_r))
-    gx = (x0h_p - x0h_m) / (2 * eps_j)
-    residual = (y_obs - A_val * x0h) / sigma_y**2
-    dps_f = gx * residual
-    dps_s = residual
-    dps_errors_full.append(abs(dps_f - exact_val) / (abs(exact_val) + 1e-10))
-    dps_errors_simple.append(abs(dps_s - exact_val) / (abs(exact_val) + 1e-10))
-
-axes[2].semilogy(t_range, dps_errors_full, 'r-o', markersize=4, label='DPS近似 (含Jacobian)')
-axes[2].semilogy(t_range, dps_errors_simple, 'g-s', markersize=4, label='DPS近似 (忽略Jacobian)')
-axes[2].set_xlabel('t (噪声水平)', fontsize=12)
-axes[2].set_ylabel('相对误差', fontsize=12)
-axes[2].set_title('(c) DPS近似误差 vs 噪声水平', fontsize=13)
-axes[2].legend(fontsize=10)
-axes[2].grid(alpha=0.3)
-axes[2].annotate('t大->噪声高->x_hat_0不可靠\n->DPS近似误差增大',
-                xy=(0.65, 0.75), xycoords='axes fraction', fontsize=10,
-                bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffeaa7', alpha=0.8))
-
+plt.suptitle('DPS图像去噪：质量-多样性权衡（端到端）', fontsize=14, y=1.02)
 plt.tight_layout()
-fig_path = os.path.join(SAVE_DIR, 'DPS的Tweedie闭环验证.png')
+fig_path = os.path.join(SAVE_DIR, 'DPS图像去噪端到端.png')
 plt.savefig(fig_path, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"\n图已保存: {fig_path}")
 
-print("""
-关键发现：
-  1. DPS近似的似然得分方向正确，但幅度在高噪声时偏差增大
-  2. 忽略Jacobian项的DPS简化版在高噪声时误差更大
-  3. 这解释了13.3.2节指出的DPS局限：高噪声时delta函数近似质量下降
-""")
-
 print("\n" + "=" * 60)
-print("实验13.3-1 完成!")
+print("实验13.3-2 完成!")
 print("=" * 60)
 print("""
 关键结论:
-1. DPS的Tweedie闭环（13.3.2节）
-   - DPS用delta函数近似将不可解积分转化为单点求值
-   - 近似误差在高噪声时增大（Tweedie估计不可靠）
-   - 忽略Jacobian项是进一步的简化，引入额外误差
+1. DPS算法实践（13.3.2节）
+   - 在自训练的MNIST DDPM上成功实现DPS
+   - 端到端流程：训练扩散模型 -> DPS求解逆问题
+   - autograd自动处理任意正向算子A的Jacobian
 
-2. 实际启示
-   - DPS在高噪声时（t大）需要更小的引导权重zeta
-   - 这是13.4.3节介绍的"时变引导权重"方案的动机
+2. 质量-多样性权衡（对应13.4.3节）
+   - ζ小(0.1): 采样结果多样化，偏离观测（高多样性，低一致性）
+   - ζ大(1.0): 采样结果趋近观测，但可能发散（低多样性，高一致性）
+   - ζ=0.5是折中点，平衡质量与多样性
+
+3. 实践要点
+   - 梯度归一化（likelihood_grad / grad_norm）稳定不同时间步的修正幅度
+   - DDPM采样步使用修正后的eps_hat，无需重新推导
 """)

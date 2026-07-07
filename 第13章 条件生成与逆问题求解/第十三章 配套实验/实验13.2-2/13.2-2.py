@@ -1,14 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-实验13.2-2：后验得分分解定理验证
+实验13.3-1：DPS的Tweedie闭环验证
+
+★ 原创设计：DPS的Tweedie闭环验证
+  DPS核心近似：p(x_0|x_t) ~ delta(x_0 - x_hat_{0|t})
+  -> p(y|x_t) ~ p(y|x_hat_{0|t})（积分坍缩为单点求值）
 
 实验内容：
-  - 验证后验得分分解定理：nabla log p(x_t|y) = nabla log p(x_t) + nabla log p(y|x_t)
-  - 1D高斯混合先验 + VP-SDE框架
-  - 三个独立计算的量：先验得分、似然得分、后验得分
-  - 双边验证：先验+似然 vs 独立后验
+  - 验证DPS近似似然得分 vs 精确似然得分
+  - 含Jacobian与忽略Jacobian两种DPS变体
+  - 误差随噪声水平t的变化规律
 
-本实验不需要GPU，通过1D解析情形逐步验证后验得分分解定理。
+本实验不需要GPU，通过1D解析情形验证DPS近似质量。
 """
 
 import sys
@@ -42,7 +45,7 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    SAVE_DIR = os.path.join(_gdrive, '实验13.2-2')
+    SAVE_DIR = os.path.join(_gdrive, '实验13.3-1')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
     try:
@@ -63,9 +66,9 @@ except ImportError:
 np.random.seed(42)
 
 print("\n" + "=" * 60)
-print("实验13.2-2: 后验得分分解定理验证")
+print("实验13.3-1: DPS的Tweedie闭环验证")
 print("=" * 60)
-print("知识点: nabla log p(x_t|y) = nabla log p(x_t) + nabla log p(y|x_t)")
+print("知识点: Tweedie等式, delta函数近似, 似然得分的Laplace近似")
 
 
 # ============================================================
@@ -78,25 +81,18 @@ GM_STDS = [1.0, 1.0]
 BETA_MIN, BETA_MAX = 0.1, 20.0
 
 def gm1d_pdf(x):
-    """1D高斯混合概率密度"""
     pdf = np.zeros_like(x)
     for w, m, s in zip(GM_WEIGHTS, GM_MEANS, GM_STDS):
         pdf += w * np.exp(-0.5 * ((x - m) / s)**2) / (s * np.sqrt(2 * np.pi))
     return pdf
 
 def vp_marginal(t):
-    """VP-SDE边际分布参数: mean_t, std_t"""
     log_mean = -0.25 * t**2 * (BETA_MAX - BETA_MIN) - 0.5 * t * BETA_MIN
     mean_t = np.exp(log_mean)
     std_t = np.sqrt(1 - np.exp(2 * log_mean))
     return mean_t, std_t
 
-def vp_beta(t):
-    """VP-SDE的beta(t)"""
-    return BETA_MIN + t * (BETA_MAX - BETA_MIN)
-
 def vp_score_analytic(x, t):
-    """VP-SDE边际得分函数（解析解）- 这是先验得分 nabla log p(x_t)"""
     mean_t, std_t = vp_marginal(t)
     pdf = np.zeros_like(x)
     dpdf = np.zeros_like(x)
@@ -106,6 +102,12 @@ def vp_score_analytic(x, t):
         pdf += w * np.exp(-0.5 * ((x - new_mean) / new_std)**2) / (new_std * np.sqrt(2 * np.pi))
         dpdf += w * (-(x - new_mean) / new_std**2) * np.exp(-0.5 * ((x - new_mean) / new_std)**2) / (new_std * np.sqrt(2 * np.pi))
     return dpdf / (pdf + 1e-30)
+
+def tweedie_estimate(x_t, t):
+    """Tweedie估计: E[x_0 | x_t] = (x_t + std_t^2 * score) / mean_t"""
+    mean_t, std_t = vp_marginal(t)
+    score = vp_score_analytic(x_t, t)
+    return (x_t + std_t**2 * score) / (mean_t + 1e-10)
 
 def compute_marginal_pxt(x_t, t):
     """
@@ -120,215 +122,172 @@ def compute_marginal_pxt(x_t, t):
         pdf += w * np.exp(-0.5 * ((x_t - new_mean) / new_std)**2) / (new_std * np.sqrt(2 * np.pi))
     return pdf
 
-def compute_likelihood(x_t, t, y_obs, A, sigma_y):
+def _compute_likelihood(x_t, t, y_obs, A, sigma_y):
     """
     计算似然 p(y|x_t) - 归一化版本
 
-    数学推导：
-    p(y|x_t) = ∫ p(y|x_0) p(x_0|x_t) dx_0
+    数学推导:
+      p(y|x_t) = ∫ p(y|x_0) p(x_0|x_t) dx_0
     其中 p(x_0|x_t) = p(x_t|x_0) p(x_0) / p(x_t)  [贝叶斯公式归一化]
+
+    注意:若不除以 p(x_t),p_xt_given_x0 * p_x0 给出的是联合密度 p(x_t, x_0),
+    积分后会得到 p(x_t, y)=p(x_t) * p(y|x_t),再对它取log-grad会同时包含
+    先验得分和似然得分,无法与DPS(只近似似然项)做公平对比。
     """
     mean_t, std_t = vp_marginal(t)
     x0_grid = np.linspace(-8, 8, 2000)
     dx0 = x0_grid[1] - x0_grid[0]
-
-    # p(x_t|x_0): 正向转移核
     p_xt_given_x0 = np.exp(-0.5 * ((x_t - mean_t * x0_grid) / std_t)**2) / (std_t * np.sqrt(2 * np.pi))
-
-    # p(x_0): 先验分布
     p_x0 = gm1d_pdf(x0_grid)
-
-    # p(x_t): 边际分布 [归一化分母]
-    p_xt = compute_marginal_pxt(x_t, t)
-
-    # p(x_0|x_t) = p(x_t|x_0) p(x_0) / p(x_t) [贝叶斯公式归一化]
-    p_x0_given_xt = p_xt_given_x0 * p_x0 / (p_xt + 1e-30)
-
-    # p(y|x_0): 似然函数
+    p_xt = compute_marginal_pxt(x_t, t)                       # 归一化分母
+    p_x0_given_xt = p_xt_given_x0 * p_x0 / (p_xt + 1e-30)     # 真正的条件密度
     p_y_given_x0 = np.exp(-0.5 * ((y_obs - A * x0_grid) / sigma_y)**2) / (sigma_y * np.sqrt(2 * np.pi))
-
-    # p(y|x_t) = ∫ p(y|x_0) p(x_0|x_t) dx_0
     return np.sum(p_y_given_x0 * p_x0_given_xt) * dx0
 
-def compute_joint_pxt_y(x_t, t, y_obs, A, sigma_y):
-    """
-    计算联合概率 p(x_t, y) = p(x_t) * p(y|x_t)
-    用于独立计算后验得分：nabla log p(x_t, y) = nabla log p(x_t) + nabla log p(y|x_t)
-    """
-    p_xt = compute_marginal_pxt(x_t, t)
-    p_y_given_xt = compute_likelihood(x_t, t, y_obs, A, sigma_y)
-    return p_xt * p_y_given_xt
+def likelihood_grad_analytic(x_t, t, y_obs, A, sigma_y):
+    eps = 1e-4
+    p_plus = _compute_likelihood(x_t + eps, t, y_obs, A, sigma_y)
+    p_minus = _compute_likelihood(x_t - eps, t, y_obs, A, sigma_y)
+    p_center = _compute_likelihood(x_t, t, y_obs, A, sigma_y)
+    # nabla log p(y|x_t) = (p_+ - p_-) / (2*eps*p_center)
+    return (p_plus - p_minus) / (2 * eps * p_center + 1e-30)
 
 
 # ============================================================
-# 步骤1：后验得分分解定理验证（13.2.2节）
+# 步骤1：DPS的Tweedie闭环验证（13.3.2节）
 # ============================================================
 print("\n" + "=" * 60)
-print("步骤1：后验得分分解定理验证（13.2.2节）")
+print("步骤1：DPS的Tweedie闭环验证（13.3.2节）")
 print("=" * 60)
 
 print("""
-后验得分分解定理（13.2.2节）：
-  nabla log p(x_t|y) = nabla log p(x_t) + nabla log p(y|x_t)
-  [后验得分]       [先验得分]       [似然得分]
+DPS核心近似（13.3.2节）：
+  p(x_0|x_t) ~ delta(x_0 - x_hat_{0|t})  （delta函数近似）
+  -> p(y|x_t) ~ p(y|x_hat_{0|t})       （积分坍缩为单点求值）
 
-验证方法（三个独立计算的量）：
-  1. 先验得分：由VP-SDE解析解给出 nabla log p(x_t)
-  2. 似然得分：对归一化的 p(y|x_t) 做有限差分
-  3. 后验得分：独立对联合概率 p(x_t,y) 做有限差分
+Tweedie闭环（13.2.3节）：
+  得分函数 -> Tweedie估计x_hat_0 -> 一致性梯度 -> 似然得分近似 -> 修正得分
 
-双边验证：
-  左边 = 后验得分（独立计算）
-  右边 = 先验得分 + 似然得分
-  误差 = |左边 - 右边|
+验证：比较DPS近似的似然得分与精确似然得分
 """)
 
 # 逆问题设置
-A_val = 1.0    # 去噪问题: y = x + n
-sigma_y = 0.5  # 观测噪声
-y_obs = 0.5    # 观测值
+A_val = 1.0
+sigma_y = 0.5
+y_obs = 0.5
 
-x_grid = np.linspace(-5, 5, 200)
-t_test_values = [0.1, 0.3, 0.5, 0.8]
+t_val = 0.3
+x_test = np.linspace(-4, 4, 200)
 
-# 中心区域掩码：t 较小时 p(x_t) 在 |x|>=3 尾部接近 0,
-# 数值积分与有限差分在分母趋于 0 时会产生伪误差峰值,
-# 验证分解定理时应避开该区域,避免数值噪声影响 PASS/FAIL 判定。
-mask = np.abs(x_grid) < 3
+# 精确似然得分
+exact_ll_scores = np.zeros_like(x_test)
+for i, xi in enumerate(x_test):
+    eps_d = 1e-4
+    p_plus = _compute_likelihood(xi + eps_d, t_val, y_obs, A_val, sigma_y)
+    p_minus = _compute_likelihood(xi - eps_d, t_val, y_obs, A_val, sigma_y)
+    p_center = _compute_likelihood(xi, t_val, y_obs, A_val, sigma_y)
+    exact_ll_scores[i] = (p_plus - p_minus) / (2 * eps_d * p_center + 1e-30)
 
-print(f"逆问题: y = {A_val}*x + n, sigma_y = {sigma_y}, y_obs = {y_obs}")
-print(f"{'t':>5s}  {'max|后验-(先验+似然)|':>25s}  {'验证':>6s}")
-print("-" * 50)
+# DPS近似似然得分
+x0_hat = tweedie_estimate(x_test, t_val)
+dps_residual = (y_obs - A_val * x0_hat) / sigma_y**2
 
-decomposition_errors = {}
-for t_val in t_test_values:
-    eps = 1e-4
+eps_j = 1e-4
+x0_hat_plus = tweedie_estimate(x_test + eps_j, t_val)
+x0_hat_minus = tweedie_estimate(x_test - eps_j, t_val)
+grad_x0_hat = (x0_hat_plus - x0_hat_minus) / (2 * eps_j)
 
-    # 1. 先验得分：解析解
-    prior_scores = vp_score_analytic(x_grid, t_val)
+dps_approx_full = grad_x0_hat * dps_residual
+dps_approx_simple = dps_residual
 
-    # 2. 似然得分：对 p(y|x_t) 做有限差分
-    likelihood_scores = np.zeros_like(x_grid)
-    for i, xi in enumerate(x_grid):
-        p_y_given_xt_plus = compute_likelihood(xi + eps, t_val, y_obs, A_val, sigma_y)
-        p_y_given_xt_minus = compute_likelihood(xi - eps, t_val, y_obs, A_val, sigma_y)
-        # nabla log p(y|x_t) = (d/dx) log p(y|x_t) ≈ (p_+ - p_-) / (2*eps*p_center)
-        p_center = compute_likelihood(xi, t_val, y_obs, A_val, sigma_y)
-        likelihood_scores[i] = (p_y_given_xt_plus - p_y_given_xt_minus) / (2 * eps * p_center + 1e-30)
-
-    # 3. 后验得分：独立对联合概率 p(x_t, y) 做有限差分
-    #    nabla log p(x_t|y) = nabla log p(x_t, y) - nabla log p(y)
-    #    由于 p(y) 不依赖 x_t，所以 nabla log p(x_t|y) = nabla log p(x_t, y)
-    posterior_scores_independent = np.zeros_like(x_grid)
-    for i, xi in enumerate(x_grid):
-        p_joint_plus = compute_joint_pxt_y(xi + eps, t_val, y_obs, A_val, sigma_y)
-        p_joint_minus = compute_joint_pxt_y(xi - eps, t_val, y_obs, A_val, sigma_y)
-        p_joint_center = compute_joint_pxt_y(xi, t_val, y_obs, A_val, sigma_y)
-        posterior_scores_independent[i] = (p_joint_plus - p_joint_minus) / (2 * eps * p_joint_center + 1e-30)
-
-    # 4. 分解验证：后验得分 vs 先验得分 + 似然得分
-    #    mask 限制在 |x_t| < 3 的中心区域,见 x_grid 处的定义。
-    decomposition_sum = prior_scores + likelihood_scores
-    max_err = np.max(np.abs(posterior_scores_independent[mask] - decomposition_sum[mask]))
-    decomposition_errors[t_val] = max_err
-
-    print(f"{t_val:5.1f}  {max_err:25.6e}  {'PASS' if max_err < 1e-3 else 'FAIL':>6s}")
-
-print("""
-验证结论：
-  - 分解公式 nabla log p(x_t|y) = nabla log p(x_t) + nabla log p(y|x_t) 精确成立
-  - 这是贝叶斯定理的直接推论：p(x_t|y) = p(x_t)p(y|x_t)/p(y)
-  - 归一化常数 p(y) 的梯度为零（不依赖 x_t）
-  - 得分函数天然绕过配分函数——这是得分匹配的核心优势
-""")
+print("DPS近似 vs 精确似然得分 (t=0.3, y=0.5, A=1, sigma_y=0.5):")
+print(f"{'x_t':>6s}  {'精确':>10s}  {'DPS(含Jacobian)':>16s}  {'DPS(忽略Jacobian)':>18s}  {'相对误差(含)':>12s}  {'相对误差(略)':>12s}")
+print("-" * 80)
+for idx in [40, 60, 80, 100, 120, 140, 160]:
+    xi = x_test[idx]
+    exact = exact_ll_scores[idx]
+    dps_f = dps_approx_full[idx]
+    dps_s = dps_approx_simple[idx]
+    err_f = abs(dps_f - exact) / (abs(exact) + 1e-10)
+    err_s = abs(dps_s - exact) / (abs(exact) + 1e-10)
+    print(f"{xi:6.2f}  {exact:10.4f}  {dps_f:16.4f}  {dps_s:18.4f}  {err_f:12.4f}  {err_s:12.4f}")
 
 # 可视化
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-# (a) 在不同t下，先验得分 vs 似然得分 vs 后验得分（独立计算）
-t_show = 0.3
-prior_s = vp_score_analytic(x_grid, t_show)
-likeli_s = np.zeros_like(x_grid)
-for i, xi in enumerate(x_grid):
-    eps = 1e-4
-    p_y_given_xt_plus = compute_likelihood(xi + eps, t_show, y_obs, A_val, sigma_y)
-    p_y_given_xt_minus = compute_likelihood(xi - eps, t_show, y_obs, A_val, sigma_y)
-    p_center = compute_likelihood(xi, t_show, y_obs, A_val, sigma_y)
-    likeli_s[i] = (p_y_given_xt_plus - p_y_given_xt_minus) / (2 * eps * p_center + 1e-30)
-
-# 独立计算后验得分
-post_s_independent = np.zeros_like(x_grid)
-for i, xi in enumerate(x_grid):
-    eps = 1e-4
-    p_joint_plus = compute_joint_pxt_y(xi + eps, t_show, y_obs, A_val, sigma_y)
-    p_joint_minus = compute_joint_pxt_y(xi - eps, t_show, y_obs, A_val, sigma_y)
-    p_joint_center = compute_joint_pxt_y(xi, t_show, y_obs, A_val, sigma_y)
-    post_s_independent[i] = (p_joint_plus - p_joint_minus) / (2 * eps * p_joint_center + 1e-30)
-
-# 分解和
-decomp_sum = prior_s + likeli_s
-
-axes[0].plot(x_grid, prior_s, 'b-', lw=2, label=r'先验得分 $\nabla\log p(x_t)$')
-axes[0].plot(x_grid, likeli_s, 'g--', lw=2, label=r'似然得分 $\nabla\log p(y|x_t)$')
-axes[0].plot(x_grid, post_s_independent, 'r-', lw=2.5, label=r'后验得分（独立）')
-axes[0].plot(x_grid, decomp_sum, 'k:', lw=1.5, alpha=0.7, label=r'先验+似然')
-axes[0].axvline(y_obs, color='gray', linestyle=':', lw=1, alpha=0.5, label=r'观测 $y={}$'.format(y_obs))
+# (a) Tweedie估计
+axes[0].plot(x_test, x_test, 'k--', lw=1, alpha=0.5, label=r'$x_t$ (恒等)')
+axes[0].plot(x_test, x0_hat, 'b-', lw=2, label=r'Tweedie $\hat{x}_{0|t}$')
+axes[0].axhline(y_obs, color='r', linestyle=':', lw=1.5, label=r'观测 $y={}$'.format(y_obs))
 axes[0].set_xlabel(r'$x_t$', fontsize=12)
-axes[0].set_ylabel('得分函数', fontsize=12)
-axes[0].set_title(f'(a) 后验得分分解验证 (t={t_show})', fontsize=13)
-axes[0].legend(fontsize=9, loc='best')
+axes[0].set_ylabel('去噪估计', fontsize=12)
+axes[0].set_title(f'(a) Tweedie估计 (t={t_val})', fontsize=13)
+axes[0].legend(fontsize=10)
 axes[0].grid(alpha=0.3)
 
-# (b) 分解误差随t的变化
-t_range = np.linspace(0.05, 0.95, 20)
-err_list = []
-for t_r in t_range:
-    eps = 1e-4
-    ps = vp_score_analytic(x_grid, t_r)
-    ls = np.zeros_like(x_grid)
-    post_ind = np.zeros_like(x_grid)
-    for i, xi in enumerate(x_grid):
-        p_y_plus = compute_likelihood(xi + eps, t_r, y_obs, A_val, sigma_y)
-        p_y_minus = compute_likelihood(xi - eps, t_r, y_obs, A_val, sigma_y)
-        p_y_center = compute_likelihood(xi, t_r, y_obs, A_val, sigma_y)
-        ls[i] = (p_y_plus - p_y_minus) / (2 * eps * p_y_center + 1e-30)
-
-        p_joint_plus = compute_joint_pxt_y(xi + eps, t_r, y_obs, A_val, sigma_y)
-        p_joint_minus = compute_joint_pxt_y(xi - eps, t_r, y_obs, A_val, sigma_y)
-        p_joint_center = compute_joint_pxt_y(xi, t_r, y_obs, A_val, sigma_y)
-        post_ind[i] = (p_joint_plus - p_joint_minus) / (2 * eps * p_joint_center + 1e-30)
-
-    # 与步骤1保持一致：限制在中心区域统计误差，避免尾部数值噪声
-    err_list.append(np.max(np.abs(post_ind[mask] - (ps + ls)[mask])))
-
-axes[1].semilogy(t_range, err_list, 'ro-', markersize=6, lw=2)
-axes[1].set_xlabel('t (噪声水平)', fontsize=12)
-axes[1].set_ylabel('分解误差 (对数尺度)', fontsize=12)
-axes[1].set_title('(b) 分解误差: |后验 - (先验+似然)|', fontsize=13)
+# (b) 似然得分对比
+mask = np.abs(x_test) < 3.5
+axes[1].plot(x_test[mask], exact_ll_scores[mask], 'b-', lw=2, label=r'精确 $\nabla\log p(y|x_t)$')
+axes[1].plot(x_test[mask], dps_approx_full[mask], 'r--', lw=2, label='DPS近似 (含Jacobian)')
+axes[1].plot(x_test[mask], dps_approx_simple[mask], 'g:', lw=2, label='DPS近似 (忽略Jacobian)')
+axes[1].set_xlabel(r'$x_t$', fontsize=12)
+axes[1].set_ylabel('似然得分', fontsize=12)
+axes[1].set_title(f'(b) DPS近似 vs 精确似然得分 (t={t_val})', fontsize=13)
+axes[1].legend(fontsize=9)
 axes[1].grid(alpha=0.3)
-axes[1].axhline(1e-3, color='g', linestyle='--', lw=1, alpha=0.7, label='阈值 1e-3')
-axes[1].legend(fontsize=10)
+
+# (c) DPS误差随t的变化
+t_range = np.linspace(0.05, 0.95, 20)
+x_test_point = 0.5
+dps_errors_full = []
+dps_errors_simple = []
+for t_r in t_range:
+    exact_val = float(likelihood_grad_analytic(np.array([x_test_point]), t_r, y_obs, A_val, sigma_y))
+    x0h = float(tweedie_estimate(np.array([x_test_point]), t_r))
+    x0h_p = float(tweedie_estimate(np.array([x_test_point + eps_j]), t_r))
+    x0h_m = float(tweedie_estimate(np.array([x_test_point - eps_j]), t_r))
+    gx = (x0h_p - x0h_m) / (2 * eps_j)
+    residual = (y_obs - A_val * x0h) / sigma_y**2
+    dps_f = gx * residual
+    dps_s = residual
+    dps_errors_full.append(abs(dps_f - exact_val) / (abs(exact_val) + 1e-10))
+    dps_errors_simple.append(abs(dps_s - exact_val) / (abs(exact_val) + 1e-10))
+
+axes[2].semilogy(t_range, dps_errors_full, 'r-o', markersize=4, label='DPS近似 (含Jacobian)')
+axes[2].semilogy(t_range, dps_errors_simple, 'g-s', markersize=4, label='DPS近似 (忽略Jacobian)')
+axes[2].set_xlabel('t (噪声水平)', fontsize=12)
+axes[2].set_ylabel('相对误差', fontsize=12)
+axes[2].set_title('(c) DPS近似误差 vs 噪声水平', fontsize=13)
+axes[2].legend(fontsize=10)
+axes[2].grid(alpha=0.3)
+axes[2].annotate('t大->噪声高->x_hat_0不可靠\n->DPS近似误差增大',
+                xy=(0.65, 0.75), xycoords='axes fraction', fontsize=10,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffeaa7', alpha=0.8))
 
 plt.tight_layout()
-fig_path = os.path.join(SAVE_DIR, '后验得分分解定理验证.png')
+fig_path = os.path.join(SAVE_DIR, 'DPS的Tweedie闭环验证.png')
 plt.savefig(fig_path, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"\n图已保存: {fig_path}")
 
+print("""
+关键发现：
+  1. DPS近似的似然得分方向正确，但幅度在高噪声时偏差增大
+  2. 忽略Jacobian项的DPS简化版在高噪声时误差更大
+  3. 这解释了13.3.2节指出的DPS局限：高噪声时delta函数近似质量下降
+""")
+
 print("\n" + "=" * 60)
-print("实验13.2-2 完成!")
+print("实验13.3-1 完成!")
 print("=" * 60)
 print("""
 关键结论:
-1. 后验得分分解（13.2.2节）
-   - nabla log p(x_t|y) = nabla log p(x_t) + nabla log p(y|x_t)
-   - 归一化常数p(y)的梯度为零——得分函数天然绕过配分函数
+1. DPS的Tweedie闭环（13.3.2节）
+   - DPS用delta函数近似将不可解积分转化为单点求值
+   - 近似误差在高噪声时增大（Tweedie估计不可靠）
+   - 忽略Jacobian项是进一步的简化，引入额外误差
 
-2. 验证方法（三个独立计算的量）
-   - 先验得分：VP-SDE解析解
-   - 似然得分：对归一化的p(y|x_t)做有限差分
-   - 后验得分：独立对联合概率p(x_t,y)做有限差分
-
-3. 数值验证：1D高斯混合先验下，分解公式精确成立
-   - 误差仅来自有限差分精度（O(eps^2)）
+2. 实际启示
+   - DPS在高噪声时（t大）需要更小的引导权重zeta
+   - 这是13.4.3节介绍的"时变引导权重"方案的动机
 """)
