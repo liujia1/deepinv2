@@ -40,6 +40,7 @@ import matplotlib.pyplot as plt
 # ====== 静默警告 ======
 import logging
 import warnings
+from tqdm import tqdm
 logging.getLogger('matplotlib').setLevel(logging.ERROR)
 logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -286,7 +287,8 @@ if not skip_training_1rf:
     for epoch in range(start_epoch_1rf, num_epochs):
         rf_model.train()
         total_loss = 0
-        for x, _ in train_loader:
+        pbar = tqdm(train_loader, desc=f"[RF] Epoch {epoch+1}/{num_epochs}", leave=False)
+        for x, _ in pbar:
             x = x.to(device)
             batch = x.shape[0]
 
@@ -316,6 +318,10 @@ if not skip_training_1rf:
             loss.backward()
             optimizer.step()
             total_loss += loss.item() * batch
+            
+            # 更新进度条显示当前平均损失
+            pbar.set_postfix({'loss': f'{total_loss / len(train_loader.dataset):.6f}'})
+        pbar.close()
 
         if (epoch + 1) % 10 == 0 or epoch == 0:
             avg_loss = total_loss / len(train_loader.dataset)
@@ -432,7 +438,8 @@ if not skip_training_2rf:
     for epoch in range(start_epoch_2rf, num_epochs):
         model_2rf.train()
         total_loss = 0
-        for z_batch, x0_batch in reflow_loader:
+        pbar = tqdm(reflow_loader, desc=f"[2-RF] Epoch {epoch+1}/{num_epochs}", leave=False)
+        for z_batch, x0_batch in pbar:
             z_batch = z_batch.to(device)
             x0_batch = x0_batch.to(device)
             batch = z_batch.shape[0]
@@ -451,6 +458,10 @@ if not skip_training_2rf:
             loss.backward()
             optimizer_2rf.step()
             total_loss += loss.item() * batch
+            
+            # 更新进度条显示当前平均损失
+            pbar.set_postfix({'loss': f'{total_loss / len(reflow_dataset):.6f}'})
+        pbar.close()
 
         if (epoch + 1) % 10 == 0:
             avg_loss = total_loss / len(reflow_dataset)
