@@ -170,7 +170,7 @@ class SmallUNet(nn.Module):
         self.pool = nn.MaxPool2d(2)
 
     def forward(self, x_t, t):
-        """预测速度场v_θ(x_t, t)或噪声ε_θ(x_t, t)，t∈[0,1]"""
+        """预测速度场v_θ(x_t, t)或噪声ε_θ(x_t, t)，t为整数时间步t∈{0,...,T-1}"""
         t_emb = self.time_mlp(t)
         h1 = self.down1(x_t, t_emb)
         h2 = self.down2(self.pool(h1), t_emb)

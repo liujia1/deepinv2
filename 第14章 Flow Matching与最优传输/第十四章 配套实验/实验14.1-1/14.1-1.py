@@ -69,8 +69,6 @@ except ImportError:
 # ========================================================
 
 np.random.seed(42)
-import torch
-torch.manual_seed(42)
 
 
 # ============================================================
@@ -115,11 +113,12 @@ def independent_coupling(n):
 # ============================================================
 # 路径插值函数
 # ============================================================
-def linear_interp(z, x0, t):
+def linear_interp(z, target, t):
     """线性插值路径（14.3.4节 OT路径/14.4.1节直线插值）
-    x_t = (1-t)z + t*x_0,  v_t = x_0 - z
+    x_t = (1-t)z + t*target,  v_t = target - z
+    注意：本书采用Flow Matching记号约定（z=源/噪声，target=数据/目标）
     """
-    return (1 - t) * z + t * x0
+    return (1 - t) * z + t * target
 
 
 # ============================================================
@@ -142,12 +141,11 @@ n_points = 50
 source = sample_source(n_points)
 target = sample_target(n_points)
 
-# OT耦合
-np.random.seed(42)
+# OT耦合（匈牙利算法确定性求解，无需重设随机种子）
 ot_idx = ot_coupling(source, target)
 target_ot = target[ot_idx]
 
-# 独立耦合
+# 独立耦合（随机配对依赖随机种子，设置seed=123确保可复现）
 np.random.seed(123)
 ind_idx = independent_coupling(n_points)
 target_ind = target[ind_idx]
@@ -207,6 +205,10 @@ print(f"  独立耦合平均传输代价: {cost_indep:.4f}")
 print(f"  OT耦合平均传输代价:   {cost_ot:.4f}")
 print(f"  OT代价 / 独立代价:    {cost_ot/cost_indep:.4f}")
 print(f"  → OT耦合传输代价更低（Wasserstein距离更短）")
+
+# 验证OT最优性：OT耦合代价必然≤独立耦合（最优传输定义保证）
+assert cost_ot <= cost_indep + 1e-9, "OT耦合代价不应高于独立耦合（违反最优性）"
+print("  ✓ OT最优性验证通过：cost_ot ≤ cost_indep")
 
 
 # ============================================================

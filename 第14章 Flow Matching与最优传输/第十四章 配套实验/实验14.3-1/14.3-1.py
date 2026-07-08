@@ -194,7 +194,6 @@ def train_cfm(n_epochs=2000, n_samples=256, coupling='independent', lr=1e-3, che
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     losses = []
     start_epoch = 0
-    is_final = False
 
     # 检查是否有最终权重
     if final_checkpoint_path and os.path.exists(final_checkpoint_path):
@@ -204,7 +203,6 @@ def train_cfm(n_epochs=2000, n_samples=256, coupling='independent', lr=1e-3, che
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         losses = checkpoint.get('losses', [])
-        is_final = True
         return model, losses
 
     # 检查是否有中间权重
@@ -216,9 +214,6 @@ def train_cfm(n_epochs=2000, n_samples=256, coupling='independent', lr=1e-3, che
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         start_epoch = checkpoint.get('epoch', 0) + 1
         losses = checkpoint.get('losses', [])
-
-    if is_final:
-        return model, losses
 
     print(f"训练 {coupling} CFM，从 epoch {start_epoch} 开始...")
 

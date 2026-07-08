@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+﻿﻿# -*- coding: utf-8 -*-
 """
 实验14.4-1 Rectified Flow训练：图像生成实践
 对应知识点：
@@ -167,7 +167,7 @@ class SmallUNet(nn.Module):
         self.pool = nn.MaxPool2d(2)
 
     def forward(self, x_t, t):
-        """预测速度场v_θ(x_t, t)，t∈[0,1]"""
+        """预测速度场v_θ(x_t, t)，t为整数时间步t∈{0,...,T-1}"""
         t_emb = self.time_mlp(t)
         h1 = self.down1(x_t, t_emb)
         h2 = self.down2(self.pool(h1), t_emb)
@@ -183,17 +183,8 @@ class SmallUNet(nn.Module):
 
 # ============================================================
 # DDPM噪声调度（用于对比实验）
-# ============================================================
+# T为时间离散化粒度，用于将连续t∈[0,1]映射到正弦嵌入的整数输入
 T = 200
-beta_min, beta_max = 1e-4, 0.02
-betas = torch.linspace(beta_min, beta_max, T).to(device)
-alphas = 1.0 - betas
-alpha_bars = torch.cumprod(alphas, dim=0)
-sqrt_alpha_bars = torch.sqrt(alpha_bars)
-sqrt_one_minus_alpha_bars = torch.sqrt(1 - alpha_bars)
-posterior_var = betas * (1 - torch.cat([torch.ones(1, device=device), alpha_bars[:-1]])) / (1 - alpha_bars)
-sqrt_recip_alphas = 1.0 / torch.sqrt(alphas)
-beta_over_sqrt_1m_ab = betas / sqrt_one_minus_alpha_bars
 
 
 # ============================================================
@@ -257,18 +248,23 @@ optimizer = torch.optim.Adam(rf_model.parameters(), lr=2e-4)
 
 # Resume检查：是否已有训练好的权重
 skip_training_1rf = False
+start_epoch_1rf = 0
 if os.path.exists(FINAL_CHECKPOINT_PATH):
     print(f"\n检测到最终权重: {FINAL_CHECKPOINT_PATH}")
     print("直接加载，跳过训练过程")
-    rf_model.load_state_dict(torch.load(FINAL_CHECKPOINT_PATH, map_location=device))
+    checkpoint_1rf = torch.load(FINAL_CHECKPOINT_PATH, map_location=device, weights_only=False)
+    rf_model.load_state_dict(checkpoint_1rf['model_state_dict'])
     skip_training_1rf = True
 elif os.path.exists(CHECKPOINT_PATH):
     print(f"\n检测到中间权重: {CHECKPOINT_PATH}")
     print("继续训练...")
-    rf_model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=device))
+    checkpoint_1rf = torch.load(CHECKPOINT_PATH, map_location=device, weights_only=False)
+    rf_model.load_state_dict(checkpoint_1rf['model_state_dict'])
+    optimizer.load_state_dict(checkpoint_1rf['optimizer_state_dict'])
+    start_epoch_1rf = checkpoint_1rf.get('epoch', 0) + 1
 
 if not skip_training_1rf:
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch_1rf, num_epochs):
         rf_model.train()
         total_loss = 0
         for x, _ in train_loader:
@@ -280,10 +276,9 @@ if not skip_training_1rf:
 
             # 采样t ~ U[0,1]（映射到整数时间步）
             t_continuous = torch.rand(batch, device=device)
-            # ★ 修正：RF中t_continuous=0是噪声，t_continuous=1是干净
+            # RF中t_continuous=0是噪声，t_continuous=1是干净
             # DDPM中t_int=0是干净，t_int=T-1是噪声
-            # 因此需要反转映射：t_int = (1 - t_continuous) * (T-1)
-            # 这样RF的"噪声时间"对应DDPM的"噪声时间"，正弦嵌入语义对齐
+            # 反转映射使正弦嵌入语义对齐：RF噪声端→DDPM噪声端
             t_int = ((1 - t_continuous) * (T - 1)).long()
 
             # 线性插值: x_t = (1-t)z + t*x_0
@@ -307,11 +302,18 @@ if not skip_training_1rf:
             avg_loss = total_loss / len(train_loader.dataset)
             print(f"  Epoch {epoch+1:3d}/{num_epochs}  Loss={avg_loss:.6f}")
 
-        # 保存中间checkpoint
-        torch.save(rf_model.state_dict(), CHECKPOINT_PATH)
+        # 保存中间checkpoint（含optimizer状态）
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': rf_model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+        }, CHECKPOINT_PATH)
 
-    # 训练完成，保存最终权重
-    torch.save(rf_model.state_dict(), FINAL_CHECKPOINT_PATH)
+    # 训练完成，保存最终权重（含optimizer状态）
+    torch.save({
+        'model_state_dict': rf_model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+    }, FINAL_CHECKPOINT_PATH)
     print(f"\n最终权重已保存: {FINAL_CHECKPOINT_PATH}")
 
 print("Rectified Flow训练完成！")
@@ -334,23 +336,24 @@ print("""
   对比1-RF和2-RF在1步采样下的质量
 """)
 
-# 生成端点对
-print("生成Reflow端点对...")
+# 生成端点对（仅从噪声z出发经ODE推演，不需要真实数据）
+n_reflow = len(train_dataset)
+print(f"生成Reflow端点对 ({n_reflow} 对)...")
 rf_model.eval()
 reflow_pairs_z = []
 reflow_pairs_x0 = []
+batch_size_reflow = 128
 
 with torch.no_grad():
-    for x, _ in train_loader:
-        x = x.to(device)
-        z = torch.randn_like(x)
+    for i in range(0, n_reflow, batch_size_reflow):
+        batch_sz = min(batch_size_reflow, n_reflow - i)
+        z = torch.randn(batch_sz, 1, 28, 28, device=device)
         # 运行Flow ODE得到终点
         x_t = z.clone()
         dt = 1.0 / 50
         for step in range(50):
             t_val = step / 50
-            # ★ 修正：与flow_ode_sample一致的时间映射
-            t_int = torch.full((x.shape[0],), int((1 - t_val) * (T - 1)), device=device, dtype=torch.long)
+            t_int = torch.full((batch_sz,), int((1 - t_val) * (T - 1)), device=device, dtype=torch.long)
             v = rf_model(x_t, t_int)
             x_t = x_t + v * dt
         reflow_pairs_z.append(z.cpu())
@@ -370,18 +373,23 @@ reflow_loader = DataLoader(reflow_dataset, batch_size=128, shuffle=True)
 
 # Resume检查：是否已有2-RF训练好的权重
 skip_training_2rf = False
+start_epoch_2rf = 0
 if os.path.exists(FINAL_2RF_PATH):
     print(f"\n检测到最终权重: {FINAL_2RF_PATH}")
     print("直接加载，跳过训练过程")
-    model_2rf.load_state_dict(torch.load(FINAL_2RF_PATH, map_location=device))
+    checkpoint_2rf = torch.load(FINAL_2RF_PATH, map_location=device, weights_only=False)
+    model_2rf.load_state_dict(checkpoint_2rf['model_state_dict'])
     skip_training_2rf = True
 elif os.path.exists(CHECKPOINT_2RF_PATH):
     print(f"\n检测到中间权重: {CHECKPOINT_2RF_PATH}")
     print("继续训练...")
-    model_2rf.load_state_dict(torch.load(CHECKPOINT_2RF_PATH, map_location=device))
+    checkpoint_2rf = torch.load(CHECKPOINT_2RF_PATH, map_location=device, weights_only=False)
+    model_2rf.load_state_dict(checkpoint_2rf['model_state_dict'])
+    optimizer_2rf.load_state_dict(checkpoint_2rf['optimizer_state_dict'])
+    start_epoch_2rf = checkpoint_2rf.get('epoch', 0) + 1
 
 if not skip_training_2rf:
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch_2rf, num_epochs):
         model_2rf.train()
         total_loss = 0
         for z_batch, x0_batch in reflow_loader:
@@ -390,7 +398,7 @@ if not skip_training_2rf:
             batch = z_batch.shape[0]
 
             t_continuous = torch.rand(batch, device=device)
-            # ★ 修正：与RF训练一致的反转映射
+            # 反转映射使正弦嵌入语义对齐：RF噪声端→DDPM噪声端
             t_int = ((1 - t_continuous) * (T - 1)).long()
             t_4d = t_continuous[:, None, None, None]
 
@@ -408,11 +416,18 @@ if not skip_training_2rf:
             avg_loss = total_loss / len(reflow_dataset)
             print(f"  [2-RF] Epoch {epoch+1:3d}/{num_epochs}  Loss={avg_loss:.6f}")
 
-        # 保存中间checkpoint
-        torch.save(model_2rf.state_dict(), CHECKPOINT_2RF_PATH)
+        # 保存中间checkpoint（含optimizer状态）
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model_2rf.state_dict(),
+            'optimizer_state_dict': optimizer_2rf.state_dict(),
+        }, CHECKPOINT_2RF_PATH)
 
-    # 训练完成，保存最终权重
-    torch.save(model_2rf.state_dict(), FINAL_2RF_PATH)
+    # 训练完成，保存最终权重（含optimizer状态）
+    torch.save({
+        'model_state_dict': model_2rf.state_dict(),
+        'optimizer_state_dict': optimizer_2rf.state_dict(),
+    }, FINAL_2RF_PATH)
     print(f"\n最终权重已保存: {FINAL_2RF_PATH}")
 
 # 对比1-RF和2-RF的少步采样

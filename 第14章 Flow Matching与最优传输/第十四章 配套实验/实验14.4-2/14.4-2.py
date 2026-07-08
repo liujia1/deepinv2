@@ -158,7 +158,6 @@ def train_cfm(n_epochs=2000, n_samples=256, coupling='independent', lr=1e-3,
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     losses = []
     start_epoch = 0
-    skip_training = False
 
     # 检查是否有最终权重
     if final_checkpoint_path and os.path.exists(final_checkpoint_path):
