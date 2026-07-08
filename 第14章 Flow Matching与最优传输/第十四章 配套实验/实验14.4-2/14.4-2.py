@@ -1,22 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-实验14.4-2 Reflow迭代变直：轨迹逐步变直
-对应知识点：
-  - 14.4节 Rectified Flow（直线插值、轨迹交叉、Reflow）
-  - 14.4.1节 Rectified Flow训练
-  - 14.4.2节 轨迹交叉问题
-  - 14.4.3节 Reflow迭代变直
-
-本实验不需要GPU，通过2D点云的可视化直观理解Reflow的核心概念。
-
-素材来源：
-  - book_plan.md的实验14.1计划
-  - 14.4节的理论内容
-  - ★ 原创设计：Reflow逐轮变直的轨迹可视化
-
-实验内容：
-  Rectified Flow与Reflow迭代变直（14.4节）
-"""
 
 import sys
 import io
@@ -280,28 +262,8 @@ def compute_straightness(traj):
 
 
 # ============================================================
-# Rectified Flow与Reflow（14.4节）
+# Rectified Flow与Reflow
 # ============================================================
-print("=" * 60)
-print("实验14.4-2：Rectified Flow与Reflow（14.4节）")
-print("=" * 60)
-
-print("""
-14.4.1节：Rectified Flow使用直线插值 x_t = (1-t)z + t*x_0
-  训练目标: ||v_θ(x_t, t) - (x_0 - z)||²
-
-14.4.2节：轨迹交叉导致边际路径弯曲
-  - 条件路径是直的，但多条直线路径交叉→边际向量场需要"折中"→弯曲
-
-14.4.3节：Reflow迭代变直
-  1-RF: 用独立耦合训练
-  2-RF: 用1-RF的ODE端点重新配对，再训练
-  3-RF: 用2-RF的ODE端点重新配对，再训练
-  ...
-  Reflow极限→OT映射！
-
-★ 原创设计：可视化1-RF→2-RF→3-RF的轨迹逐步变直
-""")
 
 # 训练初始模型（1-RF）
 print("\n训练 1-Rectified Flow (独立耦合)...")

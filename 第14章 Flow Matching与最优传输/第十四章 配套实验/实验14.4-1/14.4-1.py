@@ -1,24 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-实验14.4-1 Rectified Flow训练：图像生成实践
-对应知识点：
-  - 14.3.4节 高斯条件路径（直线插值）
-  - 14.4.1节 Rectified Flow训练
-  - 14.4.3节 Reflow迭代变直
-
-在MNIST上用小型UNet实现Rectified Flow，体验训练与蒸馏过程。
-
-素材来源：
-  - 实验11.2的SmallUNet架构和MNIST数据管道
-  - 14.3/14.4节的理论内容
-  - ★ 原创设计：Reflow蒸馏过程可视化
-
-运行前提：需要GPU
-
-实验内容：
-  步骤1：训练Rectified Flow（速度预测，14.4.1节）
-  步骤2：Reflow蒸馏为少步模型（14.4.3节）
-"""
 
 # ====== Windows UTF-8支持 ======
 import sys
@@ -245,22 +225,8 @@ def compute_nn_distance(generated, reference):
 
 
 # ============================================================
-# 步骤1：训练Rectified Flow（速度预测，14.4.1节）
+# 步骤1：训练Rectified Flow（速度预测）
 # ============================================================
-print(f"\n{'='*60}")
-print("实验14.4-1 步骤1：训练Rectified Flow（速度预测，14.4.1节）")
-print("=" * 60)
-
-print("""
-14.4.1节：Rectified Flow训练
-  插值路径: x_t = (1-t)z + t*x_0, t∈[0,1]
-  速度目标: v = x_0 - z
-  训练损失: ||v_θ(x_t, t) - (x_0 - z)||²
-
-  对比DDPM:
-  - DDPM: ||ε̂_θ(x_t, t) - ε||², t∈{0,...,T-1}, 离散时间
-  - RF:   ||v_θ(x_t, t) - (x_0-z)||², t∈[0,1], 连续时间
-""")
 
 num_epochs = 50
 rf_model = SmallUNet().to(device)
@@ -345,21 +311,8 @@ print("Rectified Flow训练完成！")
 
 
 # ============================================================
-# 步骤2：Reflow蒸馏为少步模型（14.4.3节）
+# 步骤2：Reflow蒸馏为少步模型
 # ============================================================
-print(f"\n{'='*60}")
-print("实验14.4-1 步骤2：Reflow蒸馏为少步模型（14.4.3节）")
-print("=" * 60)
-
-print("""
-14.4.3节 Reflow：
-  1. 用当前模型的Flow ODE生成端点对 (z, x̂_0)
-  2. 用这些端点对重新训练模型
-  3. 重复→轨迹逐步变直→少步采样质量提升
-
-★ 原创设计：用1-RF模型生成端点对，训练2-RF模型，
-  对比1-RF和2-RF在1步采样下的质量
-""")
 
 # 生成端点对（仅从噪声z出发经ODE推演，不需要真实数据）
 n_reflow = len(train_dataset)
@@ -378,9 +331,23 @@ else:
     reflow_pairs_z = []
     reflow_pairs_x0 = []
     batch_size_reflow = 128
+    n_batches = (n_reflow + batch_size_reflow - 1) // batch_size_reflow
+    resume_batch_idx = 0  # 从中断的batch继续
+
+    # 检查是否有部分生成的数据
+    if os.path.exists(REFLOW_PAIRS_PARTIAL_PATH):
+        print(f"\n检测到部分生成的端点对: {REFLOW_PAIRS_PARTIAL_PATH}")
+        print("从中断处继续...")
+        partial_checkpoint = torch.load(REFLOW_PAIRS_PARTIAL_PATH, map_location='cpu', weights_only=False)
+        reflow_pairs_z = partial_checkpoint['pairs_z']
+        reflow_pairs_x0 = partial_checkpoint['pairs_x0']
+        resume_batch_idx = partial_checkpoint.get('batch_idx', len(reflow_pairs_z))
+        print(f"  已恢复 {len(reflow_pairs_z)} 对，从第 {resume_batch_idx} 批继续")
 
     with torch.no_grad():
-        for i in range(0, n_reflow, batch_size_reflow):
+        pbar = tqdm(range(resume_batch_idx, n_batches), desc="生成端点对", unit="batch", initial=resume_batch_idx, total=n_batches)
+        for batch_idx in pbar:
+            i = batch_idx * batch_size_reflow
             batch_sz = min(batch_size_reflow, n_reflow - i)
             z = torch.randn(batch_sz, 1, 28, 28, device=device)
             # 运行Flow ODE得到终点
@@ -394,20 +361,33 @@ else:
             reflow_pairs_z.append(z.cpu())
             reflow_pairs_x0.append(x_t.cpu())
 
-            # 进度提示（每1000批）
-            if (i + batch_size_reflow) % 1000 == 0 or i + batch_size_reflow >= n_reflow:
-                print(f"  已生成 {min(i + batch_size_reflow, n_reflow)}/{n_reflow} 对")
+            # 更新进度条显示已生成样本数
+            pbar.set_postfix({'samples': f'{min(i + batch_sz, n_reflow)}/{n_reflow}'})
+            
+            # 每50批保存一次中间状态（防止中断后重复生成）
+            if (batch_idx + 1) % 50 == 0:
+                torch.save({
+                    'pairs_z': reflow_pairs_z,
+                    'pairs_x0': reflow_pairs_x0,
+                    'batch_idx': batch_idx + 1,
+                }, REFLOW_PAIRS_PARTIAL_PATH)
+        pbar.close()
 
     reflow_z = torch.cat(reflow_pairs_z, dim=0)
     reflow_x0 = torch.cat(reflow_pairs_x0, dim=0)
     print(f"  生成端点对: {len(reflow_z)} 对")
 
-    # 保存端点对，避免下次重新生成
+    # 保存最终端点对
     torch.save({
         'reflow_z': reflow_z,
         'reflow_x0': reflow_x0,
     }, REFLOW_PAIRS_PATH)
     print(f"端点对已保存: {REFLOW_PAIRS_PATH}")
+    
+    # 删除中间状态文件
+    if os.path.exists(REFLOW_PAIRS_PARTIAL_PATH):
+        os.remove(REFLOW_PAIRS_PARTIAL_PATH)
+        print(f"已清理中间状态: {REFLOW_PAIRS_PARTIAL_PATH}")
 
 # 训练2-RF模型
 print("训练 2-Rectified Flow...")

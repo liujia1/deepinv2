@@ -1,26 +1,4 @@
 # -*- coding: utf-8 -*-
-"""
-实验14.3-2 Flow ODE采样优势：少步采样与DDPM对比
-对应知识点：
-  - 14.3.4节 Flow ODE采样（少步采样）
-  - 14.3.6节 DDIM=FM with diffusion coupling
-  - 14.3节 Flow Matching理论
-
-在MNIST上对比Rectified Flow与DDPM的少步采样质量。
-
-素材来源：
-  - 实验11.2的SmallUNet架构和MNIST数据管道
-  - 14.3节的理论内容
-  - ★ 原创设计：DDPM vs Rectified Flow的少步采样质量对比
-  - ★ 原创设计：1步/5步/10步/50步采样对比
-
-运行前提：需要GPU
-
-实验内容：
-  步骤1：训练Rectified Flow与DDPM基线
-  步骤2：Flow ODE采样——少步采样对比（14.3.4节）
-  步骤3：DDPM vs Rectified Flow少步采样对比（14.3.6节）
-"""
 
 import sys
 import io
@@ -269,9 +247,6 @@ print(f"训练集: {len(train_dataset)}, 测试集: {len(test_dataset)}")
 # ============================================================
 # 步骤1：训练Rectified Flow与DDPM基线
 # ============================================================
-print(f"\n{'='*60}")
-print("实验14.3-2 步骤1：训练Rectified Flow与DDPM基线")
-print("=" * 60)
 
 num_epochs = 50
 
@@ -400,23 +375,8 @@ print("\n两个模型训练完成！")
 
 
 # ============================================================
-# 步骤2：Flow ODE采样——少步采样对比（14.3.4节）
+# 步骤2：Flow ODE采样——少步采样对比
 # ============================================================
-print(f"\n{'='*60}")
-print("实验14.3-2 步骤2：Flow ODE采样——少步采样对比（14.3.4节）")
-print("=" * 60)
-
-print("""
-14.3.4节：Flow ODE采样
-  - 直线路径允许大幅减少采样步数
-  - RF理论上可以1步采样
-  - 实际中需要几步才能保证质量
-
-对比（步数为文献参考值，本实验仅实现DDPM和RF）：
-  - DDPM: 200步（SDE采样）
-  - DDIM: ~50步（ODE采样，扩散耦合）——文献值，未在本实验实现
-  - RF: 1-50步（ODE采样，直线耦合）——本实验实际验证
-""")
 
 n_samples = 8
 sample_shape = (n_samples, 1, 28, 28)
@@ -450,21 +410,8 @@ print(f"图2已保存: {fig_path1}")
 
 
 # ============================================================
-# 步骤3：DDPM vs Rectified Flow少步采样对比（14.3.6节）
+# 步骤3：DDPM vs Rectified Flow少步采样对比
 # ============================================================
-print(f"\n{'='*60}")
-print("实验14.3-2 步骤3：DDPM vs Rectified Flow少步采样对比（14.3.6节）")
-print("=" * 60)
-
-print("""
-14.3.6节：DDIM = FM with diffusion coupling
-  - DDPM: SDE采样，路径弯曲，需~200步
-  - DDIM: ODE采样，半直路径，~50步（文献值，未在本实验实现）
-  - Rectified Flow: ODE采样，更直的路径，更少步数
-
-★ 原创设计：同一架构(UNet)，不同训练目标(ε-pred vs v-pred)，
-  对比少步采样质量（本实验实际验证DDPM vs RF）
-""")
 
 # DDPM采样
 print("DDPM采样中(200步)...")
