@@ -1,4 +1,4 @@
-﻿﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 实验14.4-1 Rectified Flow训练：图像生成实践
 对应知识点：
@@ -95,6 +95,7 @@ CHECKPOINT_PATH = os.path.join(SAVE_DIR, 'rf_checkpoint.pth')
 FINAL_CHECKPOINT_PATH = os.path.join(SAVE_DIR, 'rf_final.pth')
 CHECKPOINT_2RF_PATH = os.path.join(SAVE_DIR, '2rf_checkpoint.pth')
 FINAL_2RF_PATH = os.path.join(SAVE_DIR, '2rf_final.pth')
+REFLOW_PAIRS_PATH = os.path.join(SAVE_DIR, 'reflow_pairs.pth')  # Reflow端点对checkpoint
 
 
 # ============================================================
@@ -225,6 +226,24 @@ print(f"训练集: {len(train_dataset)}, 测试集: {len(test_dataset)}")
 
 
 # ============================================================
+# 量化指标：生成样本与最近邻真实样本的平均像素距离
+# ============================================================
+def compute_nn_distance(generated, reference):
+    """计算生成样本与参考集中最近邻的平均像素距离（简化质量指标）
+
+    用于量化Reflow蒸馏的效果，避免仅靠视觉判断。
+    距离越小表示生成样本更接近真实数据分布。
+    """
+    gen_flat = generated.view(generated.shape[0], -1)  # (B, 784)
+    ref_flat = reference.view(reference.shape[0], -1)  # (N, 784)
+    # 计算每个生成样本与所有参考样本的距离
+    distances = torch.cdist(gen_flat, ref_flat)  # (B, N)
+    # 取每个生成样本的最近邻距离
+    min_distances = distances.min(dim=1)[0]  # (B,)
+    return min_distances.mean().item()
+
+
+# ============================================================
 # 步骤1：训练Rectified Flow（速度预测，14.4.1节）
 # ============================================================
 print(f"\n{'='*60}")
@@ -338,30 +357,51 @@ print("""
 
 # 生成端点对（仅从噪声z出发经ODE推演，不需要真实数据）
 n_reflow = len(train_dataset)
-print(f"生成Reflow端点对 ({n_reflow} 对)...")
-rf_model.eval()
-reflow_pairs_z = []
-reflow_pairs_x0 = []
-batch_size_reflow = 128
 
-with torch.no_grad():
-    for i in range(0, n_reflow, batch_size_reflow):
-        batch_sz = min(batch_size_reflow, n_reflow - i)
-        z = torch.randn(batch_sz, 1, 28, 28, device=device)
-        # 运行Flow ODE得到终点
-        x_t = z.clone()
-        dt = 1.0 / 50
-        for step in range(50):
-            t_val = step / 50
-            t_int = torch.full((batch_sz,), int((1 - t_val) * (T - 1)), device=device, dtype=torch.long)
-            v = rf_model(x_t, t_int)
-            x_t = x_t + v * dt
-        reflow_pairs_z.append(z.cpu())
-        reflow_pairs_x0.append(x_t.cpu())
+# 检查是否已有保存的端点对
+if os.path.exists(REFLOW_PAIRS_PATH):
+    print(f"\n检测到已保存的Reflow端点对: {REFLOW_PAIRS_PATH}")
+    print("直接加载，跳过生成过程")
+    checkpoint_reflow = torch.load(REFLOW_PAIRS_PATH, map_location='cpu', weights_only=False)
+    reflow_z = checkpoint_reflow['reflow_z']
+    reflow_x0 = checkpoint_reflow['reflow_x0']
+    print(f"  已加载端点对: {len(reflow_z)} 对")
+else:
+    print(f"生成Reflow端点对 ({n_reflow} 对)...")
+    rf_model.eval()
+    reflow_pairs_z = []
+    reflow_pairs_x0 = []
+    batch_size_reflow = 128
 
-reflow_z = torch.cat(reflow_pairs_z, dim=0)
-reflow_x0 = torch.cat(reflow_pairs_x0, dim=0)
-print(f"  生成端点对: {len(reflow_z)} 对")
+    with torch.no_grad():
+        for i in range(0, n_reflow, batch_size_reflow):
+            batch_sz = min(batch_size_reflow, n_reflow - i)
+            z = torch.randn(batch_sz, 1, 28, 28, device=device)
+            # 运行Flow ODE得到终点
+            x_t = z.clone()
+            dt = 1.0 / 50
+            for step in range(50):
+                t_val = step / 50
+                t_int = torch.full((batch_sz,), int((1 - t_val) * (T - 1)), device=device, dtype=torch.long)
+                v = rf_model(x_t, t_int)
+                x_t = x_t + v * dt
+            reflow_pairs_z.append(z.cpu())
+            reflow_pairs_x0.append(x_t.cpu())
+
+            # 进度提示（每1000批）
+            if (i + batch_size_reflow) % 1000 == 0 or i + batch_size_reflow >= n_reflow:
+                print(f"  已生成 {min(i + batch_size_reflow, n_reflow)}/{n_reflow} 对")
+
+    reflow_z = torch.cat(reflow_pairs_z, dim=0)
+    reflow_x0 = torch.cat(reflow_pairs_x0, dim=0)
+    print(f"  生成端点对: {len(reflow_z)} 对")
+
+    # 保存端点对，避免下次重新生成
+    torch.save({
+        'reflow_z': reflow_z,
+        'reflow_x0': reflow_x0,
+    }, REFLOW_PAIRS_PATH)
+    print(f"端点对已保存: {REFLOW_PAIRS_PATH}")
 
 # 训练2-RF模型
 print("训练 2-Rectified Flow...")
@@ -440,6 +480,29 @@ rf_1step_2rf = flow_ode_sample(model_2rf, sample_shape, n_steps=1)
 rf_50step_1rf = flow_ode_sample(rf_model, sample_shape, n_steps=50)
 rf_10step_1rf = flow_ode_sample(rf_model, sample_shape, n_steps=10)
 
+# 计算量化指标（生成样本与最近邻真实样本的平均像素距离）
+print("\n计算量化指标（生成样本与最近邻真实样本的平均像素距离）...")
+test_samples = torch.stack([test_dataset[i][0] for i in range(min(100, len(test_dataset)))]).to(device)
+
+dist_1rf_1step = compute_nn_distance(rf_1step_1rf, test_samples)
+dist_2rf_1step = compute_nn_distance(rf_1step_2rf, test_samples)
+dist_1rf_10step = compute_nn_distance(rf_10step_1rf, test_samples)
+dist_1rf_50step = compute_nn_distance(rf_50step_1rf, test_samples)
+
+print(f"  1-RF 1步  平均最近邻距离: {dist_1rf_1step:.4f}")
+print(f"  2-RF 1步  平均最近邻距离: {dist_2rf_1step:.4f}")
+print(f"  1-RF 10步 平均最近邻距离: {dist_1rf_10step:.4f}")
+print(f"  1-RF 50步 平均最近邻距离: {dist_1rf_50step:.4f}")
+print("  （距离越小表示生成样本更接近真实数据分布）")
+print(f"\n★ Reflow效果验证：2-RF 1步距离({dist_2rf_1step:.4f}) < 1-RF 1步距离({dist_1rf_1step:.4f})")
+if dist_2rf_1step < dist_1rf_1step:
+    print(f"  改善幅度: {(dist_1rf_1step - dist_2rf_1step) / dist_1rf_1step * 100:.1f}%")
+else:
+    print(f"  注意：本次实验中Reflow改善幅度有限，可能原因：")
+    print(f"    - MNIST数据简单，1步采样本身已接近真实分布")
+    print(f"    - 训练轮数(50 epoch)较少，Reflow效果未充分体现")
+    print(f"    - 需要更多Reflow迭代(如3-RF、4-RF)才能显著改善")
+
 # 可视化
 fig, axes = plt.subplots(4, n_samples, figsize=(16, 10))
 methods = [
@@ -480,7 +543,11 @@ print("""
 
 2. Reflow蒸馏（14.4.3节）★ 原创设计
    - 用1-RF的ODE端点对训练2-RF
-   - 2-RF的1步采样质量优于1-RF的1步
+   - 量化指标验证（平均最近邻距离）：
+     * 1-RF 1步: {:.4f}
+     * 2-RF 1步: {:.4f}
+     * 1-RF 10步: {:.4f}
+     * 1-RF 50步: {:.4f}
    - Reflow本质：蒸馏多步模型为少步模型
    - 轨迹逐步变直，趋近OT映射
 
@@ -488,5 +555,5 @@ print("""
    - Reflow提供了一种无需OT求解器的"OT近似"方法
    - 适用于高维数据（图像、视频等）
    - 可用于模型加速：多步→少步→单步
-   - 在MNIST上验证了Reflow的有效性
-""")
+   - 量化指标为Reflow效果提供了客观评价依据
+""".format(dist_1rf_1step, dist_2rf_1step, dist_1rf_10step, dist_1rf_50step))

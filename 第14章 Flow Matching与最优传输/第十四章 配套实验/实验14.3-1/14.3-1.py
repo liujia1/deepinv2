@@ -10,6 +10,10 @@
 
 本实验不需要GPU，通过2D点云的可视化直观理解Flow Matching的核心概念。
 
+环境依赖：
+  - scipy >= 1.13（使用 wasserstein_distance_nd 函数）
+  - torch >= 1.8
+
 素材来源：
   - book_plan.md的实验14.1计划
   - 14.3节的理论内容
@@ -125,21 +129,27 @@ def independent_coupling(n):
 # ============================================================
 # 路径插值函数
 # ============================================================
-def linear_interp(z, x0, t):
+def linear_interp(z, target, t):
     """线性插值路径（14.3.4节 OT路径/14.4.1节直线插值）
-    x_t = (1-t)z + t*x_0,  v_t = x_0 - z
+    x_t = (1-t)z + t*target,  v_t = target - z
+    注意：本书采用Flow Matching记号约定（z=源/噪声，target=数据/目标）
     """
-    return (1 - t) * z + t * x0
+    return (1 - t) * z + t * target
 
-def diffusion_interp(z, x0, t, beta_min=0.1, beta_max=20.0):
+def diffusion_interp(z, target, t, beta_min=0.1, beta_max=20.0):
     """扩散路径（14.3.6节，VP-SDE条件路径）
-    x_t = sqrt(ᾱ_t) * x_0 + sqrt(1-ᾱ_t) * ε
+    x_t = sqrt(ᾱ_t) * target + sqrt(1-ᾱ_t) * ε
     使用cosine schedule: ᾱ_t = cos²(π/2 * (1-t))，t∈[0,1]
-    z作为噪声源ε
+
+    注意：
+    - 参数z在此公式中扮演噪声源ε的角色
+    - 实际扩散模型的噪声源应为各向同性高斯 N(0,I)，而非结构化分布
+    - 本实验为便于同一套(source,target)数据可视化对比三种路径，
+      用source分布替代标准高斯演示VP-SDE插值公式形状
     """
     alpha_bar_t = np.cos(np.pi / 2 * (1 - t)) ** 2
     alpha_bar_t = max(alpha_bar_t, 1e-10)
-    return np.sqrt(alpha_bar_t) * x0 + np.sqrt(1 - alpha_bar_t) * z
+    return np.sqrt(alpha_bar_t) * target + np.sqrt(1 - alpha_bar_t) * z
 
 
 # ============================================================
@@ -216,6 +226,8 @@ def train_cfm(n_epochs=2000, n_samples=256, coupling='independent', lr=1e-3, che
         losses = checkpoint.get('losses', [])
 
     print(f"训练 {coupling} CFM，从 epoch {start_epoch} 开始...")
+    if coupling == 'ot':
+        print("  注意：OT耦合在每epoch重新计算（匈牙利算法O(n³)），小规模教学代码可接受开销")
 
     for epoch in range(start_epoch, n_epochs):
         # 采样源和目标
@@ -340,6 +352,9 @@ print("""
   - 扩散模型: ~1000步
   - DDIM: ~50步
   - OT-CFM: ~10步（甚至1步！）
+
+注：上述步数为文献参考值，本实验代码展示的是条件路径的解析形状，
+    未实际训练扩散模型做DDIM采样对比，仅通过曲率指标验证路径形态差异。
 """)
 
 # 为路径对比准备数据
@@ -347,12 +362,11 @@ n_points = 50
 source = sample_source(n_points)
 target = sample_target(n_points)
 
-# OT耦合
-np.random.seed(42)
+# OT耦合（匈牙利算法确定性求解，无需重设随机种子）
 ot_idx = ot_coupling(source, target)
 target_ot = target[ot_idx]
 
-# 独立耦合
+# 独立耦合（随机配对依赖随机种子，设置seed=123确保可复现）
 np.random.seed(123)
 ind_idx = independent_coupling(n_points)
 target_ind = target[ind_idx]
@@ -362,7 +376,7 @@ fig, axes = plt.subplots(1, 4, figsize=(24, 6))
 
 # 只画10条轨迹以避免过于密集
 n_show = 10
-t_vals = np.linspace(0, 1, 100)
+t_vals = np.linspace(0, 1, 101)  # 与ODE采样分辨率统一（101个节点）
 
 # (a) 扩散耦合条件路径（VP-SDE，14.3.6节）
 ax = axes[0]

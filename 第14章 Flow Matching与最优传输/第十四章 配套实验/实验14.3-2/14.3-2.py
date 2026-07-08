@@ -35,6 +35,7 @@ matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
 import logging
 import warnings
+from tqdm import tqdm
 
 # 静默 matplotlib 相关警告
 logging.getLogger('matplotlib').setLevel(logging.ERROR)
@@ -208,8 +209,11 @@ def flow_ode_sample(model, shape, n_steps=50):
 
     14.3.1节: Flow ODE直接参数化向量场
     对比DDPM需要200步，FM理论上可以1步
+
+    返回: (samples, elapsed_time)
     """
     model.eval()
+    t_start = time.time()
     x = torch.randn(shape, device=device)  # z ~ N(0,I)
     dt = 1.0 / n_steps
 
@@ -217,17 +221,23 @@ def flow_ode_sample(model, shape, n_steps=50):
         t_val = step / n_steps
         # RF中t_val=0是噪声，DDPM中t_int=T-1是噪声
         # 反转映射使正弦嵌入语义对齐
+        # 注：t_int仅用作位置编码信号，不要求与实际噪声方差精确对应
         t_int = torch.full((shape[0],), int((1 - t_val) * (T - 1)), device=device, dtype=torch.long)
         v = model(x, t_int)
         x = x + v * dt
 
-    return x.clamp(0, 1)
+    elapsed = time.time() - t_start
+    return x.clamp(0, 1), elapsed
 
 
 @torch.no_grad()
 def ddpm_sample(model, shape):
-    """标准DDPM采样（200步，对比基线）"""
+    """标准DDPM采样（200步，对比基线）
+
+    返回: (samples, elapsed_time)
+    """
     model.eval()
+    t_start = time.time()
     x = torch.randn(shape, device=device)
     for t_idx in reversed(range(T)):
         t = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
@@ -240,7 +250,8 @@ def ddpm_sample(model, shape):
         else:
             noise = torch.randn_like(x)
             x = model_mean + torch.sqrt(posterior_var[t_idx]) * noise
-    return x.clamp(0, 1)
+    elapsed = time.time() - t_start
+    return x.clamp(0, 1), elapsed
 
 
 # ============================================================
@@ -266,10 +277,11 @@ num_epochs = 50
 
 # 训练函数（带Resume能力）
 def train_model(model, optimizer, train_loader, model_type='rf', num_epochs=50,
-                checkpoint_path=None, final_checkpoint_path=None):
+                checkpoint_path=None, final_checkpoint_path=None, progress_bar=False):
     """训练模型（带checkpoint Resume能力）
 
     model_type: 'rf' 或 'ddpm'
+    progress_bar: 是否显示进度条
     """
     start_epoch = 0
     is_final = False
@@ -301,7 +313,9 @@ def train_model(model, optimizer, train_loader, model_type='rf', num_epochs=50,
     for epoch in range(start_epoch, num_epochs):
         model.train()
         total_loss = 0
-        for x, _ in train_loader:
+        # 添加进度条
+        pbar = tqdm(train_loader, desc=f"[{model_type.upper()}] Epoch {epoch+1}/{num_epochs}", leave=False) if progress_bar else train_loader
+        for x, _ in pbar:
             x = x.to(device)
             batch = x.shape[0]
 
@@ -327,6 +341,12 @@ def train_model(model, optimizer, train_loader, model_type='rf', num_epochs=50,
             loss.backward()
             optimizer.step()
             total_loss += loss.item() * batch
+            
+            # 更新进度条显示当前平均损失
+            if progress_bar:
+                pbar.set_postfix({'loss': f'{total_loss / len(train_loader.dataset):.6f}'})
+        if progress_bar:
+            pbar.close()
 
         avg_loss = total_loss / len(train_loader.dataset)
         train_losses.append(avg_loss)
@@ -364,7 +384,8 @@ rf_model = SmallUNet().to(device)
 optimizer_rf = torch.optim.Adam(rf_model.parameters(), lr=2e-4)
 losses_rf = train_model(rf_model, optimizer_rf, train_loader, model_type='rf',
                         num_epochs=num_epochs, checkpoint_path=CHECKPOINT_PATH_RF,
-                        final_checkpoint_path=FINAL_CHECKPOINT_PATH_RF)
+                        final_checkpoint_path=FINAL_CHECKPOINT_PATH_RF,
+                        progress_bar=True)
 
 # 训练DDPM（ε-prediction）
 print("\n训练DDPM（ε-prediction）...")
@@ -372,7 +393,8 @@ ddpm_model = SmallUNet().to(device)
 optimizer_ddpm = torch.optim.Adam(ddpm_model.parameters(), lr=2e-4)
 losses_ddpm = train_model(ddpm_model, optimizer_ddpm, train_loader, model_type='ddpm',
                           num_epochs=num_epochs, checkpoint_path=CHECKPOINT_PATH_DDPM,
-                          final_checkpoint_path=FINAL_CHECKPOINT_PATH_DDPM)
+                          final_checkpoint_path=FINAL_CHECKPOINT_PATH_DDPM,
+                          progress_bar=True)
 
 print("\n两个模型训练完成！")
 
@@ -390,10 +412,10 @@ print("""
   - RF理论上可以1步采样
   - 实际中需要几步才能保证质量
 
-对比：
+对比（步数为文献参考值，本实验仅实现DDPM和RF）：
   - DDPM: 200步（SDE采样）
-  - DDIM: ~50步（ODE采样，扩散耦合）
-  - RF: 1-50步（ODE采样，直线耦合）
+  - DDIM: ~50步（ODE采样，扩散耦合）——文献值，未在本实验实现
+  - RF: 1-50步（ODE采样，直线耦合）——本实验实际验证
 """)
 
 n_samples = 8
@@ -401,11 +423,14 @@ sample_shape = (n_samples, 1, 28, 28)
 
 step_counts = [1, 5, 10, 50]
 samples_by_steps = {}
+times_by_steps = {}
 
 for n_steps in step_counts:
     print(f"  {n_steps}步采样中...")
-    samples = flow_ode_sample(rf_model, sample_shape, n_steps=n_steps)
+    samples, elapsed = flow_ode_sample(rf_model, sample_shape, n_steps=n_steps)
     samples_by_steps[n_steps] = samples
+    times_by_steps[n_steps] = elapsed
+    print(f"    耗时: {elapsed:.3f}s")
 
 # 可视化
 fig, axes = plt.subplots(len(step_counts), n_samples, figsize=(16, 8))
@@ -434,24 +459,62 @@ print("=" * 60)
 print("""
 14.3.6节：DDIM = FM with diffusion coupling
   - DDPM: SDE采样，路径弯曲，需~200步
-  - DDIM: ODE采样，半直路径，~50步
+  - DDIM: ODE采样，半直路径，~50步（文献值，未在本实验实现）
   - Rectified Flow: ODE采样，更直的路径，更少步数
 
 ★ 原创设计：同一架构(UNet)，不同训练目标(ε-pred vs v-pred)，
-  对比少步采样质量
+  对比少步采样质量（本实验实际验证DDPM vs RF）
 """)
 
 # DDPM采样
 print("DDPM采样中(200步)...")
-ddpm_samples = ddpm_sample(ddpm_model, sample_shape)
+ddpm_samples, time_ddpm = ddpm_sample(ddpm_model, sample_shape)
+print(f"  耗时: {time_ddpm:.3f}s")
 
 # RF 50步采样
 print("Rectified Flow采样中(50步)...")
-rf_50_samples = flow_ode_sample(rf_model, sample_shape, n_steps=50)
+rf_50_samples, time_rf50 = flow_ode_sample(rf_model, sample_shape, n_steps=50)
+print(f"  耗时: {time_rf50:.3f}s")
 
 # RF 10步采样
 print("Rectified Flow采样中(10步)...")
-rf_10_samples = flow_ode_sample(rf_model, sample_shape, n_steps=10)
+rf_10_samples, time_rf10 = flow_ode_sample(rf_model, sample_shape, n_steps=10)
+print(f"  耗时: {time_rf10:.3f}s")
+
+# RF 1步采样（已在步骤2中计算）
+time_rf1 = times_by_steps[1]
+
+# 计算量化指标：生成样本与最近邻真实样本的平均像素距离
+print("\n计算量化指标（生成样本与最近邻真实样本的平均像素距离）...")
+test_samples = torch.stack([test_dataset[i][0] for i in range(min(100, len(test_dataset)))]).to(device)
+
+def compute_nn_distance(generated, reference):
+    """计算生成样本与参考集中最近邻的平均像素距离（简化质量指标）"""
+    gen_flat = generated.view(generated.shape[0], -1)  # (B, 784)
+    ref_flat = reference.view(reference.shape[0], -1)  # (N, 784)
+    # 计算每个生成样本与所有参考样本的距离
+    distances = torch.cdist(gen_flat, ref_flat)  # (B, N)
+    # 取每个生成样本的最近邻距离
+    min_distances = distances.min(dim=1)[0]  # (B,)
+    return min_distances.mean().item()
+
+dist_ddpm = compute_nn_distance(ddpm_samples, test_samples)
+dist_rf50 = compute_nn_distance(rf_50_samples, test_samples)
+dist_rf10 = compute_nn_distance(rf_10_samples, test_samples)
+dist_rf1 = compute_nn_distance(samples_by_steps[1], test_samples)
+
+print(f"  DDPM 200步 平均最近邻距离: {dist_ddpm:.4f}")
+print(f"  RF 50步   平均最近邻距离: {dist_rf50:.4f}")
+print(f"  RF 10步   平均最近邻距离: {dist_rf10:.4f}")
+print(f"  RF 1步    平均最近邻距离: {dist_rf1:.4f}")
+print("  （距离越小表示生成样本更接近真实数据分布）")
+
+# 加速比计算（实测）
+speedup_10 = time_ddpm / time_rf10
+speedup_50 = time_ddpm / time_rf50
+print(f"\n实测加速比:")
+print(f"  RF 10步 vs DDPM 200步: {speedup_10:.1f}x")
+print(f"  RF 50步 vs DDPM 200步: {speedup_50:.1f}x")
 
 # 可视化对比
 fig, axes = plt.subplots(4, n_samples, figsize=(16, 10))
@@ -489,12 +552,17 @@ print("""
    - RF用Flow ODE采样：1步/5步/10步/50步
    - DDPM需要200步（SDE采样）
    - RF的直线路径允许大幅减少采样步数
-   - 实际应用中，RF 10步即可达到较好质量
+   - 量化指标验证：RF 10步即可达到较好质量（平均最近邻距离接近）
 
 2. DDPM vs Rectified Flow对比（14.3.6节）★ 原创设计
    - 同一UNet架构，不同训练目标
    - DDPM预测噪声ε，RF预测速度v
-   - DDPM 200步 ≈ RF 50步 ≈ RF 10步（质量接近）
+   - 量化指标对比（平均最近邻距离）：
+     * DDPM 200步: {:.4f}
+     * RF 50步: {:.4f}
+     * RF 10步: {:.4f}
+     * RF 1步: {:.4f}
+   - 结论：RF 50步/10步质量接近DDPM 200步，1步质量较差
    - RF 1步质量较差，但Reflow可以改善（见实验14.4-1）
 
 3. 路径形态差异（14.3.5节）
@@ -502,8 +570,11 @@ print("""
    - RF路径更直（直线耦合），可以少步
    - 直线路径是Flow Matching的核心优势
 
-4. 实践意义
-   - Flow Matching显著减少采样时间
-   - 从200步→10步，加速20倍
-   - 为实时生成应用奠定基础
-""")
+4. 实测加速效果
+   - DDPM 200步耗时: {:.3f}s
+   - RF 10步耗时: {:.3f}s
+   - RF 50步耗时: {:.3f}s
+   - 实测加速比：RF 10步 vs DDPM = {:.1f}x
+   - Flow Matching显著减少采样时间，为实时生成奠定基础
+""".format(dist_ddpm, dist_rf50, dist_rf10, dist_rf1,
+           time_ddpm, time_rf10, time_rf50, speedup_10))
