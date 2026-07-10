@@ -200,19 +200,33 @@ train_dataset = torch.utils.data.TensorDataset(train_data)
 train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
 
-def ode_solve_euler(vf_net, z0, n_steps, t_start=0.0, t_end=1.0):
+def _euler_step(vf_net, x, t_val, dt):
+    """单步Euler推进: x ← x + v_θ(x, t) * dt"""
+    t_tensor = torch.full((x.shape[0],), t_val, device=x.device)
+    v = vf_net(x, t_tensor)
+    return x + v * dt
+
+
+def ode_solve_euler(vf_net, z0, n_steps, t_start=0.0, t_end=1.0, return_trajectory=False):
     """Euler方法求解ODE: dx/dt = v_θ(x, t)
 
     14.2.2节: Neural ODE的前向传播即ODE求解
     这里使用固定步长Euler方法（简化实现）
+
+    Args:
+        return_trajectory: 若True，返回形状(n_steps+1, N, 2)的完整轨迹
     """
     dt = (t_end - t_start) / n_steps
     x = z0
+    if return_trajectory:
+        traj = [x.cpu().numpy().copy()]
     for step in range(n_steps):
         t_val = t_start + step * dt
-        t_tensor = torch.full((x.shape[0],), t_val, device=x.device)
-        v = vf_net(x, t_tensor)
-        x = x + v * dt
+        x = _euler_step(vf_net, x, t_val, dt)
+        if return_trajectory:
+            traj.append(x.cpu().numpy().copy())
+    if return_trajectory:
+        return np.array(traj)
     return x
 
 
@@ -518,11 +532,14 @@ n_ode_steps = 100  # 50→100，更精细的采样积分
 print(f"\n生成采样 ({n_gen} 个样本, {n_ode_steps}步ODE)...")
 
 # Neural ODE采样
+# 重置种子确保每次运行图2散点分布一致（与图3的z_traj_viz错开避免互相覆盖）
+torch.manual_seed(42)
 with torch.no_grad():
     z_gen = torch.randn(n_gen, 2, device=device)
     samples_cnll = ode_solve_euler(model_cnll, z_gen, n_steps=n_ode_steps)
 
 # Flow Matching采样
+torch.manual_seed(42)
 with torch.no_grad():
     z_gen = torch.randn(n_gen, 2, device=device)
     samples_fm = ode_solve_euler(model_fm, z_gen, n_steps=n_ode_steps)
@@ -562,31 +579,17 @@ n_traj_stats = 2000  # 曲率统计用的轨迹数（与n_gen一致，复用生�
 
 # --- 3.3a 可视化轨迹（5条，用于图3） ---
 print(f"\n采样轨迹对比（{n_traj_viz}条可视化轨迹）...")
+# 显式重置随机种子，保证每次运行图3的轨迹完全一致
+# （前面sample_8gaussian、采样等步骤会消耗随机数，不重置会导致图每次都不一样）
+torch.manual_seed(42)
 with torch.no_grad():
     z_traj_viz = torch.randn(n_traj_viz, 2, device=device)
 
     # 记录Neural ODE轨迹（CRN：共享随机数起点）
-    traj_cnll_viz = [z_traj_viz.cpu().numpy().copy()]
-    x_cnll = z_traj_viz.clone()
-    dt = 1.0 / n_ode_steps
-    for step in range(n_ode_steps):
-        t_val = step / n_ode_steps
-        t_tensor = torch.full((n_traj_viz,), t_val, device=device)
-        v = model_cnll(x_cnll, t_tensor)
-        x_cnll = x_cnll + v * dt
-        traj_cnll_viz.append(x_cnll.cpu().numpy().copy())
-    traj_cnll_viz = np.array(traj_cnll_viz)  # (n_steps+1, n_traj_viz, 2)
+    traj_cnll_viz = ode_solve_euler(model_cnll, z_traj_viz, n_steps=n_ode_steps, return_trajectory=True)
 
     # 记录Flow Matching轨迹（CRN：同一批噪声起点）
-    traj_fm_viz = [z_traj_viz.cpu().numpy().copy()]
-    x_fm = z_traj_viz.clone()
-    for step in range(n_ode_steps):
-        t_val = step / n_ode_steps
-        t_tensor = torch.full((n_traj_viz,), t_val, device=device)
-        v = model_fm(x_fm, t_tensor)
-        x_fm = x_fm + v * dt
-        traj_fm_viz.append(x_fm.cpu().numpy().copy())
-    traj_fm_viz = np.array(traj_fm_viz)
+    traj_fm_viz = ode_solve_euler(model_fm, z_traj_viz, n_steps=n_ode_steps, return_trajectory=True)
 
 # --- 3.3b 曲率统计（大样本，用于定量结论） ---
 print(f"曲率统计（{n_traj_stats}条轨迹，用于定量对比）...")
@@ -608,11 +611,9 @@ def compute_curvature_batch(vf_net, z_start, n_ode_steps):
 
     for step in range(n_ode_steps):
         t_val = step / n_ode_steps
-        t_tensor = torch.full((n_traj_pts,), t_val, device=z_start.device)
-        v = vf_net(x, t_tensor)
-        step_displacement = v * dt
-        path_len = path_len + torch.norm(step_displacement, dim=1)
-        x = x + step_displacement
+        x_new = _euler_step(vf_net, x, t_val, dt)
+        path_len = path_len + torch.norm(x_new - x, dim=1)
+        x = x_new
 
     # 直线距离
     straight_dist = torch.norm(x - z_start, dim=1)
@@ -797,4 +798,12 @@ print(f"""
    - Flow Matching的CFM损失是简单的MSE，目标 v_target = x_0 - z 无随机性（给定x_0,z），
      所以loss曲线天然更平滑。
    - 如果观察到Neural ODE的loss抖动较大，这是预期行为，不影响收敛。
+
+6. 教学脚注：MMD说FM更优，但图2c/图3b中FM轨迹反而有更多"桥接"弧线？
+   - 统计采样点到最近高斯中心的距离，FM的"桥接点"（距最近中心>0.5）占比约4%，
+     高于Neural ODE的约1%。这说明FM在离散众数意义上更容易产生跨众数弧线。
+   - 但MMD作为整体分布距离度量，对这几个百分点的桥接离群点不敏感，
+     更多反映的是整体均值/协方差/形状的匹配（FM在这些方面确实更贴近目标）。
+   - MMD更优不代表视觉上更"干净"——不同指标衡量的是分布匹配的不同侧面，
+     这也是后面14.4节引入OT-CFM的动机之一。
 """)

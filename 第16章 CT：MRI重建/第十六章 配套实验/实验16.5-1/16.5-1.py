@@ -21,7 +21,15 @@ from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from skimage.metrics import peak_signal_noise_ratio as psnr
+from skimage.metrics import peak_signal_noise_ratio as _psnr
+
+
+def psnr(gt, pred, data_range=1.0):
+    """安全的PSNR计算，避免除零警告"""
+    mse = np.mean((gt.astype(np.float64) - pred.astype(np.float64)) ** 2)
+    if mse < 1e-10:
+        return 100.0  # MSE接近0时返回一个大值
+    return 10 * np.log10((data_range ** 2) / mse)
 import warnings
 import logging
 import io
@@ -242,7 +250,7 @@ loader = torch.utils.data.DataLoader(dataset, batch_size=128, shuffle=True, num_
 model = SmallUNet(time_dim=64).to(device)
 optimizer = optim.Adam(model.parameters(), lr=2e-4)
 
-n_epochs = 50
+n_epochs = 30
 train_losses = []
 
 # ★ Resume: 检测已有checkpoint，支持断点续训
@@ -357,7 +365,7 @@ print("步骤2：DiffPIR for MRI")
 print("=" * 60)
 
 @torch.no_grad()
-def diffpir_mri(model, y, mri_op, shape, zeta=1.0):
+def diffpir_mri(model, y, mri_op, shape, zeta=1.0, show_progress=True):
     """
     ★ 修正版 DiffPIR算法 for MRI:
     对 t = T-1, T-2, ..., 0:
@@ -370,11 +378,15 @@ def diffpir_mri(model, y, mri_op, shape, zeta=1.0):
     - 大t时Tweedie估计不可靠，跳过DC步，使用纯后验公式
     - 小t时Tweedie估计可靠，DC步提供数据一致性约束
     - dc_weight从t=T/2开始线性增长到1，避免早期垃圾估计污染采样
+
+    Args:
+        show_progress: 是否显示内部采样进度条，批量调用时设为False
     """
     model.eval()
     x = torch.randn(shape, device=device)
 
-    for t_idx in tqdm(reversed(range(T)), desc="DiffPIR采样", ncols=80, leave=False):
+    iterator = tqdm(reversed(range(T)), desc="DiffPIR采样", ncols=80, leave=True) if show_progress else reversed(range(T))
+    for t_idx in iterator:
         t = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
 
         # 1. 预测干净图像（Tweedie公式，已含数值稳定化）
@@ -412,7 +424,7 @@ print("步骤3：DPS for MRI")
 print("=" * 60)
 
 @torch.no_grad()
-def dps_mri(model, y, mri_op, shape, zeta=0.5):
+def dps_mri(model, y, mri_op, shape, zeta=0.5, show_progress=True):
     """
     DPS算法 for MRI:
     对 t = T-1, T-2, ..., 0:
@@ -425,11 +437,15 @@ def dps_mri(model, y, mri_op, shape, zeta=0.5):
       大t时Tweedie估计不可靠 → ζ(t)=0，不做似然修正
       小t时Tweedie估计可靠 → ζ(t)逐步增大，注入数据一致性
       ζ(t) = ζ * max(0, 1 - 2t/T)，在t > T/2时完全跳过似然修正
+
+    Args:
+        show_progress: 是否显示内部采样进度条，批量调用时设为False
     """
     model.eval()
     x = torch.randn(shape, device=device)
 
-    for t_idx in tqdm(reversed(range(T)), desc="DPS采样", ncols=80, leave=False):
+    iterator = tqdm(reversed(range(T)), desc="DPS采样", ncols=80, leave=True) if show_progress else reversed(range(T))
+    for t_idx in iterator:
         t = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
 
         # ★ zeta调度：小t(Tweedie准)时增大修正，大t(Tweedie不准)时跳过修正
@@ -527,9 +543,9 @@ best_zeta = max(zeta_results, key=lambda z: zeta_results[z][1])
 print(f"\n  正在计算不确定性量化（15次DPS采样, ζ={best_zeta}）...")
 n_samples = 15
 posterior_samples = []
-for s in tqdm(range(n_samples), desc="DPS不确定性采样", ncols=80):
+for s in tqdm(range(n_samples), desc="DPS不确定性采样", ncols=80, leave=True):
     torch.manual_seed(42 + s)
-    x_sample = dps_mri(model, y_test[:1], mri_op, (1, 1, 28, 28), zeta=best_zeta)
+    x_sample = dps_mri(model, y_test[:1], mri_op, (1, 1, 28, 28), zeta=best_zeta, show_progress=False)
     posterior_samples.append(x_sample[0, 0].cpu().numpy())
 
 # 计算像素级均值和方差
@@ -546,9 +562,9 @@ print(f"  后验均值PSNR: {mean_psnr:.1f}dB (提升 {mean_psnr - single_psnr:+
 # ★ DiffPIR不确定性量化对比
 print(f"\n  正在计算DiffPIR不确定性量化（15次采样）...")
 diffpir_samples = []
-for s in tqdm(range(n_samples), desc="DiffPIR不确定性采样", ncols=80):
+for s in tqdm(range(n_samples), desc="DiffPIR不确定性采样", ncols=80, leave=True):
     torch.manual_seed(42 + s)
-    x_sample = diffpir_mri(model, y_test[:1], mri_op, (1, 1, 28, 28), zeta=1.0)
+    x_sample = diffpir_mri(model, y_test[:1], mri_op, (1, 1, 28, 28), zeta=1.0, show_progress=False)
     diffpir_samples.append(x_sample[0, 0].cpu().numpy())
 
 diffpir_samples_array = np.stack(diffpir_samples, axis=0)
