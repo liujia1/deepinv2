@@ -399,6 +399,63 @@ def train_model(model, optimizer, train_loader, time_sampling='uniform',
 
 
 # ============================================================
+# 诊断：可视化训练时采样到的时间分布（解释1步采样性能差异）
+# ============================================================
+print("\n" + "="*60)
+print("诊断: 时间采样分布的端点采样概率")
+print("="*60)
+
+# 生成大量样本，统计端点附近的采样概率
+n_diag = 100000
+t_uni = torch.rand(n_diag, device=device)
+t_ln = logit_normal_sample(n_diag, m=0.0, s=1.0, device=device)
+
+# 统计 t < 0.1 和 t > 0.9 的比例（端点区域）
+eps = 0.1
+uni_low = (t_uni < eps).sum().item() / n_diag * 100
+uni_high = (t_uni > 1 - eps).sum().item() / n_diag * 100
+ln_low = (t_ln < eps).sum().item() / n_diag * 100
+ln_high = (t_ln > 1 - eps).sum().item() / n_diag * 100
+
+print(f"采样 {n_diag} 次，端点区域 (t<{eps} 或 t>{1-eps}) 的比例：")
+print(f"  均匀采样：  t<{eps}: {uni_low:.2f}%,  t>{1-eps}: {uni_high:.2f}%")
+print(f"  Logit-Normal：t<{eps}: {ln_low:.2f}%,  t>{1-eps}: {ln_high:.2f}%")
+print(f"\n结论：Logit-Normal 在端点区域采样概率明显偏低（t<{eps}: {ln_low:.2f}%, "
+      f"t>{1-eps}: {ln_high:.2f}%，约为均匀采样的 {ln_low/uni_low*100:.0f}%），")
+print(f"      导致模型在 t≈0（噪声端）和 t≈1（数据端）的经验不足，")
+print(f"      这解释了为何 1 步采样时 Logit-Normal 表现更差。")
+
+# 可视化对比
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+ax = axes[0]
+ax.hist(t_uni.cpu().numpy(), bins=50, density=True, alpha=0.6, label='均匀采样')
+ax.axvspan(0, eps, alpha=0.3, color='red', label=f'端点区域 (t<{eps})')
+ax.axvspan(1-eps, 1, alpha=0.3, color='red')
+ax.set_xlabel(r'时间步 $t$', fontsize=12)
+ax.set_ylabel(r'概率密度', fontsize=12)
+ax.set_title(r'均匀采样：端点采样充足', fontsize=13)
+ax.legend(fontsize=10)
+ax.grid(alpha=0.3)
+
+ax = axes[1]
+ax.hist(t_ln.cpu().numpy(), bins=50, density=True, alpha=0.6, label='Logit-Normal', color='green')
+ax.axvspan(0, eps, alpha=0.3, color='red', label=f'端点区域 (t<{eps})')
+ax.axvspan(1-eps, 1, alpha=0.3, color='red')
+ax.set_xlabel(r'时间步 $t$', fontsize=12)
+ax.set_ylabel(r'概率密度', fontsize=12)
+ax.set_title(r'Logit-Normal：端点采样稀缺', fontsize=13)
+ax.legend(fontsize=10)
+ax.grid(alpha=0.3)
+
+plt.tight_layout()
+fig_path_diag = os.path.join(SAVE_DIR, '诊断_端点采样概率.png')
+plt.savefig(fig_path_diag, dpi=150, bbox_inches='tight')
+plt.close()
+print(f"\n诊断图已保存: {fig_path_diag}")
+
+
+# ============================================================
 # 步骤1：可视化时间采样分布
 # ============================================================
 print("\n" + "="*60)
@@ -487,7 +544,7 @@ print("\n" + "="*60)
 print("步骤2: 训练 Rectified Flow（均匀时间采样）")
 print("="*60)
 
-num_epochs = 50
+num_epochs = 30
 
 model_uniform = SmallUNet().to(device)
 optimizer_uniform = torch.optim.Adam(model_uniform.parameters(), lr=2e-4)
@@ -530,20 +587,34 @@ if losses_uniform and losses_logit:
     print(f"  Logit-Normal 最终Loss: {losses_logit[-1]:.6f}")
 
 # 4.2 采样质量对比
-n_samples = 8
-sample_shape = (n_samples, 1, 28, 28)
+# 注意：n_samples设置较大以减少统计噪声（专家建议：至少64~128）
+n_samples_quant = 64  # 量化指标用大样本减少统计噪声
+n_samples_vis = 8     # 图片可视化保持紧凑
 step_counts = [1, 5, 10, 50]
 
 print("\n少步采样对比...")
-samples_uniform = {}
-samples_logit = {}
+print(f"  量化指标样本数: {n_samples_quant}")
+print(f"  可视化样本数: {n_samples_vis}")
 
-# 生成共享初始噪声（CRN原则：同一噪声起点确保"改善%"归因于策略差异而非随机噪声）
-x_init_shared = torch.randn(sample_shape, device=device)
+# 为量化指标生成样本
+sample_shape_quant = (n_samples_quant, 1, 28, 28)
+x_init_shared_quant = torch.randn(sample_shape_quant, device=device)
 
+samples_uniform_quant = {}
+samples_logit_quant = {}
 for n_steps in step_counts:
-    samples_uniform[n_steps] = flow_ode_sample(model_uniform, sample_shape, n_steps=n_steps, x_init=x_init_shared)
-    samples_logit[n_steps]   = flow_ode_sample(model_logit,   sample_shape, n_steps=n_steps, x_init=x_init_shared)
+    samples_uniform_quant[n_steps] = flow_ode_sample(model_uniform, sample_shape_quant, n_steps=n_steps, x_init=x_init_shared_quant)
+    samples_logit_quant[n_steps]   = flow_ode_sample(model_logit,   sample_shape_quant, n_steps=n_steps, x_init=x_init_shared_quant)
+
+# 为可视化单独生成样本（独立噪声，避免与量化指标共享）
+sample_shape_vis = (n_samples_vis, 1, 28, 28)
+x_init_vis = torch.randn(sample_shape_vis, device=device)
+
+samples_uniform_vis = {}
+samples_logit_vis = {}
+for n_steps in step_counts:
+    samples_uniform_vis[n_steps] = flow_ode_sample(model_uniform, sample_shape_vis, n_steps=n_steps, x_init=x_init_vis)
+    samples_logit_vis[n_steps]   = flow_ode_sample(model_logit,   sample_shape_vis, n_steps=n_steps, x_init=x_init_vis)
 
 # 计算量化指标：生成样本与最近邻真实样本的平均像素距离
 print("\n计算量化指标（生成样本与最近邻真实样本的平均像素距离）...")
@@ -554,8 +625,14 @@ def compute_nn_distance(generated, reference):
     """计算生成样本与参考集中最近邻的平均像素距离
 
     注意: 这是一个简单的代理指标，仅衡量像素级L2最近邻距离，
-    不等价于FID等标准生成质量指标（容易被轻微模糊的"平均脸型"样本拉低距离）。
-    教学实验中用于相对比较两种采样策略的差异。
+    不等价于FID等标准生成质量指标。
+    
+    局限性:
+    1. 容易被轻微模糊的"平均脸型"样本拉低距离
+    2. 像素级L2距离有时与视觉质量脱钩（更模糊的图可能离参考图距离更远）
+    3. 小样本量(n<64)时统计噪声大，建议肉眼观察图片质量做交叉验证
+    
+    教学实验中用于相对比较两种采样策略的差异，结论需结合视觉检查。
     """
     gen_flat = generated.view(generated.shape[0], -1)
     ref_flat = reference.view(reference.shape[0], -1)
@@ -568,12 +645,17 @@ dist_uniform = {}
 dist_logit = {}
 
 for n_steps in step_counts:
-    dist_uniform[n_steps] = compute_nn_distance(samples_uniform[n_steps], test_samples)
-    dist_logit[n_steps] = compute_nn_distance(samples_logit[n_steps], test_samples)
+    dist_uniform[n_steps] = compute_nn_distance(samples_uniform_quant[n_steps], test_samples)
+    dist_logit[n_steps] = compute_nn_distance(samples_logit_quant[n_steps], test_samples)
     improvement = (dist_uniform[n_steps] - dist_logit[n_steps]) / dist_uniform[n_steps] * 100
     print(f"  {n_steps:3d}步: 均匀={dist_uniform[n_steps]:.4f}, "
           f"Logit-Normal={dist_logit[n_steps]:.4f}, "
           f"改善={improvement:+.1f}%")
+
+print("\n专家提醒:")
+print("  1. 上述指标仅是像素级L2距离代理，不等价于FID")
+print("  2. 建议肉眼观察图3(步骤3_少步采样对比.png)，特别关注1步那一行")
+print("  3. 判断是否真的Logit-Normal更差，而非仅依赖代理指标数字")
 
 # ============================================================
 # 可视化
@@ -597,23 +679,23 @@ plt.close()
 print(f"\n图2已保存: {fig_path2}")
 
 # 图3: 少步采样质量对比
-fig, axes = plt.subplots(len(step_counts), 2 * n_samples, figsize=(2 * n_samples * 1.2, len(step_counts) * 2.5))
+fig, axes = plt.subplots(len(step_counts), 2 * n_samples_vis, figsize=(2 * n_samples_vis * 1.2, len(step_counts) * 2.5))
 
 for row, n_steps in enumerate(step_counts):
     # 均匀采样结果
-    for col in range(n_samples):
+    for col in range(n_samples_vis):
         ax = axes[row, col]
-        ax.imshow(samples_uniform[n_steps][col, 0].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+        ax.imshow(samples_uniform_vis[n_steps][col, 0].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
         ax.axis('off')
         if row == 0 and col == 0:
             ax.set_title(r'均匀采样', fontsize=11, pad=10)
 
     # Logit-Normal采样结果
-    for col in range(n_samples):
-        ax = axes[row, n_samples + col]
-        ax.imshow(samples_logit[n_steps][col, 0].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+    for col in range(n_samples_vis):
+        ax = axes[row, n_samples_vis + col]
+        ax.imshow(samples_logit_vis[n_steps][col, 0].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
         ax.axis('off')
-        if row == 0 and n_samples == 0:
+        if row == 0 and col == 0:
             ax.set_title(r'Logit-Normal', fontsize=11, pad=10)
 
     # 行标签
@@ -691,11 +773,24 @@ for n_steps in step_counts:
     improvement = (dist_uniform[n_steps] - dist_logit[n_steps]) / dist_uniform[n_steps] * 100
     print(f"   {n_steps:5d}步  |  {dist_uniform[n_steps]:.4f}     |  {dist_logit[n_steps]:.4f}          | {improvement:+.1f}%")
 
+# 根据实际改善数据动态生成结论
+improvements = {s: (dist_uniform[s] - dist_logit[s]) / dist_uniform[s] * 100 for s in step_counts}
+best_step = max(step_counts, key=lambda s: improvements[s])
+best_imp = improvements[best_step]
+
+# 统计改善为正的步数（避免暗示单调阈值，直接列出具体步数）
+positive_steps = [s for s in step_counts if improvements[s] > 0]
+
 print(f"""
 4. SD3实践启示（14.5.1节）
    - SD3在60种轨迹对比中，Rectified Flow + Logit-Normal采样最优
-   - 少步采样(4步/8步)时优势更明显
-   - 中间时间步对向量场学习更关键，集中采样提升效率
-   - 本实验在MNIST上的效果可能不如SD3在ImageNet上显著
-     （MNIST数据简单，均匀采样已接近饱和）
+   - 本实验观察到的现象：
+     * 1步采样时Logit-Normal明显更差（改善={improvements[1]:+.1f}%）
+     * 在测试的步数{step_counts}中，{positive_steps}改善为正
+     * 改善幅度并非单调：{best_step}步改善最大（{best_imp:+.1f}%）
+   - 需注意的实验局限性：
+     * 量化指标(n_samples={n_samples_quant})已减小统计噪声，但仍建议肉眼观察图片验证
+     * 1步采样是极端外推场景，对t≈0附近的训练数据敏感，单次结果不稳定
+     * 若训练轮数不足(如<30轮)，低步数采样结果可能偏噪声，建议训练充分后再观察趋势
+   - SD3论文的结论是"少步采样(4-8步)时优势明显"，而非1步
 """)

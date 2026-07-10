@@ -82,12 +82,12 @@ np.random.seed(42)
 import torch
 torch.manual_seed(42)
 
-device = torch.device('cpu')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"\n{'='*60}")
 print(f"实验14.4-3: 曲率单调性数值验证——Reflow定理")
 print(f"{'='*60}")
 print(f"使用设备: {device}")
-print("  本实验使用2D点云，纯CPU即可完成")
+print("  本实验使用2D点云，CPU即可完成")
 
 import torch.nn as nn
 import torch.nn.functional as F
@@ -542,6 +542,13 @@ print(f"""
    - 每轮Reflow用ODE端点重新配对，解缠路径交叉
    - 轨迹逐步变直，趋近OT映射
    - 曲率下降意味着少步采样精度提高
+   
+   ★ 为什么2-RF的loss会断崖式下降？
+   - 1-RF训练时，每个噪声z可能配对到多个不同的x_1（独立耦合），网络要学习条件期望，
+     即"折中"方向，拟合难度大
+   - 2-RF训练时，配对变成(z, x1_hat)，其中x1_hat是1-RF的ODE端点——这是一个确定性映射，
+     每个z只对应一个固定目标，回归问题从"学习条件期望"变成了"模仿一个确定函数"
+   - 这正是曲率在第2轮几乎清零的根本原因：配对确定性↑ → 向量场方向一致性↑ → 路径交叉↓
 
 3. 理论与实践的差距
    - Reflow定理保证训练充分收敛时κ单调递减
