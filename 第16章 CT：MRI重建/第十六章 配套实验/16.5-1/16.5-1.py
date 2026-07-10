@@ -202,7 +202,7 @@ class MRIFourierOperator:
         # 在已采样位置混合
         mask_2d = self.mask.view(1, 1, x.shape[2], 1).expand_as(kspace_pred).to(x.device)
         kspace_corrected = mask_2d * (kspace_pred + zeta * (y - kspace_pred * mask_2d)) + (1 - mask_2d) * kspace_pred
-        return torch.real(torch.fft.ifftshift(torch.fft.ifft2(kspace_corrected), dim=-2))
+        return torch.real(torch.fft.ifft2(torch.fft.ifftshift(kspace_corrected, dim=-2)))
 
 
 def create_mri_mask_topk(n_rows, R, seed=None):

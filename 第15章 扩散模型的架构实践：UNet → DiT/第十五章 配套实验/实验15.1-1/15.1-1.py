@@ -434,9 +434,9 @@ print("步骤4: 完整UNet（D9）训练")
 print(f"{'='*60}")
 
 model = DiffusionUNet(
-    dim=64,
+    dim=32,
     channels=1,
-    dim_mults=(1, 2, 4, 8),
+    dim_mults=(1, 2, 4),
     with_time_emb=True,
 ).to(device)
 
@@ -450,8 +450,8 @@ os.makedirs(data_dir, exist_ok=True)
 # 注意: MNIST torchvision自动下载, 约11MB
 # 归一化到 [-1, 1] 区间以匹配标准高斯噪声先验
 transform = transforms.Compose([
-    # Resize 64: MNIST原分辨率28×28, 放大至64×64使三次下采样后中间层落在8×8
-    # 与dim_mults=(1,2,4,8)的深层UNet设计匹配
+    # Resize 64: MNIST原分辨率28×28, 放大至64×64
+    # 两次下采样后中间层落在16×16, 与 dim_mults=(1,2,4) 匹配 (MNIST 简单结构无需更深)
     transforms.Resize(64),
     transforms.ToTensor(),
     transforms.Normalize((0.5,), (0.5,)),
@@ -468,8 +468,8 @@ alpha_bars = torch.cumprod(alphas, dim=0)
 sqrt_alpha_bars = torch.sqrt(alpha_bars).to(device)
 sqrt_one_minus_alpha_bars = torch.sqrt(1.0 - alpha_bars).to(device)
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=2e-4)
-num_epochs = 20
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+num_epochs = 30
 
 # Checkpoint加载逻辑（支持 resume + 最终权重检测）
 start_epoch = 0
@@ -498,7 +498,9 @@ if os.path.exists(CHECKPOINT_PATH):
                 f"请删除 checkpoint 文件后重新训练:\n"
                 f"  {CHECKPOINT_PATH}"
             )
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        # 优化器状态仅中间 checkpoint 保存; 最终 checkpoint 不含此项, 跳过即可
+        if 'optimizer_state_dict' in checkpoint:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         loss_history = checkpoint.get('loss_history', [])
         start_epoch = checkpoint['epoch'] + 1
         is_final = True
@@ -576,12 +578,12 @@ if not is_final:
         t_elapsed = time.time() - t_start
         print(f"\n训练完成, 总耗时: {t_elapsed:.1f} 秒, 最终损失: {loss_history[-1]:.4f}")
 
-        # 保存最终 checkpoint
+        # 保存最终 checkpoint (只存模型参数, 不存优化器状态)
+        # 推理用不到优化器状态; resume 场景由中间 checkpoint 覆盖
         if loss_history:
             torch.save({
                 'epoch': num_epochs - 1,
                 'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
                 'loss': loss_history[-1],
                 'loss_history': loss_history,
                 'is_final': True
@@ -644,7 +646,7 @@ def sample_ddpm(model, shape, T, alphas, alpha_bars, betas, device):
 
 num_samples = 16
 print(f"  正在生成 {num_samples} 张样本 (DDPM 采样, T={T})...")
-# ★ 注意：dim_mults=(1,2,4,8) 需要图像尺寸能下采样4次：64→32→16→8→4
+# ★ 注意：dim_mults=(1,2,4) 两次下采样：64→32→16→16 (mid 16×16)
 samples = sample_ddpm(model, (num_samples, 1, 64, 64), T, alphas, alpha_bars, betas, device)
 # 反归一化到 [0, 1]
 samples = (samples + 1) / 2.0
@@ -674,9 +676,9 @@ print("""
   完整UNet (ConvNext + Attention + PreNorm): 基线架构
 
   当前配置:
-    - dim=64, dim_mults=(1,2,4,8): 通道数64→128→256→512
+    - dim=32, dim_mults=(1,2,4): 通道数32→64→128→256
     - T=500: 采样步数（相比T=1000减少误差累积）
-    - num_epochs=20: 充分训练以收敛深层网络
+    - num_epochs=30: 小模型需要多看几遍数据以充分收敛
 
   设计考量:
     - Attention: 实践中通常观察到其对生成质量影响较大，移除后细节捕获能力明显下降
@@ -708,9 +710,9 @@ print("""
 
 4. 完整UNet训练（步骤4）
    - MNIST数据集（torchvision自动下载）
-   - 配置: dim=64, dim_mults=(1,2,4,8), 通道数64→128→256→512
+   - 配置: dim=32, dim_mults=(1,2,4), 通道数32→64→128→256
    - DDPM线性噪声调度, T=500（减少采样误差累积）
-   - 训练轮数: 20 epochs（充分收敛深层网络）
+   - 训练轮数: 30 epochs（小模型需要更多迭代以充分收敛）
    - 支持resume + 最终权重自动跳过训练
 
 5. 架构分析（步骤5）

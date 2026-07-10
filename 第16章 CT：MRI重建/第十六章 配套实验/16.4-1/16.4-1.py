@@ -304,11 +304,11 @@ if os.path.exists(unet_ckpt_path):
 if start_epoch_unet >= n_epochs_unet:
     print("已检测到最终权重，直接加载，跳过训练")
 else:
-    for epoch in tqdm(range(start_epoch_unet, n_epochs_unet), desc='UNet训练',
-                      initial=start_epoch_unet, total=n_epochs_unet):
+    for epoch in range(start_epoch_unet, n_epochs_unet):
         epoch_loss = 0
         n_batches = 0
-        for batch_x, _ in loader:
+        pbar = tqdm(loader, desc=f'UNet Epoch {epoch+1}/{n_epochs_unet}')
+        for batch_x, _ in pbar:
             batch_x = batch_x.to(device)  # (B, 1, 28, 28)
 
             # 生成MRI测量
@@ -327,11 +327,11 @@ else:
 
             epoch_loss += loss.item()
             n_batches += 1
+            pbar.set_postfix({'loss': f'{loss.item():.4f}'})
 
         avg_loss = epoch_loss / n_batches
         unet_losses.append(avg_loss)
-        if (epoch + 1) % 5 == 0:
-            print(f"  UNet Epoch {epoch+1}/{n_epochs_unet}, Loss={avg_loss:.4f}")
+        print(f"  UNet Epoch {epoch+1}/{n_epochs_unet} 完成, Avg Loss={avg_loss:.4f}")
 
         # 每5轮保存checkpoint
         if (epoch + 1) % 5 == 0:
@@ -371,11 +371,11 @@ if os.path.exists(lgd_ckpt_path):
 if start_epoch_lgd >= n_epochs_lgd:
     print("已检测到最终权重，直接加载，跳过训练")
 else:
-    for epoch in tqdm(range(start_epoch_lgd, n_epochs_lgd), desc='LGD训练',
-                      initial=start_epoch_lgd, total=n_epochs_lgd):
+    for epoch in range(start_epoch_lgd, n_epochs_lgd):
         epoch_loss = 0
         n_batches = 0
-        for batch_x, _ in loader:
+        pbar = tqdm(loader, desc=f'LGD Epoch {epoch+1}/{n_epochs_lgd}')
+        for batch_x, _ in pbar:
             batch_x = batch_x.to(device)
 
             # 生成MRI测量
@@ -393,11 +393,11 @@ else:
 
             epoch_loss += loss.item()
             n_batches += 1
+            pbar.set_postfix({'loss': f'{loss.item():.4f}'})
 
         avg_loss = epoch_loss / n_batches
         lgd_losses.append(avg_loss)
-        if (epoch + 1) % 5 == 0:
-            print(f"  LGD Epoch {epoch+1}/{n_epochs_lgd}, Loss={avg_loss:.4f}")
+        print(f"  LGD Epoch {epoch+1}/{n_epochs_lgd} 完成, Avg Loss={avg_loss:.4f}")
 
         # 每5轮保存checkpoint
         if (epoch + 1) % 5 == 0:
