@@ -228,10 +228,18 @@ T = 200
 # Flow ODE采样器
 # ============================================================
 @torch.no_grad()
-def flow_ode_sample(model, shape, n_steps=50):
-    """从Flow ODE采样: dx/dt = v_θ(x, t), t: 0→1"""
+def flow_ode_sample(model, shape, n_steps=50, x_init=None):
+    """从Flow ODE采样: dx/dt = v_θ(x, t), t: 0→1
+
+    参数:
+      x_init: 可选，外部传入的初始噪声（CRN原则），使不同模型从同一噪声起点出发，
+              确保"改善%"纯粹归因于采样策略差异而非随机噪声
+    """
     model.eval()
-    x = torch.randn(shape, device=device)
+    if x_init is not None:
+        x = x_init.clone()
+    else:
+        x = torch.randn(shape, device=device)
     dt = 1.0 / n_steps
 
     for step in range(n_steps):
@@ -258,6 +266,15 @@ print(f"训练集: {len(train_dataset)}, 测试集: {len(test_dataset)}")
 # ============================================================
 # 训练函数（带Resume能力）
 # ============================================================
+def _make_config_fingerprint(time_sampling, ln_m=None, ln_s=None):
+    """生成训练超参数指纹，用于checkpoint校验防止数据-权重错配"""
+    import hashlib
+    config_str = f"time_sampling={time_sampling}"
+    if time_sampling == 'logit_normal':
+        config_str += f"_m={ln_m}_s={ln_s}"
+    return hashlib.md5(config_str.encode()).hexdigest()[:8]
+
+
 def train_model(model, optimizer, train_loader, time_sampling='uniform',
                 num_epochs=50, checkpoint_path=None, final_checkpoint_path=None,
                 progress_bar=True):
@@ -272,14 +289,19 @@ def train_model(model, optimizer, train_loader, time_sampling='uniform',
     ln_m = 0.0   # 重心在t=0.5
     ln_s = 1.0   # 集中程度
 
+    config_fp = _make_config_fingerprint(time_sampling, ln_m, ln_s)
+
     # 检查最终权重
     if final_checkpoint_path and os.path.exists(final_checkpoint_path):
         print(f"检测到最终权重: {final_checkpoint_path}")
         print("直接加载，跳过训练过程")
         checkpoint = torch.load(final_checkpoint_path, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         train_losses = checkpoint.get('train_losses', [])
+        # 校验超参数指纹
+        saved_fp = checkpoint.get('config_fingerprint', None)
+        if saved_fp is not None and saved_fp != config_fp:
+            print(f"  警告: 最终权重指纹({saved_fp})与当前配置({config_fp})不一致，请确认参数一致")
         return train_losses
 
     # 检查中间权重
@@ -291,6 +313,10 @@ def train_model(model, optimizer, train_loader, time_sampling='uniform',
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         start_epoch = checkpoint.get('epoch', 0) + 1
         train_losses = checkpoint.get('train_losses', [])
+        # 校验超参数指纹
+        saved_fp = checkpoint.get('config_fingerprint', None)
+        if saved_fp is not None and saved_fp != config_fp:
+            print(f"  警告: 中间权重指纹({saved_fp})与当前配置({config_fp})不一致，请确认参数一致")
 
     sampling_label = '均匀采样' if time_sampling == 'uniform' else r'Logit-Normal采样'
     print(f"训练 RF ({sampling_label})，从 epoch {start_epoch} 开始...")
@@ -315,6 +341,8 @@ def train_model(model, optimizer, train_loader, time_sampling='uniform',
                 t_continuous = logit_normal_sample(batch, m=ln_m, s=ln_s, device=device)
 
             # 映射到整数时间步（正弦嵌入）
+            # 反向映射 t_int = (1-t)*(T-1)：物理时间t=0(噪声端)对应t_int=T-1(最大)，t=1(数据端)对应t_int=0
+            # 这与扩散模型惯例一致：t_int大=噪声大，t_int小=噪声小
             t_int = ((1 - t_continuous) * (T - 1)).long()
             t_4d = t_continuous[:, None, None, None]
 
@@ -351,6 +379,7 @@ def train_model(model, optimizer, train_loader, time_sampling='uniform',
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'train_losses': train_losses,
+                'config_fingerprint': config_fp,
             }, checkpoint_path)
 
     # 保存最终权重
@@ -359,6 +388,7 @@ def train_model(model, optimizer, train_loader, time_sampling='uniform',
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'train_losses': train_losses,
+            'config_fingerprint': config_fp,
         }, final_checkpoint_path)
         print(f"最终权重已保存: {final_checkpoint_path}")
 
@@ -508,9 +538,12 @@ print("\n少步采样对比...")
 samples_uniform = {}
 samples_logit = {}
 
+# 生成共享初始噪声（CRN原则：同一噪声起点确保"改善%"归因于策略差异而非随机噪声）
+x_init_shared = torch.randn(sample_shape, device=device)
+
 for n_steps in step_counts:
-    samples_uniform[n_steps] = flow_ode_sample(model_uniform, sample_shape, n_steps=n_steps)
-    samples_logit[n_steps] = flow_ode_sample(model_logit, sample_shape, n_steps=n_steps)
+    samples_uniform[n_steps] = flow_ode_sample(model_uniform, sample_shape, n_steps=n_steps, x_init=x_init_shared)
+    samples_logit[n_steps]   = flow_ode_sample(model_logit,   sample_shape, n_steps=n_steps, x_init=x_init_shared)
 
 # 计算量化指标：生成样本与最近邻真实样本的平均像素距离
 print("\n计算量化指标（生成样本与最近邻真实样本的平均像素距离）...")
@@ -518,7 +551,12 @@ test_samples = torch.stack([test_dataset[i][0] for i in range(min(100, len(test_
 
 
 def compute_nn_distance(generated, reference):
-    """计算生成样本与参考集中最近邻的平均像素距离"""
+    """计算生成样本与参考集中最近邻的平均像素距离
+
+    注意: 这是一个简单的代理指标，仅衡量像素级L2最近邻距离，
+    不等价于FID等标准生成质量指标（容易被轻微模糊的"平均脸型"样本拉低距离）。
+    教学实验中用于相对比较两种采样策略的差异。
+    """
     gen_flat = generated.view(generated.shape[0], -1)
     ref_flat = reference.view(reference.shape[0], -1)
     distances = torch.cdist(gen_flat, ref_flat)

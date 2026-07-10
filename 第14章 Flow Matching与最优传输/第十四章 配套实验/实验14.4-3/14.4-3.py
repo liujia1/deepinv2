@@ -176,9 +176,16 @@ def compute_curvature_from_traj(traj):
     return np.mean(curvatures)
 
 
-def compute_curvature_from_model(model, n_samples=500, n_ode_steps=100, device='cpu'):
-    """从模型生成轨迹并计算曲率"""
-    z = torch.randn(n_samples, 2, device=device)
+@torch.no_grad()
+def compute_curvature_from_model(model, n_samples=500, n_ode_steps=100, device='cpu', z=None):
+    """从模型生成轨迹并计算曲率
+
+    参数:
+      z: 可选，外部传入的固定噪声（CRN原则），三轮共用同一批z确保曲率比较不受采样噪声干扰
+    """
+    model.eval()
+    if z is None:
+        z = torch.randn(n_samples, 2, device=device)
 
     # 记录轨迹
     traj = [z.cpu().numpy().copy()]
@@ -326,8 +333,11 @@ losses_1rf = train_rf_model(model_1rf, opt_1rf, z_1rf, x_1rf,
                              final_checkpoint_path=final_paths[1],
                              model_label='1-RF')
 
+# 生成固定噪声用于CRN曲率比较（跨轮共用同一批z，消除采样噪声对单调性判断的干扰）
+z_curv = torch.randn(500, 2, device=device)
+
 # 计算1-RF曲率
-kappa_1rf, traj_1rf = compute_curvature_from_model(model_1rf, n_samples=500, n_ode_steps=n_ode_steps, device=device)
+kappa_1rf, traj_1rf = compute_curvature_from_model(model_1rf, n_samples=500, n_ode_steps=n_ode_steps, device=device, z=z_curv)
 print(f"\n1-RF 曲率: κ = {kappa_1rf:.6f}")
 
 
@@ -351,8 +361,9 @@ n_reflow_rounds = 3
 for k in range(2, n_reflow_rounds + 1):
     print(f"\n--- 第 {k} 轮 Reflow ---")
 
-    # 用上一轮模型生成Reflow端点对
+    # 用上一轮模型生成Reflow端点对（每轮独立seed，与全局RNG流解耦，确保可复现）
     prev_model = models[k - 1]
+    torch.manual_seed(1000 + k)
     z_new, x_new = generate_reflow_pairs(prev_model, n_pairs=n_data, n_ode_steps=n_ode_steps)
 
     # 训练新的RF模型
@@ -364,8 +375,8 @@ for k in range(2, n_reflow_rounds + 1):
                                final_checkpoint_path=final_paths[k],
                                model_label=f'{k}-RF')
 
-    # 计算曲率
-    kappa_k, traj_k = compute_curvature_from_model(model_k, n_samples=500, n_ode_steps=n_ode_steps, device=device)
+    # 计算曲率（使用固定z_curv，CRN原则确保跨轮比较不受采样噪声干扰）
+    kappa_k, traj_k = compute_curvature_from_model(model_k, n_samples=500, n_ode_steps=n_ode_steps, device=device, z=z_curv)
     curvatures[k] = kappa_k
     trajectories[k] = traj_k
     models[k] = model_k
