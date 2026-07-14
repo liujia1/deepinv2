@@ -37,6 +37,8 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", message=".*safety.?checker.*")
 warnings.filterwarnings("ignore", message=".*safety filter.*")
 warnings.filterwarnings("ignore", message=".*unfiltered results.*")
+warnings.filterwarnings("ignore", message=".*unauthenticated requests to the HF Hub.*")
+warnings.filterwarnings("ignore", message=".*HF_TOKEN.*")
 
 # ====== 中文字体配置(兼容本地和Google Colab) ======
 _gdrive = '/content/drive/MyDrive'
