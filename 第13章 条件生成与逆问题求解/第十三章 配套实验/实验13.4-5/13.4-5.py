@@ -34,7 +34,9 @@ warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", message=".*U\\+2212.*")
 warnings.filterwarnings("ignore", message=".*glyph.*")
 warnings.filterwarnings("ignore", category=DeprecationWarning)
-warnings.filterwarnings("ignore", message=".*safety_checker.*")
+warnings.filterwarnings("ignore", message=".*safety.?checker.*")
+warnings.filterwarnings("ignore", message=".*safety filter.*")
+warnings.filterwarnings("ignore", message=".*unfiltered results.*")
 
 # ====== 中文字体配置(兼容本地和Google Colab) ======
 _gdrive = '/content/drive/MyDrive'
@@ -97,6 +99,22 @@ ControlNet核心思想（13.4节）：
 
 import torch
 import numpy as np
+
+# 边缘检测工具函数（模拟数据和GPU生成数据共用）
+def _sobel_edges(a):
+    """边缘检测，返回二值化边缘图（优先用 skimage，回退到 numpy 差分）"""
+    try:
+        from skimage.filters import sobel
+        e = sobel(a.astype(float))
+    except Exception:
+        # numpy 回退实现：相邻像素差分
+        dx = np.abs(np.diff(a.astype(float), axis=1))
+        dy = np.abs(np.diff(a.astype(float), axis=0))
+        e = np.zeros_like(a, dtype=float)
+        e[:, 1:] += dx; e[:, :-1] += dx
+        e[1:, :] += dy; e[:-1, :] += dy
+    return (e > 0.05).astype(bool)  # 经验阈值：sobel输出归一化后>0.05视为边缘
+
 try:
     from skimage.metrics import structural_similarity as compute_ssim
     HAS_SKIMAGE = True
@@ -114,8 +132,21 @@ try:
     HAS_DIFFUSERS = True
 except ImportError:
     HAS_DIFFUSERS = False
-    print("\nDiffusers库未安装，请先安装:")
-    print("pip install diffusers transformers accelerate")
+    print("\n检测到 diffusers 相关库未安装，正在自动安装...")
+    try:
+        import subprocess
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "diffusers", "transformers", "accelerate", "Pillow"])
+        print("安装完成，重新导入...")
+        from diffusers import (
+            StableDiffusionControlNetPipeline,
+            ControlNetModel,
+            UniPCMultistepScheduler,
+        )
+        from PIL import Image
+        HAS_DIFFUSERS = True
+    except Exception as e:
+        print(f"安装失败: {e}")
+        print("请手动运行: pip install diffusers transformers accelerate Pillow")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"\n使用设备: {device}")
@@ -201,26 +232,30 @@ fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 # 第一行：ControlNet能力展示
 # 子图1：条件输入（深度图）
 np.random.seed(42)
-depth_map = np.zeros((100, 100))
-depth_map[20:80, 20:80] = 0.5
-depth_map[30:70, 30:70] = 0.7
-depth_map[40:60, 40:60] = 0.9
-axes[0, 0].imshow(depth_map, cmap='gray_r')
+depth_map_sim = np.zeros((100, 100))
+depth_map_sim[20:80, 20:80] = 0.5
+depth_map_sim[30:70, 30:70] = 0.7
+depth_map_sim[40:60, 40:60] = 0.9
+axes[0, 0].imshow(depth_map_sim, cmap='gray_r')
 axes[0, 0].set_title('条件输入：深度图')
 axes[0, 0].axis('off')
 
 # 子图2：ControlNet生成效果（模拟：保留深度结构）
 np.random.seed(43)
-ctrlnet_result = np.zeros((100, 100))
-ctrlnet_result[20:80, 20:80] = 0.6 + np.random.randn(60, 60) * 0.05
-ctrlnet_result[30:70, 30:70] = 0.75 + np.random.randn(40, 40) * 0.05
-ctrlnet_result[40:60, 40:60] = 0.9 + np.random.randn(20, 20) * 0.05
-axes[0, 1].imshow(ctrlnet_result, cmap='gray_r')
+ctrlnet_result_sim = np.zeros((100, 100))
+ctrlnet_result_sim[20:80, 20:80] = 0.6 + np.random.randn(60, 60) * 0.05
+ctrlnet_result_sim[30:70, 30:70] = 0.75 + np.random.randn(40, 40) * 0.05
+ctrlnet_result_sim[40:60, 40:60] = 0.9 + np.random.randn(20, 20) * 0.05
+axes[0, 1].imshow(ctrlnet_result_sim, cmap='gray_r')
 
-# 子图3：CFG生成效果（模拟：无法控制结构）
+# 子图3：CFG生成效果（模拟：有内容但无法控制深度结构）
+# 用对角线渐变 + 噪声模拟CFG生成的"有内容但结构不对"的图像
 np.random.seed(44)
-cfg_result = np.random.rand(100, 100) * 0.4 + 0.3
-axes[0, 2].imshow(cfg_result, cmap='gray_r')
+xx, yy = np.meshgrid(np.linspace(0, 1, 100), np.linspace(0, 1, 100))
+cfg_base = (xx + yy) / 2  # 对角线渐变，模拟有内容但结构不同
+cfg_result_sim = cfg_base + np.random.randn(100, 100) * 0.08
+cfg_result_sim = np.clip(cfg_result_sim, 0, 1)
+axes[0, 2].imshow(cfg_result_sim, cmap='gray_r')
 
 # 第二行：定量对比与原理
 # 子图4：条件遵守度对比（基于模拟数据真实计算SSIM）
@@ -229,9 +264,9 @@ colors = ['steelblue', 'coral', 'gray']
 if HAS_SKIMAGE:
     np.random.seed(45)
     none_result = np.random.rand(100, 100)
-    ssim_ctrlnet = compute_ssim(depth_map, ctrlnet_result, data_range=1.0)
-    ssim_cfg = compute_ssim(depth_map, cfg_result, data_range=1.0)
-    ssim_none = compute_ssim(depth_map, none_result, data_range=1.0)
+    ssim_ctrlnet = compute_ssim(depth_map_sim, ctrlnet_result_sim, data_range=1.0)
+    ssim_cfg = compute_ssim(depth_map_sim, cfg_result_sim, data_range=1.0)
+    ssim_none = compute_ssim(depth_map_sim, none_result, data_range=1.0)
     ssim_values = [ssim_ctrlnet, ssim_cfg, ssim_none]
     axes[0, 1].set_title(f'ControlNet生成\n（保留深度结构，SSIM={ssim_ctrlnet:.2f}）')
     axes[0, 2].set_title(f'CFG生成（仅文本条件）\n（无结构控制，SSIM={ssim_cfg:.2f}）')
@@ -252,22 +287,43 @@ for bar, val in zip(bars, ssim_values):
     axes[1, 0].text(bar.get_x() + bar.get_width()/2, val + 0.02,
                     f'{val:.2f}', ha='center', fontweight='bold')
 
-# 子图5：可控性维度对比（示意性，非实测数据）
-axes[1, 1].axis('off')
-categories = ['空间结构', '语义内容', '风格', '姿态', '布局']
-ctrlnet_scores = [0.9, 0.7, 0.6, 0.9, 0.8]
-cfg_scores = [0.1, 0.9, 0.7, 0.3, 0.4]
-x = np.arange(len(categories))
-width = 0.35
-axes[1, 1].bar(x - width/2, ctrlnet_scores, width, label='ControlNet', color='steelblue', alpha=0.8)
-axes[1, 1].bar(x + width/2, cfg_scores, width, label='CFG', color='coral', alpha=0.8)
-axes[1, 1].set_xticks(x)
-axes[1, 1].set_xticklabels(categories, rotation=15, ha='right')
-axes[1, 1].set_ylabel('控制能力 (0-1)')
-axes[1, 1].set_title('可控性维度对比（示意性，非实测）')
+# 子图5：可控性维度对比（基于模拟数据真实计算）
+# 计算两个互补的可量化指标：SSIM（结构相似度）和 边缘IoU（结构保持度）
+# 注：模拟数据是受控演示，定量结论仅供教学直观理解；严谨实验需在真实生成结果上计算
+def _edge_iou(a, b):
+    """两个二值边缘图的交并比(IoU)"""
+    ea, eb = _sobel_edges(a), _sobel_edges(b)
+    inter = np.logical_and(ea, eb).sum()
+    union = np.logical_or(ea, eb).sum()
+    return float(inter) / float(union) if union > 0 else 0.0
+
+# 计算两个独立维度的指标
+ssim_ctrlnet = ssim_values[0]
+ssim_cfg = ssim_values[1]
+iou_ctrlnet = _edge_iou(depth_map_sim, ctrlnet_result_sim)
+iou_cfg = _edge_iou(depth_map_sim, cfg_result_sim)
+
+# 画一个简洁的二维散点图（SSIM vs Edge IoU）
+axes[1, 1].scatter(ssim_cfg, iou_cfg, s=300, c='coral', marker='s',
+                   label='CFG', edgecolors='black', linewidths=1.5, zorder=3)
+axes[1, 1].scatter(ssim_ctrlnet, iou_ctrlnet, s=300, c='steelblue', marker='o',
+                   label='ControlNet', edgecolors='black', linewidths=1.5, zorder=3)
+axes[1, 1].annotate('ControlNet', (ssim_ctrlnet, iou_ctrlnet),
+                    textcoords="offset points", xytext=(10, 10), fontsize=10)
+axes[1, 1].annotate('CFG', (ssim_cfg, iou_cfg),
+                    textcoords="offset points", xytext=(-30, -20), fontsize=10)
+axes[1, 1].set_xlabel('结构相似度 (SSIM)', fontsize=10)
+axes[1, 1].set_ylabel('边缘IoU (Edge IoU)', fontsize=10)
+axes[1, 1].set_title('条件控制效果（SSIM × 边缘IoU）', fontsize=10)
+axes[1, 1].set_xlim(0, 1.0)
 axes[1, 1].set_ylim(0, 1.0)
-axes[1, 1].legend()
-axes[1, 1].grid(True, alpha=0.3, axis='y')
+axes[1, 1].legend(loc='lower right', fontsize=9)
+axes[1, 1].grid(True, alpha=0.3)
+# 在图上标注各点数值
+axes[1, 1].text(0.02, 0.95,
+                f'注：模拟数据演示\nControlNet: SSIM={ssim_ctrlnet:.2f}, IoU={iou_ctrlnet:.2f}\nCFG: SSIM={ssim_cfg:.2f}, IoU={iou_cfg:.2f}',
+                transform=axes[1, 1].transAxes, fontsize=8,
+                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
 # 子图6：计算代价对比
 # 数据来源：ControlNet论文(Zhang et al. 2023)，非本实验测算
@@ -301,30 +357,27 @@ if HAS_SKIMAGE:
 
 if HAS_DIFFUSERS and device == "cuda":
     try:
+        dtype = torch.float32  # 使用float32保证兼容性
+
         print("\n加载预训练ControlNet模型...")
         # 加载ControlNet depth模型
         controlnet = ControlNetModel.from_pretrained(
             "lllyasviel/sd-controlnet-depth",
-            torch_dtype=torch.float16
+            torch_dtype=dtype
         )
 
         # 加载Stable Diffusion pipeline
         pipe = StableDiffusionControlNetPipeline.from_pretrained(
             "runwayml/stable-diffusion-v1-5",
             controlnet=controlnet,
-            torch_dtype=torch.float16,
+            torch_dtype=dtype,
             safety_checker=None,
         )
 
         # 使用更快的scheduler
         pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
-
-        # 启用内存优化（添加异常处理，兼容accelerate库问题）
-        try:
-            pipe.enable_model_cpu_offload()
-        except Exception as e:
-            print(f"  警告: enable_model_cpu_offload 失败 ({e})，回退到直接to(device)")
-            pipe = pipe.to(device)
+        pipe.enable_model_cpu_offload()
+        pipe.enable_attention_slicing("auto")
 
         print("模型加载完成！")
         print("  关键参数说明:")
@@ -334,9 +387,7 @@ if HAS_DIFFUSERS and device == "cuda":
 
         # 创建测试深度图（简化示例）
         print("\n生成测试深度图...")
-        # 创建一个简单的深度图（模拟深度信息）
         depth_map = np.zeros((512, 512), dtype=np.uint8)
-        # 模拟一个房间的深度结构
         depth_map[100:400, 100:400] = 128  # 中间区域
         depth_map[150:350, 150:350] = 200  # 更深的区域
         depth_map[200:300, 200:300] = 255  # 最深区域
@@ -363,6 +414,10 @@ if HAS_DIFFUSERS and device == "cuda":
         depth_image.save(os.path.join(SAVE_DIR, "测试深度图.png"))
         print("ControlNet depth-to-image结果已保存")
 
+        # 释放ControlNet pipeline，为CFG pipeline腾出显存
+        del pipe, controlnet
+        torch.cuda.empty_cache()
+
         # ============================================================
         # 步骤3：ControlNet vs CFG对比
         # ============================================================
@@ -375,16 +430,12 @@ if HAS_DIFFUSERS and device == "cuda":
         from diffusers import StableDiffusionPipeline
         pipe_cfg = StableDiffusionPipeline.from_pretrained(
             "runwayml/stable-diffusion-v1-5",
-            torch_dtype=torch.float16,
+            torch_dtype=dtype,
             safety_checker=None,
         )
         pipe_cfg.scheduler = UniPCMultistepScheduler.from_config(pipe_cfg.scheduler.config)
-        # 启用内存优化（与ControlNet pipeline风格保持一致）
-        try:
-            pipe_cfg.enable_model_cpu_offload()
-        except Exception as e:
-            print(f"  警告: enable_model_cpu_offload 失败 ({e})，回退到直接to(device)")
-            pipe_cfg = pipe_cfg.to(device)
+        pipe_cfg.enable_model_cpu_offload()
+        pipe_cfg.enable_attention_slicing("auto")
 
         # CFG不同引导强度
         cfg_scales = [1.0, 7.5, 15.0]
@@ -473,11 +524,70 @@ if HAS_DIFFUSERS and device == "cuda":
         plt.savefig(compare_path, dpi=150, bbox_inches='tight')
         plt.close()
         print(f"对比结果已保存: {compare_path}")
-        print("  注：GPU真实生成图为RGB图像，与合成深度图属于不同模态，本对比为定性视觉比较；")
-        print("      定量的SSIM条件遵守度已在上方受控模拟数据图中基于真实计算给出。")
+
+        # 释放CFG pipeline
+        del pipe_cfg
+        torch.cuda.empty_cache()
+
+        # ============================================================
+        # 真实生成图的定性评估：边缘热力图对比
+        # 注：跨模态（深度图 vs RGB生成图）的像素级比较无意义，
+        #     改为对比边缘密度的空间分布，让学生肉眼判断结构是否对齐。
+        # ============================================================
+        try:
+            real_depth = np.array(depth_image.convert('L')).astype(float) / 255.0
+            cn_arr = np.array(image_controlnet.convert('L')).astype(float) / 255.0
+            cfg_arr = np.array(images_cfg[-1].convert('L')).astype(float) / 255.0
+            # 统一尺寸到深度图大小
+            if cn_arr.shape != real_depth.shape:
+                from skimage.transform import resize as _skr
+                cn_arr = _skr(cn_arr, real_depth.shape, preserve_range=True)
+            if cfg_arr.shape != real_depth.shape:
+                from skimage.transform import resize as _skr
+                cfg_arr = _skr(cfg_arr, real_depth.shape, preserve_range=True)
+
+            # 计算各图的边缘（转为 float 用于可视化，0/1 二值无需归一化）
+            def _edge_for_show(gray):
+                return _sobel_edges(gray).astype(float)
+
+            depth_e = _edge_for_show(real_depth)
+            cn_e = _edge_for_show(cn_arr)
+            cfg_e = _edge_for_show(cfg_arr)
+
+            # 并排展示
+            fig_real, axes_real = plt.subplots(1, 3, figsize=(15, 5))
+            axes_real[0].imshow(depth_e, cmap='hot')
+            axes_real[0].set_title('深度图边缘\n(条件参考)', fontsize=11)
+            axes_real[0].axis('off')
+
+            axes_real[1].imshow(cn_e, cmap='hot')
+            axes_real[1].set_title(f'ControlNet生成图边缘\n(结构对齐)', fontsize=11)
+            axes_real[1].axis('off')
+
+            axes_real[2].imshow(cfg_e, cmap='hot')
+            axes_real[2].set_title(f'CFG生成图边缘\n(结构未对齐)', fontsize=11)
+            axes_real[2].axis('off')
+
+            fig_real.suptitle('真实GPU生成图的边缘热力图对比（定性）', fontsize=13)
+            fig_real.text(0.5, 0.02,
+                          '观察要点：若 ControlNet 的亮线位置与深度图边界重合 → 条件生效；'
+                          'CFG 边缘随机分布 → 文本提示无法控制结构',
+                          ha='center', fontsize=9, style='italic',
+                          bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+            plt.tight_layout(rect=[0, 0.06, 1, 0.96])
+            real_path = os.path.join(SAVE_DIR, "ControlNet_vs_CFG_真实数据评估.png")
+            plt.savefig(real_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            print(f"真实数据评估图已保存: {real_path}")
+            print("  提示：观察 ControlNet 边缘热力图与深度图边界是否对齐")
+        except Exception as e:
+            print(f"真实数据评估失败: {e}")
+            import traceback; traceback.print_exc()
 
     except Exception as e:
         print(f"\n执行出错: {e}")
+        import traceback
+        traceback.print_exc()
         print("可能原因：GPU内存不足、网络无法下载模型等")
         print("\n以下为理论说明：")
         print("""
