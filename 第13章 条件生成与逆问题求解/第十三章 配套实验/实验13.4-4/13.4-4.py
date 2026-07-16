@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-实验13.4-5：ControlNet深度条件生成
+实验13.4-4：ControlNet深度条件生成
 
 实验内容：
   - ControlNet架构原理（13.4节条件控制）
@@ -49,7 +49,7 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    SAVE_DIR = os.path.join(_gdrive, '实验13.4-5')
+    SAVE_DIR = os.path.join(_gdrive, '实验13.4-4')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
     # 将 HuggingFace 模型缓存指向 Google Drive，避免每次重启重新下载
     os.environ['HF_HOME'] = os.path.join(_gdrive, 'hf_cache')
@@ -672,7 +672,7 @@ ControlNet零样本迁移（13.4节）：
 # 总结
 # ============================================================
 print("\n" + "=" * 60)
-print("实验13.4-5 完成!")
+print("实验13.4-4 完成!")
 print("=" * 60)
 print("""
 关键结论:

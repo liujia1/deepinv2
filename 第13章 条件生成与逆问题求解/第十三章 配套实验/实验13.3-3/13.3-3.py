@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-实验13.3-5：DDRM算法实践
+实验13.3-3：DDRM算法实践
 
 ★ 原创设计：DDRM的SVD频谱域条件化
   DDRM核心思想：对线性算子A做SVD分解，在频谱域精确条件化
@@ -48,7 +48,7 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    SAVE_DIR = os.path.join(_gdrive, '实验13.3-5')
+    SAVE_DIR = os.path.join(_gdrive, '实验13.3-3')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
     try:
@@ -73,7 +73,7 @@ plt.rcParams['axes.unicode_minus'] = False
 np.random.seed(42)
 
 print("\n" + "=" * 60)
-print("实验13.3-5: DDRM算法实践")
+print("实验13.3-3: DDRM算法实践")
 print("=" * 60)
 print("知识点: DDRM算法(附录13B), SVD频谱域条件化, 与DPS的对比")
 
@@ -473,7 +473,7 @@ print(f"局限性对比已保存: {limit_path}")
 # 总结
 # ============================================================
 print("\n" + "=" * 60)
-print("实验13.3-5 完成!")
+print("实验13.3-3 完成!")
 print("=" * 60)
 print("""
 关键结论:
