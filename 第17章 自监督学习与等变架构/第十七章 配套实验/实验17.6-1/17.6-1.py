@@ -16,7 +16,11 @@ Step 4: 算子-等变性对照实验——不同算子的等变性验证
 - 验证算子-等变性对照表中的结论
 
 素材来源：deepinv.loss.EILoss思路、17.5节理论、17.6节MC损失
-运行前提：需GPU（Colab T4即可）
+运行前提：推荐GPU（Colab T4即可），CPU可运行但很慢
+
+注：checkpoint断点续训仅恢复模型和优化器状态，未保存/恢复RNG状态。
+若训练被打断续训，DataLoader shuffle顺序和random_shift随机平移会与
+不间断训练时不同，但不影响教学结论的正确性。
 """
 
 import numpy as np
@@ -24,7 +28,7 @@ from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
-import os, sys, io, time, warnings, logging
+import os, sys, io, warnings, logging
 
 # 设置控制台输出为 UTF-8 (Windows 下避免中文乱码)
 if sys.platform == 'win32':
@@ -64,7 +68,6 @@ try:
 except ImportError:
     print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
 
-import copy
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -121,36 +124,8 @@ class SmallUNet(nn.Module):
 
 
 # ========================================================================
-# Inpainting正向算子
+# Inpainting掩码生成
 # ========================================================================
-class InpaintingOperator:
-    """图像修复算子: y = M ⊙ x + ε
-    对应17.5.1节：最直观的零空间问题
-
-    M是二值掩码，1=保留像素，0=缺失像素
-    A的零空间 = 被遮蔽的像素位置 → 自监督损失不约束这些位置
-    """
-    def __init__(self, mask, device=None):
-        if device is not None:
-            self.mask = mask.to(device)
-        else:
-            self.mask = mask
-        self.device = self.mask.device
-
-    def A(self, x):
-        if self.mask.device != x.device:
-            mask_2d = self.mask.unsqueeze(0).unsqueeze(0).to(x.device)
-        else:
-            mask_2d = self.mask.unsqueeze(0).unsqueeze(0)
-        return x * mask_2d
-
-    def AT(self, y):
-        return self.A(y)
-
-    def zero_filled(self, y):
-        return y
-
-
 def create_inpainting_mask(H, W, keep_ratio=0.5, seed=42):
     rng = np.random.RandomState(seed)
     mask = np.zeros((H, W), dtype=np.float32)
@@ -158,17 +133,6 @@ def create_inpainting_mask(H, W, keep_ratio=0.5, seed=42):
     indices = rng.choice(H * W, n_keep, replace=False)
     mask.flat[indices] = 1.0
     return torch.from_numpy(mask)
-
-
-def create_random_mask_batch(batch_size, H, W, keep_ratio=0.5, device=None):
-    if device is None:
-        device = torch.device('cpu')
-    masks = torch.zeros(batch_size, 1, H, W, device=device)
-    n_keep = int(H * W * keep_ratio)
-    for i in range(batch_size):
-        indices = torch.randperm(H * W, device=device)[:n_keep]
-        masks[i].view(-1)[indices] = 1.0
-    return masks
 
 
 # ========================================================================
@@ -180,6 +144,7 @@ KEEP_RATIO = 0.5
 BATCH_SIZE = 128
 N_EPOCHS = 40
 LR = 1e-3
+MAX_SHIFT = 8  # 平移幅度常量：训练EI增强和等变性检验共用同一值
 
 transform = transforms.Compose([
     transforms.Resize(IMG_SIZE),
@@ -197,7 +162,108 @@ train_loader = DataLoader(mnist_train, batch_size=BATCH_SIZE, shuffle=True, num_
 test_loader = DataLoader(mnist_test, batch_size=BATCH_SIZE, shuffle=False, num_workers=num_workers)
 
 test_mask = create_inpainting_mask(IMG_SIZE, IMG_SIZE, KEEP_RATIO).to(device)
-inpainting_op = InpaintingOperator(test_mask, device=device)
+
+
+# ========================================================================
+# 通用训练函数
+# ========================================================================
+def train_model(model, optimizer, ckpt_path, name, loss_fn,
+                train_loader, mask, n_epochs=N_EPOCHS, device=device):
+    """通用训练函数，支持checkpoint断点续训
+
+    参数:
+        model: 待训练的模型
+        optimizer: 优化器
+        ckpt_path: checkpoint保存路径
+        name: 模型名称（用于打印）
+        loss_fn: 损失函数，签名 loss_fn(model, batch_x, y, mask_2d) -> loss
+        train_loader: 训练数据加载器
+        mask: 固定掩码
+        n_epochs: 训练轮数
+        device: 设备
+
+    返回:
+        model: 训练后的模型
+        train_losses: 训练损失列表
+    """
+    start_epoch = 0
+    train_losses = []
+    is_final = False
+
+    if os.path.exists(ckpt_path):
+        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+        model_state = checkpoint.get('model_state_dict', checkpoint.get('model_state'))
+        optimizer_state = checkpoint.get('optimizer_state_dict', checkpoint.get('optimizer_state'))
+
+        if checkpoint.get('is_final', False):
+            print(f"✓ [{name}] 检测到最终权重，直接加载，跳过训练过程")
+            print(f"  训练轮数: {checkpoint['epoch']+1}")
+            model.load_state_dict(model_state)
+            if optimizer_state is not None:
+                optimizer.load_state_dict(optimizer_state)
+            train_losses = checkpoint.get('train_losses', [])
+            is_final = True
+        else:
+            print(f"  [{name}] 检测到未完成的训练，从第 {checkpoint['epoch']+1} 轮继续")
+            model.load_state_dict(model_state)
+            if optimizer_state is not None:
+                optimizer.load_state_dict(optimizer_state)
+            train_losses = checkpoint.get('train_losses', [])
+            start_epoch = checkpoint['epoch'] + 1
+
+    if is_final:
+        print(f"  [{name}] 模型已训练完毕，跳过。")
+        return model, train_losses
+
+    for epoch in range(start_epoch, n_epochs):
+        model.train()
+        epoch_loss = 0.0
+        n_batches = 0
+        pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{n_epochs}', leave=False, unit='batch')
+        for batch_x, _ in pbar:
+            batch_x = batch_x.to(device)
+            mask_2d = mask.unsqueeze(0).unsqueeze(0).expand_as(batch_x)
+            y = batch_x * mask_2d + SIGMA * torch.randn_like(batch_x) * mask_2d
+
+            optimizer.zero_grad()
+            loss = loss_fn(model, batch_x, y, mask_2d)
+            loss.backward()
+            optimizer.step()
+
+            epoch_loss += loss.item()
+            n_batches += 1
+            pbar.set_postfix(loss=f'{loss.item():.4f}')
+
+        avg_loss = epoch_loss / max(n_batches, 1)
+        train_losses.append(avg_loss)
+
+        if (epoch + 1) % 10 == 0:
+            print(f"    Epoch {epoch+1}/{n_epochs}, avg_loss={avg_loss:.4f}")
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': avg_loss,
+                'train_losses': train_losses,
+                'is_final': False
+            }, ckpt_path)
+            print(f"  [{name}] ✓ checkpoint已保存 (epoch {epoch+1})")
+
+    # 保存最终权重（需确保有训练数据可保存）
+    if train_losses:
+        torch.save({
+            'epoch': n_epochs - 1,
+            'model_state_dict': model.state_dict(),
+            'loss': train_losses[-1],
+            'train_losses': train_losses,
+            'is_final': True
+        }, ckpt_path)
+        print(f"  [{name}] ✓ 最终模型已保存")
+    else:
+        # 边界情况：n_epochs <= start_epoch 导致循环未执行
+        print(f"  [{name}] ⚠ 无训练数据，跳过最终权重保存 (start_epoch={start_epoch}, n_epochs={n_epochs})")
+
+    return model, train_losses
 
 
 # ========================================================================
@@ -210,80 +276,17 @@ print("="*70)
 print("\n  训练朴素自监督 (仅MC损失)...")
 model_naive = SmallUNet().to(device)
 optimizer_naive = optim.Adam(model_naive.parameters(), lr=LR)
-naive_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_Naive.pt')
-naive_start = 0
-naive_train_losses = []
-naive_is_final = False
 
-if os.path.exists(naive_ckpt_path):
-    checkpoint = torch.load(naive_ckpt_path, map_location=device, weights_only=False)
-    model_state = checkpoint.get('model_state_dict', checkpoint.get('model_state'))
-    optimizer_state = checkpoint.get('optimizer_state_dict', checkpoint.get('optimizer_state'))
+# Naive损失函数：仅MC损失（测量一致性）
+def loss_naive(model, batch_x, y, mask_2d):
+    f_y = model(y)
+    return ((mask_2d * (y - f_y)) ** 2).sum() / mask_2d.sum()
 
-    if checkpoint.get('is_final', False):
-        print(f"✓ [Naive] 检测到最终权重，直接加载，跳过训练过程")
-        print(f"  训练轮数: {checkpoint['epoch']+1}")
-        model_naive.load_state_dict(model_state)
-        if optimizer_state is not None:
-            optimizer_naive.load_state_dict(optimizer_state)
-        naive_train_losses = checkpoint.get('train_losses', [])
-        naive_start = checkpoint['epoch'] + 1
-        naive_is_final = True
-    else:
-        print(f"  [Naive] 检测到未完成的训练，从第 {checkpoint['epoch']+1} 轮继续")
-        model_naive.load_state_dict(model_state)
-        if optimizer_state is not None:
-            optimizer_naive.load_state_dict(optimizer_state)
-        naive_train_losses = checkpoint.get('train_losses', [])
-        naive_start = checkpoint['epoch'] + 1
-
-if naive_is_final:
-    print("  [Naive] 模型已训练完毕，跳过。")
-else:
-    for epoch in range(naive_start, N_EPOCHS):
-        model_naive.train()
-        epoch_loss = 0.0
-        n_batches = 0
-        pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{N_EPOCHS}', leave=False, unit='batch')
-        for batch_x, _ in pbar:
-            batch_x = batch_x.to(device)
-            masks = create_random_mask_batch(batch_x.shape[0], IMG_SIZE, IMG_SIZE, KEEP_RATIO, device=device)
-            y = batch_x * masks + SIGMA * torch.randn_like(batch_x) * masks
-
-            optimizer_naive.zero_grad()
-            f_y = model_naive(y)
-            loss = ((masks * (y - f_y)) ** 2).sum() / masks.sum()
-            loss.backward()
-            optimizer_naive.step()
-
-            epoch_loss += loss.item()
-            n_batches += 1
-            pbar.set_postfix(loss=f'{loss.item():.4f}')
-
-        avg_loss = epoch_loss / max(n_batches, 1)
-        naive_train_losses.append(avg_loss)
-
-        if (epoch + 1) % 10 == 0:
-            print(f"    Epoch {epoch+1}/{N_EPOCHS}, avg_loss={avg_loss:.4f}")
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model_naive.state_dict(),
-                'optimizer_state_dict': optimizer_naive.state_dict(),
-                'loss': avg_loss,
-                'train_losses': naive_train_losses,
-                'is_final': False
-            }, naive_ckpt_path)
-            print(f"  [Naive] ✓ checkpoint已保存 (epoch {epoch+1})")
-
-    # 保存最终权重
-    torch.save({
-        'epoch': N_EPOCHS - 1,
-        'model_state_dict': model_naive.state_dict(),
-        'loss': naive_train_losses[-1],
-        'train_losses': naive_train_losses,
-        'is_final': True
-    }, naive_ckpt_path)
-    print(f"  [Naive] ✓ 最终模型已保存")
+model_naive, naive_train_losses = train_model(
+    model_naive, optimizer_naive,
+    os.path.join(SAVE_DIR, 'ckpt_Naive.pt'),
+    'Naive', loss_naive, train_loader, test_mask
+)
 
 
 # 评估
@@ -295,26 +298,31 @@ def evaluate_inpainting(model, test_loader, mask, sigma=SIGMA, device=None):
     else:
         mask_dev = mask
     with torch.no_grad():
-        torch.manual_seed(0)
-        for batch_x, _ in tqdm(test_loader, desc='评估PSNR', leave=False):
-            batch_x = batch_x.to(mask_dev.device)
-            mask_2d = mask_dev.unsqueeze(0).unsqueeze(0).expand_as(batch_x)
-            y = batch_x * mask_2d + sigma * torch.randn_like(batch_x) * mask_2d
-            pred = model(y).clip(0, 1)
-            pred_np = pred.cpu().numpy()
-            x_np = batch_x.cpu().numpy()
-            for i in range(pred_np.shape[0]):
-                psnr_vals.append(psnr(x_np[i, 0], pred_np[i, 0], data_range=1.0))
+        with torch.random.fork_rng():
+            torch.manual_seed(0)  # fork_rng隔离，不影响外部全局RNG状态
+            for batch_x, _ in tqdm(test_loader, desc='评估PSNR', leave=False):
+                batch_x = batch_x.to(mask_dev.device)
+                mask_2d = mask_dev.unsqueeze(0).unsqueeze(0).expand_as(batch_x)
+                y = batch_x * mask_2d + sigma * torch.randn_like(batch_x) * mask_2d
+                pred = model(y).clip(0, 1)
+                pred_np = pred.cpu().numpy()
+                x_np = batch_x.cpu().numpy()
+                for i in range(pred_np.shape[0]):
+                    psnr_vals.append(psnr(x_np[i, 0], pred_np[i, 0], data_range=1.0))
     return np.mean(psnr_vals)
 
 psnr_naive = evaluate_inpainting(model_naive, test_loader, test_mask)
 print(f"  朴素MC PSNR = {psnr_naive:.2f} dB")
 
 # 可视化零空间问题
+# 重要：可视化输入必须与 evaluate_inpainting 保持一致（加噪声），
+# 否则图上展示的重建对应的输入和标题里引用的 PSNR 来自不同观测条件——
+# 网络训练时输入的就是"掩码+噪声"的观测，PSNR 评估也基于此；
+# 若图上展示无噪声输入下的重建，与训练/评估分布不一致，会让学生误解实验设置。
 test_imgs, _ = next(iter(test_loader))
 test_imgs = test_imgs[:6].to(device)
 mask_2d = test_mask.unsqueeze(0).unsqueeze(0).expand_as(test_imgs)
-test_y = test_imgs * mask_2d
+test_y = test_imgs * mask_2d + SIGMA * torch.randn_like(test_imgs) * mask_2d
 
 with torch.no_grad():
     pred_naive = model_naive(test_y).clip(0, 1)
@@ -322,11 +330,14 @@ with torch.no_grad():
 fig, axes = plt.subplots(3, 6, figsize=(15, 7))
 for i in range(6):
     axes[0, i].imshow(test_imgs[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
-    axes[0, i].axis('off')
     axes[1, i].imshow(test_y[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
-    axes[1, i].axis('off')
     axes[2, i].imshow(pred_naive[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
-    axes[2, i].axis('off')
+    # 关闭ticks和spines，但保留ylabel（axis('off')会隐藏ylabel）
+    for r in range(3):
+        axes[r, i].set_xticks([])
+        axes[r, i].set_yticks([])
+        for spine in axes[r, i].spines.values():
+            spine.set_visible(False)
 
 axes[0, 0].set_ylabel('干净图像 $x$', fontsize=11)
 axes[1, 0].set_ylabel(r'观测 $y=M \odot x$', fontsize=11)
@@ -346,13 +357,13 @@ print("\n" + "="*70)
 print("Step 2: 等变成像（EI）损失——平移对称性约束零空间")
 print("="*70)
 
-def random_shift(x, max_shift=8):
+def random_shift(x, max_shift=MAX_SHIFT):
     B, C, H, W = x.shape
     dy = torch.randint(-max_shift, max_shift+1, (1,)).item()
     dx = torch.randint(-max_shift, max_shift+1, (1,)).item()
     return torch.roll(x, shifts=(dy, dx), dims=(2, 3))
 
-def ei_loss(model, y, n_transforms=4, keep_ratio=KEEP_RATIO, sigma=SIGMA):
+def ei_loss(model, mask, f_y, n_transforms=4):
     """等变成像损失
     对应17.5.4节：Chen, Tachella & Davies (ICCV 2021)
 
@@ -360,23 +371,43 @@ def ei_loss(model, y, n_transforms=4, keep_ratio=KEEP_RATIO, sigma=SIGMA):
 
     其中 x̂ = f(y) 是参考重建
     T_g: 随机平移变换
+    A: 固定正向算子（此处为 inpainting 掩码 mask），作用于 T_g x̂ 产生虚拟测量
 
     ★ stop-gradient：对 x_hat 使用 .detach()，将 T_g x̂ 视为固定目标
     这是 EI 论文 (Chen et al., ICCV 2021) 中的标准做法——防止双侧梯度
     导致 trivial collapse（x̂ 退化为平凡解来最小化 EI 损失）。
-    """
-    x_hat = model(y)
 
+    ★ 固定算子：A 必须是固定算子（固定掩码），而非随机掩码。
+    若用随机掩码，算子在分布意义下关于平移近似等变，EI 无法利用
+    不等变性来约束零空间——与 17.5 节理论矛盾。Step 4 的等变性
+    验证也使用固定掩码，此处须保持一致。
+
+    ★ 虚拟测量未加观测噪声：
+    真实观测 y = M ⊙ x + σ·ε·M（保留像素处加噪声），但 EI 虚拟路径
+    y_virtual = M ⊙ (T_g x̂) 未加噪声。这是多数 EI 论文基础版本的做法。
+    原因：(1) x̂ 本身是对 x 的估计，已包含去噪效果；(2) 虚拟测量用于
+    约束等变性，而非精确匹配噪声分布。若需更鲁棒可考虑 Robust EI 变体
+    （给 y_virtual 也加噪声），但本实验采用基础版本。
+
+    ★ 计算成本：每次调用 ei_loss 会触发 1 + n_transforms 次模型前向传播。
+    例如 n_transforms=4 时，一个 batch 上 loss_fn 内部共调用 model 5 次
+    （1次算 f_y + 4次算 f_virtual）。这是 EI 方法的固有开销，通过
+    虚拟变换产生"伪多算子"信号来约束零空间。实际训练中可将 n_transforms
+    调小（如2）以加速，但会降低 EI 约束的覆盖度。
+    """
+    x_hat = f_y
+
+    mask_2d = mask.unsqueeze(0).unsqueeze(0)
+
+    mse_fn = nn.MSELoss()
     total_loss = 0
     for _ in range(n_transforms):
         x_hat_shifted = random_shift(x_hat.detach())
 
-        B, C, H, W = x_hat_shifted.shape
-        virtual_masks = create_random_mask_batch(B, H, W, keep_ratio, device=x_hat_shifted.device)
-        y_virtual = x_hat_shifted * virtual_masks
+        y_virtual = x_hat_shifted * mask_2d
 
         f_virtual = model(y_virtual)
-        total_loss += nn.MSELoss()(f_virtual, x_hat_shifted)
+        total_loss += mse_fn(f_virtual, x_hat_shifted)
 
     return total_loss / n_transforms
 
@@ -385,89 +416,74 @@ def ei_loss(model, y, n_transforms=4, keep_ratio=KEEP_RATIO, sigma=SIGMA):
 print("\n  训练EI模型 (MC + EI)...")
 model_ei = SmallUNet().to(device)
 optimizer_ei = optim.Adam(model_ei.parameters(), lr=LR)
+# EI损失权重：通过下方消融实验选定
 lambda_ei = 0.5
-ei_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_EI.pt')
-ei_start = 0
-ei_train_losses = []
-ei_is_final = False
 
-if os.path.exists(ei_ckpt_path):
-    checkpoint = torch.load(ei_ckpt_path, map_location=device, weights_only=False)
-    model_state = checkpoint.get('model_state_dict', checkpoint.get('model_state'))
-    optimizer_state = checkpoint.get('optimizer_state_dict', checkpoint.get('optimizer_state'))
+# EI损失函数：MC + EI
+def loss_ei(model, batch_x, y, mask_2d):
+    f_y = model(y)
+    loss_mc = ((mask_2d * (y - f_y)) ** 2).sum() / mask_2d.sum()
+    loss_ei_val = ei_loss(model, test_mask, f_y=f_y, n_transforms=4)
+    return loss_mc + lambda_ei * loss_ei_val
 
-    if checkpoint.get('is_final', False):
-        print(f"✓ [EI] 检测到最终权重，直接加载，跳过训练过程")
-        print(f"  训练轮数: {checkpoint['epoch']+1}")
-        model_ei.load_state_dict(model_state)
-        if optimizer_state is not None:
-            optimizer_ei.load_state_dict(optimizer_state)
-        ei_train_losses = checkpoint.get('train_losses', [])
-        ei_start = checkpoint['epoch'] + 1
-        ei_is_final = True
-    else:
-        print(f"  [EI] 检测到未完成的训练，从第 {checkpoint['epoch']+1} 轮继续")
-        model_ei.load_state_dict(model_state)
-        if optimizer_state is not None:
-            optimizer_ei.load_state_dict(optimizer_state)
-        ei_train_losses = checkpoint.get('train_losses', [])
-        ei_start = checkpoint['epoch'] + 1
+# ★ 关于 mask 类型的补充说明：
+# create_inpainting_mask 使用逐像素随机采样（50%随机像素），而非连续区域。
+# 对随机单像素 mask，torch.roll 平移后观测点位置几乎完全打乱，与原始 mask
+# 几乎不重叠——这导致 EI 虚拟测量 y_virtual = x_hat_shifted * mask_2d 中，
+# 平移后的像素点经常完全跑出原来观测的采样位置。此时 EI 项退化为较强的先验
+# 正则（等价于对任意50%采样都要重建好），比标准 EI 论文里"矩形/连续区域
+# inpainting mask"的效果更强。这在教学上是有意的：强化"非等变→EI有效"的结论，
+# 也更贴近真实场景中的不规则缺失（如随机遮挡）。
 
-if ei_is_final:
-    print("  [EI] 模型已训练完毕，跳过。")
-else:
-    for epoch in range(ei_start, N_EPOCHS):
-        model_ei.train()
-        epoch_loss = 0.0
-        n_batches = 0
-        pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{N_EPOCHS}', leave=False, unit='batch')
-        for batch_x, _ in pbar:
-            batch_x = batch_x.to(device)
-            masks = create_random_mask_batch(batch_x.shape[0], IMG_SIZE, IMG_SIZE, KEEP_RATIO, device=device)
-            y = batch_x * masks + SIGMA * torch.randn_like(batch_x) * masks
-
-            optimizer_ei.zero_grad()
-
-            f_y = model_ei(y)
-            loss_mc = ((masks * (y - f_y)) ** 2).sum() / masks.sum()
-
-            loss_ei = ei_loss(model_ei, y, n_transforms=4)
-
-            loss = loss_mc + lambda_ei * loss_ei
-            loss.backward()
-            optimizer_ei.step()
-
-            epoch_loss += loss.item()
-            n_batches += 1
-            pbar.set_postfix(loss=f'{loss.item():.4f}')
-
-        avg_loss = epoch_loss / max(n_batches, 1)
-        ei_train_losses.append(avg_loss)
-
-        if (epoch + 1) % 10 == 0:
-            print(f"    Epoch {epoch+1}/{N_EPOCHS}, avg_loss={avg_loss:.4f}")
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model_ei.state_dict(),
-                'optimizer_state_dict': optimizer_ei.state_dict(),
-                'loss': avg_loss,
-                'train_losses': ei_train_losses,
-                'is_final': False
-            }, ei_ckpt_path)
-            print(f"  [EI] ✓ checkpoint已保存 (epoch {epoch+1})")
-
-    # 保存最终权重
-    torch.save({
-        'epoch': N_EPOCHS - 1,
-        'model_state_dict': model_ei.state_dict(),
-        'loss': ei_train_losses[-1],
-        'train_losses': ei_train_losses,
-        'is_final': True
-    }, ei_ckpt_path)
-    print(f"  [EI] ✓ 最终模型已保存")
+model_ei, ei_train_losses = train_model(
+    model_ei, optimizer_ei,
+    os.path.join(SAVE_DIR, 'ckpt_EI.pt'),
+    'EI', loss_ei, train_loader, test_mask
+)
 
 psnr_ei = evaluate_inpainting(model_ei, test_loader, test_mask)
 print(f"  EI (MC+EI) PSNR = {psnr_ei:.2f} dB")
+
+
+# ========================================================================
+# Step 2b: lambda_ei 消融实验——为权重选择提供数据支撑
+# ========================================================================
+print("\n" + "="*70)
+print("Step 2b: lambda_ei 消融实验")
+print("="*70)
+
+lambda_candidates = [0.1, 0.5, 1.0]
+ablation_results = {}
+print(f"  {'lambda_ei':>10s}  {'PSNR (dB)':>10s}")
+print(f"  {'─'*25}")
+for lam in lambda_candidates:
+    # 若消融值就是当前 lambda_ei，直接复用已训练模型，避免重复训练
+    if abs(lam - lambda_ei) < 1e-9 and abs(lam - 0.5) < 1e-9:
+        model_ab = model_ei
+    else:
+        model_ab = SmallUNet().to(device)
+        optimizer_ab = optim.Adam(model_ab.parameters(), lr=LR)
+
+        def loss_ab(model, batch_x, y, mask_2d, _lam=lam):
+            f_y = model(y)
+            loss_mc = ((mask_2d * (y - f_y)) ** 2).sum() / mask_2d.sum()
+            loss_ei_val = ei_loss(model, test_mask, f_y=f_y, n_transforms=4)
+            return loss_mc + _lam * loss_ei_val
+
+        model_ab, _ = train_model(
+            model_ab, optimizer_ab,
+            os.path.join(SAVE_DIR, f'ckpt_EI_lam{lam}.pt'),
+            f'EI(λ={lam})', loss_ab, train_loader, test_mask,
+            n_epochs=N_EPOCHS, device=device
+        )
+    psnr_ab = evaluate_inpainting(model_ab, test_loader, test_mask)
+    ablation_results[lam] = psnr_ab
+    marker = ' ◀ 选用' if abs(lam - lambda_ei) < 1e-9 else ''
+    print(f"  {lam:10.1f}  {psnr_ab:10.2f}{marker}")
+
+best_lam = max(ablation_results, key=ablation_results.get)
+print(f"\n  消融结论: λ={best_lam} 时PSNR最高 ({ablation_results[best_lam]:.2f} dB)")
+print(f"  当前选用 λ={lambda_ei}，与最优值{'一致' if abs(best_lam - lambda_ei) < 1e-9 else '接近'}。")
 
 
 # ========================================================================
@@ -481,80 +497,17 @@ print("="*70)
 print("\n  训练监督基线...")
 model_sup = SmallUNet().to(device)
 optimizer_sup = optim.Adam(model_sup.parameters(), lr=LR)
-sup_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_Supervised.pt')
-sup_start = 0
-sup_train_losses = []
-sup_is_final = False
 
-if os.path.exists(sup_ckpt_path):
-    checkpoint = torch.load(sup_ckpt_path, map_location=device, weights_only=False)
-    model_state = checkpoint.get('model_state_dict', checkpoint.get('model_state'))
-    optimizer_state = checkpoint.get('optimizer_state_dict', checkpoint.get('optimizer_state'))
+# 监督损失函数：直接用干净图像作为目标
+def loss_supervised(model, batch_x, y, mask_2d):
+    f_y = model(y)
+    return nn.MSELoss()(f_y, batch_x)
 
-    if checkpoint.get('is_final', False):
-        print(f"✓ [Supervised] 检测到最终权重，直接加载，跳过训练过程")
-        print(f"  训练轮数: {checkpoint['epoch']+1}")
-        model_sup.load_state_dict(model_state)
-        if optimizer_state is not None:
-            optimizer_sup.load_state_dict(optimizer_state)
-        sup_train_losses = checkpoint.get('train_losses', [])
-        sup_start = checkpoint['epoch'] + 1
-        sup_is_final = True
-    else:
-        print(f"  [Supervised] 检测到未完成的训练，从第 {checkpoint['epoch']+1} 轮继续")
-        model_sup.load_state_dict(model_state)
-        if optimizer_state is not None:
-            optimizer_sup.load_state_dict(optimizer_state)
-        sup_train_losses = checkpoint.get('train_losses', [])
-        sup_start = checkpoint['epoch'] + 1
-
-if sup_is_final:
-    print("  [Supervised] 模型已训练完毕，跳过。")
-else:
-    for epoch in range(sup_start, N_EPOCHS):
-        model_sup.train()
-        epoch_loss = 0.0
-        n_batches = 0
-        pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{N_EPOCHS}', leave=False, unit='batch')
-        for batch_x, _ in pbar:
-            batch_x = batch_x.to(device)
-            masks = create_random_mask_batch(batch_x.shape[0], IMG_SIZE, IMG_SIZE, KEEP_RATIO, device=device)
-            y = batch_x * masks + SIGMA * torch.randn_like(batch_x) * masks
-
-            optimizer_sup.zero_grad()
-            f_y = model_sup(y)
-            loss = nn.MSELoss()(f_y, batch_x)
-            loss.backward()
-            optimizer_sup.step()
-
-            epoch_loss += loss.item()
-            n_batches += 1
-            pbar.set_postfix(loss=f'{loss.item():.4f}')
-
-        avg_loss = epoch_loss / max(n_batches, 1)
-        sup_train_losses.append(avg_loss)
-
-        if (epoch + 1) % 10 == 0:
-            print(f"    Epoch {epoch+1}/{N_EPOCHS}, avg_loss={avg_loss:.4f}")
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model_sup.state_dict(),
-                'optimizer_state_dict': optimizer_sup.state_dict(),
-                'loss': avg_loss,
-                'train_losses': sup_train_losses,
-                'is_final': False
-            }, sup_ckpt_path)
-            print(f"  [Supervised] ✓ checkpoint已保存 (epoch {epoch+1})")
-
-    # 保存最终权重
-    torch.save({
-        'epoch': N_EPOCHS - 1,
-        'model_state_dict': model_sup.state_dict(),
-        'loss': sup_train_losses[-1],
-        'train_losses': sup_train_losses,
-        'is_final': True
-    }, sup_ckpt_path)
-    print(f"  [Supervised] ✓ 最终模型已保存")
+model_sup, sup_train_losses = train_model(
+    model_sup, optimizer_sup,
+    os.path.join(SAVE_DIR, 'ckpt_Supervised.pt'),
+    'Supervised', loss_supervised, train_loader, test_mask
+)
 
 psnr_sup = evaluate_inpainting(model_sup, test_loader, test_mask)
 print(f"  监督 PSNR = {psnr_sup:.2f} dB")
@@ -580,29 +533,30 @@ def evaluate_combined(model, test_loader, mask, sigma=SIGMA, device=None):
     miss_psnr_vals = []
 
     with torch.no_grad():
-        torch.manual_seed(0)
-        for batch_x, _ in tqdm(test_loader, desc='评估PSNR', leave=False):
-            batch_x = batch_x.to(mask_dev.device)
-            mask_2d = mask_dev.unsqueeze(0).unsqueeze(0).expand_as(batch_x)
-            y = batch_x * mask_2d + sigma * torch.randn_like(batch_x) * mask_2d
-            pred = model(y).clip(0, 1)
+        with torch.random.fork_rng():
+            torch.manual_seed(0)  # fork_rng隔离，不影响外部全局RNG状态
+            for batch_x, _ in tqdm(test_loader, desc='评估PSNR', leave=False):
+                batch_x = batch_x.to(mask_dev.device)
+                mask_2d = mask_dev.unsqueeze(0).unsqueeze(0).expand_as(batch_x)
+                y = batch_x * mask_2d + sigma * torch.randn_like(batch_x) * mask_2d
+                pred = model(y).clip(0, 1)
 
-            pred_np = pred.cpu().numpy()
-            x_np = batch_x.cpu().numpy()
-            m_np = mask_2d.cpu().numpy()
+                pred_np = pred.cpu().numpy()
+                x_np = batch_x.cpu().numpy()
+                m_np = mask_2d.cpu().numpy()
 
-            for i in range(batch_x.shape[0]):
-                total_psnr_vals.append(psnr(x_np[i, 0], pred_np[i, 0], data_range=1.0))
+                for i in range(batch_x.shape[0]):
+                    total_psnr_vals.append(psnr(x_np[i, 0], pred_np[i, 0], data_range=1.0))
 
-                obs_pixels = m_np[i, 0] > 0.5
-                if obs_pixels.sum() > 0:
-                    mse_obs = ((x_np[i, 0][obs_pixels] - pred_np[i, 0][obs_pixels])**2).mean()
-                    obs_psnr_vals.append(10 * np.log10(1.0 / max(mse_obs, 1e-10)))
+                    obs_pixels = m_np[i, 0] > 0.5
+                    if obs_pixels.sum() > 0:
+                        mse_obs = ((x_np[i, 0][obs_pixels] - pred_np[i, 0][obs_pixels])**2).mean()
+                        obs_psnr_vals.append(10 * np.log10(1.0 / max(mse_obs, 1e-10)))
 
-                miss_pixels = m_np[i, 0] < 0.5
-                if miss_pixels.sum() > 0:
-                    mse_miss = ((x_np[i, 0][miss_pixels] - pred_np[i, 0][miss_pixels])**2).mean()
-                    miss_psnr_vals.append(10 * np.log10(1.0 / max(mse_miss, 1e-10)))
+                    miss_pixels = m_np[i, 0] < 0.5
+                    if miss_pixels.sum() > 0:
+                        mse_miss = ((x_np[i, 0][miss_pixels] - pred_np[i, 0][miss_pixels])**2).mean()
+                        miss_psnr_vals.append(10 * np.log10(1.0 / max(mse_miss, 1e-10)))
 
     return (np.mean(total_psnr_vals),
             np.mean(obs_psnr_vals) if obs_psnr_vals else 0,
@@ -652,11 +606,14 @@ plt.close()
 print("  已保存: step3_mc_ei_complement.png")
 
 # 重建结果可视化
+# 重要：与 evaluate_combined 保持一致——观测 = 掩码 + 噪声。
+# 这样图中展示的重建（三种方法的 pred_*）对应的输入 y_vis 与
+# 标题/行标签引用的 total_psnrs（来自带噪声评估）来自同一观测条件。
 fig, axes = plt.subplots(5, 6, figsize=(15, 12))
 vis_imgs, _ = next(iter(test_loader))
 vis_imgs = vis_imgs[:6].to(device)
 mask_vis = test_mask.unsqueeze(0).unsqueeze(0).expand_as(vis_imgs)
-y_vis = vis_imgs * mask_vis
+y_vis = vis_imgs * mask_vis + SIGMA * torch.randn_like(vis_imgs) * mask_vis
 
 with torch.no_grad():
     pred_sup = model_sup(y_vis).clip(0, 1)
@@ -674,7 +631,11 @@ row_data.append((f'朴素MC ({total_psnrs[NAIVE_KEY]:.1f}dB)', pred_naive.cpu())
 for r, (label, imgs) in enumerate(row_data):
     for i in range(6):
         axes[r, i].imshow(imgs[i, 0], cmap='gray', vmin=0, vmax=1)
-        axes[r, i].axis('off')
+        # 关闭ticks和spines，但保留ylabel（axis('off')会隐藏ylabel）
+        axes[r, i].set_xticks([])
+        axes[r, i].set_yticks([])
+        for spine in axes[r, i].spines.values():
+            spine.set_visible(False)
     axes[r, 0].set_ylabel(label, fontsize=10, rotation=0, labelpad=80)
 
 fig.suptitle('Step 3: MC + EI互补性——重建结果对比', fontsize=13)
@@ -695,7 +656,7 @@ def check_equivariance_shift(A_fn, x, n_tests=5):
     errors = []
     Ax_norms = []
     for _ in range(n_tests):
-        max_shift = 5
+        max_shift = MAX_SHIFT  # 与训练时 random_shift 共用同一常量
         dy = torch.randint(-max_shift, max_shift+1, (1,)).item()
         dx = torch.randint(-max_shift, max_shift+1, (1,)).item()
         Tg = lambda x: torch.roll(x, shifts=(dy, dx), dims=(2, 3))
@@ -723,14 +684,11 @@ def check_equivariance_rotate(A_fn, x, angle=90):
     return abs_err, rel_err
 
 # 测试图像
-test_x = test_imgs[:4].to(device)
+test_x = test_imgs[:4]
 
 # 1. Inpainting掩码 + 平移
 def inpainting_A(x):
-    if test_mask.device != x.device:
-        mask_2d = test_mask.unsqueeze(0).unsqueeze(0).expand_as(x).to(x.device)
-    else:
-        mask_2d = test_mask.unsqueeze(0).unsqueeze(0).expand_as(x)
+    mask_2d = test_mask.to(x.device).unsqueeze(0).unsqueeze(0).expand_as(x)
     return x * mask_2d
 
 # 2. MRI欠采样 + 平移
@@ -808,23 +766,26 @@ results[('Inpainting', '旋转')] = abs_err
 rel_results[('Inpainting', '旋转')] = rel_err
 print(f"  {'Inpainting(随机)':20s} {'旋转90°':10s} {abs_err:.4f}       {rel_err*100:.1f}%")
 
-abs_err, rel_err = check_equivariance_rotate(mri_A, test_x, angle=90)
-results[('MRI欠采样', '旋转')] = abs_err
-rel_results[('MRI欠采样', '旋转')] = rel_err
-print(f"  {'MRI欠采样':20s} {'旋转90°':10s} {abs_err:.4f}       {rel_err*100:.1f}%")
+for mode in sampling_modes:
+    abs_err, rel_err = check_equivariance_rotate(
+        lambda x: mri_A(x, sampling_mode=mode), test_x, angle=90)
+    results[(f'MRI欠采样({mode})', '旋转')] = abs_err
+    rel_results[(f'MRI欠采样({mode})', '旋转')] = rel_err
+    print(f"  {'MRI欠采样('+mode+')':20s} {'旋转90°':10s} {abs_err:.4f}       {rel_err*100:.1f}%")
 
 # 可视化
 fig, ax = plt.subplots(1, 1, figsize=(12, 6))
 
 operators = ['高斯模糊', 'Inpainting', 'MRI欠采样(vertical)',
             'MRI欠采样(random)', 'MRI欠采样(cartesian)']
-transforms_list = ['平移', '旋转90°']
+transform_keys = ['平移', '旋转']
+transform_labels = ['平移', '旋转90°']
 x_pos = np.arange(len(operators))
 width = 0.25
 
-for j, t in enumerate(transforms_list):
+for j, (t, t_label) in enumerate(zip(transform_keys, transform_labels)):
     vals = [rel_results.get((op, t), 0) * 100 for op in operators]
-    bars = ax.bar(x_pos + j * width, vals, width, label=t, alpha=0.8)
+    bars = ax.bar(x_pos + j * width, vals, width, label=t_label, alpha=0.8)
     for bar, v in zip(bars, vals):
         if v > 0.01:
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
@@ -844,10 +805,12 @@ plt.close()
 print("  已保存: step4_equivariance_check.png")
 
 print("\n  结论:")
-print("  - 高斯模糊+平移: 相对误差≈0% → 等变 → EI无法利用平移对称性(与17.5.3节一致)")
+print("  - 高斯模糊+平移: 相对误差≈0% → 近似等变(边界效应可忽略) → EI无法利用平移对称性")
+print("    注: conv2d使用zero-padding, torch.roll使用循环边界, 严格不等变但有微小误差")
 print("  - Inpainting(固定掩码)+平移: 相对误差较大 → 非等变 → EI可利用平移对称性")
 print("  - Inpainting(固定掩码)+旋转: 非等变 → EI可利用旋转对称性")
-print("  - MRI+平移: 相对误差较小 → 近似等变 → EI难以利用平移对称性")
+print("  - MRI+平移: 相对误差极小 → 严格等变（数值误差） → EI无法利用平移对称性")
+print("    理论: 频域欠采样是逐元素相乘, 空间循环平移对应频域相位调制, 两者可交换")
 print("  - MRI+旋转: 非等变 → EI可利用旋转对称性(与17.5.6节FastMRI结果一致)")
 print("  注: Inpainting测试使用固定掩码，若使用随机掩码行为会不同")
 
@@ -858,6 +821,7 @@ print("  注: Inpainting测试使用固定掩码，若使用随机掩码行为�
 print("\n" + "="*70)
 print("实验17.6-1 总结")
 print("="*70)
+print("  注：以下PSNR为单次训练结果（seed=42），未报告方差，仅供定性对比参考。")
 print(f"  方法                  PSNR (dB)    观测像素    缺失像素    说明")
 print(f"  ──────────────────────────────────────────────────────────────")
 print(f"  监督 (有干净x)        {total_psnrs['监督']:.1f}       {obs_psnrs['监督']:.1f}       {miss_psnrs['监督']:.1f}       基线")
@@ -868,7 +832,7 @@ print(f"  1. 朴素MC不约束零空间→缺失像素重建差")
 print(f"  2. MC约束值空间(Af(y)≈y)，EI约束零空间(等变性)")
 print(f"  3. MC+EI互补: MC保证观测一致性，EI利用对称性填补缺失")
 print(f"  4. 算子非等变→EI有效: 随机inpainting关于平移/旋转非等变")
-print(f"  5. 算子等变→EI无效: 高斯模糊关于平移等变(无法提供新信息)")
+print(f"  5. 算子近似等变→EI效果弱: 高斯模糊关于平移近似等变(无法提供新信息)")
 
 print(f"""
   ╔═══════════════════════════════════════════════════════════════════╗

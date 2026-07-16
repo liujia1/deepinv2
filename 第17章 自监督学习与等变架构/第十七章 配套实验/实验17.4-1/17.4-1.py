@@ -1315,12 +1315,12 @@ approx_results = verify_blind_spot_property(model_approx)
 # ★说明：以下对比中 ApproximateBlindSpot 使用随机初始化模型（未参与训练），
 # 因为盲点约束是架构性质（与权重无关），仅用于演示"近似"vs"严格"架构的差异。
 print(f"\n  ✅ 盲点网络严格程度对比（ApproximateBlindSpot为随机初始化，仅验证架构约束）:")
-print(f"  ┌─────────────────────┬─────────────┬─────────────┐")
-print(f"  │       网络类型       │  泄漏比例   │   严格程度   │")
-print(f"  ├─────────────────────┼─────────────┼─────────────┤")
-print(f"  │ StrictBlindSpot     │ {strict_results['leak_ratio']:.6f}    │  严格盲点   │")
-print(f"  │ ApproximateBlindSpot│ {approx_results['leak_ratio']:.6f}    │  近似盲点   │")
-print(f"  └─────────────────────┴─────────────┴─────────────┘")
+print(f"  ┌──────────────────────┬──────────────┬──────────────┐")
+print(f"  │       网络类型       │   泄漏比例   │   严格程度   │")
+print(f"  ├──────────────────────┼──────────────┼──────────────┤")
+print(f"  │ StrictBlindSpot      │ {strict_results['leak_ratio']:.6f}  │  严格盲点    │")
+print(f"  │ ApproximateBlindSpot │ {approx_results['leak_ratio']:.6f}  │  近似盲点    │")
+print(f"  └──────────────────────┴──────────────┴──────────────")
 if strict_results['leak_ratio'] < approx_results['leak_ratio'] * 0.1:
     print(f"  结论: StrictBlindSpot泄漏比例显著低于ApproximateBlindSpot ✓")
 else:
