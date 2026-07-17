@@ -30,6 +30,14 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 import matplotlib as mpl
 
+# Windows PowerShell 默认 GBK 编码无法打印上标 ²、中点 · 等 Unicode 字符，
+# 这里主动把 stdout 切到 utf-8，避免 Step 4 公式 print 时 UnicodeEncodeError 中断运行
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
 # ====== 中文字体配置(兼容本地和Google Colab) ======
 _gdrive = '/content/drive/MyDrive'
 _IN_COLAB = 'google.colab' in sys.modules
@@ -507,7 +515,7 @@ class PoissonGaussianNoise(nn.Module):
       gain=0.1 是教学演示的典型取值。
     - sigma ∈ [0.005, 0.1]：
       sigma 太大（如 >0.2）时泊松部分会被高斯淹没，
-      复合模型退化为纯高斯；sigma=0.02 是教学演示的典型取值。
+      sigma=0.05 是教学演示的典型取值，高斯分量在视觉上可辨。
 
     【重要简化假设】
     forward() 方法对输入执行两次 clamp：
@@ -533,7 +541,7 @@ class PoissonGaussianNoise(nn.Module):
 
 phys_pg = Downsampling(factor=4, img_size=(3, 256, 256), device=device,
                         filter=None)
-phys_pg.set_noise_model(PoissonGaussianNoise(gain=0.1, sigma=0.02))
+phys_pg.set_noise_model(PoissonGaussianNoise(gain=0.1, sigma=0.05))
 
 # 生成观测
 # 【教学说明】此处重设种子是为了让本步骤（Step 4）独立可复现，
@@ -552,7 +560,7 @@ noise_pg = (y_pg - y_clean).abs().mean().item()
 print(f"  无噪声观测:    MAE = 0")
 print(f"  高斯噪声:      MAE = {noise_gauss:.4f}  (σ={sigma_gauss})")
 print(f"  泊松噪声:      MAE = {noise_poisson:.4f}  (gain={gain_poisson})")
-print(f"  泊松-高斯:     MAE = {noise_pg:.4f}  (gain=0.1, σ=0.02)")
+print(f"  泊松-高斯:     MAE = {noise_pg:.4f}  (gain=0.1, σ=0.05)")
 
 # 可视化
 fig, axes = plt.subplots(2, 4, figsize=(16, 8))
@@ -802,11 +810,22 @@ if has_mri:
     axes[1, 1].imshow(x_adj_mri[0, 0].cpu(), cmap='gray')
     axes[1, 1].set_title('MRI零填充重建', fontsize=12)
     axes[1, 1].axis('off')
-    
+
     # k-space
-    kspace = torch.fft.fftshift(y_mri[0, 0].cpu().abs(), dim=(-2, -1))
-    axes[1, 2].imshow(np.log1p(kspace.numpy()), cmap='gray')
-    axes[1, 2].set_title('MRI k空间(对数)', fontsize=12)
+    # ★ 修复：deepinv 的 MRI 算子内部已对 k-space 做 fftshift 居中
+    # （im_to_kspace = ifftshift + fftn + fftshift），输出 y_mri 即为中心化 k-space
+    # 原代码再 fftshift 一次会把中心点移到角落，加上只取实部、log1p 无归一化导致全黑
+    # 正确做法：view_as_complex 转复数 → abs 取模 → log1p → 99 百分位归一化增强对比度
+    y_complex = torch.view_as_complex(
+        y_mri[0].permute(1, 2, 0).contiguous()  # (H, W, 2) → complex
+    )  # (H, W) complex
+    kspace_abs = y_complex.abs().numpy()
+    kspace_log = np.log1p(kspace_abs)
+    # 用 99 百分位归一化以增强 k-space 高频细节的对比度（k-space 动态范围极大）
+    vmax = float(np.percentile(kspace_log, 99))
+    kspace_disp = np.clip(kspace_log / vmax, 0, 1) if vmax > 0 else kspace_log
+    axes[1, 2].imshow(kspace_disp, cmap='gray')
+    axes[1, 2].set_title('MRI k空间(对数, 99%归一化)', fontsize=12)
     axes[1, 2].axis('off')
 else:
     axes[1, 1].text(0.5, 0.5, 'MRI不可用', ha='center', va='center', fontsize=12)
@@ -814,31 +833,70 @@ else:
     axes[1, 2].text(0.5, 0.5, 'MRI不可用', ha='center', va='center', fontsize=12)
     axes[1, 2].axis('off')
 
-# 第三行: 伴随验证汇总
-for c in range(3):
-    axes[2, c].axis('off')
+# 第三行: 伴随误差条形图（图标风格）+ 模糊核 + MRI输入
+# 【教学改进】将原文字汇总改为 log10 误差条形图，便于横向比较各算子伴随精度
+# 文字汇总通过 print 在控制台输出（不在图中放置文字，符合"图或图标"要求）
 
-# 【教学说明】内置算子（Downsampling/Blur/MRI/Composite）是 deepinv 库内精确实现，
-# 它们的伴随在数学上是严格的（库作者负责保证），故可用 PASS/FAIL 二元判断；
-# MultiViewPhysics 是本实验自定义算子，其手动伴随是"近似"实现，
-# 详细解读见 Step 3b（按 |误差| 分层），不在此处用 PASS/FAIL 误导学生。
-summary_text = "伴随验证汇总:\n\n"
-summary_text += "[内置算子——库内精确实现，PASS/FAIL 二元判断]\n"
-# 下采样算子
-status_down = "✓ PASS" if abs(adj_err_down) < 1e-3 else "✗ FAIL"
-summary_text += f"下采样算子:       {adj_err_down:.2e} {status_down}\n"
+# 收集各算子伴随误差数据
+op_names = []
+op_errors = []
+op_colors = []
+
+# 内置算子
+op_names.append('Down')
+op_errors.append(abs(adj_err_down))
+op_colors.append('#1f77b4')  # 蓝色：内置
+
 if has_blur and 'adj_err_blur' in locals():
-    status_blur = "✓ PASS" if abs(adj_err_blur) < 1e-3 else "✗ FAIL"
-    summary_text += f"运动模糊:         {adj_err_blur:.2e} {status_blur}\n"
+    op_names.append('Blur')
+    op_errors.append(abs(adj_err_blur))
+    op_colors.append('#1f77b4')
+
 if has_composite and 'adj_err_composite' in locals():
-    status_composite = "✓ PASS" if abs(adj_err_composite) < 1e-3 else "✗ FAIL"
-    summary_text += f"模糊+下采样:      {adj_err_composite:.2e} {status_composite}\n"
+    op_names.append('Composite')
+    op_errors.append(abs(adj_err_composite))
+    op_colors.append('#1f77b4')
+
 if has_mri and 'adj_err_mri' in locals():
-    status_mri = "✓ PASS" if abs(adj_err_mri) < 1e-3 else "✗ FAIL"
-    summary_text += f"MRI子采样:        {adj_err_mri:.2e} {status_mri}\n"
-summary_text += "\n[自定义算子——手动伴随为近似，详见 Step 3b 分层解读]\n"
-# 自定义 MultiViewPhysics：不使用 PASS/FAIL 标签，避免误导
-# 复用 Step 3b 的 |误差| 量级给出诚实表述
+    op_names.append('MRI')
+    op_errors.append(abs(adj_err_mri))
+    op_colors.append('#1f77b4')
+
+# 自定义算子（红色高亮）
+op_names.append('MultiView')
+op_errors.append(abs(adj_err_multi))
+op_colors.append('#d62728')
+
+# 绘制对数刻度横向条形图（log10 量级），便于横向比较各算子精度
+log_errors = np.log10(np.maximum(np.array(op_errors), 1e-15))
+bars = axes[2, 0].barh(op_names, log_errors, color=op_colors,
+                       edgecolor='black', linewidth=0.5)
+axes[2, 0].axvline(-3, color='green', linestyle='--', alpha=0.7, label='阈值 1e-3')
+axes[2, 0].set_xlabel('log10(相对误差)', fontsize=10)
+axes[2, 0].set_title('★ 伴随验证误差对比', fontsize=12)
+axes[2, 0].legend(loc='lower right', fontsize=9)
+axes[2, 0].grid(axis='x', alpha=0.3)
+axes[2, 0].invert_yaxis()  # 让第一个算子在最上面
+# 在条形末端标注具体数值
+for bar, err in zip(bars, op_errors):
+    axes[2, 0].text(bar.get_width() + 0.05, bar.get_y() + bar.get_height() / 2,
+                    f'{err:.1e}', va='center', fontsize=9)
+
+# 文字描述：通过 print 输出（不在图中放置文字）
+print("\n--- 伴随验证汇总（图例式条形图见 axes[2,0]） ---")
+print("[内置算子——库内精确实现，PASS/FAIL 二元判断]")
+status_down = "PASS" if abs(adj_err_down) < 1e-3 else "FAIL"
+print(f"  下采样算子:    {abs(adj_err_down):.2e}  {status_down}")
+if has_blur and 'adj_err_blur' in locals():
+    status_blur = "PASS" if abs(adj_err_blur) < 1e-3 else "FAIL"
+    print(f"  运动模糊:      {abs(adj_err_blur):.2e}  {status_blur}")
+if has_composite and 'adj_err_composite' in locals():
+    status_composite = "PASS" if abs(adj_err_composite) < 1e-3 else "FAIL"
+    print(f"  模糊+下采样:   {abs(adj_err_composite):.2e}  {status_composite}")
+if has_mri and 'adj_err_mri' in locals():
+    status_mri = "PASS" if abs(adj_err_mri) < 1e-3 else "FAIL"
+    print(f"  MRI子采样:     {abs(adj_err_mri):.2e}  {status_mri}")
+print("\n[自定义算子——手动伴随为近似，详见 Step 3b 分层解读]")
 abs_err_multi = abs(adj_err_multi)
 if abs_err_multi < 1e-3:
     multi_label = "近似足够（<1e-3）"
@@ -846,11 +904,8 @@ elif abs_err_multi < 1e-2:
     multi_label = "需用 autograd（1e-3~1e-2）"
 else:
     multi_label = "需用 autograd（>=1e-2）"
-summary_text += f"MultiViewPhysics: {adj_err_multi:.2e} → {multi_label}\n"
-summary_text += "\n内置算子阈值: < 1e-3 通过\n"
-summary_text += "自定义算子: 详见 Step 3b 分层"
-axes[2, 0].text(0.1, 0.5, summary_text, fontsize=11, family='monospace',
-                verticalalignment='center', transform=axes[2, 0].transAxes)
+print(f"  MultiViewPhysics: {abs_err_multi:.2e} -> {multi_label}")
+print("\n阈值说明: 内置算子 < 1e-3 通过; 自定义算子详见 Step 3b 分层")
 
 # ★ 模糊核空间域可视化
 if has_blur:
