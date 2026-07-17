@@ -32,22 +32,31 @@ import matplotlib as mpl
 import warnings
 import logging
 
-# ====== 导入中文字体支持模块 ======
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '.chinese'))
-from chinese_font import setup_chinese_font
-
-# ====== 保存目录（优先Google Drive）======
+# ====== 中文字体配置(兼容本地和Google Colab) ======
 _gdrive = '/content/drive/MyDrive'
-if os.path.isdir(_gdrive):
-    SAVE_DIR = os.path.join(_gdrive, '实验18_5_1_不确定性量化与后验采样')
-    os.makedirs(SAVE_DIR, exist_ok=True)
-    print(f"检测到 Google Drive，结果将保存至: {SAVE_DIR}")
-else:
-    SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
-    print(f"本地环境，结果将保存至: {SAVE_DIR}")
+_IN_COLAB = 'google.colab' in sys.modules
 
-# 设置中文字体
-setup_chinese_font(SAVE_DIR)
+if _IN_COLAB:
+    from google.colab import drive
+    if not os.path.isdir(_gdrive):
+        print("正在挂载 Google Drive...")
+        drive.mount('/content/drive')
+    SAVE_DIR = os.path.join(_gdrive, '实验18.5-1')
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+else:
+    try:
+        SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        SAVE_DIR = os.getcwd()
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+
+os.makedirs(_chinese_path, exist_ok=True)
+sys.path.insert(0, _chinese_path)
+try:
+    from chinese_font import setup_chinese_font
+    setup_chinese_font(save_dir=_chinese_path)
+except ImportError:
+    print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
 
 # ★ 缓存配置
 use_cache = True
@@ -67,13 +76,22 @@ if device.type == 'cpu':
 
 # 安装deepinv
 try:
-    import deepinv
+    import deepinv as dinv  # ★ 统一使用 as dinv 别名
 except ImportError:
+    import subprocess
     print("正在安装 deepinv ...")
-    os.system('pip install git+https://github.com/deepinv/deepinv.git#egg=deepinv')
-    import deepinv as dinv
+    try:
+        subprocess.check_call([
+            sys.executable, '-m', 'pip', 'install',
+            'git+https://github.com/deepinv/deepinv.git#egg=deepinv'
+        ])
+        # ★ 安装成功后重新导入
+        import deepinv as dinv
+        print(f"deepinv 安装成功，版本: {dinv.__version__}")
+    except subprocess.CalledProcessError as e:
+        print(f"[错误] deepinv 安装失败，请手动安装: pip install git+https://github.com/deepinv/deepinv.git")
+        sys.exit(1)
 else:
-    dinv = deepinv
     print(f"deepinv 版本: {dinv.__version__}")
 
 from deepinv.physics import Blur, Inpainting, GaussianNoise
@@ -84,7 +102,17 @@ from deepinv.utils import load_example
 # 辅助函数
 # ========================================================================
 def compute_psnr(img1, img2):
-    """计算PSNR (dB)"""
+    """计算PSNR (dB)。
+
+    注意: 本函数假设图像动态范围为[0,1]，但不执行clamp操作。
+    理由:
+    1. PSNR应反映真实重建误差，而非人为限制范围后的误差
+    2. 后验采样结果可能超出[0,1]（如迭代去噪过程中），clamp会低估真实误差
+    3. 可视化时统一clamp(0,1)是为了显示，但PSNR计算应保持原始数值精度
+
+    参数:
+        img1, img2: 4D张量 (B, C, H, W)，假设值域[0,1]但允许超出
+    """
     mse = torch.mean((img1 - img2) ** 2).item()
     if mse == 0:
         return float('inf')
@@ -141,6 +169,24 @@ print("\n" + "="*70)
 print("Step 2: 后验采样实现")
 print("="*70)
 
+print("""
+★ 自动降级策略说明:
+  本脚本采用"尝试-失败-降级"策略：
+  1. 优先尝试 ULA 采样（最准确的后验采样方法）
+  2. 若 ULA 失败，降级到 DPS 扩散采样
+  3. 若 DPS 失败，降级到 PnP 近似采样
+  4. 若 PnP 失败，降级到伪逆+噪声近似（最粗糙）
+
+  ⚠️ 注意: 这种降级策略是工程容错设计，但会产生"混合样本"：
+     - 混合样本的统计同质性较差（不同样本来自不同的后验近似）
+     - 混合采样时，统计结果（均值、标准差）可能受方法切换影响
+     - 代码会在混合采样时打印警告，并改用按方法分组的可视化
+
+  如果需要严格统计同质性，建议：
+  - 固定使用单一方法（删除其他分支）
+  - 或增大样本数 S 以降低单方法失败的影响
+""")
+
 ula_method = None
 
 S = 8
@@ -148,11 +194,14 @@ print(f"后验采样数量: S={S}")
 
 all_samples = []
 sample_times = []
+# ★ 新增：记录每个样本的来源方法，避免混合采样标签污染
+sample_methods = []
 
 import traceback
 
 cached_samples = []
-cached_method = None
+cached_methods = []  # ★ 修改：支持样本级方法记录
+cached_times = []    # ★ 新增：支持样本级时间记录
 if use_cache and os.path.exists(cache_file):
     try:
         if os.path.getsize(cache_file) > 0:
@@ -160,12 +209,29 @@ if use_cache and os.path.exists(cache_file):
                 cached_data = pickle.load(f)
             if 'samples' in cached_data and len(cached_data['samples']) > 0:
                 cached_samples = cached_data['samples']
-                cached_method = cached_data.get('method', 'Unknown')
-                print(f"[缓存] 加载了 {len(cached_samples)} 个样本 (方法: {cached_method})")
+                # ★ 兼容旧缓存：如果没有methods字段，使用method字段
+                cached_methods = cached_data.get('methods', [])
+                if not cached_methods and 'method' in cached_data:
+                    cached_methods = [cached_data['method']] * len(cached_samples)
+                # ★ 兼容旧缓存：如果没有times字段，补充为空列表
+                cached_times = cached_data.get('times', [])
+                print(f"[缓存] 加载了 {len(cached_samples)} 个样本")
+                # ★ 打印方法分布
+                method_counts = {}
+                for m in cached_methods:
+                    method_counts[m] = method_counts.get(m, 0) + 1
+                print(f"[缓存] 方法分布: {method_counts}")
                 if len(cached_samples) >= S:
                     print(f"[缓存] 样本数已满足需求，跳过采样")
                     all_samples = cached_samples[:S]
-                    ula_method = cached_method
+                    sample_methods = cached_methods[:S]
+                    sample_times = cached_times[:S] if cached_times else []  # ★ 加载时间记录
+                    # ★ 计算最终方法（检查是否混合采样）
+                    unique_methods = list(set(sample_methods))
+                    if len(unique_methods) == 1:
+                        ula_method = unique_methods[0]
+                    else:
+                        ula_method = "混合采样"
         else:
             print(f"[缓存] 缓存文件为空，将重新采样")
             os.remove(cache_file)
@@ -178,11 +244,12 @@ if use_cache and os.path.exists(cache_file):
     except Exception as e:
         print(f"[缓存] 加载失败: {e}")
 
-def save_samples_to_cache(samples, method, times=None):
+def save_samples_to_cache(samples, methods, times=None):
+    """保存样本到缓存，包含样本级方法标签。"""
     if not use_cache:
         return
     try:
-        cached_data = {'samples': samples, 'method': method, 'times': times or []}
+        cached_data = {'samples': samples, 'methods': methods, 'times': times or []}
         with open(cache_file, 'wb') as f:
             pickle.dump(cached_data, f)
         print(f"[缓存] 已保存 {len(samples)} 个样本")
@@ -190,20 +257,30 @@ def save_samples_to_cache(samples, method, times=None):
         print(f"[缓存] 保存失败: {e}")
 
 def release_model(model_var_name):
-    if model_var_name in dir():
+    """释放全局作用域中的模型变量并清理显存。
+
+    注意：dir()在函数内部只返回局部变量，需用globals()检查全局变量。
+    """
+    # ★ 修复：使用globals()而非dir()检查全局变量
+    if model_var_name in globals():
         del globals()[model_var_name]
+        print(f"[显存] 已删除全局变量 {model_var_name}")
+    else:
+        print(f"[显存] 全局变量 {model_var_name} 不存在，可能已被释放")
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        print(f"[显存] 已释放 {model_var_name}，当前显存: {torch.cuda.memory_allocated()/1e9:.2f}GB")
+        print(f"[显存] 当前显存: {torch.cuda.memory_allocated()/1e9:.2f}GB")
 
 if len(all_samples) < S:
     remaining = S - len(all_samples)
     start_idx = len(all_samples)
     print(f"需要采样 {remaining} 个样本")
 
-    if cached_samples:
+    # ★ 修改：使用 cached_methods 和 cached_times 而非 cached_method
+    if cached_samples and cached_methods:
         all_samples = cached_samples.copy()
-        ula_method = cached_method
+        sample_methods = cached_methods.copy()
+        sample_times = cached_times.copy() if cached_times else []  # ★ 加载已有时间记录
 
     # ========== 2a. ULA 采样 ==========
     if len(all_samples) < S:
@@ -253,15 +330,16 @@ if len(all_samples) < S:
                     x_sample = ula_result[0] if isinstance(ula_result, tuple) else ula_result
                     t_sample = time.time() - t_start
                     all_samples.append(x_sample.detach().cpu())
-                    sample_times.append(t_sample)
+                    sample_times.append(t_sample)  # ★ 记录实际耗时
+                    sample_methods.append("ULA")  # ★ 记录样本来源方法
                     print(f"[ULA] 样本 {s+1}/{S}, 耗时 {t_sample:.1f}s, PSNR={compute_psnr(x_true, x_sample):.2f}dB")
                     del x_sample, ula_result
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
-                    save_samples_to_cache(all_samples, "ULA", sample_times)
+                    save_samples_to_cache(all_samples, sample_methods, sample_times)
 
-                print(f"[ULA] 采样完成! 平均耗时: {np.mean(sample_times):.2f}s")
-                ula_method = "ULA"
+                if sample_times:
+                    print(f"[ULA] 采样完成! 平均耗时: {np.mean(sample_times[-(S-start_idx):]):.2f}s")
 
             except ImportError as e:
                 print(f"[ULA] 导入失败: {e}")
@@ -315,15 +393,16 @@ if len(all_samples) < S:
                     x_sample = dps_result[0] if isinstance(dps_result, tuple) else dps_result
                     t_sample = time.time() - t_start
                     all_samples.append(x_sample.detach().cpu())
-                    sample_times.append(t_sample)
+                    sample_times.append(t_sample)  # ★ 记录实际耗时
+                    sample_methods.append("DPS")  # ★ 记录样本来源方法
                     print(f"[DPS] 样本 {s+1}/{S}, 耗时 {t_sample:.1f}s, PSNR={compute_psnr(x_true, x_sample):.2f}dB")
                     del x_sample, dps_result
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
-                    save_samples_to_cache(all_samples, "DPS", sample_times)
+                    save_samples_to_cache(all_samples, sample_methods, sample_times)
 
-                print(f"[DPS] 采样完成! 平均耗时: {np.mean(sample_times):.2f}s")
-                ula_method = "DPS"
+                if sample_times:
+                    print(f"[DPS] 采样完成! 平均耗时: {np.mean(sample_times[-(S-start_idx):]):.2f}s")
 
             except ImportError as e:
                 print(f"[DPS] 导入失败: {e}")
@@ -362,6 +441,7 @@ if len(all_samples) < S:
                 print("[PnP] 开始采样...")
                 start_idx = len(all_samples)
                 for s in range(start_idx, S):
+                    t_start = time.time()
                     torch.manual_seed(42 + s)
                     x_pnp = physics_inp.A_adjoint(y_inp) + 0.05 * torch.randn_like(x_true)
 
@@ -377,15 +457,18 @@ if len(all_samples) < S:
                         if (it + 1) % 5 == 0 and torch.cuda.is_available():
                             torch.cuda.empty_cache()
 
+                    t_sample = time.time() - t_start
                     all_samples.append(x_pnp.detach().cpu())
+                    sample_times.append(t_sample)  # ★ 记录实际耗时
+                    sample_methods.append("PnP近似")  # ★ 记录样本来源方法
                     del x_pnp
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
-                    save_samples_to_cache(all_samples, "PnP近似", sample_times)
-                    print(f"[PnP] 样本 {len(all_samples)}/{S}")
+                    save_samples_to_cache(all_samples, sample_methods, sample_times)
+                    print(f"[PnP] 样本 {len(all_samples)}/{S}, 耗时 {t_sample:.1f}s")
 
-                print(f"[PnP] 采样完成!")
-                ula_method = "PnP近似"
+                if sample_times:
+                    print(f"[PnP] 采样完成! 平均耗时: {np.mean(sample_times[-(S-start_idx):]):.2f}s")
 
             except Exception as e:
                 print(f"[PnP] 采样失败!")
@@ -404,12 +487,29 @@ if len(all_samples) < S:
 
         start_idx = len(all_samples)
         for s in range(start_idx, S):
+            t_start = time.time()
             torch.manual_seed(42 + s)
             x_approx = physics_inp.A_adjoint(y_inp) + 0.02 * torch.randn_like(x_true)
+            t_sample = time.time() - t_start
             all_samples.append(x_approx.cpu())
-        ula_method = "伪逆+噪声"
-        save_samples_to_cache(all_samples, ula_method, sample_times)
+            sample_times.append(t_sample)  # ★ 记录实际耗时(伪逆操作极快)
+            sample_methods.append("伪逆+噪声")  # ★ 记录样本来源方法
+        save_samples_to_cache(all_samples, sample_methods, sample_times)
         print(f"[伪逆] 完成 {len(all_samples)} 个样本")
+
+# ★ 计算最终采样方法（检查是否混合采样）
+if len(sample_methods) > 0:
+    unique_methods = list(set(sample_methods))
+    if len(unique_methods) == 1:
+        ula_method = unique_methods[0]
+    else:
+        ula_method = "混合采样"
+        # 计算各方法占比
+        method_counts = {}
+        for m in sample_methods:
+            method_counts[m] = method_counts.get(m, 0) + 1
+        print(f"\n⚠️ 警告: 采样为混合方法，统计结果可能受不同后验近似方法的影响")
+        print(f"   方法分布: {method_counts}")
 
 print(f"\n最终采样方法: {ula_method}, 样本数: {len(all_samples)}")
 
@@ -495,9 +595,10 @@ ax12.axis('off')
 plt.colorbar(im12, ax=ax12, fraction=0.046, pad=0.04)
 
 ax13 = fig.add_subplot(gs[1, 3])
-ci_map = ci_width[0].cpu().mean(dim=0).numpy()
-im13 = ax13.imshow(ci_map, cmap='hot', vmin=0, vmax=ci_map.max())
-ax13.set_title(f'经验分位数区间宽度\n(S={S}, 需S≥30才可靠)', fontsize=10)
+# ★ 修改：主图展示75%区间（S=8可靠范围内最高置信水平）
+ci_map_75 = ci_width_75[0].cpu().mean(dim=0).numpy()
+im13 = ax13.imshow(ci_map_75, cmap='hot', vmin=0, vmax=ci_map_75.max())
+ax13.set_title(f'75%经验分位数区间宽度\n(S={S}, 可靠范围)', fontsize=10)
 ax13.axis('off')
 plt.colorbar(im13, ax=ax13, fraction=0.046, pad=0.04)
 
@@ -509,14 +610,13 @@ ax20.set_title('重建误差地图', fontsize=11)
 ax20.axis('off')
 plt.colorbar(im20, ax=ax20, fraction=0.046, pad=0.04)
 
-# ★ 经验分位数覆盖图（S=8时覆盖率估计不准确）
+# ★ 修改：覆盖率基于75%区间（S=8可靠范围内最高置信水平）
 ax21 = fig.add_subplot(gs[2, 1])
-# 检查真值是否在经验分位数区间内
-in_ci = ((x_true >= q025.to(device)) & (x_true <= q975.to(device))).float()
-coverage_map = in_ci[0].cpu().mean(dim=0).numpy()
+in_ci_75 = ((x_true >= q125.to(device)) & (x_true <= q875.to(device))).float()
+coverage_map = in_ci_75[0].cpu().mean(dim=0).numpy()
 im21 = ax21.imshow(coverage_map, cmap='RdYlGn', vmin=0, vmax=1)
-overall_coverage = in_ci.mean().item()
-ax21.set_title(f'★ 经验分位数覆盖图\n(S={S}, 覆盖率={overall_coverage:.1%})', fontsize=10)
+overall_coverage = in_ci_75.mean().item()
+ax21.set_title(f'★ 75%经验分位数覆盖图\n(S={S}, 可靠范围, 覆盖率={overall_coverage:.1%})', fontsize=10)
 ax21.axis('off')
 plt.colorbar(im21, ax=ax21, fraction=0.046, pad=0.04)
 
@@ -566,9 +666,10 @@ print("""
 """)
 
 # 对不同置信水平计算覆盖率
-# 注意: S=8 时，最高可区分的分位数为 1 - 2/S = 75%，更高置信水平的估计是粗略的
-# （8个点无法区分95%和99%分位数，曲线会出现阶梯状跳变）。需 S≥30 才可可靠估计高置信水平。
-confidence_levels = [0.50, 0.60, 0.68, 0.75]  # 限制在 S=8 可靠范围内
+# ★ 注意: S=8 时，只有12.5%整数倍的分位点(0%, 12.5%, 25%, ..., 87.5%, 100%)才是经验分位数的精确位置
+# 这里选择对称的置信水平：25%, 50%, 75%（对应2/8, 4/8, 6/8分位点）
+# 更高置信水平（如95%）需要 S≥30 才能可靠估计
+confidence_levels = [0.25, 0.50, 0.75]  # ★ S=8时的可靠分位点
 coverages = []
 
 for cl in confidence_levels:
@@ -595,7 +696,8 @@ axes[0].set_ylim(0, 1)
 
 # 右: 按像素强度的覆盖率分析
 x_flat = x_true[0].cpu().numpy().flatten()
-in_ci_flat = in_ci[0].cpu().numpy().flatten()
+# ★ 修复：使用 in_ci_75（75%区间覆盖率）而非未定义的 in_ci
+in_ci_flat = in_ci_75[0].cpu().numpy().flatten()
 # 按像素强度分组
 bins = np.linspace(0, 1, 11)
 bin_centers = (bins[:-1] + bins[1:]) / 2
@@ -686,16 +788,44 @@ if len(all_samples) >= 4:
     plt.colorbar(im11, ax=axes[1, 1], fraction=0.046)
 
     # 样本数 vs PSNR收敛
-    psnr_by_s = []
-    for n in range(1, len(all_samples) + 1):
-        mean_n = torch.stack(all_samples[:n], dim=0).mean(dim=0)
-        psnr_by_s.append(compute_psnr(x_true, mean_n.to(device)))
+    # ★ 注意: 如果为混合采样（如ULA+DPS），曲线跳变反映方法切换而非收敛
+    if ula_method != "混合采样":
+        # ★ 非混合采样：绘制PSNR收敛曲线
+        psnr_by_s = []
+        for n in range(1, len(all_samples) + 1):
+            mean_n = torch.stack(all_samples[:n], dim=0).mean(dim=0)
+            psnr_by_s.append(compute_psnr(x_true, mean_n.to(device)))
 
-    axes[1, 2].plot(range(1, len(all_samples) + 1), psnr_by_s, 'bo-', markersize=6)
-    axes[1, 2].set_xlabel('样本数 S', fontsize=11)
-    axes[1, 2].set_ylabel('PSNR (dB)', fontsize=11)
-    axes[1, 2].set_title('★ 后验均值PSNR vs 样本数', fontsize=11)
-    axes[1, 2].grid(alpha=0.3)
+        axes[1, 2].plot(range(1, len(all_samples) + 1), psnr_by_s, 'bo-', markersize=6)
+        axes[1, 2].set_xlabel('样本数 S', fontsize=11)
+        axes[1, 2].set_ylabel('PSNR (dB)', fontsize=11)
+        axes[1, 2].set_title(f'★ 后验均值PSNR vs 样本数', fontsize=11)
+        axes[1, 2].grid(alpha=0.3)
+    else:
+        # ★ 混合采样：改为按方法分组的柱状图，避免混淆"样本数"和"方法质量"
+        method_psnrs = {}
+        for s_idx, (sample, method) in enumerate(zip(all_samples, sample_methods)):
+            if method not in method_psnrs:
+                method_psnrs[method] = []
+            method_psnrs[method].append(compute_psnr(x_true, sample.to(device)))
+
+        methods_list = list(method_psnrs.keys())
+        mean_psnrs = [np.mean(method_psnrs[m]) for m in methods_list]
+        std_psnrs = [np.std(method_psnrs[m]) for m in methods_list]
+
+        bars = axes[1, 2].bar(range(len(methods_list)), mean_psnrs,
+                              yerr=std_psnrs, capsize=5, color='steelblue', alpha=0.8)
+        axes[1, 2].set_xticks(range(len(methods_list)))
+        axes[1, 2].set_xticklabels(methods_list, rotation=15, ha='right', fontsize=9)
+        axes[1, 2].set_ylabel('平均PSNR (dB)', fontsize=11)
+        axes[1, 2].set_title('★ 按方法分组的PSNR\n(混合采样)', fontsize=11)
+        axes[1, 2].grid(alpha=0.3, axis='y')
+
+        # 在柱状图上标注样本数
+        for i, method in enumerate(methods_list):
+            count = len(method_psnrs[method])
+            axes[1, 2].text(i, mean_psnrs[i] + std_psnrs[i] + 0.5, f'n={count}',
+                           ha='center', va='bottom', fontsize=9)
 
     fig.suptitle('Step 5: ★ 样本数对不确定性估计的影响', fontsize=14)
     plt.tight_layout()
@@ -733,16 +863,23 @@ print("""
 # 保存数值结果
 # ========================================================================
 import json
+
+# ★ 计算方法分布（用于混合采样情况）
+method_distribution = {}
+for m in sample_methods:
+    method_distribution[m] = method_distribution.get(m, 0) + 1
+
 uq_results = {
     '采样方法': ula_method,
     '样本数': S,
     '后验均值PSNR': round(psnr_mean, 2),
     '平均像素std': round(mean_std, 4),
     '最大像素std': round(max_std, 4),
-    f'平均经验分位数区间宽度(S={S})': round(mean_ci_width, 4),
-    f'经验分位数区间覆盖率(S={S},仅供参考)': round(overall_coverage, 4),
+    '平均75%经验分位数区间宽度': round(ci_width_75.mean().item(), 4),
+    '75%经验分位数区间覆盖率': round(overall_coverage, 4),
     '样本PSNR范围': [round(min(sample_psnrs), 2), round(max(sample_psnrs), 2)],
-    '校准数据': {str(cl): round(cov, 4) for cl, cov in zip(confidence_levels, coverages)}
+    '校准数据': {str(cl): round(cov, 4) for cl, cov in zip(confidence_levels, coverages)},
+    '方法分布': method_distribution  # ★ 新增：记录各方法样本数
 }
 with open(os.path.join(SAVE_DIR, 'uq_results.json'), 'w', encoding='utf-8') as f:
     json.dump(uq_results, f, ensure_ascii=False, indent=2)
@@ -785,7 +922,7 @@ print(f"""
 关键发现:
 - 采样方法: {ula_method}
 - 后验均值PSNR: {psnr_mean:.2f} dB
-- 95%CI覆盖率: {overall_coverage:.1%}
+- 75%CI覆盖率: {overall_coverage:.1%}
 - 样本数建议: S≥8可获得稳定不确定性估计
 
 所有图像已保存至: {SAVE_DIR}

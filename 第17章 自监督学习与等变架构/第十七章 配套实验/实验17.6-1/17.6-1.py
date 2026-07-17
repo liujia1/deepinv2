@@ -236,18 +236,17 @@ def train_model(model, optimizer, ckpt_path, name, loss_fn,
 
         avg_loss = epoch_loss / max(n_batches, 1)
         train_losses.append(avg_loss)
+        pbar.set_description(f'Epoch {epoch+1}/{n_epochs} | loss={avg_loss:.4f}')
+        pbar.close()
 
-        if (epoch + 1) % 10 == 0:
-            print(f"    Epoch {epoch+1}/{n_epochs}, avg_loss={avg_loss:.4f}")
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'loss': avg_loss,
-                'train_losses': train_losses,
-                'is_final': False
-            }, ckpt_path)
-            print(f"  [{name}] ✓ checkpoint已保存 (epoch {epoch+1})")
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': avg_loss,
+            'train_losses': train_losses,
+            'is_final': False
+        }, ckpt_path)
 
     # 保存最终权重（需确保有训练数据可保存）
     if train_losses:
@@ -474,7 +473,7 @@ for lam in lambda_candidates:
             model_ab, optimizer_ab,
             os.path.join(SAVE_DIR, f'ckpt_EI_lam{lam}.pt'),
             f'EI(λ={lam})', loss_ab, train_loader, test_mask,
-            n_epochs=N_EPOCHS, device=device
+            n_epochs=20, device=device
         )
     psnr_ab = evaluate_inpainting(model_ab, test_loader, test_mask)
     ablation_results[lam] = psnr_ab

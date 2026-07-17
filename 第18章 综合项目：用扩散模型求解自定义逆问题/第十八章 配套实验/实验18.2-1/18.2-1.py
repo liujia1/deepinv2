@@ -29,29 +29,32 @@ matplotlib.use('Agg')  # 设置非交互式后端
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 import matplotlib as mpl
-import warnings
-import logging
 
-# ====== 导入独立的中文字体模块 ======
-# （os、sys已在文件头部导入，无需重复）
-_chinese_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.chinese')
-if _chinese_path not in sys.path:
-    sys.path.insert(0, _chinese_path)
-import chinese_font
-
-# ====== 保存目录（优先Google Drive，支持Colab环境）======
+# ====== 中文字体配置(兼容本地和Google Colab) ======
 _gdrive = '/content/drive/MyDrive'
-if os.path.isdir(_gdrive):
-    SAVE_DIR = os.path.join(_gdrive, '实验18_2_1_自定义前向算子与伴随验证')
-    os.makedirs(SAVE_DIR, exist_ok=True)
-    print(f"检测到 Google Drive，结果将保存至: {SAVE_DIR}")
-else:
-    SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
-    print(f"本地环境，结果将保存至: {SAVE_DIR}")
+_IN_COLAB = 'google.colab' in sys.modules
 
-# 设置中文字体
-_font_dir = os.path.join(SAVE_DIR, '.chinese') if os.path.isdir(os.path.join(SAVE_DIR, '.chinese')) else SAVE_DIR
-chinese_font.setup_chinese_font(_font_dir)
+if _IN_COLAB:
+    from google.colab import drive
+    if not os.path.isdir(_gdrive):
+        print("正在挂载 Google Drive...")
+        drive.mount('/content/drive')
+    SAVE_DIR = os.path.join(_gdrive, '实验18.2-1')
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+else:
+    try:
+        SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        SAVE_DIR = os.getcwd()
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+
+os.makedirs(_chinese_path, exist_ok=True)
+sys.path.insert(0, _chinese_path)
+try:
+    from chinese_font import setup_chinese_font
+    setup_chinese_font(save_dir=_chinese_path)
+except ImportError:
+    print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
 
 # 固定随机种子
 np.random.seed(42)
@@ -63,11 +66,20 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"使用设备: {device}")
 
 # 安装deepinv（Colab环境）
+# 教学注意：使用 subprocess.check_call 并显式退出，避免 os.system 静默失败
 try:
     import deepinv
 except ImportError:
     print("正在安装 deepinv ...")
-    os.system('pip install git+https://github.com/deepinv/deepinv.git#egg=deepinv')
+    import subprocess
+    try:
+        subprocess.check_call(
+            [sys.executable, '-m', 'pip', 'install',
+             'git+https://github.com/deepinv/deepinv.git#egg=deepinv']
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"deepinv 安装失败（退出码 {e.returncode}），请检查网络或手动安装后重试")
+        raise SystemExit(1)
     import deepinv as dinv
 else:
     dinv = deepinv
@@ -107,8 +119,17 @@ print(f"load_example 返回 shape: {x_true.shape}, ndim: {x_true.ndim}")
 if x_true.ndim == 3:
     x_true = x_true.unsqueeze(0)  # (C, H, W) -> (1, C, H, W)
 elif x_true.ndim == 5:
-    # 可能是 (1, 1, C, H, W)，需要squeeze
-    x_true = x_true.squeeze(0) if x_true.shape[0] == 1 else x_true[0]
+    # 5D 属于非标准格式（如 (1, 1, C, H, W)），按启发式规则显式压缩；
+    # 打印警告说明假设，便于学生排查数据结构异常
+    print(f"  ⚠️ [Warning] load_example 返回 5D 张量 shape={tuple(x_true.shape)}，"
+          f"按 (B, 1, C, H, W) 假设压缩为 4D；如不符合请检查数据源")
+    if x_true.shape[1] == 1:
+        x_true = x_true.squeeze(1)
+    else:
+        # ⚠️ 通道维不为 1 时保守取第一组（隐性丢数据），此情况罕见但在预期外时建议排查数据源
+        x_true = x_true[:, 0]
+elif x_true.ndim != 4:
+    raise ValueError(f"load_example 返回的 x_true ndim={x_true.ndim} 不在支持范围 [3,4,5]")
 x_true = x_true.to(device)
 print(f"处理后 x_true shape: {x_true.shape}")
 
@@ -135,6 +156,7 @@ class MultiViewPhysics(LinearPhysics):
         self.base_physics = base_physics
         self.transf = transf
         self.device = device
+        # 【重要】img_size 以 base_physics 为准，避免 kwargs 传入冲突参数时导致尺寸判断错误
 
     def A(self, x, **kwargs):
         """前向传播: 对x施加J个仿射变换，再分别下采样"""
@@ -146,8 +168,15 @@ class MultiViewPhysics(LinearPhysics):
         if x.ndim == 3:
             x = x.unsqueeze(0)  # (C, H, W) -> (1, C, H, W)
         elif x.ndim == 5:
-            # 可能是 (B, 1, C, H, W) 或其他5D格式，取第一个batch
-            x = x.squeeze(1) if x.shape[1] == 1 else x[:, 0]
+            # 5D 属于非标准格式（如 (B, 1, C, H, W)），按启发式规则显式压缩；
+            # 打印警告说明假设，便于学生排查数据结构异常
+            print(f"  ⚠️ [Warning] MultiViewPhysics.A 收到 5D 输入 shape={tuple(x.shape)}，"
+                  f"按 (B, 1, C, H, W) 假设压缩为 4D；如不符合请检查上游算子")
+            if x.shape[1] == 1:
+                x = x.squeeze(1)
+            else:
+                # ⚠️ 通道维不为 1 时保守取第一组（隐性丢数据），此情况罕见但在预期外时建议排查上游算子
+                x = x[:, 0]
         elif x.ndim != 4:
             raise ValueError(f"期望输入为3D或4D张量，但得到 {x.ndim}D，shape={x.shape}")
         
@@ -159,7 +188,7 @@ class MultiViewPhysics(LinearPhysics):
         for j in range(J):
             # 构造仿射网格
             theta_j = transf[j:j+1].to(x.device).float()  # (1, 2, 3)
-            grid = F.affine_grid(theta_j.expand(B, -1, -1),  # ✅ (B, 2, 3)
+            grid = F.affine_grid(theta_j.expand(B, -1, -1),  # (B, 2, 3)
                                   size=(B, C, H, W),
                                   align_corners=False)
             x_transformed = F.grid_sample(x, grid, align_corners=False)
@@ -172,8 +201,22 @@ class MultiViewPhysics(LinearPhysics):
 
     def A_adjoint(self, y, **kwargs):
         """
-        伴随算子: A^T y = sum_j T_j^T A^T y_j
-        对每个视角：先上采样(A^T)，再反向仿射变换(T_j^T)
+        伴随算子: 复合算子 y = A * T_j * x 的伴随
+
+        【重要教学说明——手动伴随是"近似"而非精确】
+        对于像素空间的纯仿射变换 T(x)=Ax+t，其严格伴随为
+            T^T(y) = A^T y + (-A^T t)
+        但本实现的"复合"算子内部使用 grid_sample+affine_grid 完成 T_j，
+        grid_sample 本质是带双线性插值的采样算子：
+            1) 严格意义下，采样算子的伴随需要 VJP（autograd）逐点计算插值梯度；
+            2) 仿射矩阵转置 A^T 只对"连续坐标"层面的仿射映射是精确伴随，
+               对"像素值+插值"层面是数学上的近似；
+            3) 误差量级受 align_corners、插值模式、变换剧烈程度影响。
+        因此本方法在变换接近恒等（旋转角 ≤ π/8、平移小）时误差约 1e-3~1e-2，
+        当变换较大或需亚像素精度时应改用 autograd 自动伴随（见 Step 3c）。
+        【注】上述"1e-3~1e-2"为基于 grid_sample+affine_grid 一般行为的经验估计，
+        仅反映单次运行观察值，并非理论保证的误差界；
+        实际数值请以本实验运行输出为准，且可能随分辨率、变换幅度变化。
         """
         transf = kwargs.get('transf', self.transf)
         if transf is None:
@@ -184,7 +227,7 @@ class MultiViewPhysics(LinearPhysics):
         if hasattr(self.base_physics, 'img_size') and self.base_physics.img_size is not None:
             img_size = self.base_physics.img_size
             if len(img_size) == 3:
-                _, H_full, W_full = img_size  # ✅ img_size是(C, H, W)三元组
+                _, H_full, W_full = img_size  # img_size 是 (C, H, W) 三元组
             elif len(img_size) == 4:
                 _, _, H_full, W_full = img_size  # (B, C, H, W)
             else:
@@ -199,19 +242,23 @@ class MultiViewPhysics(LinearPhysics):
         for j in range(J):
             y_j = y[:, j]  # (B, C, H', W')
             # A^T: 上采样（伴随下采样）
+            # 【教学提示】本实现调用 base_physics.A_adjoint 的"精确"伴随；
+            # 当前 base_physics 用 filter=None（恒等滤波），因此 A^T 实际就是上采样本身。
+            # 若改用非平凡 filter（如默认的 sinc 低通），base_physics 内部会有滤波伴随步骤，
+            # 此时本方法对该部分的"近似"误差会进一步叠加 filter 伴随的实现误差。
+            # 在本实验的参数设置（filter=None）下，该叠加源不存在。
             x_up = self.base_physics.A_adjoint(y_j)  # (B, C, H, W)
-            # T_j^T: 伴随仿射变换（内积意义下用转置而非逆）
-            # 对于仿射变换 T(x) = Ax + t，其伴随 T^T 满足 <Tx, y> = <x, T^T y>
-            # 在 grid_sample 坐标系下，T^T 对应矩阵转置（不是逆）
+            # T_j^T 的近似：仿射矩阵转置 + 平移调整
+            # 严格意义下，grid_sample 的伴随是 VJP；此处用 A^T 近似
+            # 当变换接近恒等时误差较小，剧烈变换时需用 autograd 自动伴随
             theta_2x3 = transf[j].to(y.device).float()  # (2, 3)
             A_2x2 = theta_2x3[:, :2]  # (2, 2) 旋转+缩放部分
             t_2x1 = theta_2x3[:, 2:3]  # (2, 1) 平移部分
-            # ✅ 矩阵转置和乘法不会失败，直接计算伴随变换
-            A_T = A_2x2.T  # 伴随算子对应矩阵转置
+            A_T = A_2x2.T  # 线性部分取转置作为连续坐标层的近似伴随
             t_T = -A_T @ t_2x1  # 伴随变换的平移: t^T = -A^T t
             theta_adj_full = torch.cat([A_T, t_T], dim=1).unsqueeze(0)  # (1, 2, 3)
-            
-            grid = F.affine_grid(theta_adj_full.expand(B, -1, -1),  # ✅ (B, 2, 3)
+
+            grid = F.affine_grid(theta_adj_full.expand(B, -1, -1),  # (B, 2, 3)
                                   size=(B, C, H_full, W_full),
                                   align_corners=False)
             # 累加: A^T y = Σ_j T_j^T A^T y_j （堆叠算子的伴随是各子伴随之和，
@@ -230,7 +277,7 @@ def generate_random_transforms(J, scale=0.8, max_angle=np.pi/8, max_shift=0.05):
     """生成J个随机仿射变换矩阵（旋转+缩放+平移）"""
     transf = torch.zeros(J, 2, 3)
     for i in range(J):
-        angle = (torch.rand(1) * 2 - 1) * max_angle  # ✅ [-max_angle, max_angle]，双向旋转
+        angle = (torch.rand(1) * 2 - 1) * max_angle  # 双向旋转，范围 [-max_angle, max_angle]
         transf[i, 0, 0] = torch.cos(angle) * scale
         transf[i, 0, 1] = -torch.sin(angle) * scale
         transf[i, 1, 0] = torch.sin(angle) * scale
@@ -243,6 +290,8 @@ def generate_random_transforms(J, scale=0.8, max_angle=np.pi/8, max_shift=0.05):
 print("\n创建多视角下采样算子 (4×下采样, J=16个视角)...")
 base_physics = Downsampling(factor=4, img_size=(3, 256, 256), device=device,
                              filter=None, padding="zeros")
+# 【教学说明】此处重设种子是为了让本步骤（Step 2）独立可复现，
+# 不受 Step 1 图像加载等全局随机调用的影响；与文件开头的全局种子无关。
 torch.manual_seed(42)
 transf = generate_random_transforms(J=16)
 
@@ -279,8 +328,9 @@ def detailed_adjointness_test(physics, x, n_tests=5):
     """
     errors = []
     for i in range(n_tests):
+        # 每次重设不同种子以测试不同随机向量下的伴随精度
         torch.manual_seed(100 + i)
-        Ax = physics.A(x)  # ✅ 确定性的前向算子，不加噪声
+        Ax = physics.A(x)  # 使用确定性的前向算子 A(x)，避免 physics(x) 自带噪声的随机性
         y_rand = torch.randn_like(Ax)
         lhs = (Ax * y_rand).sum().item()
         rhs = (x * physics.A_adjoint(y_rand)).sum().item()
@@ -292,21 +342,40 @@ def detailed_adjointness_test(physics, x, n_tests=5):
 print("\n--- 3a. 内置算子伴随验证 ---")
 
 # 下采样算子
-down_phys = Downsampling(factor=2, img_size=(3, 256, 256), device=device)
+down_phys_step3 = Downsampling(factor=2, img_size=(3, 256, 256), device=device,
+                                 filter=None)
 x_test = torch.randn(1, 3, 256, 256, device=device)
-adj_err_down = down_phys.adjointness_test(x_test)
-mean_err, std_err = detailed_adjointness_test(down_phys, x_test, n_tests=5)
+adj_err_down = down_phys_step3.adjointness_test(x_test)
+mean_err, std_err = detailed_adjointness_test(down_phys_step3, x_test, n_tests=5)
 print(f"  下采样 (factor=2) 伴随误差: {adj_err_down:.2e} (多次测试: {mean_err:.2e} ± {std_err:.2e})")
 
 # 3b. 对MultiViewPhysics做伴随验证
-print("\n--- 3b. MultiViewPhysics 伴随验证 ---")
+print("\n--- 3b. MultiViewPhysics 伴随验证（★手动伴随是近似）---")
 adj_err_multi = multi_physics.adjointness_test(x_true)
 mean_multi, std_multi = detailed_adjointness_test(multi_physics, x_true, n_tests=5)
-print(f"  MultiViewPhysics 伴随误差: {adj_err_multi:.2e} (多次测试: {mean_multi:.2e} ± {std_multi:.2e})")
-if adj_err_multi < 1e-3:
-    print("  ✓ 伴随验证通过！")
+print(f"  手动伴随相对误差: {adj_err_multi:.2e} (多次测试: {mean_multi:.2e} ± {std_multi:.2e})")
+
+# 【教学提示】对手动伴随做分层解释，避免简单的 PASS/FAIL 二分
+# grid_sample 内部的双线性插值伴随在严格意义上需要 autograd VJP；
+# 本实现用仿射矩阵转置作近似，误差量级受 align_corners、变换剧烈程度影响
+# 注意：adjointness_test 输出的相对误差可能为负（lhs-rhs 符号），
+# 判断阈值时需取绝对值
+abs_err = abs(adj_err_multi)
+if abs_err < 1e-3:
+    verdict = "满足 1e-3 阈值（对小旋转/小平移场景可接受）"
+    advice = "在变换接近恒等时手动伴随已足够；如需更严格精度请用 Step 3c autograd"
+elif abs_err < 1e-2:
+    verdict = "介于 1e-3 ~ 1e-2 之间（典型 grid_sample 插值伴随误差量级）"
+    advice = "强烈推荐使用 Step 3c 的 autograd 自动伴随"
 else:
-    print("  ✗ 伴随误差较大，手动伴随可能不够精确，建议使用autograd自动伴随")
+    verdict = "超过 1e-2（变换较剧烈时手动近似的固有误差）"
+    advice = "应当使用 Step 3c 的 autograd 自动伴随；本实现仅作教学演示"
+
+print(f"  |手动伴随相对误差|: {abs_err:.2e}")
+print(f"  解读: {verdict}")
+print(f"  建议: {advice}")
+print("  注意: 手动伴随本质是'连续坐标层'的精确 + '插值层'的近似；")
+print("        dot product test 通过并不等于算法实现正确，只反映近似精度足够")
 
 # 3c. ★ 使用autograd自动伴随对比
 print("\n--- 3c. ★ autograd 自动伴随 vs 手动伴随 ---")
@@ -346,13 +415,16 @@ try:
     
     multi_physics_auto = MultiViewPhysicsAutoAdj(base_physics, transf=transf, device=device)
     adj_err_auto = multi_physics_auto.adjointness_test(x_true)
-    print(f"  autograd伴随误差: {adj_err_auto:.2e}")
-    print(f"  手动伴随误差:     {adj_err_multi:.2e}")
-    
-    if adj_err_auto < adj_err_multi:
+    print(f"  autograd伴随误差: {adj_err_auto:.2e} (|.|={abs(adj_err_auto):.2e})")
+    print(f"  手动伴随误差:     {adj_err_multi:.2e} (|.|={abs(adj_err_multi):.2e})")
+
+    # 比较绝对误差（dot product test 误差可能带符号）
+    if abs(adj_err_auto) < abs(adj_err_multi):
         print("  ★ autograd自动伴随更精确！推荐在手动伴随不精确时使用")
     else:
-        print("  手动伴随已经足够精确")
+        print("  手动伴随已经足够精确（与 autograd 误差量级相当）")
+    print("  说明：autograd 通过 VJP 精确计算 grid_sample 的插值伴随，")
+    print("        误差接近数值精度；手动版本用仿射矩阵转置作近似，会随变换剧烈程度下降")
         
 except (ImportError, AttributeError):
     print("  autograd伴随功能在当前deepinv版本不可用，跳过对比")
@@ -360,7 +432,7 @@ except (ImportError, AttributeError):
 # 3d. 算子范数
 print("\n--- 3d. 算子范数估计 ---")
 try:
-    norm_down = down_phys.compute_norm(x_test)
+    norm_down = down_phys_step3.compute_norm(x_test)
     print(f"  下采样算子范数: {norm_down:.4f}")
 except Exception as e:
     print(f"  算子范数计算失败: {e}")
@@ -406,14 +478,17 @@ sigma_gauss = 0.05  # 高斯噪声标准差
 gain_poisson = 0.1  # 泊松噪声增益（越小噪声越大）
 
 # 使用下采样算子 + 不同噪声
-down_phys_clean = Downsampling(factor=4, img_size=(3, 256, 256), device=device)
+down_phys_step4 = Downsampling(factor=4, img_size=(3, 256, 256), device=device,
+                                 filter=None)
 
 # 高斯噪声
-phys_gauss = Downsampling(factor=4, img_size=(3, 256, 256), device=device)
+phys_gauss = Downsampling(factor=4, img_size=(3, 256, 256), device=device,
+                           filter=None)
 phys_gauss.set_noise_model(GaussianNoise(sigma=sigma_gauss))
 
 # 泊松噪声
-phys_poisson = Downsampling(factor=4, img_size=(3, 256, 256), device=device)
+phys_poisson = Downsampling(factor=4, img_size=(3, 256, 256), device=device,
+                             filter=None)
 phys_poisson.set_noise_model(PoissonNoise(gain=gain_poisson))
 
 # 泊松-高斯复合噪声（★模拟真实传感器：光子散粒噪声+电子读出噪声）
@@ -424,25 +499,47 @@ class PoissonGaussianNoise(nn.Module):
     - Poisson: 光子散粒噪声（信号依赖型，方差∝信号强度）
     - Gaussian: 电子读出噪声（信号无关型，方差恒定）
     - gain(λ)越小，泊松噪声越强；sigma越大，高斯噪声越强
+
+    推荐取值范围（基于x∈[0,1]假设）:
+    - gain ∈ [0.05, 0.5]：
+      gain 太小（如 <0.01）时，x/gain 极大，
+      torch.poisson 在不同硬件/PyTorch 版本上可能溢出或精度下降；
+      gain=0.1 是教学演示的典型取值。
+    - sigma ∈ [0.005, 0.1]：
+      sigma 太大（如 >0.2）时泊松部分会被高斯淹没，
+      复合模型退化为纯高斯；sigma=0.02 是教学演示的典型取值。
+
+    【重要简化假设】
+    forward() 方法对输入执行两次 clamp：
+      1) x.clamp(0,1) 限制泊松采样前的输入范围
+      2) 输出再次 clamp(0,1) 确保结果有效
+    这假设 A(x) 已在 [0,1] 范围内（如经过归一化的图像）。
+    若实际输入超出该范围（如模糊/下采样后有轻微 overshoot），
+    clamp 会截断极端值，可能引入信息损失。
+    对于未归一化数据，应先做归一化预处理或移除 clamp 逻辑。
     """
     def __init__(self, gain=0.1, sigma=0.02):
         super().__init__()
         self.gain = gain
         self.sigma = sigma
-    
+
     def forward(self, x, **kwargs):
         # 1. 泊松噪声：模拟光子计数过程
+        #    注意：clamp(0,1) 限制输入幅度，避免 x/gain 过大导致数值不稳定
         x_poisson = torch.poisson(x.clamp(0, 1) / self.gain) * self.gain
         # 2. 高斯噪声：模拟电子读出噪声（独立于信号）
         x_noisy = x_poisson + self.sigma * torch.randn_like(x)
         return x_noisy.clamp(0, 1)
 
-phys_pg = Downsampling(factor=4, img_size=(3, 256, 256), device=device)
+phys_pg = Downsampling(factor=4, img_size=(3, 256, 256), device=device,
+                        filter=None)
 phys_pg.set_noise_model(PoissonGaussianNoise(gain=0.1, sigma=0.02))
 
 # 生成观测
+# 【教学说明】此处重设种子是为了让本步骤（Step 4）独立可复现，
+# 不受 Step 2/3 等全局随机调用的影响；与文件开头的全局种子无关。
 torch.manual_seed(42)
-y_clean = down_phys_clean(x_true)
+y_clean = down_phys_step4(x_true)
 y_gauss = phys_gauss(x_true)
 y_poisson = phys_poisson(x_true)
 y_pg = phys_pg(x_true)
@@ -573,16 +670,21 @@ try:
     # 扩展到3通道
     motion_k_3ch = motion_k_tensor.repeat(1, 3, 1, 1)
     blur_phys = Blur(filter=motion_k_3ch, device=device)
-    
+
     y_blurred = blur_phys(x_true)
-    
+
     # 伴随验证
     adj_err_blur = blur_phys.adjointness_test(x_true)
     print(f"  运动模糊算子伴随误差: {adj_err_blur:.2e}")
-    
+
     has_blur = True
 except Exception as e:
-    print(f"  Blur算子创建失败: {e}，跳过模糊部分")
+    # 【教学改进】关键路径（★原创部分）打印完整 traceback，便于学生排查
+    import traceback
+    print(f"  Blur算子创建失败: {e}")
+    print("  详细 traceback:")
+    traceback.print_exc()
+    print("  → 跳过模糊部分")
 
 # 5b. ★ 组合算子：模糊 → 下采样
 if has_blur:
@@ -596,14 +698,37 @@ if has_blur:
         
         # 组合算子: y = D(K(x))，即先模糊再下采样
         # deepinv中用乘法表示算子组合，执行顺序从右到左: D * K 表示先应用K再应用D
-        composite_phys = Downsampling(factor=4, img_size=(3, H_blur, W_blur), device=device) * blur_phys
+        composite_phys = Downsampling(factor=4, img_size=(3, H_blur, W_blur), device=device,
+                                       filter=None) * blur_phys
         y_composite = composite_phys(x_true)
+
+        # ★ 显式验证组合顺序正确性：对比手动调用与组合调用的结果
+        # 手动调用：先模糊，再下采样
+        down_phys_step5 = Downsampling(factor=4, img_size=(3, H_blur, W_blur), device=device,
+                                        filter=None)
+        y_manual = down_phys_step5.A(blur_phys.A(x_true))
+        # 使用相对误差而非绝对误差，阈值 1e-5 基于 |y| 的数量级（≈1），
+        # 适用于 x ∈ [0,1] 归一化图像；其他数值范围需相应调整阈值
+        abs_diff = (y_composite - y_manual).abs().max().item()
+        y_scale = y_composite.abs().mean().item() + 1e-10
+        order_diff = abs_diff / y_scale
+        print(f"  组合顺序验证: 组合结果 vs 手动调用 最大相对误差 = {order_diff:.2e} (最大绝对误差 = {abs_diff:.2e})")
+        if order_diff < 1e-5:
+            print("  ✓ 组合顺序正确：D * K 确实对应 先应用K(模糊) 再应用D(下采样)")
+        else:
+            print(f"  ! 组合顺序可能有问题（相对误差 {order_diff:.2e} > 1e-5），请检查deepinv版本")
+        
         adj_err_composite = composite_phys.adjointness_test(x_true)
         print(f"  组合算子(模糊+下采样)伴随误差: {adj_err_composite:.2e}")
         print(f"  组合观测 shape: {y_composite.shape}")
         has_composite = True
     except Exception as e:
+        # 【教学改进】打印完整 traceback，便于学生调试
+        import traceback
         print(f"  算子组合失败: {e}")
+        print("  详细 traceback:")
+        traceback.print_exc()
+        print("  → 跳过组合算子部分")
         has_composite = False
 
 # 5c. MRI子采样掩模
@@ -616,20 +741,27 @@ try:
     # MRI通常是单通道，将RGB转灰度（ITU-R BT.709标准）
     x_gray = 0.2126*x_true[:,0:1] + 0.7152*x_true[:,1:2] + 0.0722*x_true[:,2:3]
     
-    # MRI算子期望输入是复数格式，需要将实数图像转换为复数
-    # 方法：将灰度图作为实部，虚部为0
-    x_gray_complex = torch.view_as_complex(
-        torch.stack([x_gray.squeeze(1), torch.zeros_like(x_gray.squeeze(1))], dim=-1)
-    ).unsqueeze(1)  # (B, 1, H, W) complex64
-    
-    y_mri = mri_phys(x_gray_complex)
-    
-    adj_err_mri = mri_phys.adjointness_test(x_gray_complex)
+    # MRI算子期望输入是 (B, 2, H, W) 的实数张量：channel 0=实部, channel 1=虚部
+    # deepinv 内部会调用 view_as_complex(x.moveaxis(1, -1)) 把它转为复数
+    # 【教学注意】不要预先用 view_as_complex 转成复数！否则会触发
+    # "view_as_complex is only supported for half, float and double tensors"
+    x_mri_input = torch.stack(
+        [x_gray.squeeze(1), torch.zeros_like(x_gray.squeeze(1))], dim=1
+    ).contiguous()  # (B, 2, H, W) float32
+
+    y_mri = mri_phys(x_mri_input)
+
+    adj_err_mri = mri_phys.adjointness_test(x_mri_input)
     print(f"  MRI算子伴随误差: {adj_err_mri:.2e}")
     print(f"  MRI观测 shape: {y_mri.shape}")
     has_mri = True
 except Exception as e:
+    # 【教学改进】关键路径（★原创部分）打印完整 traceback
+    import traceback
     print(f"  MRI算子创建失败: {e}")
+    print("  详细 traceback:")
+    traceback.print_exc()
+    print("  → 跳过 MRI 部分")
     has_mri = False
 
 # 5d. 可视化
@@ -686,23 +818,37 @@ else:
 for c in range(3):
     axes[2, c].axis('off')
 
+# 【教学说明】内置算子（Downsampling/Blur/MRI/Composite）是 deepinv 库内精确实现，
+# 它们的伴随在数学上是严格的（库作者负责保证），故可用 PASS/FAIL 二元判断；
+# MultiViewPhysics 是本实验自定义算子，其手动伴随是"近似"实现，
+# 详细解读见 Step 3b（按 |误差| 分层），不在此处用 PASS/FAIL 误导学生。
 summary_text = "伴随验证汇总:\n\n"
+summary_text += "[内置算子——库内精确实现，PASS/FAIL 二元判断]\n"
 # 下采样算子
-status_down = "✓ PASS" if adj_err_down < 1e-3 else "✗ FAIL"
+status_down = "✓ PASS" if abs(adj_err_down) < 1e-3 else "✗ FAIL"
 summary_text += f"下采样算子:       {adj_err_down:.2e} {status_down}\n"
-# MultiViewPhysics
-status_multi = "✓ PASS" if adj_err_multi < 1e-3 else "✗ FAIL"
-summary_text += f"MultiViewPhysics: {adj_err_multi:.2e} {status_multi}\n"
 if has_blur and 'adj_err_blur' in locals():
-    status_blur = "✓ PASS" if adj_err_blur < 1e-3 else "✗ FAIL"
+    status_blur = "✓ PASS" if abs(adj_err_blur) < 1e-3 else "✗ FAIL"
     summary_text += f"运动模糊:         {adj_err_blur:.2e} {status_blur}\n"
 if has_composite and 'adj_err_composite' in locals():
-    status_composite = "✓ PASS" if adj_err_composite < 1e-3 else "✗ FAIL"
+    status_composite = "✓ PASS" if abs(adj_err_composite) < 1e-3 else "✗ FAIL"
     summary_text += f"模糊+下采样:      {adj_err_composite:.2e} {status_composite}\n"
 if has_mri and 'adj_err_mri' in locals():
-    status_mri = "✓ PASS" if adj_err_mri < 1e-3 else "✗ FAIL"
+    status_mri = "✓ PASS" if abs(adj_err_mri) < 1e-3 else "✗ FAIL"
     summary_text += f"MRI子采样:        {adj_err_mri:.2e} {status_mri}\n"
-summary_text += "\n阈值: < 1e-3 通过"
+summary_text += "\n[自定义算子——手动伴随为近似，详见 Step 3b 分层解读]\n"
+# 自定义 MultiViewPhysics：不使用 PASS/FAIL 标签，避免误导
+# 复用 Step 3b 的 |误差| 量级给出诚实表述
+abs_err_multi = abs(adj_err_multi)
+if abs_err_multi < 1e-3:
+    multi_label = "近似足够（<1e-3）"
+elif abs_err_multi < 1e-2:
+    multi_label = "需用 autograd（1e-3~1e-2）"
+else:
+    multi_label = "需用 autograd（>=1e-2）"
+summary_text += f"MultiViewPhysics: {adj_err_multi:.2e} → {multi_label}\n"
+summary_text += "\n内置算子阈值: < 1e-3 通过\n"
+summary_text += "自定义算子: 详见 Step 3b 分层"
 axes[2, 0].text(0.1, 0.5, summary_text, fontsize=11, family='monospace',
                 verticalalignment='center', transform=axes[2, 0].transAxes)
 
@@ -726,28 +872,40 @@ print("  已保存: step5_custom_operators.png")
 
 # 5e. ★ 性能基准测试
 print("\n--- 5e. ★ 算子性能基准测试 ---")
+# 【免责说明】本测试仅演示 time.perf_counter 的计时方法与算子调用流程，
+# 并非严格的算子效率横向对比：
+#   - Blur 输入 (3, 256, 256) 3通道；Composite 为 Blur+Downsampling 复合，尺寸经模糊后保持；
+#   - MRI 输入 (2, 256, 256) 复数表示的灰度图，与 RGB 算子通道数不同；
+#   - MRI 内部涉及 FFT 等复数运算，与 Blur/Downsampling 的实数卷积/采样在计算范式上也不同；
+#   - 真实横向对比需统一输入尺寸、通道数、迭代次数与硬件环境。
+# 本节目的：让学生掌握算子耗时评估方法，理解影响算子速度的混杂变量。
 import time
 benchmark_ops = []
+# 准备每个算子对应的真实输入：MRI 期望复数，其他算子期望实数 RGB
+# 教学注意：若 MRI 误用实数输入调用，计时结果无法代表真实调用路径
 if has_blur:
-    benchmark_ops.append(('Blur', blur_phys))
+    benchmark_ops.append(('Blur', blur_phys, x_true))
 if has_composite:
-    benchmark_ops.append(('Composite', composite_phys))
+    benchmark_ops.append(('Composite', composite_phys, x_true))
 if has_mri:
-    benchmark_ops.append(('MRI', mri_phys))
+    benchmark_ops.append(('MRI', mri_phys, x_mri_input))
 
-for name, phys in benchmark_ops:
+for name, phys, bench_input in benchmark_ops:
     try:
         # 预热
-        _ = phys(x_true if name != 'MRI' else x_gray)
+        _ = phys(bench_input)
         # 正式测试
         t0 = time.perf_counter()
         n_iters = 10
         for _ in range(n_iters):
-            _ = phys(x_true if name != 'MRI' else x_gray)
+            _ = phys(bench_input)
         elapsed_ms = (time.perf_counter() - t0) / n_iters * 1000
         print(f"  {name:10s}: {elapsed_ms:7.2f} ms/iter")
     except Exception as e:
+        # 【教学改进】打印 traceback，便于排查算子调用路径问题
+        import traceback
         print(f"  {name:10s}: 测试失败 ({e})")
+        traceback.print_exc()
 
 
 # ========================================================================

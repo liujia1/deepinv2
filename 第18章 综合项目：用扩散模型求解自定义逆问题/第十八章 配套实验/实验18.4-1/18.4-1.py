@@ -20,9 +20,11 @@ Step 5: ★方法对比与决策指南 —— PSNR/SSIM表格、运行时间、�
 """
 
 import os, sys, time, copy
+import subprocess  # ★ 用于 pip install 失败时显式退出（与 18_2-1.py 风格统一，避免 os.system 静默失败）
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F  # ★ 教学注意：必须全局导入，Step 2 超分初始化(368行) / TV 散度手动实现(499/501行) / Step 5 降级可视化(1106行) 均依赖 F
 import torch.optim as optim
 import matplotlib
 matplotlib.use('Agg')  # ★ 设置非交互式后端
@@ -41,28 +43,31 @@ warnings.filterwarnings("ignore", message=".*U\\+2212.*")
 warnings.filterwarnings("ignore", message=".*glyph.*")
 plt.rcParams['axes.unicode_minus'] = False
 
-# ====== 保存目录（优先Google Drive）======
+# ====== 中文字体配置(兼容本地和Google Colab) ======
 _gdrive = '/content/drive/MyDrive'
-if os.path.isdir(_gdrive):
-    SAVE_DIR = os.path.join(_gdrive, '实验18_4-1_端到端求解策略对比')
-    os.makedirs(SAVE_DIR, exist_ok=True)
-    print(f"检测到 Google Drive，结果将保存至: {SAVE_DIR}")
+_IN_COLAB = 'google.colab' in sys.modules
+
+if _IN_COLAB:
+    from google.colab import drive
+    if not os.path.isdir(_gdrive):
+        print("正在挂载 Google Drive...")
+        drive.mount('/content/drive')
+    SAVE_DIR = os.path.join(_gdrive, '实验18.4-1')
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
-    SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
-    print(f"本地环境，结果将保存至: {SAVE_DIR}")
+    try:
+        SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        SAVE_DIR = os.getcwd()
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 
-# ====== 导入中文字体模块 ======
-# ★ 动态导入中文字体模块（兼容直接运行脚本）
-_script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
-_chinese_font_path = os.path.join(_script_dir, '.chinese', 'chinese_font.py')
-import importlib.util
-_spec = importlib.util.spec_from_file_location("chinese_font", _chinese_font_path)
-_chinese_font = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_chinese_font)
-setup_chinese_font = _chinese_font.setup_chinese_font
-
-# ★ 设置中文字体
-setup_chinese_font(os.path.join(_script_dir, '.chinese'))
+os.makedirs(_chinese_path, exist_ok=True)
+sys.path.insert(0, _chinese_path)
+try:
+    from chinese_font import setup_chinese_font
+    setup_chinese_font(save_dir=_chinese_path)
+except ImportError:
+    print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
 
 # 固定随机种子
 np.random.seed(42)
@@ -76,6 +81,8 @@ if device.type == 'cpu':
     print("⚠ 警告: 扩散模型推理在CPU上会非常慢，建议使用GPU")
 
 # ====== 实验参数配置 ======
+# ★ 当前为快速演示模式：n_diffusion_steps=100，适合调试和初步实验
+#   正式对比实验建议改为300步（平衡质量与速度）或1000步（最高质量）
 n_diffusion_steps = 100  # 扩散采样步数: 100(快速), 300(平衡), 1000(高质量)
 show_progress = True  # 是否显示扩散采样进度条
 use_cache = True  # ★ 是否启用结果缓存（避免重复计算）
@@ -86,7 +93,12 @@ try:
     import deepinv
 except ImportError:
     print("正在安装 deepinv ...")
-    os.system('pip install git+https://github.com/deepinv/deepinv.git#egg=deepinv')
+    # 教学注意：使用 subprocess.check_call 并显式退出，避免 os.system 静默失败
+    try:
+        subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'git+https://github.com/deepinv/deepinv.git#egg=deepinv'])
+    except subprocess.CalledProcessError as e:
+        print(f"deepinv 安装失败，退出码 {e.returncode}")
+        raise SystemExit(1)
     import deepinv as dinv
 else:
     dinv = deepinv
@@ -107,7 +119,12 @@ def compute_psnr(img1, img2):
     return 10 * np.log10(1.0 / mse)
 
 def compute_ssim(img1, img2):
-    """简化SSIM计算（基于局部统计量）"""
+    """简化SSIM计算（基于局部统计量）
+
+    ★ 教学提示：若skimage不可用，返回NaN而非近似值，避免误导结果。
+    后续可视化（如柱状图）仅使用PSNR，但若扩展为SSIM维度的决策图，
+    需注意NaN值的传播与过滤处理。
+    """
     try:
         from skimage.metrics import structural_similarity as ssim
         img1_np = img1.squeeze().cpu().permute(1, 2, 0).numpy().clip(0, 1)
@@ -133,8 +150,17 @@ print(f"load_example 返回 shape: {x_true.shape}, ndim: {x_true.ndim}")
 if x_true.ndim == 3:
     x_true = x_true.unsqueeze(0)  # (C, H, W) -> (1, C, H, W)
 elif x_true.ndim == 5:
-    # 可能是 (1, 1, C, H, W)，需要squeeze
-    x_true = x_true.squeeze(0) if x_true.shape[0] == 1 else x_true[0]
+    # 5D 属于非标准格式（如 (1, 1, C, H, W)），按启发式规则显式压缩；
+    # 打印警告说明假设，便于学生排查数据结构异常
+    print(f"  ⚠️ [Warning] load_example 返回 5D 张量 shape={tuple(x_true.shape)}，"
+          f"按 (B, 1, C, H, W) 假设压缩为 4D；如不符合请检查数据源")
+    if x_true.shape[1] == 1:
+        x_true = x_true.squeeze(1)
+    else:
+        # ⚠️ 通道维不为 1 时保守取第一组（隐性丢数据），此情况罕见但在预期外时建议排查数据源
+        x_true = x_true[:, 0]
+elif x_true.ndim != 4:
+    raise ValueError(f"load_example 返回的 x_true ndim={x_true.ndim} 不在支持范围 [3,4,5]")
 x_true = x_true.to(device)
 print(f"处理后 x_true shape: {x_true.shape}")
 print(f"测试图像 shape: {x_true.shape}")
@@ -202,7 +228,9 @@ try:
     print(f"  4×超分: 观测shape={y_sr4.shape}, PSNR={compute_psnr(x_true, sr4.A_adjoint(y_sr4)):.2f} dB")
     has_sr_scenario = True
 except Exception as e:
+    import traceback
     print(f"  超分场景创建失败: {e}")
+    traceback.print_exc()  # ★ 统一风格：关键路径打印完整traceback便于调试
     has_sr_scenario = False
 
 # 1c. 修复场景
@@ -351,6 +379,11 @@ else:
 if not skip_step2:
     if not skip_step2_scenarios:
         results = {}  # 全部重新计算时才清空
+    # ★ 状态管理说明（四种组合分支）：
+    #   1. skip_step2=True, skip_step2_scenarios非空 → 缓存已加载全部场景，results已在前文(323行)重建
+    #   2. skip_step2=True, skip_step2_scenarios为空 → 不可能（全部缓存命中意味着至少有一个场景）
+    #   3. skip_step2=False, skip_step2_scenarios非空 → 部分缓存命中，results已有部分数据，需补算缺失场景
+    #   4. skip_step2=False, skip_step2_scenarios为空 → 无缓存或缓存失效，results为空字典，需全部计算
 
 # 对每种场景，用优化方法求解
 for scenario_name, scenario_data in scenarios.items():
@@ -387,14 +420,14 @@ for scenario_name, scenario_data in scenarios.items():
         op_norm_sq = (physics.A(x_tmp)**2).sum() / (x_tmp**2).sum()
         lr_tik = 1.0 / (op_norm_sq.item() + lambda_reg)
 
-        t_start = time.time()
+        t_start = time.perf_counter()  # ★ 用 perf_counter 计时，避免系统时钟调整影响且分辨率更高
         x_tikhonov = x_init.clone()
         for _ in range(n_tik_iter):
             # 梯度: ∇(||Ax-y||² + λ||x||²) = A^T(Ax-y) + λx
             grad = physics.A_adjoint(physics.A(x_tikhonov) - y) + lambda_reg * x_tikhonov
             x_tikhonov = x_tikhonov - lr_tik * grad
             x_tikhonov = x_tikhonov.clamp(0, 1)
-        t_tikh = time.time() - t_start
+        t_tikh = time.perf_counter() - t_start  # ★ 改用 perf_counter 计时：分辨率高于 time.time()，且不受系统时钟调整影响；公式为"结束时刻 - 起始时刻"得到真实耗时（秒）
 
         psnr_tikh = compute_psnr(x_true, x_tikhonov)
         ssim_tikh = compute_ssim(x_true, x_tikhonov)
@@ -420,7 +453,7 @@ for scenario_name, scenario_data in scenarios.items():
         data_fidelity_tv = DataFidelity_L2()
 
         # 尝试使用新版deepinv的优化器（优先方案）
-        t_start = time.time()
+        t_start = time.perf_counter()  # ★ 用 perf_counter 计时，避免系统时钟调整影响且分辨率更高
 
         # 方案1: 尝试使用 optim_builder（如果可用）
         try:
@@ -461,7 +494,7 @@ for scenario_name, scenario_data in scenarios.items():
                 except ImportError:
                     raise ImportError("新版优化器均不可用")
 
-        t_tv = time.time() - t_start
+        t_tv = time.perf_counter() - t_start  # ★ 改用 perf_counter 计时：分辨率高于 time.time()，且不受系统时钟调整影响；公式为"结束时刻 - 起始时刻"得到真实耗时（秒）
         psnr_tv = compute_psnr(x_true, x_tv)
         ssim_tv = compute_ssim(x_true, x_tv)
         results[scenario_name]['TV正则化'] = {
@@ -480,7 +513,7 @@ for scenario_name, scenario_data in scenarios.items():
             lr_tv = 0.01
             n_tv_iter = 100  # 减少迭代次数
             x_tv = x_init.clone().detach().requires_grad_(False)
-            t_start = time.time()
+            t_start = time.perf_counter()  # ★ 用 perf_counter 计时，避免系统时钟调整影响且分辨率更高
             for it in range(n_tv_iter):
                 # 数据保真项梯度
                 grad_data = physics.A_adjoint(physics.A(x_tv) - y)
@@ -504,7 +537,7 @@ for scenario_name, scenario_data in scenarios.items():
                 x_tv = x_tv.clamp(0, 1)
                 if (it + 1) % 25 == 0:
                     print(f"    TV迭代 {it+1}/{n_tv_iter} 完成")
-            t_tv = time.time() - t_start
+            t_tv = time.perf_counter() - t_start  # ★ 改用 perf_counter 计时：分辨率高于 time.time()，且不受系统时钟调整影响；公式为"结束时刻 - 起始时刻"得到真实耗时（秒）
 
             psnr_tv = compute_psnr(x_true, x_tv)
             ssim_tv = compute_ssim(x_true, x_tv)
@@ -517,18 +550,25 @@ for scenario_name, scenario_data in scenarios.items():
             print(f"  手动TV也失败: {e2}")
             traceback.print_exc()
 
-    # 2c. 伴随重建（超分场景用双线性插值，其他场景用A_adjoint）
+    # 2c. 伴随重建
+    # ★ 教学注意：超分场景下 A_adjoint(y) 是零填充（极暗），本节实际使用的是 x_init.clone()，对超分场景即"双线性插值"结果。
+    #   为避免方法名误导，将伴随重建结果的方法名按场景区分：超分场景叫"插值基线"，其他场景才叫"伴随重建"。
     try:
-        t_start = time.time()
+        t_start = time.perf_counter()  # ★ 用 perf_counter 计时，避免系统时钟调整影响且分辨率更高
         x_adj = x_init.clone()
-        t_adj = time.time() - t_start
+        t_adj = time.perf_counter() - t_start  # ★ 改用 perf_counter 计时：分辨率高于 time.time()，且不受系统时钟调整影响；公式为"结束时刻 - 起始时刻"得到真实耗时（秒）
+        # ★ 运行时自检：防止之前"t_xxx = time.perf_counter() + 注释里的 - t_start"那种隐蔽 bug 重犯
+        if not (0 <= t_adj < 3600):
+            print(f"  [警告] 伴随重建耗时异常: t_adj={t_adj:.3f}s（预期 0~3600），可能计时逻辑有误")
 
         psnr_adj = compute_psnr(x_true, x_adj)
         ssim_adj = compute_ssim(x_true, x_adj)
-        results[scenario_name]['伴随重建'] = {
+        # ★ 根据是否超分场景，给方法名以更准确的中文标签
+        method_name_adj = '插值基线' if isinstance(physics, Downsampling) else '伴随重建'
+        results[scenario_name][method_name_adj] = {
             'psnr': psnr_adj, 'ssim': ssim_adj, 'time': t_adj, 'img': x_adj
         }
-        print(f"  伴随重建:   PSNR={psnr_adj:.2f} dB, SSIM={ssim_adj:.4f}, 耗时={t_adj:.3f}s")
+        print(f"  {method_name_adj}:   PSNR={psnr_adj:.2f} dB, SSIM={ssim_adj:.4f}, 耗时={t_adj:.3f}s")
     except Exception as e:
         print(f"  伴随重建失败: {e}")
 
@@ -544,7 +584,7 @@ for scenario_name, scenario_data in scenarios.items():
                 try:
                     with open(cache_file, 'rb') as f:
                         cached_data = pickle.load(f)
-                except:
+                except Exception:  # ★ 明确捕获异常类型，避免吞掉 KeyboardInterrupt/SystemExit
                     cached_data = {}  # 如果加载失败，从头开始
 
             # 更新 Step 2 结果（只保存指标，不保存图像张量以减小文件大小）
@@ -648,10 +688,10 @@ if has_dpir and not skip_step3:
         print(f"\n--- 场景: {scenario_name} ---")
 
         # 根据场景确定噪声水平（DPIR需要此参数来设置迭代参数）
+        # 教学说明：原代码的 elif '80%' 分支和 else 完全等价（都是 0.01），属于死代码。
+        # 现简化为两层：重度模糊用较高噪声(0.05)，其余场景统一用 0.01
         if '重度' in scenario_name:
             noise_sigma = 0.05
-        elif '80%' in scenario_name:
-            noise_sigma = 0.01
         else:
             noise_sigma = 0.01
 
@@ -667,7 +707,7 @@ if has_dpir and not skip_step3:
             prior = PnP(denoiser=denoiser_drunet)
             data_fidelity = L2()
 
-            t_start = time.time()
+            t_start = time.perf_counter()  # ★ 用 perf_counter 计时，避免系统时钟调整影响且分辨率更高
             model = optim_builder(
                 iteration="HQS",
                 prior=prior,
@@ -679,7 +719,7 @@ if has_dpir and not skip_step3:
             )
             x_dpir = model(y, physics)
             x_dpir = x_dpir.clamp(0, 1)  # ★ 确保输出在[0,1]范围
-            t_dpir = time.time() - t_start
+            t_dpir = time.perf_counter() - t_start  # ★ 改用 perf_counter 计时：分辨率高于 time.time()，且不受系统时钟调整影响；公式为"结束时刻 - 起始时刻"得到真实耗时（秒）
 
             psnr_dpir = compute_psnr(x_true, x_dpir)
             ssim_dpir = compute_ssim(x_true, x_dpir)
@@ -699,11 +739,13 @@ if has_dpir and not skip_step3:
 
                 # PnP-HQS: x_{k+1} = denoiser(prox_{data}(x_k))
                 # 教学提示：手动实现清晰展示了PnP的核心思想
+                # ★ 简化配置：n_iter=20, step_size=0.5 为经验值，未做类似Tikhonov(387-395行)的自适应步长估计
+                #   实际应用中，PnP收敛性依赖步长与去噪器的匹配，可能需要按场景调优
                 x_pnp = x_init.clone()
                 n_iter = 20  # 减少迭代次数，加快演示
                 sigma_pnp = noise_sigma * 2  # 初始噪声水平
-                step_size = 0.5  # 适中的步长
-                t_start = time.time()
+                step_size = 0.5  # 适中的步长（经验值，缺乏理论保证）
+                t_start = time.perf_counter()  # ★ 用 perf_counter 计时，避免系统时钟调整影响且分辨率更高
 
                 for it in range(n_iter):
                     # 数据保真项梯度步
@@ -717,7 +759,7 @@ if has_dpir and not skip_step3:
                     if (it + 1) % 5 == 0:
                         print(f"    迭代 {it+1}/{n_iter} 完成")
 
-                t_pnp = time.time() - t_start
+                t_pnp = time.perf_counter() - t_start  # ★ 改用 perf_counter 计时：分辨率高于 time.time()，且不受系统时钟调整影响；公式为"结束时刻 - 起始时刻"得到真实耗时（秒）
                 psnr_pnp = compute_psnr(x_true, x_pnp)
                 ssim_pnp = compute_ssim(x_true, x_pnp)
                 results[scenario_name]['PnP-HQS(手动)'] = {
@@ -738,7 +780,7 @@ if has_dpir and not skip_step3:
                 try:
                     with open(cache_file, 'rb') as f:
                         cached_data = pickle.load(f)
-                except:
+                except Exception:  # ★ 明确捕获异常类型，避免吞掉 KeyboardInterrupt/SystemExit
                     cached_data = {}
 
             # 提取 Step 3 的结果（只包含 PnP 相关方法，只保存指标）
@@ -839,7 +881,12 @@ if has_diffpir and not skip_step4:
     #   - 旧版deepinv使用DiffPIR类封装扩散采样算法
     #   - 新版deepinv可能重构了接口，本代码采用"新API优先+DDRM备选"
     # 选择代表性场景测试扩散方法（较慢，不全测）
-    diff_scenarios = list(scenarios.keys())[:4]  # 最多测4个场景（含2倍和4倍超分）
+    # ★ 显式按名称选择代表性场景，避免依赖 scenarios 字典的插入顺序
+    #   教学说明：先前依赖 list(scenarios.keys())[:4]，一旦 Step 1 中某个场景构造失败被跳过，
+    #   "取前4个"的隐含假设就会失效。显式按名字挑选可保证选出的始终是教学设计的目标场景。
+    diff_scenarios = [k for k in ['轻度模糊', '重度模糊', '2倍超分', '4倍超分'] if k in scenarios]
+    if not diff_scenarios:
+        diff_scenarios = list(scenarios.keys())[:4]  # 退化兜底：若命名变更，仍取前4个
     for scenario_name in diff_scenarios:
         # ★ 跳过已有缓存结果的场景
         if scenario_name in skip_step4_scenarios:
@@ -854,7 +901,9 @@ if has_diffpir and not skip_step4:
             from deepinv.sampling import DiffPIR as DiffPIR_algo
             from deepinv.optim import L2 as DiffL2
 
-            t_start = time.time()
+            t_start = time.perf_counter()  # ★ 用 perf_counter 计时，避免系统时钟调整影响且分辨率更高
+            # ★ 教学简化：zeta=0.1, lambda_=7.0 为统一固定值，未按退化场景网格搜索调优
+            #   实际应用中，重度退化（如4×超分）可能需要更大的似然权重（zeta）或不同的噪声调度（lambda_）
             model_diffpir = DiffPIR_algo(
                 model=denoiser_diffunet,
                 data_fidelity=DiffL2(),
@@ -867,7 +916,7 @@ if has_diffpir and not skip_step4:
             )
             x_diffpir = model_diffpir(y, physics)
             x_diffpir = x_diffpir.clamp(0, 1)  # ★ 确保输出在[0,1]范围，避免显示过暗或过亮
-            t_diffpir = time.time() - t_start
+            t_diffpir = time.perf_counter() - t_start  # ★ 改用 perf_counter 计时：分辨率高于 time.time()，且不受系统时钟调整影响；公式为"结束时刻 - 起始时刻"得到真实耗时（秒）
 
             psnr_diffpir = compute_psnr(x_true, x_diffpir)
             ssim_diffpir = compute_ssim(x_true, x_diffpir)
@@ -881,7 +930,7 @@ if has_diffpir and not skip_step4:
             try:
                 print("  回退到DDRM算法...")
                 from deepinv.sampling import DDRM
-                t_start = time.time()
+                t_start = time.perf_counter()  # ★ 用 perf_counter 计时，避免系统时钟调整影响且分辨率更高
                 model_ddrm = DDRM(
                     denoiser=denoiser_diffunet,
                     sigmas=np.linspace(1, 0, n_diffusion_steps),
@@ -889,7 +938,7 @@ if has_diffpir and not skip_step4:
                 )
                 x_ddrm = model_ddrm(y, physics)
                 x_ddrm = x_ddrm.clamp(0, 1)  # ★ 确保输出在[0,1]范围
-                t_ddrm = time.time() - t_start
+                t_ddrm = time.perf_counter() - t_start  # ★ 改用 perf_counter 计时：分辨率高于 time.time()，且不受系统时钟调整影响；公式为"结束时刻 - 起始时刻"得到真实耗时（秒）
 
                 psnr_ddrm = compute_psnr(x_true, x_ddrm)
                 ssim_ddrm = compute_ssim(x_true, x_ddrm)
@@ -903,7 +952,7 @@ if has_diffpir and not skip_step4:
                 try:
                     print("  回退到DPS算法（无需SVD，适合Blur场景）...")
                     from deepinv.sampling import DPS
-                    t_start = time.time()
+                    t_start = time.perf_counter()  # ★ 用 perf_counter 计时，避免系统时钟调整影响且分辨率更高
                     model_dps = DPS(
                         model=denoiser_diffunet,
                         data_fidelity=DiffL2(),
@@ -912,7 +961,7 @@ if has_diffpir and not skip_step4:
                     )
                     x_dps = model_dps(y, physics)
                     x_dps = x_dps.clamp(0, 1)  # ★ 确保输出在[0,1]范围
-                    t_dps = time.time() - t_start
+                    t_dps = time.perf_counter() - t_start  # ★ 改用 perf_counter 计时：分辨率高于 time.time()，且不受系统时钟调整影响；公式为"结束时刻 - 起始时刻"得到真实耗时（秒）
 
                     psnr_dps = compute_psnr(x_true, x_dps)
                     ssim_dps = compute_ssim(x_true, x_dps)
@@ -933,7 +982,7 @@ if has_diffpir and not skip_step4:
                 try:
                     with open(cache_file, 'rb') as f:
                         cached_data = pickle.load(f)
-                except:
+                except Exception:  # ★ 明确捕获异常类型，避免吞掉 KeyboardInterrupt/SystemExit
                     cached_data = {}
 
             # 提取 Step 4 的结果（只包含扩散相关方法，只保存指标）
@@ -1012,7 +1061,8 @@ if len(plot_scenarios) >= 1:
 
     axes[0].set_xlabel('退化场景', fontsize=12)
     axes[0].set_ylabel('PSNR (dB)', fontsize=12)
-    axes[0].set_title('★ 各方法PSNR对比', fontsize=13)
+    # ★ 教学提示：PSNR绝对值不可跨场景比较（退化强度不同），仅可比较同场景内不同方法
+    axes[0].set_title('★ 各方法PSNR对比\n(仅同场景内可比)', fontsize=13)
     axes[0].set_xticks(x_pos + width * (len(all_methods) - 1) / 2)
     axes[0].set_xticklabels(plot_scenarios, fontsize=10)
     axes[0].legend(fontsize=9)
@@ -1023,17 +1073,19 @@ if len(plot_scenarios) >= 1:
     for i, method in enumerate(all_methods):
         times = []
         psnrs = []
+        labels = []  # 记录对应的场景名称
         for s in plot_scenarios:
             if method in results[s]:
                 times.append(results[s][method]['time'])
                 psnrs.append(results[s][method]['psnr'])
+                labels.append(s)
         if times:
             axes[1].scatter(times, psnrs, marker=markers[i % len(markers)],
                            s=100, label=method, color=colors[i], zorder=5)
-            for j, s in enumerate(plot_scenarios):
-                if method in results[s]:
-                    axes[1].annotate(s, (times[j], psnrs[j]),
-                                    fontsize=8, xytext=(5, 5), textcoords='offset points')
+            # 使用独立索引访问times和psnrs
+            for j in range(len(times)):
+                axes[1].annotate(labels[j], (times[j], psnrs[j]),
+                                fontsize=8, xytext=(5, 5), textcoords='offset points')
 
     axes[1].set_xlabel('推理时间 (秒)', fontsize=12)
     axes[1].set_ylabel('PSNR (dB)', fontsize=12)
@@ -1093,15 +1145,15 @@ for scenario_name, scenario_methods in results.items():
                     physics = scenarios[scenario_name]['physics']
                     y_obs = scenarios[scenario_name]['y']
                     # ★ 对超分场景，A_adjoint 是零填充（极暗），改用双线性插值
+                    #   F 已通过文件头部 import torch.nn.functional as F 全局导入，无需在此重复
                     try:
                         from deepinv.physics import Downsampling
                         if isinstance(physics, Downsampling):
-                            import torch.nn.functional as F
                             target_h, target_w = x_true.shape[-2], x_true.shape[-1]
                             adj = F.interpolate(y_obs, size=(target_h, target_w), mode='bilinear', align_corners=False)
                         else:
                             adj = physics.A_adjoint(y_obs)
-                        safe_imshow(axes_flat[ax_idx], adj, f'{method_name}\nPSNR={metrics["psnr"]:.1f}dB (伴随)')
+                        safe_imshow(axes_flat[ax_idx], adj, f'{method_name}\nPSNR={metrics["psnr"]:.1f}dB\n(缓存降级-非真实重建)')
                         displayed = True
                     except Exception:
                         pass
@@ -1183,7 +1235,7 @@ print(f"""
 2. 优化方法 ✓
    - Tikhonov: L2正则化，速度快
    - TV正则化: 保边缘，轻度退化效果好
-   - 伴随重建: 零填充基线
+   - 伴随重建/插值基线: 超分用双线性插值（命名"插值基线"），其余场景用零填充伴随（命名"伴随重建"）
 
 3. PnP方法 ✓
    - DPIR: DRUNet去噪器+递减噪声表
