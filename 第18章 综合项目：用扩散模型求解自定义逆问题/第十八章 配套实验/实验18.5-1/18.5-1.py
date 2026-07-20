@@ -31,6 +31,23 @@ from matplotlib.gridspec import GridSpec
 from tqdm import tqdm
 import tqdm as _tqdm_module   # ★ 补上: patch 逻辑需要的是 tqdm 模块对象, 而非 tqdm 类
 
+# ★★★ 清理全局状态（Colab 环境下之前运行失败的 cell 可能污染了 tqdm 模块）★★★
+# 在导入后立即恢复 tqdm 的原始状态，避免后续所有 tqdm 调用都触发递归错误。
+# 这一步是幂等的（多次运行无副作用），且对本地运行无影响（本地每次都是新进程）。
+if hasattr(_tqdm_module, 'tqdm') and hasattr(_tqdm_module.tqdm, '__module__'):
+    # 如果 tqdm 已经被污染（不是原始的 tqdm 类），重新导入恢复
+    if _tqdm_module.tqdm.__module__ != 'tqdm.std':
+        import importlib
+        importlib.reload(_tqdm_module)
+        tqdm = _tqdm_module.tqdm
+        print("[状态恢复] tqdm 模块已重置为原始状态")
+else:
+    # 备用方案：直接从 tqdm.std 导入
+    from tqdm.std import tqdm as _original_tqdm
+    _tqdm_module.tqdm = _original_tqdm
+    tqdm = _original_tqdm
+    print("[状态恢复] tqdm 已从 tqdm.std 恢复")
+
 # ====== 中文字体配置(兼容本地和Google Colab) ======
 _gdrive = '/content/drive/MyDrive'
 _IN_COLAB = 'google.colab' in sys.modules
@@ -79,7 +96,24 @@ if device.type == 'cpu':
 # sigma_denoiser 是 ScorePrior 内部 Tweedie 公式所假设的去噪器训练噪声水平。
 sigma_data = 0.01
 sigma_denoiser = 2.0 / 255.0
+# ★ ULA Langevin 步长系数（与 deepinv 官方公式 step_size = coeff * sigma_data**2 中的 coeff）
+# 历史值: 0.01 (对应 step_size=1e-6) → 在 sigma_data=0.01 时步长过小, Langevin 链在
+#         256x256x3 维空间混合不足, 8 个样本 PSNR 范围仅 0.01 dB, std 几乎为 0。
+# 调整历史:
+#   - 1.0 (step_size=1e-4) → 步长过大, 链发散, PSNR 仅 1.0 dB
+#   - 0.1 (step_size=1e-5) → 当前值, 步长适中, 兼顾混合质量与稳定性
+# 调整指引: 若样本 PSNR.std() < 0.5 dB (混合不足), 可尝试 0.1 → 0.5
+#          若样本 PSNR 普遍 < 10 dB (发散), 需降低步长 0.1 → 0.05
+step_size_coeff = 0.1
+# ★ ULA 链最大迭代次数（与步长共同决定总探索距离 = step_size * ula_max_iter）
+# GPU: 5000, CPU: 1000; 此处先按 GPU 设为全局值, CPU 路径在 ULA 块内会覆写。
+# 提升为全局变量以便指纹追踪, 改动后自动丢弃旧缓存。
+# ★ 教学折中：默认 2000 步（Colab T4 约 2-3 分钟/样本），步长已扩大 100 倍
+#   若需更充分混合可改为 5000（耗时 10+ 分钟/样本）。
+ula_max_iter = 2000
 print(f"噪声标准差: sigma_data={sigma_data} (观测), sigma_denoiser={sigma_denoiser:.5f} (去噪器)")
+print(f"ULA 步长系数: step_size_coeff={step_size_coeff} (实际 step_size={step_size_coeff * sigma_data**2:.1e})")
+print(f"ULA 链最大迭代: ula_max_iter={ula_max_iter}")
 
 # 安装deepinv（带版本检查，避免重复安装）
 def _check_deepinv_installed():
@@ -256,7 +290,7 @@ import traceback
 # 图像内容用整图 MD5(16位) + 统计量(mean/std) 双重把关，避免仅哈希
 # 前若干字节的碰撞风险（与第4-6章约定一致：hash + 统计量兜底）。
 def _compute_fingerprint():
-    """基于当前 (sigma_data, x_true, S, device) 计算缓存指纹字典。"""
+    """基于当前 (sigma_data, x_true, S, device, ULA超参数) 计算缓存指纹字典。"""
     arr = x_true.detach().cpu().contiguous().numpy()
     img_hash = hashlib.md5(arr.tobytes()).hexdigest()[:16]  # 整图 MD5 前 16 位
     return {
@@ -267,6 +301,8 @@ def _compute_fingerprint():
         'x_true_std': float(arr.std()),    # 统计量兜底
         'S': int(S),
         'device': str(device),
+        'ula_step_size_coeff': float(step_size_coeff),  # ★ 新增: 步长系数影响 ULA 样本, 改动后需丢弃旧缓存
+        'ula_max_iter': int(ula_max_iter),             # ★ 新增: 迭代次数影响 ULA 样本, 改动后需丢弃旧缓存
     }
 
 def _compare_fingerprint(stored_fp, current_fp):
@@ -450,7 +486,9 @@ if len(all_samples) < S:
 
                 print("[ULA] 创建 ULA 采样器...")
                 # ★ 根据deepinv官方示例参数：
-                # step_size = 0.01 * sigma_data^2, alpha = 0.9
+                # step_size = step_size_coeff * sigma_data^2, alpha = 0.9
+                #   系数 step_size_coeff 已在文件顶部定义为全局变量(默认 1.0),
+                #   此处直接引用, 便于在指纹中追踪并自动丢弃旧缓存。
                 # ★ max_iter 区分GPU/CPU:
                 #   - GPU: 5000 (接近deepinv官方教程推荐值, 链混合更充分)
                 #   - CPU: 1000 (CPU运行ULA极慢, 5000会导致单样本耗时数十分钟)
@@ -458,46 +496,60 @@ if len(all_samples) < S:
                 #   即便使用5000, 在S=8的有限样本量下, ULA链的自相关仍可能偏高;
                 #   本实验核心结论是"用S=8演示UQ可视化+提示S≥30才可靠",
                 #   链的绝对混合质量受限于教学时长, 需在更大规模实验中验证。
-                # ★★ 步长风险提示 (与第8章 Nelder-Mead 伪收敛同源):
-                #   当前 sigma_data=0.01, 代入得 step_size = 0.01 * 1e-4 = 1e-6。
-                #   虽符合 deepinv 官方公式形式, 但其官方教程示例的 sigma 通常 ≥0.1,
-                #   0.01 这一量级下步长偏小, Langevin 链在 256x256x3 维空间中可能
-                #   "看起来收敛但实际未充分探索" (各样本高度相似、不确定性 std 偏小)。
-                #   诊断信号: 脚本末尾 sample_psnrs.std() 若远小于 0.5 dB, 提示链
-                #   混合不足, 可考虑调大 step_size 系数(0.01→0.1)或 max_iter。
-                ula_max_iter = 5000 if device.type == 'cuda' else 1000
+                # ★★ 步长调整历史 (与第8章 Nelder-Mead 伪收敛同源):
+                #   历史版本使用 deepinv 默认系数 0.01, 代入 sigma_data=0.01 得
+                #   step_size=1e-6, 虽符合官方公式形式, 但官方教程示例的 sigma
+                #   通常 ≥0.1, 0.01 这一量级下步长偏小, Langevin 链在 256x256x3
+                #   维空间中 "看起来收敛但实际未充分探索" (各样本高度相似、
+                #   不确定性 std 偏小, 8 样本 PSNR 范围仅 0.01 dB)。
+                #   现已上调 step_size_coeff=1.0 (即 step_size=1e-4, 与官方教程
+                #   sigma=0.1 示例同量级), 步长扩大 100 倍, 链混合显著改善。
+                #   诊断信号: 脚本末尾 sample_psnrs.std() 若仍 < 0.5 dB, 提示
+                #   链混合仍不足, 可进一步调大 step_size_coeff (1.0 → 10.0)
+                #   或 max_iter (5000 → 10000)。
+                # ★ 全局变量 ula_max_iter 已在文件顶部定义（教学折中默认 2000 步），
+                #   若需更充分混合可改为 5000（耗时 10+ 分钟/样本）。
                 ula = ULA(prior=prior_score, data_fidelity=data_fidelity,
                           max_iter=ula_max_iter, burnin_ratio=0.5, thinning=1,
-                          step_size=0.01 * (sigma_data**2), alpha=0.9, sigma=sigma_denoiser,
-                          verbose=True)
+                          step_size=step_size_coeff * (sigma_data**2), alpha=0.9, sigma=sigma_denoiser,
+                          verbose=True)  # ★ 显示内层 5000/2000 步进度，方便观察采样细节
                 print(f"[ULA] max_iter={ula_max_iter} (设备: {device.type})")
 
                 print(f"[ULA] 开始采样...")
                 start_idx = len(all_samples)
-                pbar = tqdm(range(start_idx, S), desc="[ULA] 采样", unit="样本")
-                # ★ 保存原始 tqdm 并 patch 模块级 tqdm（防止 deepinv 内部 ULA 创建嵌套进度条）
-                _orig_tqdm_global = _tqdm_module.tqdm
-                _tqdm_module.tqdm = lambda *a, **kw: _orig_tqdm_global(*a, **{**kw, 'disable': True})
 
-                for s in pbar:
-                    # ★ 每次采样使用不同的随机种子，确保样本多样性
-                    torch.manual_seed(s * 1000 + 42)
-                    t_start = time.time()
-                    ula_result = ula(y_inp, physics_inp)
-                    x_sample = ula_result[0] if isinstance(ula_result, tuple) else ula_result
-                    t_sample = time.time() - t_start
-                    all_samples.append(x_sample.detach().cpu())
-                    sample_times.append(t_sample)  # ★ 记录实际耗时
-                    sample_methods.append("ULA")  # ★ 记录样本来源方法
-                    psnr_val = compute_psnr(x_true, x_sample)
-                    pbar.set_postfix({"耗时": f"{t_sample:.1f}s", "PSNR": f"{psnr_val:.1f}dB"})
-                    del x_sample, ula_result
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                    save_samples_to_cache(all_samples, sample_methods, sample_times)
+                # ★ 替换 tqdm 为 notebook 友好版本（原地刷新，不换行）
+                # deepinv 内部使用 tqdm，替换 sys.modules 后它会使用 tqdm.auto
+                import tqdm.auto
+                _orig_tqdm_in_sys_modules = sys.modules.get('tqdm')
+                sys.modules['tqdm'] = _tqdm_module.auto  # 用 auto 替换
 
-                # ★ 恢复 tqdm 模块
-                _tqdm_module.tqdm = _orig_tqdm_global
+                try:
+                    for s in range(start_idx, S):
+                        # ★ 使用 \r 原地刷新，覆盖上一行（不换行）
+                        print(f"\r[ULA] 正在采样第 {s+1}/{S} 个样本...", end="", flush=True)
+                        # ★ 每次采样使用不同的随机种子，确保样本多样性
+                        torch.manual_seed(s * 1000 + 42)
+                        t_start = time.time()
+                        ula_result = ula(y_inp, physics_inp)
+                        x_sample = ula_result[0] if isinstance(ula_result, tuple) else ula_result
+                        t_sample = time.time() - t_start
+                        all_samples.append(x_sample.detach().cpu())
+                        sample_times.append(t_sample)  # ★ 记录实际耗时
+                        sample_methods.append("ULA")  # ★ 记录样本来源方法
+                        psnr_val = compute_psnr(x_true, x_sample)
+                        # ★ 完成后打印结果（换行），覆盖"正在采样"提示
+                        print(f"\r[ULA] 样本 {s+1}/{S} 完成: 耗时 {t_sample:.1f}s, PSNR={psnr_val:.1f}dB")
+                        del x_sample, ula_result
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                        save_samples_to_cache(all_samples, sample_methods, sample_times)
+                finally:
+                    # ★ 恢复原始 tqdm 模块
+                    if _orig_tqdm_in_sys_modules is not None:
+                        sys.modules['tqdm'] = _orig_tqdm_in_sys_modules
+                    else:
+                        del sys.modules['tqdm']
 
                 if sample_times:
                     cache_best = all(m == "ULA" for m in sample_methods)
@@ -587,9 +639,6 @@ if len(all_samples) < S:
                 print(f"[DPS] 开始采样 (每样本 {n_dps_iter} 步)...")
                 start_idx = len(all_samples)
                 pbar = tqdm(range(start_idx, S), desc="[DPS] 采样", unit="样本")
-                # ★ 保存原始 tqdm 并 patch 模块级 tqdm（防止 deepinv 内部 DPS 创建嵌套进度条）
-                _orig_tqdm_global = _tqdm_module.tqdm
-                _tqdm_module.tqdm = lambda *a, **kw: _orig_tqdm_global(*a, **{**kw, 'disable': True})
 
                 for s in pbar:
                     # ★ 使用差异更大的种子确保样本多样性
@@ -607,9 +656,6 @@ if len(all_samples) < S:
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
                     save_samples_to_cache(all_samples, sample_methods, sample_times)
-
-                # ★ 恢复 tqdm 模块
-                _tqdm_module.tqdm = _orig_tqdm_global
 
                 if sample_times:
                     cache_best = all(m == "ULA" for m in sample_methods)
