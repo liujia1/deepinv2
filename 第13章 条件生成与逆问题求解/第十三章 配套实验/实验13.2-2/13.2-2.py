@@ -291,3 +291,35 @@ print("""
    - DPS在高噪声时（t大）需要更小的引导权重zeta
    - 这是13.4.3节介绍的"时变引导权重"方案的动机
 """)
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "逆问题设置": {
+        "A": round(float(A_val), 4),
+        "sigma_y": round(float(sigma_y), 4),
+        "y_obs": round(float(y_obs), 4),
+        "t_val": round(float(t_val), 4),
+    },
+    "DPS近似误差_含Jacobian": [round(float(e), 6) for e in dps_errors_full],
+    "DPS近似误差_忽略Jacobian": [round(float(e), 6) for e in dps_errors_simple],
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
+

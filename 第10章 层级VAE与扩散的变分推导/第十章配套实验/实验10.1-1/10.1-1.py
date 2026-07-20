@@ -811,3 +811,57 @@ print("""
    - 但层级结构提供了更灵活的先验建模能力
    - 当L→∞时，这就是扩散模型（10.4节）
 """)
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    'hierarchical_VAE': {
+        'final_loss': history['loss'][-1] if history['loss'] else None,
+        'final_recon': history['recon'][-1] if history['recon'] else None,
+        'final_kl1': history['kl1'][-1] if history['kl1'] else None,
+        'final_kl2': history['kl2'][-1] if history['kl2'] else None,
+        'final_kl_total': history['kl_total'][-1] if history['kl_total'] else None,
+        'loss_curve': history['loss'],
+        'kl1_curve': history['kl1'],
+        'kl2_curve': history['kl2'],
+    },
+    'single_VAE': {
+        'final_loss': history_single['loss'][-1] if history_single['loss'] else None,
+        'final_recon': history_single['recon'][-1] if history_single['recon'] else None,
+        'final_kl': history_single['kl'][-1] if history_single['kl'] else None,
+        'loss_curve': history_single['loss'],
+        'kl_curve': history_single['kl'],
+    },
+    'ELBO_test': {
+        'recon': avg_recon,
+        'kl1': avg_kl1,
+        'kl2': avg_kl2,
+        'kl_total': avg_kl1 + avg_kl2,
+        'ELBO': elbo,
+        'kl1_over_kl2': avg_kl1 / avg_kl2 if avg_kl2 != 0 else None,
+    },
+    'single_VAE_test': {
+        'recon': avg_recon_s,
+        'kl': avg_kl_s,
+        'ELBO': elbo_s,
+    },
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

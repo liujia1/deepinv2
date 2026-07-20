@@ -634,3 +634,32 @@ print("""
    - 认识计算代价对实用性的限制
    - 理解DOC的理论价值（精确后验采样）
 """)
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "试验次数": n_trials,
+    "DOC_平均误差": round(float(doc_mean_error), 6),
+    "DOC_误差标准差": round(float(doc_std_error), 6),
+    "DPS_平均误差": round(float(dps_mean_error), 6),
+    "DPS_误差标准差": round(float(dps_std_error), 6),
+    "DOC相对改进百分比": round(float((dps_mean_error - doc_mean_error) / dps_mean_error * 100), 2),
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

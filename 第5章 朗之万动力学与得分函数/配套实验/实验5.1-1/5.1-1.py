@@ -222,3 +222,46 @@ print("   平稳分布方差 σ² = 1 / (1 - δ/2)")
 print("   推导：递推式 X_{m+1} = (1-δ)X_m + √(2δ)Z")
 print("   平衡时 σ² = (1-δ)²σ² + 2δ，解得 σ² = 1/(1-δ/2)")
 print("   δ<2时方差有限；δ≥2时递推不收缩，采样发散")
+
+# ══════════════════════════════════════════════════════════
+# 保存数值结果到JSON文件
+# ══════════════════════════════════════════════════════════
+import json
+
+def _to_native(obj):
+    """递归将numpy/torch类型转换为Python原生类型，便于JSON序列化"""
+    if isinstance(obj, dict):
+        return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_native(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return _to_native(obj.tolist())
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if hasattr(obj, 'item') and not isinstance(obj, (str, bytes)):
+        try:
+            return obj.item()
+        except (ValueError, RuntimeError, TypeError):
+            return obj
+    return obj
+
+results_summary = {
+    'experiment': '5.1-1',
+    'title': 'ULA采样与步长敏感性分析',
+    'step1_ula_sampling': {
+        'niter': 100000,
+        'delta': 0.1,
+        'theoretical_var': float(round(1 / (1 - 0.1 / 2), 6)),  # 公式: 1/(1-δ/2)
+    },
+    'step2_step_size_sensitivity': {
+        'deltas': deltas,
+        'niter': 50000,
+        'last_delta': float(delta),  # 末次迭代的步长（变量在循环中被覆盖）
+        'last_empirical_var': float(round(empirical_var, 6)),
+        'last_theoretical_var': float(round(theoretical_var, 6)),
+    }
+}
+
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(_to_native(results_summary), f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

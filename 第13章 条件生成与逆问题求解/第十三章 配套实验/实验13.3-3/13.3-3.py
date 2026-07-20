@@ -125,6 +125,31 @@ def vp_sde_forward(x0, t_idx):
     x_t = np.sqrt(alpha_bar_t) * x0 + np.sqrt(1.0 - alpha_bar_t) * noise
     return x_t, noise
 
+# ★ 自检：验证VP-SDE调度的关键性质(避免T/beta范围被改后Tweedie公式仍按旧值工作)
+# 调度: T=200, beta_min=1e-4, beta_max=2e-2
+# 检验规则:
+#   Q1: ᾱ_1 ≈ 1-β_min (因α_1=1-β_min, 累积一步的近似)
+#   Q2: ᾱ_T 接近0 (T=200时应该比T=1000时大很多, 残余信号更强)
+#   Q3: ᾱ_t单调递减, 介于(0,1]之间
+#   Q4: VP-SDE前向过程x_t的均值和方差符合理论(无噪声时x_t=√ᾱ·x0)
+print(f"[DDRM自检] VP-SDE调度与前向过程验证(实际运行, 非手算):")
+print(f"  Q1: ᾱ_1={alpha_bars[0]:.6f} (应≈1-β_min={1-beta_min:.6f}): "
+      f"{'OK' if abs(alpha_bars[0] - (1-beta_min)) < 1e-3 else 'FAIL'}")
+print(f"  Q2: ᾱ_T={alpha_bars[-1]:.6e} (应很小但>0, T=200时仍比T=1000大): "
+      f"{'OK' if 0 < alpha_bars[-1] < 0.1 else 'FAIL'}")
+print(f"  Q3: 单调递减: {'OK' if (np.diff(alpha_bars) <= 0).all() else 'FAIL'}, "
+      f"范围: [{alpha_bars.min():.4f}, {alpha_bars.max():.4f}] (应∈(0,1])")
+# Q4: 前向过程x_t的理论均值=√ᾱ·x0, 方差=(1-ᾱ) (对x0=0)
+np.random.seed(42)
+_x0 = np.array([1.0, 2.0])
+for _t in [0, T//4, T//2, T-1]:
+    _xt_samples = np.array([vp_sde_forward(_x0, _t)[0] for _ in range(5000)])
+    _mean = _xt_samples.mean(axis=0)
+    _var = _xt_samples.var(axis=0)
+    _theory_mean = np.sqrt(alpha_bars[_t]) * _x0
+    _theory_var = (1 - alpha_bars[_t]) * np.ones_like(_x0)
+    print(f"  Q4 t={_t+1:4d}: E[x_t]={_mean}, 理论={_theory_mean} (相对误差<5%即可)")
+
 def tweedie_estimate(x_t, t_idx):
     """基于高斯混合先验的解析Tweedie估计（后验均值 E[x_0|x_t]）
 
@@ -497,3 +522,32 @@ print("""
    - 理解DDRM文献方法的数学基础
    - 对比不同近似方法的适用范围
 """)
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "DDRM_各时间步平均误差": [round(float(e), 4) for e in ddrm_errors],
+    "DPS_各时间步平均误差": [round(float(e), 4) for e in dps_errors],
+    "DDRM_总平均误差": round(float(np.mean(ddrm_errors)), 4),
+    "DPS_总平均误差": round(float(np.mean(dps_errors)), 4),
+    "DDRM相对改进百分比": round(float((np.mean(dps_errors) - np.mean(ddrm_errors)) / np.mean(dps_errors) * 100), 2),
+    "SVD_奇异值": [round(float(s), 4) for s in S],
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

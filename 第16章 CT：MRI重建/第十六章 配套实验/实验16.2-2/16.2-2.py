@@ -553,4 +553,39 @@ if ASTRA_AVAILABLE:
     print("  未释放将导致GPU内存泄漏！")
 
 
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "experiment": "实验16.2-2 ASTRA工具箱——CT不适定性演示",
+    "ASTRA_AVAILABLE": ASTRA_AVAILABLE,
+    "步骤2_三种CT配置_PSNR_dB": {name: round(float(results[name]['psnr']), 2) for name in names},
+    "步骤4_稀疏角度扫描": {
+        "角度数": sparse_angle_counts,
+        "PSNR_dB": [round(float(v), 2) for v in psnr_sparse_curve],
+    },
+    "步骤4_有限角度扫描": {
+        "角度范围": limited_ranges,
+        "PSNR_dB": [round(float(v), 2) for v in psnr_limited_curve],
+    },
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
+
 print(f"\n实验16.2-2完成！所有图片已保存至: {SAVE_DIR}")

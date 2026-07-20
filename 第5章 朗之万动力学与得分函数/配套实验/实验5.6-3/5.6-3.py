@@ -477,3 +477,56 @@ print("3. 两种估计的PSNR/SSIM差异通常不大，但视觉特征不同")
 print("4. 不确定性量化在医学、遥感、科学计算、主动学习中有重要应用")
 print("5. 参数选择（ε、δ、M）影响不确定性估计的质量")
 print("\n来源: 实验5.3.py; Terris et al. (2022); Laumont et al. (2021)")
+
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "实验名称": "实验5.6-3 MAP vs MMSE综合对比",
+    "数据信息": {
+        "后验均值形状": list(post_mean.shape),
+        "样本数量": int(len(mc_samples)),
+    },
+    "步骤2_MAP_vs_MMSE对比": {
+        "MMSE估计_后验均值": {
+            "PSNR_dB": round(float(psnr_mmse), 4),
+            "全局相似度": round(float(sim_mmse), 6),
+            "NRMSE": round(float(nrmse_mmse), 6),
+        },
+        "含噪观测_对比基准": {
+            "PSNR_dB": round(float(psnr_map), 4),
+            "全局相似度": round(float(sim_map), 6),
+            "NRMSE": round(float(nrmse_map), 6),
+        },
+    },
+    "步骤5_不确定性量化": {
+        "后验标准差_平均值": round(float(np.mean(post_std)), 6),
+        "后验标准差_最大值": round(float(np.max(post_std)), 6),
+        "高不确定性区域占比_百分比": round(float(np.mean(high_uncertainty_mask) * 100), 4),
+    },
+    "步骤6_参数敏感性": {
+        "基准平均方差": round(float(base_var), 8),
+        "噪声水平测试值": list(epsilon_values),
+        "样本数测试值": list(M_values),
+        "步长测试值": list(delta_values),
+    },
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

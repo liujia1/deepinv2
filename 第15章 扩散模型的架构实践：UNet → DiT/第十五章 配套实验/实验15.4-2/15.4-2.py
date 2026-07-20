@@ -666,3 +666,34 @@ print(f"""
 print(f"\n{'='*60}")
 print("实验15.4-2 完成!")
 print(f"{'='*60}")
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    'scaling_results': {
+        name: {
+            'params_M': round(float(param_counts[name] / 1e6), 2),
+            'final_loss': round(float(trained_histories[name][-1]), 6) if trained_histories.get(name) else None,
+        } for name in dit_configs
+    },
+    'power_law_exponent': round(float(b_fit), 2),
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

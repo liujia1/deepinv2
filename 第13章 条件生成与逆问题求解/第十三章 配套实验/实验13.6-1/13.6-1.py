@@ -349,3 +349,32 @@ print("""
    - 这两个机制共同作用，导致任务3的不确定性最高、均值偏移最大
    - 呼应了"任意复杂先验"的优势：扩散后验采样能自动处理非线性A与复杂先验的交互
 """)
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "去噪_A=I": {"均值": round(float(np.mean(samples_denoise)), 4), "标准差": round(float(np.std(samples_denoise)), 4)},
+    "去模糊_A=0.7x": {"均值": round(float(np.mean(samples_blur)), 4), "标准差": round(float(np.std(samples_blur)), 4)},
+    "非线性_A=tanh2x": {"均值": round(float(np.mean(samples_nonlinear)), 4), "标准差": round(float(np.std(samples_nonlinear)), 4)},
+    "多次采样_均值统计": {"均值": round(float(np.mean(all_means)), 4), "标准差": round(float(np.std(all_means)), 4)},
+    "多次采样_标准差统计": {"均值": round(float(np.mean(all_stds)), 4), "标准差": round(float(np.std(all_stds)), 4)},
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
+

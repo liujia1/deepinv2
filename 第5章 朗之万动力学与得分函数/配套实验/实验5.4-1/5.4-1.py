@@ -291,3 +291,55 @@ print("\n4. TV近端算子参数敏感性：")
 print(r"   $\lambda$小：弱正则化，保留更多细节和噪声")
 print(r"   $\lambda$大：强正则化，趋向常数，过度平滑")
 print("\n下一步：加载去噪器（学习去噪器），实现MMSE方向的'一步'（见拆分实验5.4-2）")
+
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "实验名称": "实验5.4-1 近端算子：Moreau包络的一步梯度",
+    "环境信息": {
+        "sampling_tools可用": bool(_has_sampling_tools),
+        "device": str(device),
+    },
+}
+
+# 步骤1：TV近端算子
+if _has_sampling_tools:
+    results_summary["步骤1_TV近端算子"] = {
+        "lambda测试值": list(lam_values),
+    }
+
+# 步骤2：Moreau包络梯度验证（变量在else块内定义，需安全访问）
+try:
+    _step2 = {
+        "lambda_tv": round(float(lam_tv), 6),
+        "平均绝对误差": round(float(mean_error), 8),
+        "最大绝对误差": round(float(max_error), 8),
+        "相对误差": round(float(rel_error), 6),
+        "验证通过": bool(is_valid),
+        "采样像素数": int(n_samples),
+        "有限差分步长": float(eps),
+    }
+    results_summary["步骤2_Moreau包络梯度验证"] = _step2
+except (NameError, UnboundLocalError):
+    results_summary["步骤2_Moreau包络梯度验证"] = "未执行（缺少sampling_tools）"
+
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

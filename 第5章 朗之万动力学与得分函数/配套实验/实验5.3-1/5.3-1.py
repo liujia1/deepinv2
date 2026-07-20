@@ -370,3 +370,55 @@ print("2. 从去噪器提取得分：得分函数 = 去噪器残差 / 噪声方�
 print("3. 图像去噪验证：学习去噪器的残差确实等价于得分函数")
 print("4. PnP的桥梁作用：Tweedie等式是连接去噪与采样的核心数学工具")
 print("5. 隐式先验：去噪器学习到的'干净图像长什么样'等价于学习了先验分布 p(x)")
+
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+# 重新计算各噪声水平下的Tweedie等式验证误差
+_tweedie_errors = {}
+for _eps in eps_values:
+    _denoised = exact_mmse_denoiser_1d(y_values, _eps)
+    _score_num = numerical_score_1d(y_values, _eps)
+    _score_tweedie = (_denoised - y_values) / _eps
+    _max_err = float(np.max(np.abs(_score_num - _score_tweedie)))
+    _tweedie_errors[f"eps_{_eps}"] = round(_max_err, 8)
+
+# 重新计算eps_step1对应的验证误差（确保数值正确）
+_denoised_1 = exact_mmse_denoiser_1d(y_values, eps_step1)
+_score_num_1 = numerical_score_1d(y_values, eps_step1)
+_score_tweedie_1 = (_denoised_1 - y_values) / eps_step1
+_diff_1 = _score_num_1 - _score_tweedie_1
+_max_abs_err = float(np.max(np.abs(_diff_1)))
+_max_rel_err = float(_max_abs_err / (np.max(np.abs(_score_num_1)) + 1e-10))
+
+results_summary = {
+    "实验名称": "实验5.3-1 Tweedie等式验证——从去噪器提取得分",
+    "步骤1_1D_Tweedie验证": {
+        "噪声方差_eps": round(float(eps_step1), 6),
+        "最大绝对误差": round(_max_abs_err, 8),
+        "最大相对误差": round(_max_rel_err, 8),
+        "多噪声水平验证": _tweedie_errors,
+    },
+    "步骤3_几何含义": {
+        "噪声方差_eps": round(float(eps_step3), 6),
+    },
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

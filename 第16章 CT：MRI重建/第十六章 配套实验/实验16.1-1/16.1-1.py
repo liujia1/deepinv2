@@ -188,4 +188,34 @@ plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤3_滤波器对比.png'), dpi=150, bbox_inches='tight')
 plt.show()
 
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "experiment": "实验16.1-1 CT成像基础——Radon变换与FBP重建",
+    "步骤2_反投影vs_FBP": {
+        "反投影": {"PSNR_dB": round(psnr_bp, 2), "SSIM": round(ssim_bp, 4)},
+        "FBP": {"PSNR_dB": round(psnr_fbp, 2), "SSIM": round(ssim_fbp, 4)},
+    },
+    "步骤3_滤波器对比_噪声sigma": noise_sigma,
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
+
 print("\n实验16.1-1完成！")

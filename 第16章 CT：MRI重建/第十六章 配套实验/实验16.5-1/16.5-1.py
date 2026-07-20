@@ -683,4 +683,56 @@ plt.grid(True)
 plt.savefig(os.path.join(SAVE_DIR, 'DDPM训练曲线.png'), dpi=150, bbox_inches='tight')
 plt.show()
 
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().numpy())
+    except ImportError:
+        pass
+    return obj
+
+# 逐样本PSNR
+per_sample_psnr = {}
+for i in range(4):
+    gt_i = test_batch[i, 0].cpu().numpy()
+    per_sample_psnr[f"样本{i}"] = {
+        "零填充": round(float(psnr(gt_i, x_zf[i, 0].cpu().numpy(), data_range=1.0)), 2),
+        "DiffPIR": round(float(psnr(gt_i, x_diffpir[i, 0].cpu().numpy().clip(0, 1), data_range=1.0)), 2),
+        "DPS": round(float(psnr(gt_i, x_dps[i, 0].cpu().numpy().clip(0, 1), data_range=1.0)), 2),
+    }
+
+zeta_psnr = {str(z): round(float(zeta_results[z][1]), 2) for z in zeta_list}
+
+results_summary = {
+    "experiment": "实验16.5-1 扩散先验重建",
+    "步骤1_DDPM训练": {
+        "最终Loss": round(float(train_losses[-1]), 6) if train_losses else None,
+        "训练轮数": n_epochs,
+    },
+    "步骤4_逐样本PSNR_dB": per_sample_psnr,
+    "ζ敏感性分析_DPS_PSNR_dB": zeta_psnr,
+    "最优ζ": round(float(best_zeta), 2),
+    "不确定性量化_DPS": {
+        "单次采样PSNR_dB": round(float(single_psnr), 2),
+        "后验均值PSNR_dB": round(float(mean_psnr), 2),
+    },
+    "不确定性量化_DiffPIR": {
+        "后验均值PSNR_dB": round(float(diffpir_mean_psnr), 2),
+    },
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"  数值结果已保存至 {os.path.join(SAVE_DIR, 'results_summary.json')}")
+
 print("\n实验16.5-1完成！")

@@ -303,3 +303,60 @@ print("   - 共享全局结构（先验约束）")
 print("   - 细节存在差异（多峰后验）")
 print("4. 样本差异大的区域 = 高后验方差区域")
 print("5. 置信区间可用于下游决策（如医学影像中的专家复核区域）")
+
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "实验名称": "实验5.6-2 置信区间与多样性分析",
+    "数据信息": {
+        "后验均值形状": list(post_mean.shape),
+        "样本数量": int(len(mc_samples)),
+        "均值差异_L2范数": round(float(np.linalg.norm(post_mean - post_mean_recomputed)), 8),
+        "方差差异_L2范数": round(float(np.linalg.norm(post_var - post_var_recomputed)), 8),
+    },
+    "步骤2_95%置信区间": {
+        "正态近似_z值": float(z_95),
+        "正态近似_区间宽度统计": {
+            "平均宽度": round(float(np.mean(ci_width)), 6),
+            "最大宽度": round(float(np.max(ci_width)), 6),
+            "最小宽度": round(float(np.min(ci_width)), 6),
+        },
+        "样本分位数_区间宽度统计": {
+            "平均宽度": round(float(np.mean(ci_width_empirical)), 6),
+            "最大宽度": round(float(np.max(ci_width_empirical)), 6),
+            "最小宽度": round(float(np.min(ci_width_empirical)), 6),
+        },
+    },
+    "步骤4_后验样本多样性": {
+        "展示样本数": int(len(selected)),
+    },
+}
+
+# 步骤5的相关系数在条件块内定义，需安全访问
+try:
+    results_summary["步骤5_样本差异分析"] = {
+        "后验标准差与样本标准差相关系数": round(float(corr), 6),
+    }
+except (NameError, UnboundLocalError):
+    results_summary["步骤5_样本差异分析"] = "未执行（样本数不足）"
+
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

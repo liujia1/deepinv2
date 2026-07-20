@@ -256,6 +256,26 @@ def cosine_alpha_bar_schedule(t, s=0.008):
 t_norm = torch.linspace(0, 1, T)
 alpha_bars_cosine = cosine_alpha_bar_schedule(t_norm)
 
+# ★ 自检：验证cosine调度的关键性质(避免s参数被误改后调度形状变化)
+# 公式: ᾱ(t) = cos²((t+s)/(1+s)·π/2) / cos²(s/(1+s)·π/2)
+# 检验规则:
+#   C1: ᾱ(0) = 1 (归一化保证)
+#   C2: ᾱ(1) = cos²((1+s)/(1+s)·π/2) / cos²(s/(1+s)·π/2) = 0 / cos²(...) = 0
+#   C3: ᾱ(t)单调递减
+#   C4: 在t=0.5处ᾱ(0.5)与DDPM线性调度的对比(典型值)
+print(f"[Cosine自检] 改进DDPM余弦调度验证(实际运行, 非手算):")
+print(f"  C1: ᾱ(0)={alpha_bars_cosine[0].item():.6f} (应=1): "
+      f"{'OK' if abs(alpha_bars_cosine[0].item() - 1.0) < 1e-5 else 'FAIL'}")
+print(f"  C2: ᾱ(1)={alpha_bars_cosine[-1].item():.6e} (应→0): "
+      f"{'OK' if alpha_bars_cosine[-1].item() < 0.01 else 'FAIL'}")
+print(f"  C3: 单调递减: {'OK' if (alpha_bars_cosine[1:] <= alpha_bars_cosine[:-1]).all().item() else 'FAIL'}")
+# C4: 与DDPM线性调度在典型t处的对比(教学常见观察点)
+_ab_cos_mid = alpha_bars_cosine[T//2].item()
+_ab_cos_q = alpha_bars_cosine[T//4].item()
+_ab_cos_3q = alpha_bars_cosine[3*T//4].item()
+print(f"  C4: 关键t处ᾱ值: t=0.25→{_ab_cos_q:.4f}, t=0.5→{_ab_cos_mid:.4f}, t=0.75→{_ab_cos_3q:.4f}")
+print(f"  (典型范围: 中间t处cosine调度ᾱ比线性调度下降更慢, 末尾更陡)")
+
 ax.plot(range(1, T+1), alpha_bars_linear.numpy(), 'b-', linewidth=2, label='DDPM线性调度')
 ax.plot(range(1, T+1), alpha_bars_cosine.numpy(), 'g-', linewidth=2, label='Cosine调度')
 ax.set_xlabel('时间步 $t$', fontsize=12)
@@ -321,3 +341,59 @@ print("   - VP-SDE: L→∞的连续极限，SDE形式")
 
 print("\n" + "="*60)
 print("实验10.4-1 完成!")
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    'discrete_to_continuous_limit': {},
+    'KL_integral_estimates': {},
+}
+beta_total_save = 1.0
+for L in [5, 10, 50, 100, 500, 1000]:
+    dt = beta_total_save / L
+    alpha_per_step = 1 - dt
+    alpha_bar_discrete = alpha_per_step ** L
+    alpha_bar_cont = np.exp(-beta_total_save)
+    rel_err = abs(alpha_bar_discrete - alpha_bar_cont) / alpha_bar_cont
+    results_summary['discrete_to_continuous_limit'][f'L_{L}'] = {
+        'alpha_bar_discrete': alpha_bar_discrete,
+        'alpha_bar_continuous': alpha_bar_cont,
+        'relative_error': rel_err,
+    }
+# KL integral estimates
+for L in [5, 10, 50, 100]:
+    dt = 1.0 / L
+    beta_step = dt
+    alpha_step = 1 - beta_step
+    total_kl = 0
+    for t in range(1, L + 1):
+        ab_t = alpha_step ** t
+        mu2 = 1.0
+        sigma2 = 0.25
+        mean_sq = ab_t * (mu2 + sigma2) + (1 - ab_t)
+        log_var = np.log(ab_t * sigma2 + (1 - ab_t))
+        kl_t = 0.5 * (mean_sq - 1 - log_var)
+        total_kl += kl_t * dt
+    results_summary['KL_integral_estimates'][f'L_{L}'] = {
+        'KL_integral': total_kl,
+        'beta_step': beta_step,
+    }
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

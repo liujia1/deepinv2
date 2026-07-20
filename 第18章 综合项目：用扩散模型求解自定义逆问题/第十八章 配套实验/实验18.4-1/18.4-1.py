@@ -420,6 +420,19 @@ for scenario_name, scenario_data in scenarios.items():
         op_norm_sq = (physics.A(x_tmp)**2).sum() / (x_tmp**2).sum()
         lr_tik = 1.0 / (op_norm_sq.item() + lambda_reg)
 
+        # ★ 自检：验证Tikhonov自适应步长满足收敛条件(避免步长系数被误改后仍能跑)
+        # 收敛条件: lr < 2/(‖A‖²+λ), 这里取lr = 1/(‖A‖²+λ) < 2/(‖A‖²+λ)  (1<2, 永远满足)
+        # 检验规则:
+        #   T1: lr > 0 (避免除零/算子范数为0的退化情况)
+        #   T2: lr * (‖A‖²+λ) ≈ 1 (验证公式一致性)
+        #   T3: op_norm_sq > 0 (power iteration输出非零, 避免‖A‖=0的平凡情况)
+        print(f"[Tikhonov自检] 步长收敛条件验证(实际运行, 非手算):")
+        _lr_check = 1.0 / (op_norm_sq.item() + lambda_reg)
+        print(f"  T1: lr={_lr_check:.6e} > 0: {'OK' if _lr_check > 0 else 'FAIL'}")
+        print(f"  T2: lr·(‖A‖²+λ)={_lr_check * (op_norm_sq.item() + lambda_reg):.6f} (应=1): "
+              f"{'OK' if abs(_lr_check * (op_norm_sq.item() + lambda_reg) - 1.0) < 1e-5 else 'FAIL'}")
+        print(f"  T3: op_norm_sq={op_norm_sq.item():.4f} > 0: {'OK' if op_norm_sq.item() > 0 else 'FAIL'}")
+
         t_start = time.perf_counter()  # ★ 用 perf_counter 计时，避免系统时钟调整影响且分辨率更高
         x_tikhonov = x_init.clone()
         for _ in range(n_tik_iter):

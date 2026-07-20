@@ -491,3 +491,42 @@ print("   ✓ 实验验证: 步骤4量化样本效率差异")
 
 print(f"\n{'='*60}")
 print("第九章配套实验 9.2-1 完成!")
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    'REINFORCE_mean': np.mean(reinforce_estimates),
+    'REINFORCE_var': np.var(reinforce_estimates),
+    'REPARAM_mean': np.mean(reparam_estimates),
+    'REPARAM_var': np.var(reparam_estimates),
+    'variance_ratio': np.var(reinforce_estimates) / np.var(reparam_estimates),
+    'true_gradient': TRUE_GRAD,
+    'REINFORCE_small_sigma_var': np.var(reinforce_small),
+    'REPARAM_small_sigma_var': np.var(reparam_small),
+    'small_sigma_variance_ratio': np.var(reinforce_small) / max(np.var(reparam_small), 1e-10),
+    'sigma_list': sigma_list,
+    'reinforce_vars': reinforce_vars,
+    'reparam_vars': reparam_vars,
+    'L_list': L_list,
+    'reinforce_mse': reinforce_mse,
+    'reparam_mse': reparam_mse,
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

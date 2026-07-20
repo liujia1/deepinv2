@@ -550,3 +550,65 @@ print("   $\\nabla \\log p_\\varepsilon(x) = (D_\\varepsilon(x) - x) / \\varepsi
 print("3. 步长约束保证收敛:")
 print("   $\\delta \\leq 1/(L_f + L_D/\\varepsilon)$")
 print("4. 后验采样生成多个样本，可用于不确定性量化（见实验5.6-1/2/3）")
+
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "实验名称": "实验5.5-1 PnP-ULA后验采样实现",
+    "环境信息": {
+        "GPU可用": bool(_has_gpu),
+        "sampling_tools可用": bool(_has_sampling_tools),
+        "预训练模型可用": bool(_has_model),
+        "device": str(device),
+    },
+}
+
+# 步骤4的关键变量在条件块内定义，需安全访问
+try:
+    _step4 = {
+        "算法参数": {
+            "去噪器噪声水平_eps": round(float(eps), 8),
+            "步长_delta": round(float(delta), 8),
+            "最大允许步长_delta_max": round(float(delta_max), 8),
+            "总迭代次数_maxit": int(maxit),
+            "burnin迭代数": int(burnin),
+            "采样样本数_n_samples": int(n_samples),
+            "BSNR_db": float(BSNRdb),
+            "噪声标准差_sigma": round(float(sigma), 8),
+        },
+        "初始指标": {
+            "NRMSE": round(float(NRMSE(x, y)), 6),
+            "PSNR_dB": round(float(PSNR(x, y)), 4),
+            "SSIM": round(float(SSIM(x, y)), 6),
+        },
+        "后验均值指标": {
+            "NRMSE": round(float(NRMSE(post_mean, x)), 6),
+            "PSNR_dB": round(float(PSNR(post_mean, x)), 4),
+            "SSIM": round(float(SSIM(x, post_mean)), 6),
+        },
+        "采样耗时_秒": round(float(elapsed), 4),
+    }
+    results_summary["步骤4_PnP-ULA采样"] = _step4
+except (NameError, UnboundLocalError):
+    results_summary["步骤4_PnP-ULA采样"] = "未执行（缺少GPU、sampling_tools或预训练模型）"
+
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

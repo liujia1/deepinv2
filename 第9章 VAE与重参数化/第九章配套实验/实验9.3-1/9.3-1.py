@@ -457,3 +457,40 @@ print(f"  测试集: Loss={test_loss/n_test:.2f}, BCE={test_bce/n_test:.2f}, KL=
 
 print(f"\n{'='*60}")
 print("第九章配套实验 9.3-1 完成!")
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    'beta': BETA,
+    'latent_dim': LATENT_DIM,
+    'final_loss': history['loss'][-1] if history['loss'] else None,
+    'final_bce': history['bce'][-1] if history['bce'] else None,
+    'final_kld': history['kld'][-1] if history['kld'] else None,
+    'final_active_dims': history['active_dims'][-1] if history['active_dims'] else None,
+    'test_loss': test_loss / n_test,
+    'test_bce': test_bce / n_test,
+    'test_kld': test_kld / n_test,
+    'train_loss_curve': history['loss'],
+    'train_bce_curve': history['bce'],
+    'train_kld_curve': history['kld'],
+    'train_active_dims_curve': history['active_dims'],
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

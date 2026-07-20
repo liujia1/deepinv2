@@ -127,6 +127,31 @@ def diffusion_interp(z, target, t, beta_min=0.1, beta_max=20.0):
     alpha_bar_t = max(alpha_bar_t, 1e-10)
     return np.sqrt(alpha_bar_t) * target + np.sqrt(1 - alpha_bar_t) * z
 
+# ★ 自检：验证路径插值函数的边界行为(避免公式改错时仍能跑出图)
+# 核心公式:
+#   linear: x_t = (1-t)·z + t·target
+#     → t=0时x_0=z, t=1时x_1=target, 端点严格成立
+#   diffusion: x_t = √ᾱ_t·target + √(1-ᾱ_t)·z (cosine: ᾱ_t=cos²(π/2·(1-t)))
+#     → t=0时ᾱ=cos²(π/2)=0, x_0=z (纯噪声); t=1时ᾱ=cos²(0)=1, x_1=target
+print(f"[路径自检] 线性/扩散插值函数边界与端点验证(实际运行, 非手算):")
+_z = np.array([1.0, 2.0])
+_tg = np.array([3.0, 5.0])
+for _t in [0.0, 0.25, 0.5, 0.75, 1.0]:
+    _x_lin = linear_interp(_z, _tg, _t)
+    _x_diff = diffusion_interp(_z, _tg, _t)
+    print(f"  t={_t:.2f}: linear={_x_lin}, diffusion={_x_diff}")
+# 边界检查
+_x_lin_0 = linear_interp(_z, _tg, 0.0)
+_x_lin_1 = linear_interp(_z, _tg, 1.0)
+print(f"  边界: linear(t=0)={_x_lin_0} vs z={_z}: {'OK' if np.allclose(_x_lin_0, _z) else 'FAIL'}")
+print(f"        linear(t=1)={_x_lin_1} vs target={_tg}: {'OK' if np.allclose(_x_lin_1, _tg) else 'FAIL'}")
+# diffusion: t=0时因clamp(1e-10)产生微小偏差(避免sqrt(0)), t=1时严格成立
+_x_diff_0 = diffusion_interp(_z, _tg, 0.0)
+_x_diff_1 = diffusion_interp(_z, _tg, 1.0)
+print(f"  边界: diffusion(t=0)={_x_diff_0} vs z={_z} (因clamp有1e-3量级偏差, 仍判OK): "
+      f"{'OK' if np.allclose(_x_diff_0, _z, atol=1e-3) else 'FAIL'}")
+print(f"        diffusion(t=1)={_x_diff_1} vs target={_tg}: {'OK' if np.allclose(_x_diff_1, _tg, atol=1e-5) else 'FAIL'}")
+
 
 # ============================================================
 # 步骤1：CFM训练——学习向量场
@@ -440,3 +465,34 @@ print("""
    - 直线路径显著减少ODE求解步数
    - OT-CFM是最优传输与Flow Matching的完美结合
 """)
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    'wd_independent': round(float(wd_ind), 4),
+    'wd_ot': round(float(wd_ot), 4),
+    'curvature_diffusion': round(float(kappa_diff), 4),
+    'curvature_independent': round(float(S_ind), 4),
+    'curvature_ot': round(float(S_ot), 4),
+    'final_loss_ind': round(float(losses_ind[-1]), 6) if losses_ind else None,
+    'final_loss_ot': round(float(losses_ot[-1]), 6) if losses_ot else None,
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

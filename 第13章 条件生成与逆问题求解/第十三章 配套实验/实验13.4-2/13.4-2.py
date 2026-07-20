@@ -220,6 +220,37 @@ print("""
   zeta大 -> 强数据一致性（低多样性）-> 类似MAP
   zeta小 -> 强先验（高多样性）-> 类似无条件采样
 """)
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "zeta_values": zeta_values,
+    "真实后验_均值": round(float(post_mean_true), 4),
+    "真实后验_标准差": round(float(post_std_true), 4),
+    "真实后验_一致性": round(float(true_consistency), 4),
+    "真实后验_多样性": round(float(true_diversity), 4),
+    "DPS采样_一致性": [round(float(c), 4) for c in consistency_list],
+    "DPS采样_多样性": [round(float(d), 4) for d in diversity_list],
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
+
 
 # 逆问题设置
 A_val = 1.0

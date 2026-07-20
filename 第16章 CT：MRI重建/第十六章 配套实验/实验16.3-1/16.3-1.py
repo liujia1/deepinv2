@@ -395,4 +395,41 @@ plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤5_加速因子对比.png'), dpi=150, bbox_inches='tight')
 plt.show()
 
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "experiment": "实验16.3-1 MRI成像基础——k-space采样与重建",
+    "加速比R": R,
+    "步骤3_零填充重建_PSNR_dB": {
+        "等间距": round(float(p_eq), 2),
+        "随机": round(float(p_rand), 2),
+        "可变密度": round(float(p_vd), 2),
+    },
+    "步骤4_CS_MRI_ISTA_PSNR_dB": round(float(p_cs), 2),
+    "步骤5_加速因子对比": {
+        "加速因子R": R_list,
+        "零填充_PSNR_dB": [round(float(v), 2) for v in results_zf],
+        "CS_ISTA_PSNR_dB": [round(float(v), 2) for v in results_cs],
+    },
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
+
 print("\n实验16.3-1完成！")

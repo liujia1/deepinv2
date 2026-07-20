@@ -794,3 +794,36 @@ print(f"""
      * 若训练轮数不足(如<30轮)，低步数采样结果可能偏噪声，建议训练充分后再观察趋势
    - SD3论文的结论是"少步采样(4-8步)时优势明显"，而非1步
 """)
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    'final_loss_uniform': round(float(losses_uniform[-1]), 6) if losses_uniform else None,
+    'final_loss_logit': round(float(losses_logit[-1]), 6) if losses_logit else None,
+    'dist_by_step': {
+        f'{n_steps}_step': {
+            'uniform': round(float(dist_uniform[n_steps]), 4),
+            'logit_normal': round(float(dist_logit[n_steps]), 4),
+            'improvement_pct': round(float((dist_uniform[n_steps] - dist_logit[n_steps]) / dist_uniform[n_steps] * 100), 1),
+        } for n_steps in step_counts
+    },
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

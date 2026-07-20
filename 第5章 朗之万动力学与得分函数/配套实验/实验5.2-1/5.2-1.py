@@ -329,3 +329,46 @@ print("   - 两者平衡产生目标分布 p(x)")
 print("5. 得分函数天然消去归一化常数：")
 print("   s(x) = ∇ log p(x) = ∇ log p̃(x)")
 print("   这对贝叶斯推断至关重要")
+
+# ══════════════════════════════════════════════════════════
+# 保存数值结果到JSON文件
+# ══════════════════════════════════════════════════════════
+import json
+
+def _to_native(obj):
+    """递归将numpy/torch类型转换为Python原生类型，便于JSON序列化"""
+    if isinstance(obj, dict):
+        return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_native(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return _to_native(obj.tolist())
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if hasattr(obj, 'item') and not isinstance(obj, (str, bytes)):
+        try:
+            return obj.item()
+        except (ValueError, RuntimeError, TypeError):
+            return obj
+    return obj
+
+results_summary = {
+    'experiment': '5.2-1',
+    'title': '得分函数可视化',
+    'gaussian_mixture_params': {
+        'mu1': [-2.0, -2.0],
+        'mu2': [2.0, 2.0],
+        'weights': [0.5, 0.5],
+    },
+    'step3_ula_sampling': {
+        'niter': niter,
+        'delta': delta,
+        'burn_in': burn_in,
+        'x0': [0.0, 0.0],
+        'effective_samples': niter - burn_in,
+    }
+}
+
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(_to_native(results_summary), f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

@@ -268,3 +268,42 @@ print("""
    - 同时先验项保持"多样性"：不会坍缩到单点（与MAP的本质区别）
    - 后验采样能反映出真实信号 x0_star 来自哪个高斯分量
 """)
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "真实信号_x0_star": round(float(x0_star), 4),
+    "观测值_y_obs": round(float(y_obs), 4),
+    "观测噪声_sigma_obs": round(float(sigma_obs), 4),
+    "无条件采样": {
+        "均值": round(float(np.mean(uncond_final)), 4),
+        "方差": round(float(np.var(uncond_final)), 4),
+        "|x-y|均值": round(float(np.mean(np.abs(uncond_final - y_obs))), 4),
+        "|x-x0|均值": round(float(np.mean(np.abs(uncond_final - x0_star))), 4),
+    },
+    "条件采样": {
+        "均值": round(float(np.mean(cond_final)), 4),
+        "方差": round(float(np.var(cond_final)), 4),
+        "|x-y|均值": round(float(np.mean(np.abs(cond_final - y_obs))), 4),
+        "|x-x0|均值": round(float(np.mean(np.abs(cond_final - x0_star))), 4),
+    },
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

@@ -265,3 +265,48 @@ print("1. 后验标准差提供像素级的不确定性度量")
 print("2. 高方差区域对应信息丢失区域（模糊核导致的频率缺失）")
 print("3. 低方差区域对应数据约束强的区域")
 print("4. 不确定性与重建误差正相关，是可靠的误差代理指标")
+
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "实验名称": "实验5.6-1 后验标准差与不确定性图",
+    "数据信息": {
+        "后验均值形状": list(post_mean.shape),
+        "样本数量": int(len(mc_samples)),
+        "均值差异_L2范数": round(float(np.linalg.norm(post_mean - post_mean_recomputed)), 8),
+        "方差差异_L2范数": round(float(np.linalg.norm(post_var - post_var_recomputed)), 8),
+    },
+    "步骤2_后验标准差统计": {
+        "平均值": round(float(np.mean(post_std)), 6),
+        "最大值": round(float(np.max(post_std)), 6),
+        "最小值": round(float(np.min(post_std)), 6),
+        "中位数": round(float(np.median(post_std)), 6),
+    },
+    "步骤3_不确定性": {
+        "高不确定性阈值": round(float(threshold), 6),
+        "高不确定性像素占比_百分比": round(float(np.sum(high_uncertainty) / high_uncertainty.size * 100), 4),
+    },
+    "步骤4_不确定性与误差关系": {
+        "相关系数": round(float(corr), 6),
+    },
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

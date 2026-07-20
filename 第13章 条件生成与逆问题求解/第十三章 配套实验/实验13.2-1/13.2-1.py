@@ -332,3 +332,32 @@ print("""
 3. 数值验证：1D高斯混合先验下，分解公式精确成立
    - 误差仅来自有限差分精度（O(eps^2)）
 """)
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "逆问题设置": {
+        "A": round(float(A_val), 4),
+        "sigma_y": round(float(sigma_y), 4),
+        "y_obs": round(float(y_obs), 4),
+    },
+    "分解定理验证误差": {f"t={t_val}": round(float(max_err), 6) for t_val, max_err in decomposition_errors.items()},
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

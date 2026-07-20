@@ -301,3 +301,44 @@ print("   - DDPM选择eps-prediction作为默认参数化")
 
 print("\n" + "="*60)
 print("实验10.3-1 完成!")
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+# VLB权重 (使用σ_t²=β_t归一化)
+weights_vlb = (betas / (2 * alphas * (1 - alpha_bars))).numpy()
+results_summary = {
+    'parameterization_equivalence': {
+        'note': '三种参数化在完美预测下给出完全相同的后验均值',
+    },
+    'VLB_weights': {
+        f't_{t}': weights_vlb[t-1]
+        for t in [1, 10, 50, 100, 300, 500, 700, 900, 999]
+    },
+    'conversion_coefficients': {
+        'note': 'eps_to_x0: 1/sqrt(ab_t), score_to_eps: sqrt(1-ab_t)',
+        f't_{t}': {
+            'eps_to_x0': (1.0 / torch.sqrt(alpha_bars[t-1])).item(),
+            'score_to_eps': torch.sqrt(1 - alpha_bars[t-1]).item(),
+        }
+        for t in [10, 100, 500, 900]
+    },
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

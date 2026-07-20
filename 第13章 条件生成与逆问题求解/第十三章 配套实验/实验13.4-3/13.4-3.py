@@ -498,3 +498,31 @@ print(f"""
      排除采样随机性对曲线形状的干扰(与13.4-1做法一致)
    - 实验配置: T={T} 步DDPM, 训练 {num_epochs} 轮 MNIST UNet.
 """)
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "zeta_values": zeta_values,
+    "PSNR_各zeta": {f"zeta={z}": round(float(p), 2) for z, p in zip(zeta_values, psnr_results)},
+    "最优zeta": round(float(best_zeta), 2),
+    "最优PSNR": round(float(best_psnr), 2),
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
+

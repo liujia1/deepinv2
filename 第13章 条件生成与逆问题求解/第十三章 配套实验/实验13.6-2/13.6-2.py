@@ -517,3 +517,33 @@ print("""
    - DPS: 修正SDE轨迹，理论清晰（后验得分分解）
    - DiffPIR: 交替去噪+投影，PnP思想的延伸
 """)
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "zeta_values": zeta_values,
+    "sigma_y_blur": round(float(sigma_y_blur), 4),
+    "sigma_y_inpaint": round(float(sigma_y_inpaint), 4),
+    "PSNR_去模糊_各zeta": {f"zeta={z}": round(float(p), 2) for z, p in zip(zeta_values, psnr_blur_list)},
+    "PSNR_去模糊_观测": round(float(psnr_blur_obs), 2),
+    "PSNR_inpainting_各zeta": {f"zeta={z}": round(float(p), 2) for z, p in zip(zeta_values, psnr_inpaint_list)},
+    "PSNR_inpainting_观测": round(float(psnr_inpaint_obs), 2),
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

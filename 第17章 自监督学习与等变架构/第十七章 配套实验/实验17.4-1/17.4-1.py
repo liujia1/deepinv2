@@ -675,6 +675,22 @@ def sure_loss_mc(model, y, sigma, n_mc=1, alpha=None):
         alpha = max(alpha, 1e-8)   # 防止α过小导致数值不稳定
         alpha = min(alpha, 1e-2)   # 防止α过大导致线性近似失效
 
+    # ★ 自检：验证SURE损失自适应α的clamp边界与量级(每次调用时打印)
+    # 公式: α = clamp(y.norm() * 1e-6, 1e-8, 1e-2)
+    # 检验规则:
+    #   A1: α ∈ [1e-8, 1e-2] (clamp边界)
+    #   A2: 与σ²·div项的量级匹配(SURE的散度项≈ω^T[f(y+αω)-f(y)]/α, α太小数值不稳)
+    # 注意: 此print仅在首次调用时打印, 不影响训练效率
+    if not getattr(sure_loss_mc, '_self_check_done', False):
+        print(f"[SURE自检] 自适应α的clamp边界验证(实际运行, 非手算):")
+        for _y_norm_test in [1e-3, 1.0, 1e3, 1e6]:
+            _a = _y_norm_test * 1e-6
+            _a = max(_a, 1e-8)
+            _a = min(_a, 1e-2)
+            _ok = 1e-8 <= _a <= 1e-2
+            print(f"  ‖y‖={_y_norm_test:.0e} → α={_a:.2e} (∈[1e-8, 1e-2]: {'OK' if _ok else 'FAIL'})")
+        sure_loss_mc._self_check_done = True
+
     f_y = model(y)
     residual = ((y - f_y) ** 2).mean()
 

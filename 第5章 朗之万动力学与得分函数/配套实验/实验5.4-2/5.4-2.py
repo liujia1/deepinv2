@@ -480,3 +480,62 @@ if _has_gpu and _has_sampling_tools and _has_model:
     print(r"   温度参数$T$控制从众数到均值的过渡")
     print("\n4. 性能对比：")
     print(r"   PnP-ULA的PSNR显著高于TV-ULA，验证学习先验的表达能力优势")
+
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "实验名称": "实验5.4-2 近端算子 vs 学习去噪器：结构对偶性验证",
+    "环境信息": {
+        "GPU可用": bool(_has_gpu),
+        "sampling_tools可用": bool(_has_sampling_tools),
+        "预训练模型可用": bool(_has_model),
+        "device": str(device),
+    },
+}
+
+# 步骤1-3的关键变量在条件块内定义，需安全访问
+try:
+    _step1 = {
+        "实验参数": {
+            "迭代次数_niter": int(niter),
+            "TV_ULA_lambda": round(float(lambda_tv), 6),
+            "PnP_ULA_eps": round(float(eps), 8),
+            "TV_ULA步长_delta": round(float(delta_tv), 8),
+            "PnP_ULA步长_delta": round(float(delta_pnp), 8),
+            "噪声标准差_sigma": round(float(sigma), 8),
+            "BSNR_db": float(BSNRdb),
+        },
+        "重建质量对比": {
+            "含噪图像_PSNR_dB": round(float(PSNR(x, y)), 4),
+            "TV_ULA均值_PSNR_dB": round(float(PSNR(x_tv_mean, x)), 4),
+            "PnP_ULA均值_PSNR_dB": round(float(PSNR(x_pnp_mean, x)), 4),
+        },
+        "不确定性对比": {
+            "TV_ULA平均标准差": round(float(torch.mean(x_tv_std)), 6),
+            "PnP_ULA平均标准差": round(float(torch.mean(x_pnp_std)), 6),
+        },
+    }
+    results_summary.update(_step1)
+except (NameError, UnboundLocalError):
+    results_summary["实验结果"] = "未执行（缺少GPU、sampling_tools或预训练模型）"
+
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

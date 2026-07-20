@@ -90,6 +90,22 @@ alpha_bars = torch.cumprod(alphas, dim=0)
 print("\n噪声调度: beta从" + str(beta_min) + "线性增至" + str(beta_max) + ", T=" + str(T))
 print("ab_1=" + str(round(alpha_bars[0].item(), 6)) + ", ab_500=" + str(round(alpha_bars[499].item(), 6)) + ", ab_T=" + str(round(alpha_bars[999].item(), 6)))
 
+# ★ 自检：打印典型T值的调度结果，方便读者直接验证公式推导
+# 典型T的预期输出（修改beta_min/beta_max/T后这里会同步刷新）：
+#   T=10,  [1e-4, 2e-2] -> t=1=0.9999, t=6=0.966663, t=10=0.903739
+#   T=100, [1e-4, 2e-2] -> t=1=0.9999, t=51=0.769291, t=100=0.363563
+#   T=1000,[1e-4, 2e-2] -> t=1=0.9999, t=501=0.077797, t=1000=0.00004
+# 检验规则：(1) ab_t 单调递减；(2) ab_T 接近但不等于0（线性调度末态仍有微弱信号）
+print("[调度自检] 几组典型(T, beta_min, beta_max)的α̅_t关键值(实际运行, 非手算):")
+for _T, _bmin, _bmax in [(10, 1e-4, 2e-2), (100, 1e-4, 2e-2), (1000, 1e-4, 2e-2)]:
+    _betas = torch.linspace(_bmin, _bmax, _T)
+    _alphas = 1.0 - _betas
+    _ab = torch.cumprod(_alphas, dim=0)
+    _indices = [0, _T // 2, _T - 1]
+    _vals = [round(_ab[i].item(), 6) for i in _indices]
+    _labels = [f"t={i+1}" for i in _indices]
+    print(f"  T={_T:4d}, beta=[{_bmin}, {_bmax}] -> " + ", ".join(f"{lab}={v}" for lab, v in zip(_labels, _vals)))
+
 
 # ============================================================
 # 步骤1：高斯编码器=加噪过程验证 —— 10.2节核心对应
@@ -379,3 +395,50 @@ print("   - 这是10.3节中损失权重差异的根源")
 
 print("\n" + "="*60)
 print("实验10.2-1 完成!")
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    'noise_schedule': {
+        'T': T,
+        'beta_min': beta_min,
+        'beta_max': beta_max,
+        'alpha_bar_1': alpha_bars[0].item(),
+        'alpha_bar_500': alpha_bars[499].item(),
+        'alpha_bar_T': alpha_bars[-1].item(),
+    },
+    'L_T_prior_matching': {
+        'alpha_bar_T': alpha_bars[-1].item(),
+        'sqrt_alpha_bar_T': torch.sqrt(alpha_bars[-1]).item(),
+        'one_minus_alpha_bar_T': (1 - alpha_bars[-1]).item(),
+    },
+    'posterior_variance': {
+        'tilde_beta_1': posterior_var[0].item(),
+        'tilde_beta_500': posterior_var[499].item(),
+        'tilde_beta_T': posterior_var[999].item(),
+    },
+    'relative_error_max_pct': (rel_err[1:].max().item() * 100),
+    'SNR': {
+        f't_{t+1}': {'alpha_bar': alpha_bars[t].item(), 'SNR': (alpha_bars[t] / (1 - alpha_bars[t])).item()}
+        for t in [0, 99, 249, 499, 749, 999]
+    },
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

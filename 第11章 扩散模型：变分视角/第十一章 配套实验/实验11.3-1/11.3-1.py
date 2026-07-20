@@ -144,6 +144,26 @@ print(f"  w_t(ε) = β_t²/(2σ_t²α_t(1-ᾱ_t)): U形曲线，小t时大(~0.6)
 print(f"  w_t(x₀) = ᾱ_{{t-1}}β_t²/(2σ_t²(1-ᾱ_t)²): 单调递减，t小时极大(~10³)，t大时趋于0")
 print(f"  w_t(ε)/w_t(s) = 1/(1-ᾱ_t): ε-prediction的权重比score-prediction多1/(1-ᾱ_t)因子")
 
+# ★ 自检：验证三种权重的理论恒等式(避免注释里的"~0.6, ~0.005"等手算值与代码脱节)
+# 理论关系(由权重定义直接推导):
+#   R1: w_t(ε)/w_t(s) = 1/(1-ᾱ_t)            (wt_eps=β²/(2σ²·α·(1-ᾱ)), wt_score=β²/(2σ²·α))
+#   R2: w_t(x₀)/w_t(ε) = ᾱ_{t-1}·α_t/(1-ᾱ_t) (wt_x0=ᾱ_{t-1}·β²/(2σ²(1-ᾱ)²), wt_eps=β²/(2σ²·α·(1-ᾱ)))
+# 验证规则: 相对误差 < 1e-3 即认为公式实现正确
+print(f"[权重自检] 三种VLB权重的理论恒等式(实际运行, 非手算):")
+_t_check = [2, 50, 100, 500, 999]
+for _t in _t_check:
+    _i = _t - 1
+    _ratio_eps_score = wt_eps[_i].item() / max(wt_score[_i].item(), 1e-30)
+    _theory_eps_score = 1.0 / (1.0 - alpha_bars[_i].item())
+    _err1 = abs(_ratio_eps_score - _theory_eps_score) / max(abs(_theory_eps_score), 1e-30)
+    _ratio_x0_eps = wt_x0[_i].item() / max(wt_eps[_i].item(), 1e-30)
+    _theory_x0_eps = alpha_bars_prev[_i].item() * alphas[_i].item() / (1.0 - alpha_bars[_i].item())
+    _err2 = abs(_ratio_x0_eps - _theory_x0_eps) / max(abs(_theory_x0_eps), 1e-30)
+    _flag1 = "OK" if _err1 < 1e-3 else "FAIL"
+    _flag2 = "OK" if _err2 < 1e-3 else "FAIL"
+    print(f"  t={_t:4d}: R1(w_ε/w_s)={_ratio_eps_score:.4f} vs 1/(1-ᾱ_t)={_theory_eps_score:.4f} [{_flag1}]; "
+          f"R2(w_x0/w_ε)={_ratio_x0_eps:.4f} vs ᾱ_{{t-1}}/[(1-ᾱ_t)·α_t]={_theory_x0_eps:.4f} [{_flag2}]")
+
 # L_0: 重建项
 print(f"\nL_0 (重建项): 对高斯解码器, -E[log p(x_0|x_1)] ∝ ||x_0 - μ_θ(x_1,1)||²")
 
@@ -426,3 +446,43 @@ print("""
    - ||ε-ε̂||² = (1-ᾱ_t)·||ŝ-s*||²
    - 这是第12章Score≡ELBO等价性的数值基础
 """)
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    'L_T_prior_matching': {
+        'alpha_bar_T': alpha_bars[-1].item(),
+    },
+    'KL_mean_matching_verification': {
+        'KL_MC_estimate': kl_mc,
+        'KL_formula': kl_formula,
+        'error': abs(kl_mc - kl_formula),
+    },
+    'VLB_weights_sampled': {
+        f't_{t}': {
+            'wt_eps': wt_eps[t-1].item(),
+            'wt_x0': wt_x0[t-1].item(),
+            'wt_score': wt_score[t-1].item(),
+        }
+        for t in [2, 50, 100, 250, 500, 750, 999]
+    },
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

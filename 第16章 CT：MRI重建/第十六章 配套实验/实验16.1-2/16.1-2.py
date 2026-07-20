@@ -493,4 +493,34 @@ print("  + 多种重建算法（FBP/SIRT/SART/CGLS）")
 print("  - 仅Linux+CUDA")
 print("  - 需手动内存管理")
 
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "experiment": "实验16.1-2 ASTRA工具箱——CT正向模型与FBP",
+    "ASTRA_AVAILABLE": ASTRA_AVAILABLE,
+    "步骤2_平行束FBP_PSNR_dB": round(float(parall_psnr), 2),
+    "步骤4_滤波器对比_PSNR_dB": {f"滤波器{i}": round(float(p), 2) for i, p in enumerate(filter_psnrs)},
+}
+if ASTRA_AVAILABLE:
+    results_summary["步骤3_扇形束FBP_PSNR_dB"] = round(float(fan_psnr), 2)
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
+
 print(f"\n实验16.1-2完成！结果已保存至: {SAVE_DIR}")

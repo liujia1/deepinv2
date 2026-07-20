@@ -807,3 +807,36 @@ print(f"""
    - MMD更优不代表视觉上更"干净"——不同指标衡量的是分布匹配的不同侧面，
      这也是后面14.4节引入OT-CFM的动机之一。
 """)
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    'avg_time_cnll_per_epoch': round(float(np.mean(times_cnll)), 4) if times_cnll else None,
+    'avg_time_fm_per_epoch': round(float(np.mean(times_fm)), 4) if times_fm else None,
+    'speedup': round(float(avg_time_cnll / avg_time_fm), 1) if times_cnll and times_fm and avg_time_fm > 0 else None,
+    'mmd_cnll': round(float(mmd_cnll), 6),
+    'mmd_fm': round(float(mmd_fm), 6),
+    'curv_cnll': round(float(curv_cnll), 6),
+    'curv_fm': round(float(curv_fm), 6),
+    'final_loss_cnll': round(float(losses_cnll[-1]), 6) if losses_cnll else None,
+    'final_loss_fm': round(float(losses_fm[-1]), 6) if losses_fm else None,
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

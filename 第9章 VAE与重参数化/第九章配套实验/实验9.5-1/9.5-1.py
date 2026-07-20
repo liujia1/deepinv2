@@ -630,3 +630,38 @@ print("   ✓ 实验验证: β=1/4时隐空间呈现聚类结构")
 
 print(f"\n{'='*60}")
 print("第九章配套实验 9.5-1 完成!")
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {}
+for beta in betas:
+    h = models[beta]['history']
+    results_summary[f'beta_{beta}'] = {
+        'final_loss': h['loss'][-1] if h['loss'] else None,
+        'final_bce': h['bce'][-1] if h['bce'] else None,
+        'final_kld': h['kld'][-1] if h['kld'] else None,
+        'final_active': h['active'][-1] if h['active'] else None,
+        'loss_curve': h['loss'],
+        'bce_curve': h['bce'],
+        'kld_curve': h['kld'],
+        'active_curve': h['active'],
+    }
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

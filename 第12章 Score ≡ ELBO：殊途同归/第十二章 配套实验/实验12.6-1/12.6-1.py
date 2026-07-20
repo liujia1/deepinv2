@@ -541,3 +541,42 @@ print("""
 
 print(f"{'='*60}")
 print("第十二章配套实验12.6-1完成!")
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    'sampling_path_DSM': {
+        'final_loss': losses_a[-1] if losses_a else None,
+        'loss_curve': losses_a,
+    },
+    'variational_path_VLB': {
+        'final_loss': losses_b[-1] if losses_b else None,
+        'loss_curve': losses_b,
+    },
+    'dual_verification': {
+        'eps_pred_norm': eps_pred.norm().item(),
+        'score_norm': score_from_eps.norm().item(),
+        'mu_norm': mu_from_eps.norm().item(),
+        'x0_est_norm': x0_from_eps.norm().item(),
+        'note': '同一网络输出承载三种信息: score, 逆向均值, x0估计',
+    },
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

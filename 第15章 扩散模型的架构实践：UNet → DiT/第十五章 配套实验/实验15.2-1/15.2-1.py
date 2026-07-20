@@ -764,3 +764,33 @@ print(f"""
 print(f"\n{'='*60}")
 print("实验15.2-1 完成!")
 print(f"{'='*60}")
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    'final_loss_dncnn': round(float(dncnn_losses[-1]), 6) if dncnn_losses else None,
+    'final_loss_unet_film': round(float(unet_losses[-1]), 6) if unet_losses else None,
+    'injection_comparison': {
+        inj: round(float(histories[inj][-1]), 6) if histories.get(inj) else None
+        for inj in ['add', 'film', 'adaln']
+    },
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
