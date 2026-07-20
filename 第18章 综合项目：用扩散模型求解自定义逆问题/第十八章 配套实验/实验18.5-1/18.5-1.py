@@ -81,25 +81,64 @@ sigma_data = 0.01
 sigma_denoiser = 2.0 / 255.0
 print(f"噪声标准差: sigma_data={sigma_data} (观测), sigma_denoiser={sigma_denoiser:.5f} (去噪器)")
 
-# 安装deepinv
-try:
-    import deepinv as dinv  # ★ 统一使用 as dinv 别名
-except ImportError:
+# 安装deepinv（带版本检查，避免重复安装）
+def _check_deepinv_installed():
+    """检查 deepinv 是否已安装及其版本。"""
+    try:
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, '-m', 'pip', 'show', 'deepinv'],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            for line in result.stdout.split('\n'):
+                if line.startswith('Version:'):
+                    version = line.split(':')[1].strip()
+                    return True, version
+            return True, 'unknown'
+        return False, None
+    except Exception:
+        return False, None
+
+_dinv_installed, _dinv_version = _check_deepinv_installed()
+
+if _dinv_installed:
+    print(f"[安装检查] deepinv 已安装，版本: {_dinv_version}")
+    try:
+        import deepinv as dinv
+        print(f"deepinv 版本: {dinv.__version__}")
+    except ImportError as e:
+        print(f"[警告] deepinv 已安装但导入失败: {e}")
+        print("[警告] 尝试重新安装...")
+        _dinv_installed = False
+
+def _install_deepinv():
+    """安装 deepinv，添加 --no-deps 避免重复安装依赖，增加超时控制。"""
     import subprocess
     print("正在安装 deepinv ...")
     try:
+        # ★ 使用 --no-deps 避免重复安装已有的 torch 等大依赖，加速安装
+        # ★ 添加 --quiet 减少输出噪音
         subprocess.check_call([
             sys.executable, '-m', 'pip', 'install',
+            '--no-deps', '--quiet',
             'git+https://github.com/deepinv/deepinv.git#egg=deepinv'
-        ])
+        ], timeout=300)  # 5分钟超时
         # ★ 安装成功后重新导入
         import deepinv as dinv
         print(f"deepinv 安装成功，版本: {dinv.__version__}")
-    except subprocess.CalledProcessError as e:
-        print(f"[错误] deepinv 安装失败，请手动安装: pip install git+https://github.com/deepinv/deepinv.git")
+        return dinv
+    except subprocess.TimeoutExpired:
+        print("[错误] deepinv 安装超时（>5分钟），网络可能不稳定")
+        print("[错误] 建议手动安装: pip install git+https://github.com/deepinv/deepinv.git")
         sys.exit(1)
-else:
-    print(f"deepinv 版本: {dinv.__version__}")
+    except subprocess.CalledProcessError as e:
+        print(f"[错误] deepinv 安装失败，错误码: {e.returncode}")
+        print(f"[错误] 请手动安装: pip install git+https://github.com/deepinv/deepinv.git")
+        sys.exit(1)
+
+if not _dinv_installed:
+    dinv = _install_deepinv()
 
 from deepinv.physics import Blur, Inpainting, GaussianNoise
 from deepinv.utils import load_example
@@ -328,7 +367,7 @@ def save_samples_to_cache(samples, methods, times=None):
       匹配也会打醒目警告，避免学生因首次偶发失败而静默复用质量较差的样本。
     """
     if not use_cache:
-        return
+        return None
     try:
         # ★ best_achieved: 仅当所有样本方法标签都是 "ULA" 时为 True
         # "混合采样" 或任何降级方法都会让 best_achieved = False
@@ -342,10 +381,10 @@ def save_samples_to_cache(samples, methods, times=None):
         }
         with open(cache_file, 'wb') as f:
             pickle.dump(cached_data, f)
-        quality_tag = "全部ULA(最优)" if best_achieved else "含降级样本"
-        print(f"[缓存] 已保存 {len(samples)} 个样本 (含 fingerprint, {quality_tag})")
+        return best_achieved  # ★ 返回质量标记, 供循环结束后统一汇总打印
     except Exception as e:
-        print(f"[缓存] 保存失败: {e}")
+        print(f"[缓存] 保存失败: {e}")  # 异常时打印（会打断进度条，但异常本身就会中断程序）
+        return None
 
 def release_model(model_var_name):
     """释放全局作用域中的模型变量并清理显存。
@@ -457,11 +496,15 @@ if len(all_samples) < S:
                         torch.cuda.empty_cache()
                     save_samples_to_cache(all_samples, sample_methods, sample_times)
 
-                if sample_times:
-                    print(f"[ULA] 采样完成! 平均耗时: {np.mean(sample_times[-(S-start_idx):]):.2f}s")
-
                 # ★ 恢复 tqdm 模块
                 _tqdm_module.tqdm = _orig_tqdm_global
+
+                if sample_times:
+                    cache_best = all(m == "ULA" for m in sample_methods)
+                    print(f"[ULA] 采样完成! 平均耗时: {np.mean(sample_times[-(S-start_idx):]):.2f}s")
+                    if use_cache:
+                        qtag = "全部ULA(最优)" if cache_best else "含降级样本"
+                        print(f"[缓存] 已保存 {len(all_samples)} 个样本 (含 fingerprint, {qtag})")
 
             except ImportError as e:
                 print(f"[ULA] 导入失败: {e}")
@@ -547,6 +590,7 @@ if len(all_samples) < S:
                 # ★ 保存原始 tqdm 并 patch 模块级 tqdm（防止 deepinv 内部 DPS 创建嵌套进度条）
                 _orig_tqdm_global = _tqdm_module.tqdm
                 _tqdm_module.tqdm = lambda *a, **kw: _orig_tqdm_global(*a, **{**kw, 'disable': True})
+
                 for s in pbar:
                     # ★ 使用差异更大的种子确保样本多样性
                     torch.manual_seed(s * 1000 + 42)
@@ -564,11 +608,15 @@ if len(all_samples) < S:
                         torch.cuda.empty_cache()
                     save_samples_to_cache(all_samples, sample_methods, sample_times)
 
-                if sample_times:
-                    print(f"[DPS] 采样完成! 平均耗时: {np.mean(sample_times[-(S-start_idx):]):.2f}s")
-
                 # ★ 恢复 tqdm 模块
                 _tqdm_module.tqdm = _orig_tqdm_global
+
+                if sample_times:
+                    cache_best = all(m == "ULA" for m in sample_methods)
+                    print(f"[DPS] 采样完成! 平均耗时: {np.mean(sample_times[-(S-start_idx):]):.2f}s")
+                    if use_cache:
+                        qtag = "全部ULA(最优)" if cache_best else "含降级样本"
+                        print(f"[缓存] 已保存 {len(all_samples)} 个样本 (含 fingerprint, {qtag})")
 
             except ImportError as e:
                 print(f"[DPS] 导入失败: {e}")
@@ -639,7 +687,11 @@ if len(all_samples) < S:
                     pbar_outer.set_postfix({"耗时": f"{t_sample:.1f}s"})
 
                 if sample_times:
+                    cache_best = all(m == "ULA" for m in sample_methods)
                     print(f"[PnP] 采样完成! 平均耗时: {np.mean(sample_times[-(S-start_idx):]):.2f}s")
+                    if use_cache:
+                        qtag = "全部ULA(最优)" if cache_best else "含降级样本"
+                        print(f"[缓存] 已保存 {len(all_samples)} 个样本 (含 fingerprint, {qtag})")
 
             except Exception as e:
                 print(f"[PnP] 采样失败!")
@@ -677,6 +729,11 @@ if len(all_samples) < S:
                 torch.cuda.empty_cache()
             save_samples_to_cache(all_samples, sample_methods, sample_times)
             pbar.set_postfix({"耗时": f"{t_sample:.1f}s"})
+
+        if use_cache:
+            cache_best = all(m == "ULA" for m in sample_methods)
+            qtag = "全部ULA(最优)" if cache_best else "含降级样本"
+            print(f"[缓存] 已保存 {len(all_samples)} 个样本 (含 fingerprint, {qtag})")
 
 # ★ 计算最终采样方法（检查是否混合采样）
 if len(sample_methods) > 0:

@@ -1641,3 +1641,61 @@ print("     其中step_fn(batch_x) -> loss作为参数传入，可减少代码�
 print("  2. 可复现性：torch.manual_seed(42)只设一次，断点续训会改变后续RNG状态，")
 print("     导致'从头跑'与'从checkpoint恢复'的最终数值略有差异。")
 print("     工程应用建议为每个训练函数传入独立的torch.Generator。")
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict):
+        return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor):
+            return _to_native(obj.detach().cpu().tolist())
+    except:
+        pass
+    return obj
+
+# 收集关键数值结果
+results_summary = {
+    '实验': '17.2-1 Noise2Noise与Noise2Blind',
+    '不同训练设定的性能': {
+        '设定1(监督)': {'PSNR': psnr_s1, 'SSIM': ssim_s1},
+        '设定2(合成配对)': {'PSNR': psnr_s2, 'SSIM': ssim_s2},
+        '设定4(朴素自监督)': {'PSNR': psnr_s4, 'SSIM': ssim_s4},
+    },
+    '完整训练结果': {
+        '监督': {'PSNR': psnr_sup, 'SSIM': ssim_sup},
+        'Noise2Noise': {'PSNR': psnr_n2n, 'SSIM': ssim_n2n},
+        '朴素自监督': {'PSNR': psnr_naive, 'SSIM': ssim_naive},
+        '改进版N2B': {'PSNR': psnr_n2b_fullres, 'SSIM': ssim_n2b_fullres},
+    },
+    '偏差分析': {
+        '朴素散度': div_naive,
+        '监督散度': div_sup,
+        '偏差项': bias_term,
+    },
+    'N2B盲点性验证': {
+        '相关系数': correlation,
+    },
+    '实验参数': {
+        '噪声水平': SIGMA,
+        '训练轮数快速验证': EPOCHS,
+        '训练轮数完整训练': EPOCHS_FULL,
+    }
+}
+
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"\n数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

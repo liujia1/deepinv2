@@ -849,3 +849,51 @@ print(f"""
   ║          答：EI加约束，利用对称性约束零空间                            ║
   ╚═══════════════════════════════════════════════════════════════════╝
 """)
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict):
+        return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor):
+            return _to_native(obj.detach().cpu().tolist())
+    except:
+        pass
+    return obj
+
+# 收集关键数值结果
+results_summary = {
+    '实验': '17.6-1 等变成像与测量一致性',
+    'PSNR结果': {
+        '各方法整图PSNR': total_psnrs,
+        '各方法观测像素PSNR': obs_psnrs,
+        '各方法缺失像素PSNR': miss_psnrs,
+    },
+    '等变性验证': {
+        '绝对误差': {f"{op}_{trans}": val for (op, trans), val in results.items()},
+        '相对误差': {f"{op}_{trans}": val for (op, trans), val in rel_results.items()},
+    },
+    '实验参数': {
+        '噪声水平': SIGMA,
+        '保留像素比例': KEEP_RATIO,
+        '平移幅度': MAX_SHIFT,
+    }
+}
+
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"\n数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

@@ -1145,3 +1145,55 @@ plt.savefig(os.path.join(SAVE_DIR, 'summary_psnr_vs_G.png'), dpi=150, bbox_inche
 plt.close()
 print("  已保存: summary_psnr_vs_G.png")
 print(f"\n  实验完成！所有图表已保存到 {SAVE_DIR}")
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict):
+        return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor):
+            return _to_native(obj.detach().cpu().tolist())
+    except:
+        pass
+    return obj
+
+# 收集关键数值结果
+results_summary = {
+    '实验': '17.5-1 MOI多算子成像',
+    '分区域PSNR结果': {
+        '各方法分区域PSNR': region_results,
+    },
+    '满秩条件验证': {
+        f"G={G}": {
+            '经验覆盖率': coverage_stats[G]['coverage_at_least_once'],
+            '理论覆盖率': coverage_stats[G]['theoretical_at_least_once'],
+            '秩占比': coverage_stats[G]['rank_ratio'],
+            '全部覆盖比例': coverage_stats[G]['all_covered'],
+        } for G in coverage_stats.keys()
+    },
+    '实验参数': {
+        '噪声水平': SIGMA,
+        '保留像素比例': KEEP_RATIO,
+        '训练轮数': N_EPOCHS,
+        'MOI权重': LAMBDA_MOI,
+        'EI权重': LAMBDA_EI,
+    }
+}
+
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"\n数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

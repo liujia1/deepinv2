@@ -1860,3 +1860,49 @@ plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, 'summary_comparison.png'), dpi=150, bbox_inches='tight')
 plt.close()
 print(f"\n  已保存: summary_comparison.png (综合对比柱状图)")
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict):
+        return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor):
+            return _to_native(obj.detach().cpu().tolist())
+    except:
+        pass
+    return obj
+
+# 收集关键数值结果
+results_summary = {
+    '实验': '17.4-1 SURE与盲点网络',
+    '去噪性能对比': {
+        '监督': {'PSNR': psnr_sup, 'SSIM': ssim_sup},
+        'SURE': {'PSNR': psnr_sure, 'SSIM': ssim_sure},
+        'R2R': {'PSNR': psnr_r2r, 'SSIM': ssim_r2r},
+        '盲点': {'PSNR': psnr_bs, 'SSIM': ssim_bs},
+        '朴素': {'PSNR': psnr_naive, 'SSIM': ssim_naive},
+    },
+    'SURE→Tweedie验证': tweedie_results,
+    '实验参数': {
+        '噪声水平': SIGMA,
+        '训练轮数': N_EPOCHS,
+    }
+}
+
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"\n数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
