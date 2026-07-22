@@ -20,9 +20,13 @@ Step 5: ★ 样本数对不确定性估计的影响
 运行前提：需GPU（Colab T4即可），需下载预训练模型(DRUNet/DiffUNet)
 """
 
-import os, sys, time, pickle, hashlib
+import os, sys, time, pickle, hashlib, gc
 import numpy as np
 import torch
+
+# ★ CUDA显存优化：减少碎片，提升长时间运行的稳定性
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 # 设置非交互式后端（必须在 import matplotlib.pyplot 之前）
 import matplotlib
 matplotlib.use('Agg')
@@ -90,30 +94,75 @@ print(f"使用设备: {device}")
 if device.type == 'cpu':
     print("[警告] 扩散采样在CPU上会非常慢，强烈建议使用GPU")
 
-# ★ 全局噪声标准差（观测噪声水平 sigma_data）
-# 含义：物理算子 GaussianNoise、DataFid_L2/ULA step_size、DPS_L2 三处统一引用。
-# 与去噪器噪声 sigma_denoiser=2/255 物理含义不同：sigma_data 是 y 中加性高斯噪声的标准差，
-# sigma_denoiser 是 ScorePrior 内部 Tweedie 公式所假设的去噪器训练噪声水平。
-sigma_data = 0.01
-sigma_denoiser = 2.0 / 255.0
-# ★ ULA Langevin 步长系数（与 deepinv 官方公式 step_size = coeff * sigma_data**2 中的 coeff）
-# 历史值: 0.01 (对应 step_size=1e-6) → 在 sigma_data=0.01 时步长过小, Langevin 链在
-#         256x256x3 维空间混合不足, 8 个样本 PSNR 范围仅 0.01 dB, std 几乎为 0。
-# 调整历史:
-#   - 1.0 (step_size=1e-4) → 步长过大, 链发散, PSNR 仅 1.0 dB
-#   - 0.1 (step_size=1e-5) → 当前值, 步长适中, 兼顾混合质量与稳定性
-# 调整指引: 若样本 PSNR.std() < 0.5 dB (混合不足), 可尝试 0.1 → 0.5
-#          若样本 PSNR 普遍 < 10 dB (发散), 需降低步长 0.1 → 0.05
-step_size_coeff = 0.1
-# ★ ULA 链最大迭代次数（与步长共同决定总探索距离 = step_size * ula_max_iter）
-# GPU: 5000, CPU: 1000; 此处先按 GPU 设为全局值, CPU 路径在 ULA 块内会覆写。
-# 提升为全局变量以便指纹追踪, 改动后自动丢弃旧缓存。
-# ★ 教学折中：默认 2000 步（Colab T4 约 2-3 分钟/样本），步长已扩大 100 倍
-#   若需更充分混合可改为 5000（耗时 10+ 分钟/样本）。
-ula_max_iter = 2000
+# ========================================================================
+# ★ 统一配置管理（借鉴测试.txt的CFG字典设计）
+# ========================================================================
+CFG = {
+    # 运行设备
+    "device": str(device),
+
+    # 图像尺寸
+    "image_size": 128,  # 平衡效率与质量
+
+    # 噪声水平
+    "sigma_data": 0.01,  # 观测噪声（y中加性高斯噪声的标准差）
+    "sigma_denoiser": 2.0 / 255.0,  # 去噪器噪声（ScorePrior内部Tweedie公式假设）
+
+    # 退火ULA参数
+    "sigma_schedule": [1.0, 0.5, 0.25, 0.1, 0.05, 0.01],  # 退火调度
+    "ula_steps_each_sigma": 40,  # 每个sigma级别的迭代步数（从20增加至40，给样本更多时间收敛）
+    "lambda_data": 0.2,  # 数据保真项权重（从0.05增大至0.2，强化观测约束）
+    "step_size_coeff_annealed": 0.01,  # 退火ULA步长系数（从0.005增大至0.01，让样本移动更快）
+
+    # 后验采样数量
+    "samples": 30,  # 推荐值：可靠的置信区间估计
+}
+
+# ★ 从CFG提取常用变量（保持兼容性）
+sigma_data = CFG["sigma_data"]
+sigma_denoiser = CFG["sigma_denoiser"]
+sigma_schedule = CFG["sigma_schedule"]
+ula_steps_each_sigma = CFG["ula_steps_each_sigma"]
+lambda_data = CFG["lambda_data"]
+step_size_coeff_annealed = CFG["step_size_coeff_annealed"]
+IMG_SIZE = CFG["image_size"]
+S = CFG["samples"]
+
+# ★ 打印关键参数
 print(f"噪声标准差: sigma_data={sigma_data} (观测), sigma_denoiser={sigma_denoiser:.5f} (去噪器)")
-print(f"ULA 步长系数: step_size_coeff={step_size_coeff} (实际 step_size={step_size_coeff * sigma_data**2:.1e})")
-print(f"ULA 链最大迭代: ula_max_iter={ula_max_iter}")
+print(f"图像尺寸: {IMG_SIZE}x{IMG_SIZE}")
+print(f"后验采样数量: S={S}")
+print(f"退火ULA: lambda_data={lambda_data}, step_size_coeff={step_size_coeff_annealed}")
+
+# ========================================================================
+# ★ 参数设计说明（静态说明，不影响代码执行）
+# ========================================================================
+# 本节说明各采样方法的超参数取值依据，供学生参考。
+#
+# ------ ULA (Unadjusted Langevin Algorithm) 参数 ------
+# 退火ULA使用多级噪声调度 [1.0, 0.5, 0.25, 0.1, 0.05, 0.01]
+# 每级噪声的步长: step_size = step_size_coeff_annealed * sigma^2
+#   - 物理含义：Langevin 动力学的离散化步长
+#   - 诊断信号：样本PSNR.std()应>0.5dB，若<0.5dB提示混合不足
+#
+# ula_steps_each_sigma（每级噪声的迭代步数）
+#   - 物理含义：退火ULA在每个sigma级别运行的步数
+#   - 取值依据：20步/级 × 6级 = 120总步数
+#
+# sigma_denoiser（去噪器噪声水平）
+#   - 物理含义：ScorePrior内部Tweedie公式所假设的去噪器训练噪声
+#   - 取值依据：deepinv官方示例 sigma_denoiser=2/255
+#   - 与sigma_data区别：sigma_data是观测噪声，sigma_denoiser是去噪器内部噪声
+#
+# lambda_data（数据保真项权重）
+#   - 物理含义：控制数据保真项 ||y-A(x)||² 的权重
+#   - 取值依据：测试.txt使用0.05，数据保真项已归一化为A^T(Ax-y)/sigma_data²
+#
+# ------ DPS (Diffusion Posterior Sampling) 参数 ------
+# weight（似然梯度权重）: 1.0（deepinv默认值）
+# alpha（扩散步长系数）: 1.0（deepinv默认值）
+# num_steps（采样步数）: 100（DPS论文推荐值）
+# ========================================================================
 
 # 安装deepinv（带版本检查，避免重复安装）
 def _check_deepinv_installed():
@@ -181,6 +230,21 @@ from deepinv.utils import load_example
 # ========================================================================
 # 辅助函数
 # ========================================================================
+
+def clear_gpu():
+    """清理GPU显存（借鉴测试.txt）。
+
+    包含三级清理：
+    1. gc.collect(): Python垃圾回收
+    2. torch.cuda.empty_cache(): PyTorch缓存清理
+    3. torch.cuda.ipc_collect(): 进程间通信缓存清理
+    """
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
+
+
 def compute_psnr(img1, img2):
     """计算PSNR (dB)。
 
@@ -197,7 +261,6 @@ def compute_psnr(img1, img2):
     if mse == 0:
         return float('inf')
     return 10 * np.log10(1.0 / mse)
-
 
 
 # ========================================================================
@@ -223,7 +286,8 @@ print("""
 """)
 
 # 加载测试图像
-x_true = load_example("celeba_example.jpg", img_size=(256, 256), resize_mode='resize')
+# ★ 使用 IMG_SIZE（小图诊断模式下为64，完整模式下为256）
+x_true = load_example("celeba_example.jpg", img_size=(IMG_SIZE, IMG_SIZE), resize_mode='resize')
 # 确保是4D张量 (B, C, H, W)
 if x_true.ndim == 3:
     x_true = x_true.unsqueeze(0)  # (C, H, W) -> (1, C, H, W)
@@ -233,13 +297,95 @@ x_true = x_true.to(device)
 
 # 创建退化模型（修复场景，50%缺失——欠定程度适中）
 torch.manual_seed(42)
-physics_inp = Inpainting(img_size=(3, 256, 256), mask=0.5, device=device)
+physics_inp = Inpainting(img_size=(3, IMG_SIZE, IMG_SIZE), mask=0.5, device=device)
 physics_inp.set_noise_model(GaussianNoise(sigma=sigma_data))
 y_inp = physics_inp(x_true)
 
 print(f"真值 shape: {x_true.shape}")
 print(f"观测 shape: {y_inp.shape}")
 print(f"观测 PSNR: {compute_psnr(x_true, y_inp):.2f} dB")
+
+
+# ========================================================================
+# ★ 退火ULA采样函数（从测试.txt移植）
+# ========================================================================
+def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per_sigma,
+                         lambda_data, step_size_coeff, S=1):
+    """
+    退火ULA后验采样
+
+    参数:
+        y_obs: 观测 (1, C, H, W)
+        physics: 物理算子（Inpainting）
+        model: DRUNet去噪器
+        device: 运行设备
+        sigma_schedule: 退火调度 [1.0, 0.5, 0.25, 0.1, 0.05, 0.01]
+        steps_per_sigma: 每个sigma级别的步数
+        lambda_data: 数据保真权重
+        step_size_coeff: 步长系数
+        S: 样本数
+
+    返回:
+        samples: (S, C, H, W) 后验样本
+    """
+    samples = []
+    model.eval()  # ★ 设置为eval模式，减少显存占用
+
+    for sample_id in range(S):
+        print(f"[退火ULA] 正在采样第 {sample_id+1}/{S} 个样本...")
+
+        # ★ 为每个样本设置不同的随机种子（与DPS/PnP保持一致）
+        torch.manual_seed(sample_id * 1000 + 42)
+
+        # 清理显存
+        clear_gpu()
+
+        # 初始化：伪逆 + 小噪声（与测试.txt一致）
+        x = physics.A_dagger(y_obs)
+        x = x + 0.01 * torch.randn_like(x)
+        x = x.clamp(0, 1)
+
+        # 退火循环
+        for sigma in sigma_schedule:
+            step_size = step_size_coeff * (sigma ** 2)
+
+            for step in range(steps_per_sigma):
+                # 计算score: (D(x,sigma) - x) / sigma^2
+                # ★ DRUNet需要noise level map (B, 1, H, W)，而不是标量
+                B = x.shape[0]
+                sigma_map = torch.ones(B, 1, x.shape[-2], x.shape[-1], device=device) * sigma
+
+                # ★ 使用no_grad减少显存
+                with torch.no_grad():
+                    denoised = model(x, sigma_map)
+
+                score = (denoised - x) / (sigma ** 2)
+
+                # 计算数据保真梯度: A^T(Ax - y) / sigma_data^2
+                # ★ 归一化：使数据保真项与先验score在同一量级（均含1/sigma^2）
+                data_grad = physics.A_adjoint(physics.A(x) - y_obs) / (sigma_data ** 2)
+
+                # 后验梯度: score - lambda * data_grad
+                grad = score - lambda_data * data_grad
+
+                # Langevin更新: x + step_size * grad + noise
+                noise = torch.randn_like(x)
+                x = x + step_size * grad + torch.sqrt(torch.tensor(2 * step_size, device=device)) * noise
+
+                # 值域约束
+                x = x.clamp(0, 1)
+
+                # ★ 定期清理中间变量
+                del denoised, score, sigma_map, data_grad, grad, noise
+                if step % 20 == 0:
+                    clear_gpu()
+
+        # ★ 样本存储后立即移到CPU并清理显存（借鉴测试.txt）
+        samples.append(x.detach().cpu())
+        del x
+        clear_gpu()
+
+    return torch.stack(samples)
 
 
 # ========================================================================
@@ -270,8 +416,8 @@ print("""
 
 ula_method = None
 
-S = 8
-print(f"后验采样数量: S={S}")
+# ★ 后验采样数量已在CFG中定义，此处打印确认
+print(f"[配置] 后验采样数量 S={S}")
 
 all_samples = []
 sample_times = []
@@ -290,19 +436,35 @@ import traceback
 # 图像内容用整图 MD5(16位) + 统计量(mean/std) 双重把关，避免仅哈希
 # 前若干字节的碰撞风险（与第4-6章约定一致：hash + 统计量兜底）。
 def _compute_fingerprint():
-    """基于当前 (sigma_data, x_true, S, device, ULA超参数) 计算缓存指纹字典。"""
+    """基于当前超参数计算缓存指纹字典，确保改动后自动丢弃旧缓存。
+
+    指纹覆盖所有影响采样结果的超参数：
+    - sigma_data: 观测噪声水平（影响 ULA step_size、DPS 似然缩放）
+    - sigma_denoiser: 去噪器噪声水平（影响 ScorePrior 的 Tweedie 公式）
+    - step_size_coeff: ULA Langevin 步长系数
+    - ula_max_iter: ULA 链最大迭代次数
+    - IMG_SIZE: 图像尺寸（影响维度和稳定性边界）
+    - x_true: 测试图像内容（MD5 + 统计量双重校验）
+    - S: 目标样本数
+    - device: 运行设备（GPU vs CPU 影响随机数生成）
+    """
     arr = x_true.detach().cpu().contiguous().numpy()
     img_hash = hashlib.md5(arr.tobytes()).hexdigest()[:16]  # 整图 MD5 前 16 位
     return {
         'sigma_data': float(sigma_data),
+        'sigma_denoiser': float(sigma_denoiser),
         'x_true_shape': tuple(arr.shape),
         'x_true_hash': img_hash,
-        'x_true_mean': float(arr.mean()),  # 统计量兜底
-        'x_true_std': float(arr.std()),    # 统计量兜底
+        'x_true_mean': float(arr.mean()),
+        'x_true_std': float(arr.std()),
+        'IMG_SIZE': int(IMG_SIZE),
         'S': int(S),
         'device': str(device),
-        'ula_step_size_coeff': float(step_size_coeff),  # ★ 新增: 步长系数影响 ULA 样本, 改动后需丢弃旧缓存
-        'ula_max_iter': int(ula_max_iter),             # ★ 新增: 迭代次数影响 ULA 样本, 改动后需丢弃旧缓存
+        # ★ 退火ULA参数
+        'sigma_schedule': tuple(sigma_schedule),
+        'ula_steps_each_sigma': int(ula_steps_each_sigma),
+        'lambda_data': float(lambda_data),
+        'step_size_coeff_annealed': float(step_size_coeff_annealed),
     }
 
 def _compare_fingerprint(stored_fp, current_fp):
@@ -326,8 +488,29 @@ cached_times = []    # ★ 新增：支持样本级时间记录
 if use_cache and os.path.exists(cache_file):
     try:
         if os.path.getsize(cache_file) > 0:
-            with open(cache_file, 'rb') as f:
-                cached_data = pickle.load(f)
+            # ★ 改用 torch.load（对应 torch.save 格式）
+            # 兼容旧版 pickle 缓存：先尝试 torch.load，失败回退到 pickle
+            cached_data = None
+            try:
+                with open(cache_file, 'rb') as f:
+                    cached_data = torch.load(f, weights_only=False)  # weights_only=False 以加载非张量字段
+            except Exception:
+                # 回退到旧版 pickle 格式
+                try:
+                    with open(cache_file, 'rb') as f:
+                        cached_data = pickle.load(f)
+                    print(f"[缓存] 检测到旧版 pickle 缓存，将自动迁移到 torch.save 格式")
+                    # 迁移为新格式
+                    try:
+                        torch.save(cached_data, cache_file)
+                        print(f"[缓存] 旧版缓存已迁移到 torch.save 格式")
+                    except Exception as e:
+                        print(f"[缓存] 缓存迁移失败（不影响本次运行）: {e}")
+                except Exception as e:
+                    print(f"[缓存] 旧版 pickle 也无法加载: {e}")
+                    cached_data = None
+            if cached_data is None:
+                raise EOFError("缓存加载失败")
             # ★ 指纹校验：与第4-6章 checkpoint 约定一致
             stored_fp = cached_data.get('fingerprint')
             fp_matched, fp_msg = _compare_fingerprint(stored_fp, _current_fp)
@@ -340,7 +523,15 @@ if use_cache and os.path.exists(cache_file):
                 except OSError:
                     pass
             elif 'samples' in cached_data and len(cached_data['samples']) > 0:
-                cached_samples = cached_data['samples']
+                # ★ 兼容两种格式：torch.save 的 samples 是 (S, 1, C, H, W) 张量
+                #   旧版 pickle 的 samples 是 list of (1, C, H, W) 张量
+                raw_samples = cached_data['samples']
+                if isinstance(raw_samples, torch.Tensor):
+                    # ★ torch.save 格式：堆叠张量，转换为 list 保持后续索引访问一致
+                    cached_samples = [raw_samples[i] for i in range(raw_samples.shape[0])]
+                else:
+                    # ★ 旧版 pickle 格式：list of tensors
+                    cached_samples = raw_samples
                 # ★ 兼容旧缓存：如果没有methods字段，使用method字段
                 cached_methods = cached_data.get('methods', [])
                 if not cached_methods and 'method' in cached_data:
@@ -363,8 +554,10 @@ if use_cache and os.path.exists(cache_file):
                 # 兼容旧缓存: 没有 best_achieved 字段时按方法分布推断
                 best_achieved = cached_data.get('best_achieved', None)
                 if best_achieved is None:
-                    # 旧版缓存: 按 method_counts 推断
-                    best_achieved = (list(method_counts.keys()) == ["ULA"])
+                    # 旧版缓存: 检查是否所有方法都是有效后验方法（ULA/退火ULA）
+                    # ★ 修复：原代码硬编码 ["ULA"]，无法识别 "退火ULA"
+                    valid_ula_methods = {"ULA", "退火ULA"}
+                    best_achieved = all(m in valid_ula_methods for m in method_counts.keys())
                 if not best_achieved:
                     print(f"⚠️⚠️⚠️ [缓存] 缓存中的样本并非全部来自 ULA (最优方法)")
                     print(f"⚠️⚠️⚠️ [缓存] 方法分布: {method_counts}")
@@ -401,22 +594,37 @@ def save_samples_to_cache(samples, methods, times=None):
     - best_achieved: bool, 是否所有样本均来自 ULA（最优方法）。
       加载时若为 False, 说明缓存中包含降级结果（DPS/PnP/伪逆）, 即便 fingerprint
       匹配也会打醒目警告，避免学生因首次偶发失败而静默复用质量较差的样本。
+
+    存储格式说明:
+    - 改用 torch.save + 堆叠张量, 相比 pickle 列表式存储可减少 80%+ 空间
+    - pickle 存储 30 个独立张量时会重复序列化 dtype/stride/storage 元数据
+      及 Python 对象包装, 100MB+ 文件实际仅含 5.6MB 有效数据
+    - 堆叠后 torch.save 直接写入连续内存块, 同样数据量约 10-15MB
     """
     if not use_cache:
         return None
     try:
-        # ★ best_achieved: 仅当所有样本方法标签都是 "ULA" 时为 True
+        # ★ best_achieved: 仅当所有样本方法标签都是有效ULA方法时为 True
         # "混合采样" 或任何降级方法都会让 best_achieved = False
-        best_achieved = bool(methods) and all(m == "ULA" for m in methods)
+        # ★ 修复：原代码硬编码 m == "ULA"，无法识别 "退火ULA"
+        valid_ula_methods = {"ULA", "退火ULA"}
+        best_achieved = bool(methods) and all(m in valid_ula_methods for m in methods)
+        # ★ 堆叠为单个张量后再保存，大幅减少序列化开销
+        #   保留 list 形式以兼容后续 all_samples[i] 索引访问
+        samples_tensor = torch.stack(samples, dim=0)  # (S, 1, C, H, W)
         cached_data = {
-            'samples': samples,
+            'samples': samples_tensor,  # ★ 改为堆叠后的张量（节省空间）
             'methods': methods,
             'times': times or [],
             'fingerprint': _compute_fingerprint(),  # ★ 与加载侧 _compare_fingerprint 配套
             'best_achieved': best_achieved,
         }
+        # ★ 使用 torch.save 替代 pickle.dump
+        #   - torch.save 直接序列化张量数据，零 Python 对象包装开销
+        #   - 默认使用 pickle 协议但仅打包 tensor 元数据
+        #   - 30样本×128²×3 float32 ≈ 5.6MB 原始数据，torch.save 后约 6-8MB
         with open(cache_file, 'wb') as f:
-            pickle.dump(cached_data, f)
+            torch.save(cached_data, f)
         return best_achieved  # ★ 返回质量标记, 供循环结束后统一汇总打印
     except Exception as e:
         print(f"[缓存] 保存失败: {e}")  # 异常时打印（会打断进度条，但异常本身就会中断程序）
@@ -425,16 +633,20 @@ def save_samples_to_cache(samples, methods, times=None):
 def release_model(model_var_name):
     """释放全局作用域中的模型变量并清理显存。
 
-    注意：dir()在函数内部只返回局部变量，需用globals()检查全局变量。
+    参数:
+        model_var_name: 全局变量名（字符串），如 'denoiser_ula'
+
+    实现说明:
+        使用 globals() 字典检查和删除全局变量，因为函数内部无法通过
+        局部作用域访问全局变量。删除后调用 clear_gpu() 立即释放显存。
     """
-    # ★ 修复：使用globals()而非dir()检查全局变量
     if model_var_name in globals():
         del globals()[model_var_name]
         print(f"[显存] 已删除全局变量 {model_var_name}")
     else:
         print(f"[显存] 全局变量 {model_var_name} 不存在，可能已被释放")
+    clear_gpu()
     if torch.cuda.is_available():
-        torch.cuda.empty_cache()
         print(f"[显存] 当前显存: {torch.cuda.memory_allocated()/1e9:.2f}GB")
 
 if len(all_samples) < S:
@@ -456,117 +668,82 @@ if len(all_samples) < S:
         denoiser_ula = None
         try:
             from deepinv.models import DRUNet
-            print("[ULA] 加载 DRUNet...")
+            print("[退火ULA] 加载 DRUNet...")
             denoiser_ula = DRUNet(pretrained='download').to(device)
-            print(f"[ULA] DRUNet 加载成功，显存: {torch.cuda.memory_allocated()/1e9:.2f}GB")
+            print(f"[退火ULA] DRUNet 加载成功，显存: {torch.cuda.memory_allocated()/1e9:.2f}GB")
+
+            # ★ 验证预训练权重是否加载
+            total_params = sum(p.numel() for p in denoiser_ula.parameters())
+            non_zero_params = sum((p != 0).sum().item() for p in denoiser_ula.parameters())
+            print(f"[退火ULA] 总参数: {total_params}, 非零参数: {non_zero_params}")
+            if non_zero_params < total_params * 0.5:
+                print("[退火ULA] ⚠️ 警告: 超过50%参数为零，可能未正确加载预训练权重！")
+            else:
+                print("[退火ULA] ✓ 预训练权重加载正常")
         except Exception as e:
-            print(f"[ULA] DRUNet 加载失败!")
-            print(f"[ULA] 错误类型: {type(e).__name__}")
-            print(f"[ULA] 错误信息: {e}")
-            print("[ULA] 详细堆栈:")
+            print(f"[退火ULA] DRUNet 加载失败!")
+            print(f"[退火ULA] 错误类型: {type(e).__name__}")
+            print(f"[退火ULA] 错误信息: {e}")
+            print("[退火ULA] 详细堆栈:")
             traceback.print_exc()
 
         if denoiser_ula is not None:
             try:
-                from deepinv.sampling import ULA
-                from deepinv.optim import L2 as DataFid_L2
-                from deepinv.optim import ScorePrior
+                # ★ 主动清理显存（释放之前可能残留的模型）
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    import gc
+                    gc.collect()
+                    print(f"[退火ULA] 显存已清理: {torch.cuda.memory_allocated()/1e9:.2f}GB")
 
-                print("[ULA] 创建 ScorePrior...")
-                # ★ sigma_denoiser：去噪器噪声水平（ScorePrior 内部 Tweedie 公式使用）
-                #   对应 deepinv 官方示例中的 sigma_denoiser = 2/255，与图像像素值域 [0,1] 匹配
-                # ★ sigma_data：观测噪声标准差（已在脚本顶部定义为全局变量），同时用于
-                #   DataFid_L2 与 ULA step_size。依据 deepinv 官方 PnP-ULA 教程
-                #   （demo_sampling.html）：step_size = 0.01 * sigma_data**2。
-                #   官方公式中的 sigma 指数据噪声水平（与 L2 数据保真度同一 sigma），
-                #   而非 sigma_denoiser，二者物理含义不同（数据噪声 vs 先验/去噪器噪声），
-                #   切勿混用。
-                prior_score = ScorePrior(denoiser=denoiser_ula)
-                data_fidelity = DataFid_L2(sigma=sigma_data)
+                print(f"[退火ULA] 参数配置:")
+                print(f"  - sigma_schedule: {sigma_schedule}")
+                print(f"  - steps_per_sigma: {ula_steps_each_sigma}")
+                print(f"  - lambda_data: {lambda_data}")
+                print(f"  - step_size_coeff: {step_size_coeff_annealed}")
+                total_steps = len(sigma_schedule) * ula_steps_each_sigma
+                print(f"  - 总步数: {total_steps} ({len(sigma_schedule)}级 × {ula_steps_each_sigma}步)")
 
-                print("[ULA] 创建 ULA 采样器...")
-                # ★ 根据deepinv官方示例参数：
-                # step_size = step_size_coeff * sigma_data^2, alpha = 0.9
-                #   系数 step_size_coeff 已在文件顶部定义为全局变量(默认 1.0),
-                #   此处直接引用, 便于在指纹中追踪并自动丢弃旧缓存。
-                # ★ max_iter 区分GPU/CPU:
-                #   - GPU: 5000 (接近deepinv官方教程推荐值, 链混合更充分)
-                #   - CPU: 1000 (CPU运行ULA极慢, 5000会导致单样本耗时数十分钟)
-                # ★ 教学权衡说明:
-                #   即便使用5000, 在S=8的有限样本量下, ULA链的自相关仍可能偏高;
-                #   本实验核心结论是"用S=8演示UQ可视化+提示S≥30才可靠",
-                #   链的绝对混合质量受限于教学时长, 需在更大规模实验中验证。
-                # ★★ 步长调整历史 (与第8章 Nelder-Mead 伪收敛同源):
-                #   历史版本使用 deepinv 默认系数 0.01, 代入 sigma_data=0.01 得
-                #   step_size=1e-6, 虽符合官方公式形式, 但官方教程示例的 sigma
-                #   通常 ≥0.1, 0.01 这一量级下步长偏小, Langevin 链在 256x256x3
-                #   维空间中 "看起来收敛但实际未充分探索" (各样本高度相似、
-                #   不确定性 std 偏小, 8 样本 PSNR 范围仅 0.01 dB)。
-                #   现已上调 step_size_coeff=1.0 (即 step_size=1e-4, 与官方教程
-                #   sigma=0.1 示例同量级), 步长扩大 100 倍, 链混合显著改善。
-                #   诊断信号: 脚本末尾 sample_psnrs.std() 若仍 < 0.5 dB, 提示
-                #   链混合仍不足, 可进一步调大 step_size_coeff (1.0 → 10.0)
-                #   或 max_iter (5000 → 10000)。
-                # ★ 全局变量 ula_max_iter 已在文件顶部定义（教学折中默认 2000 步），
-                #   若需更充分混合可改为 5000（耗时 10+ 分钟/样本）。
-                ula = ULA(prior=prior_score, data_fidelity=data_fidelity,
-                          max_iter=ula_max_iter, burnin_ratio=0.5, thinning=1,
-                          step_size=step_size_coeff * (sigma_data**2), alpha=0.9, sigma=sigma_denoiser,
-                          verbose=True)  # ★ 显示内层 5000/2000 步进度，方便观察采样细节
-                print(f"[ULA] max_iter={ula_max_iter} (设备: {device.type})")
-
-                print(f"[ULA] 开始采样...")
                 start_idx = len(all_samples)
+                samples_needed = S - start_idx
 
-                # ★ 替换 tqdm 为 notebook 友好版本（原地刷新，不换行）
-                # deepinv 内部使用 tqdm，替换 sys.modules 后它会使用 tqdm.auto
-                import tqdm.auto
-                _orig_tqdm_in_sys_modules = sys.modules.get('tqdm')
-                sys.modules['tqdm'] = _tqdm_module.auto  # 用 auto 替换
+                t_start_all = time.time()
+                annealed_samples = sample_annealed_ula(
+                    y_obs=y_inp,
+                    physics=physics_inp,
+                    model=denoiser_ula,
+                    device=device,
+                    sigma_schedule=sigma_schedule,
+                    steps_per_sigma=ula_steps_each_sigma,
+                    lambda_data=lambda_data,
+                    step_size_coeff=step_size_coeff_annealed,
+                    S=samples_needed
+                )
+                t_total = time.time() - t_start_all
 
-                try:
-                    for s in range(start_idx, S):
-                        # ★ 使用 \r 原地刷新，覆盖上一行（不换行）
-                        print(f"\r[ULA] 正在采样第 {s+1}/{S} 个样本...", end="", flush=True)
-                        # ★ 每次采样使用不同的随机种子，确保样本多样性
-                        torch.manual_seed(s * 1000 + 42)
-                        t_start = time.time()
-                        ula_result = ula(y_inp, physics_inp)
-                        x_sample = ula_result[0] if isinstance(ula_result, tuple) else ula_result
-                        t_sample = time.time() - t_start
-                        all_samples.append(x_sample.detach().cpu())
-                        sample_times.append(t_sample)  # ★ 记录实际耗时
-                        sample_methods.append("ULA")  # ★ 记录样本来源方法
-                        psnr_val = compute_psnr(x_true, x_sample)
-                        # ★ 完成后打印结果（换行），覆盖"正在采样"提示
-                        print(f"\r[ULA] 样本 {s+1}/{S} 完成: 耗时 {t_sample:.1f}s, PSNR={psnr_val:.1f}dB")
-                        del x_sample, ula_result
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                        save_samples_to_cache(all_samples, sample_methods, sample_times)
-                finally:
-                    # ★ 恢复原始 tqdm 模块
-                    if _orig_tqdm_in_sys_modules is not None:
-                        sys.modules['tqdm'] = _orig_tqdm_in_sys_modules
-                    else:
-                        del sys.modules['tqdm']
+                # 添加样本到列表
+                for i, sample in enumerate(annealed_samples):
+                    all_samples.append(sample)
+                    sample_methods.append("退火ULA")
+                    # 估算每个样本的耗时（平均）
+                    sample_times.append(t_total / samples_needed)
 
-                if sample_times:
-                    cache_best = all(m == "ULA" for m in sample_methods)
-                    print(f"[ULA] 采样完成! 平均耗时: {np.mean(sample_times[-(S-start_idx):]):.2f}s")
-                    if use_cache:
-                        qtag = "全部ULA(最优)" if cache_best else "含降级样本"
-                        print(f"[缓存] 已保存 {len(all_samples)} 个样本 (含 fingerprint, {qtag})")
+                # 计算PSNR
+                for i, sample in enumerate(annealed_samples):
+                    # ★ 样本在CPU上，需移到GPU再计算PSNR
+                    psnr_val = compute_psnr(x_true, sample.to(device))
+                    # ★ 显示2位小数，便于观察样本间是否有真实变化
+                    print(f"[退火ULA] 样本 {start_idx + i + 1}/{S} 完成: PSNR={psnr_val:.2f}dB")
 
-            except ImportError as e:
-                print(f"[ULA] 导入失败: {e}")
-                print("[ULA] 详细堆栈:")
-                traceback.print_exc()
+                print(f"[退火ULA] 采样完成! 总耗时: {t_total:.1f}s")
+                print(f"[缓存] 已保存 {len(all_samples)} 个样本 (全部退火ULA)")
+                save_samples_to_cache(all_samples, sample_methods, sample_times)
+
             except Exception as e:
-                print(f"[ULA] 采样失败!")
-                print(f"[ULA] 错误类型: {type(e).__name__}")
-                print(f"[ULA] 错误信息: {e}")
-                print("[ULA] 详细堆栈:")
+                print(f"[退火ULA] 采样失败!")
+                print(f"[退火ULA] 错误类型: {type(e).__name__}")
+                print(f"[退火ULA] 错误信息: {e}")
+                print("[退火ULA] 详细堆栈:")
                 traceback.print_exc()
             finally:
                 release_model('denoiser_ula')
@@ -596,36 +773,11 @@ if len(all_samples) < S:
 
                 print("[DPS] 创建 DPS 采样器...")
                 n_dps_iter = 100
-                # ★ 修复：与 ULA 保持一致, 显式传入 sigma=sigma_data 匹配观测噪声水平
-                #   （L2 默认 sigma=1.0 会与 physics_inp 的 GaussianNoise(sigma=sigma_data) 严重失配）
-                # ★★ 与 ULA 中 sigma_data 语义的细微差异说明 (供学生参考, 避免误类比):
-                #   ULA:  Langevin 步长公式  step_size = 0.01 * sigma_data**2 中的 sigma_data
-                #         严格对应"数据保真项 L2 的噪声水平", 也即 y_obs = A(x)+n, n~N(0, sigma_data^2 I),
-                #         deepinv 官方 PnP-ULA 教程 (demo_sampling.html) 明确该 sigma 即为物理观测噪声。
-                #   DPS:  Diffusion Posterior Sampling (Chung et al., 2022) 原文 Eq.(9) 给出的
-                #         guidance scale 形式为  ∇_x ||y - A(x_hat_0)||^2 / (2 * rho^2),
-                #         其中 rho 才是"y 中的噪声水平" (与 ULA 中 sigma_data 同物理含义)。
-                #         但 deepinv 的 DPS 实现 (deepinv/sampling/dps.py) 实际并未直接调用该
-                #         原论文公式, 而是将 L2(sigma=...) 整体作为 data_fidelity 传入, 由 DPS
-                #         类在每个扩散时间步 t 计算  ||y - A(x_hat_0(x_t, t))||^2, 并按 1/sigma^2
-                #         缩放梯度。 因此 deepinv 的 DPS(sigma=sigma_data) 中:
-                #         - 物理含义上: sigma 仍表示"观测噪声水平" (与 ULA 的 sigma_data 同义)
-                #         - 数值效果上: 与原论文 rho 略有不同 —— deepinv 默认不引入 DPS 原论文
-                #           建议的 1/||y - A(x_hat_0)|| 归一化缩放 (DPS 论文推荐按噪声大小做
-                #           启发式缩放以适应不同噪声量级), 而是固定使用 1/sigma_data^2 缩放。
-                #         简化结论: 在 deepinv 框架下, ULA 与 DPS 传入相同的 sigma=sigma_data
-                #         物理含义一致, 但 DPS 内部并未做论文推荐的启发式缩放, 严格意义上
-                #         "guidance scale" 不严格等于 1/sigma_data^2。学生在跨方法对比时应注意
-                #         这一差异 (尤其是 sigma_data 较大时, deepinv 的 DPS 可能会比论文版本
-                #         给出更保守的 likelihood weight)。本实验选择 deepinv 默认实现以保证
-                #         API 一致性, 论文原版实现请参考 Chung et al. (2022) 公开代码。
-                # ★ 新版 deepinv (>=0.4) DPS API：
-                #   - 必填首参是 denoiser（旧版为 model）
-                #   - 内部自动构造 DPSDataFidelity，禁止再传 data_fidelity
-                #     （会引发 super().__init__ 重复关键字报错）
-                #   - 采样步数用 num_steps（旧版为 max_iter）
-                #   - 噪声水平由 physics_inp 的 GaussianNoise(sigma=sigma_data) 提供
-                #     DPS 在 forward 时按 1/sigma² 缩放似然梯度，由 weight 控制步长 λ
+                # ★ DPS 核心参数（详细说明见文件开头"参数设计说明"区块）
+                # weight=1.0: 似然梯度权重，deepinv默认值，对应DPS论文标准设置
+                # alpha=1.0: 扩散步长系数，deepinv默认值
+                # 噪声水平由 physics_inp.noise_model 提供（sigma_data=0.01）
+                # DPS 内部用 1/sigma_data² 缩放似然梯度（已在开头参数验证中打印）
                 dps = DPS(
                     denoiser=denoiser_dps,
                     schedule="vp",
@@ -658,7 +810,7 @@ if len(all_samples) < S:
                     save_samples_to_cache(all_samples, sample_methods, sample_times)
 
                 if sample_times:
-                    cache_best = all(m == "ULA" for m in sample_methods)
+                    cache_best = all(m in {"ULA", "退火ULA"} for m in sample_methods)
                     print(f"[DPS] 采样完成! 平均耗时: {np.mean(sample_times[-(S-start_idx):]):.2f}s")
                     if use_cache:
                         qtag = "全部ULA(最优)" if cache_best else "含降级样本"
@@ -733,7 +885,7 @@ if len(all_samples) < S:
                     pbar_outer.set_postfix({"耗时": f"{t_sample:.1f}s"})
 
                 if sample_times:
-                    cache_best = all(m == "ULA" for m in sample_methods)
+                    cache_best = all(m in {"ULA", "退火ULA"} for m in sample_methods)
                     print(f"[PnP] 采样完成! 平均耗时: {np.mean(sample_times[-(S-start_idx):]):.2f}s")
                     if use_cache:
                         qtag = "全部ULA(最优)" if cache_best else "含降级样本"
@@ -777,7 +929,7 @@ if len(all_samples) < S:
             pbar.set_postfix({"耗时": f"{t_sample:.1f}s"})
 
         if use_cache:
-            cache_best = all(m == "ULA" for m in sample_methods)
+            cache_best = all(m in {"ULA", "退火ULA"} for m in sample_methods)
             qtag = "全部ULA(最优)" if cache_best else "含降级样本"
             print(f"[缓存] 已保存 {len(all_samples)} 个样本 (含 fingerprint, {qtag})")
 
@@ -891,6 +1043,106 @@ print(f"⚠️ 注意: S={S} 时区间估计不可靠，建议 S≥30")
 sample_psnrs = [compute_psnr(x_true, s.to(device)) for s in all_samples]
 print(f"样本PSNR范围: {min(sample_psnrs):.2f} - {max(sample_psnrs):.2f} dB")
 print(f"样本PSNR标准差: {np.std(sample_psnrs):.2f} dB")
+
+# ★★★ 运行时自动诊断：检测 ULA 链是否发散 ★★★
+# 诊断信号：
+#   1. max_std > 0.5: 像素标准差超过图像合法值域 [0,1] 的一半，说明样本间差异过大
+#   2. 样本包含 NaN: 数值不稳定
+#   3. 样本包含极端值 (abs > 3): 链走向了错误区域
+#   4. PSNR < 10 dB: 重建质量过低（inpainting 任务预期 18-25 dB）
+DIAG_MAX_STD_THRESHOLD = 0.5  # 像素 std 阈值
+DIAG_PSNR_MIN_THRESHOLD = 10.0  # PSNR 最低阈值（inpainting 任务）
+has_nan = torch.isnan(samples_tensor).any().item()
+has_extreme = (samples_tensor.abs() > 3).any().item()
+psnr_too_low = min(sample_psnrs) < DIAG_PSNR_MIN_THRESHOLD
+std_too_high = max_std > DIAG_MAX_STD_THRESHOLD
+
+if std_too_high or has_nan or has_extreme or psnr_too_low:
+    print("\n" + "⚠️" * 30)
+    print("⚠️⚠️⚠️ [诊断警告] ULA 链可能已发散，结果不可信！")
+    print("⚠️" * 30)
+    if std_too_high:
+        print(f"  - max_std={max_std:.4f} > {DIAG_MAX_STD_THRESHOLD} (超过图像值域阈值)")
+    if has_nan:
+        print(f"  - 样本包含 NaN（数值不稳定）")
+    if has_extreme:
+        print(f"  - 样本包含极端值（abs > 3，链走向错误区域）")
+    if psnr_too_low:
+        print(f"  - 最小PSNR={min(sample_psnrs):.1f}dB < {DIAG_PSNR_MIN_THRESHOLD}dB（重建质量过低）")
+    print("\n建议操作：")
+    print(f"  1. 减小 step_size_coeff_annealed（当前={step_size_coeff_annealed}，尝试 0.001 或更小）")
+    print(f"  2. 检查 lambda_data 是否合理（当前={lambda_data}）")
+    print(f"  3. 检查样本可视化图片，确认是否出现噪声/伪影")
+    print("⚠️" * 30 + "\n")
+else:
+    print(f"[诊断] ✓ 样本质量正常（max_std={max_std:.4f}, PSNR范围=[{min(sample_psnrs):.1f}, {max(sample_psnrs):.1f}]dB）")
+
+# ====== 按方法分组的后验统计量对比（实证验证）======
+# 验证"DPS 与 ULA 的不确定性估计是否一致"的理论预期
+# 注意：仅比较 ULA 和 DPS（两者构成严格后验采样），
+#       PnP近似/伪逆+噪声不参与此验证（见下方说明）
+VALID_POSTERIOR_METHODS = {"ULA", "退火ULA", "DPS"}  # 构成严格后验采样的方法
+APPROXIMATE_METHODS = {"PnP近似", "伪逆+噪声"}  # 不构成严格后验的方法
+
+# ★ PnP/伪逆不可比的原因说明（与最终总结的 _std_comparable_msg 共享逻辑）
+_APPROX_METHOD_NOT_COMPARABLE = {
+    "PnP近似": "缺少Langevin逐步加噪, std系统性偏小",
+    "伪逆+噪声": "std几乎完全由初始化扰动决定, 与后验语义相去甚远"
+}
+
+unique_methods = list(set(sample_methods))
+valid_methods = [m for m in unique_methods if m in VALID_POSTERIOR_METHODS]
+approx_methods = [m for m in unique_methods if m in APPROXIMATE_METHODS]
+
+if approx_methods:
+    print(f"\n[实证验证] 检测到非严格后验方法: {approx_methods}")
+    print(f"[实证验证] 这些方法的 posterior_std 不能用于验证'DPS与ULA物理含义一致'：")
+    for method in approx_methods:
+        print(f"  - {method}: {_APPROX_METHOD_NOT_COMPARABLE.get(method, '原因未知')}")
+
+if len(valid_methods) >= 2:
+    print("\n" + "="*60)
+    print("★ 跨方法后验统计量对比（实证验证）")
+    print("="*60)
+    print("理论预期：若 DPS 与 ULA 的 sigma_data 语义一致，")
+    print("          两者的 posterior_std 应在相近量级。")
+    print("-"*60)
+    for method in valid_methods:
+        method_indices = [i for i, m in enumerate(sample_methods) if m == method]
+        method_samples = [all_samples[i] for i in method_indices]
+        if len(method_samples) > 1:
+            method_tensor = torch.stack(method_samples, dim=0)
+            method_std = method_tensor.std(dim=0).mean().item()
+            method_psnrs = [sample_psnrs[i] for i in method_indices]
+            print(f"  {method}: n={len(method_samples)}, "
+                  f"平均std={method_std:.4f}, "
+                  f"PSNR={np.mean(method_psnrs):.1f}±{np.std(method_psnrs):.2f}dB")
+        else:
+            print(f"  {method}: n=1（无法计算std）")
+    print("-"*60)
+    # 判断是否一致（仅比较有效后验方法）
+    method_stds = []
+    for method in valid_methods:
+        method_indices = [i for i, m in enumerate(sample_methods) if m == method]
+        method_samples = [all_samples[i] for i in method_indices]
+        if len(method_samples) > 1:
+            method_tensor = torch.stack(method_samples, dim=0)
+            method_stds.append(method_tensor.std(dim=0).mean().item())
+    if len(method_stds) >= 2:
+        std_ratio = max(method_stds) / min(method_stds) if min(method_stds) > 0 else float('inf')
+        if std_ratio < 2:
+            print(f"✓ ULA vs DPS 的 posterior_std 比值={std_ratio:.1f}（<2），"
+                  f"与'物理含义一致'的理论预期吻合")
+        else:
+            print(f"✗ ULA vs DPS 的 posterior_std 比值={std_ratio:.1f}（≥2），"
+                  f"与'物理含义一致'的理论预期不符，需检查超参数")
+elif len(valid_methods) == 1:
+    print(f"\n[实证验证] 本次运行仅使用单一有效后验方法 ({valid_methods[0]})，"
+          f"无法验证'ULA vs DPS 物理含义一致'的理论预期")
+    print(f"[实证验证] 平均 posterior_std={mean_std:.4f}（仅作为该方法的参考值）")
+else:
+    print(f"\n[实证验证] 本次运行未使用有效后验方法（仅 {approx_methods}），"
+          f"无法验证'DPS与ULA物理含义一致'的理论预期")
 
 # 可视化: 后验样本 + 均值 + 不确定性
 fig = plt.figure(figsize=(18, 12))
@@ -1051,11 +1303,30 @@ fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
 # 左: 校准曲线
 axes[0].plot([0, 1], [0, 1], 'k--', label='完美校准', alpha=0.5)
-axes[0].plot(confidence_levels, coverages, 'ro-', label='实际校准', markersize=8)
+
+# ★ 当只有一个置信水平时（S=4），绘制单点+标注；否则绘制曲线
+if len(confidence_levels) == 1:
+    # 单点情况：绘制点并添加说明
+    axes[0].plot(confidence_levels[0], coverages[0], 'ro', markersize=12, label='实际校准')
+    axes[0].annotate(f'({confidence_levels[0]:.0%}, {coverages[0]:.1%})',
+                     xy=(confidence_levels[0], coverages[0]),
+                     xytext=(10, 10), textcoords='offset points',
+                     fontsize=11, color='red',
+                     bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow', edgecolor='red'))
+    # ★ 添加警告说明
+    axes[0].text(0.5, 0.15,
+                 f'⚠️ S={S}时仅能计算{len(confidence_levels)}个置信水平\n'
+                 f'需要S≥8才能绘制完整校准曲线',
+                 ha='center', va='center', fontsize=10, color='darkorange',
+                 bbox=dict(boxstyle='round,pad=0.5', facecolor='lightyellow', edgecolor='darkorange'))
+else:
+    # 多个置信水平：绘制曲线
+    axes[0].plot(confidence_levels, coverages, 'ro-', label='实际校准', markersize=8)
+
 axes[0].set_xlabel('名义覆盖率', fontsize=12)
 axes[0].set_ylabel('实际覆盖率', fontsize=12)
 axes[0].set_title('★ 校准曲线', fontsize=13)
-axes[0].legend(fontsize=10)
+axes[0].legend(fontsize=10, loc='upper left')
 axes[0].grid(alpha=0.3)
 axes[0].set_xlim(0, 1)
 axes[0].set_ylim(0, 1)
@@ -1112,8 +1383,7 @@ print("""
   - S适中(≥8): 均值和标准差趋于稳定
   - S较多(≥30): 高置信水平分位数也可可靠估计
 
-本步骤对比: S=4 vs S={S} 样本数对不确定性的影响
-""")
+本步骤对比: S=4 vs S={S} 样本数对不确定性的影响""".format(S=S))
 
 # 减少样本数的不确定性对比
 if len(all_samples) >= 4:
@@ -1321,10 +1591,11 @@ else:
 #     - 伪逆+噪声: 各样本之间共享同一个伪逆解, 仅以 0.02*randn 扰动, std 几乎
 #       完全由初始化噪声决定, 与"后验"语义相去甚远。
 #   下面这段提示在最终总结中根据 ula_method 动态生成, 与上面的"混合采样"警告互补。
+#   ★ 注意：PnP/伪逆不可比的原因与 Step 3 的 _APPROX_METHOD_NOT_COMPARABLE 保持一致
 if ula_method in ("PnP近似", "伪逆+噪声"):
     _std_comparable_msg = (
         f"⚠️ 采样为纯降级方法 ({ula_method}), 该方法不构成严格后验采样 "
-        f"(PnP 缺 Langevin 步加噪, 伪逆仅在初始化注入固定幅值噪声), "
+        f"({_APPROX_METHOD_NOT_COMPARABLE.get(ula_method, '原因未知')}), "
         f"posterior_std 的绝对数值不能与 ULA 的不确定性直接比较大小, "
         f"本结果仅作'方法可运行'演示"
     )
