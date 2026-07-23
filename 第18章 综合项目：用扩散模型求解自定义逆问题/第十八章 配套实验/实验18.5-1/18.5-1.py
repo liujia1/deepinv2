@@ -109,10 +109,10 @@ CFG = {
     "sigma_denoiser": 2.0 / 255.0,  # 去噪器噪声（ScorePrior内部Tweedie公式假设）
 
     # 退火ULA参数（从测试.py移植优化版）
-    "sigma_schedule": [1.0, 0.5, 0.25, 0.1, 0.05, 0.02, 0.01],  # 退火调度（从6级扩展为7级）
+    "sigma_schedule": [1.0, 0.5, 0.25, 0.1, 0.05, 0.02, 0.01],  # 退火调度（7级）
     "ula_steps_each_sigma": 50,  # 每个sigma级别的迭代步数（从40增至50，与测试.py一致）
-    "lambda_data": 0.05,  # ★ 关键改进：从0.2降至0.05，与测试.py一致（数据保真项已归一化）
-    "step_size_coeff_annealed": 0.005,  # 步长系数（从0.01降至0.005，与测试.py一致）
+    "lambda_data": 0.05,  # 数据保真项权重（与测试.py一致，数据保真项已归一化）
+    "step_size_coeff_annealed": 0.005,  # 步长系数（保留与测试.py一致）
     "ula_noise_scale": 1.0,  # ★ 新增：Langevin噪声尺度（测试.py验证值）
     "ula_burn_in": 10,  # ★ 新增：每级sigma的burn-in步数（MCMC标准做法）
 
@@ -146,6 +146,30 @@ print(f"  噪声尺度: ula_noise_scale={ula_noise_scale}, burn_in={ula_burn_in}
 #
 # ------ ULA (Unadjusted Langevin Algorithm) 参数 ------
 # 退火ULA使用多级噪声调度 [1.0, 0.5, 0.25, 0.1, 0.05, 0.02, 0.01]
+#
+# ★ 根本局限性与教学平衡说明:
+#   DRUNet 的训练噪声范围为 [0, 50/255≈0.196]，而退火调度的前3级
+#   (σ=1.0, 0.5, 0.25) 均超出此范围。在这些 σ 上，DRUNet 输出 D(x,σ)
+#   不可靠，score = (D-x)/σ² 的质量下降，导致：
+#   (a) 单样本 PSNR ≈ 12 dB（仅略高于观测 11.39 dB）——单样本被噪声淹没
+#   (b) 后验均值 PSNR ≈ 15.7 dB——30 个独立样本取平均时噪声部分抵消
+#   (c) 93% 区间覆盖率 ≈ 98.8%（略保守）——区间偏宽但覆盖了真值
+#
+#   为什么不增大 lambda_data 来增强数据保真？
+#     lambda_data 控制数据保真项 A^T(Ax-y)/sigma_data² 的权重。
+#     增大 lambda（如 0.5）会"钉死"链在伪逆附近，导致样本多样性
+#     极低（PSNR std ≈ 0.016 dB），后验均值 PSNR 反而下降到 12.4 dB，
+#     校准区间过窄（93% 覆盖率仅 72.9%），教学效果更差。
+#
+#   为什么不缩短 sigma_schedule 到 DRUNet 工作范围？
+#     缩到 [0.15, ..., 0.0025] 后，末级 σ 太小使链"冻结"在伪逆附近，
+#     同样导致样本多样性不足，校准从保守变为严重不足。
+#
+#   当前配置 (lambda=0.05, burn_in=10) 是在教学目标下的最佳平衡：
+#     - 后验均值 PSNR 15.7 dB 展示了"多样本平均去噪"的效果
+#     - 校准曲线虽然偏保守，但区间覆盖了真值，学生能理解UQ的含义
+#     - 若需更高单样本 PSNR，应换用 DPS 采样（见代码降级策略）
+#
 # 每级噪声的步长: step_size = step_size_coeff_annealed * sigma^2
 #   - 物理含义：Langevin 动力学的离散化步长
 #   - 诊断信号：样本PSNR.std()应>0.5dB，若<0.5dB提示混合不足
@@ -169,12 +193,11 @@ print(f"  噪声尺度: ula_noise_scale={ula_noise_scale}, burn_in={ula_burn_in}
 #   - 取值依据：deepinv官方示例 sigma_denoiser=2/255
 #   - 与sigma_data区别：sigma_data是观测噪声，sigma_denoiser是去噪器内部噪声
 #
-# lambda_data（数据保真项权重）★关键改进
+# lambda_data（数据保真项权重）
 #   - 物理含义：控制数据保真项 ||y-A(x)||² 的权重
-#   - 取值依据：测试.py使用0.05（从0.2修正为0.05）
-#   - 原因：数据保真项已归一化为A^T(Ax-y)/sigma_data²，
-#     lambda=0.2会导致过强约束，迫使后验过度集中于观测值附近
-#   - 修正效果：后验std更接近真实宽度，coverage更准确
+#   - 取值依据：0.05（测试.py验证值，数据保真项已归一化为A^T(Ax-y)/sigma_data²）
+#   - 教学平衡：lambda=0.05 让链保留足够多样性，后验均值 PSNR ≈ 15.7 dB，
+#     93% 区间覆盖率 ≈ 98.8%（略保守但覆盖真值）；增大 lambda 会牺牲多样性
 #
 # ------ DPS (Diffusion Posterior Sampling) 参数 ------
 # weight（似然梯度权重）: 1.0（deepinv默认值）
@@ -327,8 +350,20 @@ print(f"观测 PSNR: {compute_psnr(x_true, y_inp):.2f} dB")
 # ========================================================================
 # ★ 退火ULA采样函数（从测试.py移植优化版）
 # ========================================================================
+# ★ 全局：tqdm 进度条开关
+#  - Jupyter/Colab 环境下 tqdm.auto 会自动选择 notebook widget
+#  - 纯脚本/管道/CI 环境下自动降级为 ASCII 进度条
+#  - 需要静默运行（如重定向到日志）时，置为 False 即可
+import sys
+try:
+    from tqdm.auto import tqdm as _tqdm_auto
+except Exception:
+    _tqdm_auto = tqdm  # 退化到已导入的普通 tqdm
+# 检测 stdout 是否是 tty：管道/CI 环境关闭进度条避免刷屏
+_TQDM_ENABLED = sys.stdout.isatty() or bool(getattr(sys, 'ps1', None))
 def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per_sigma,
-                         lambda_data, step_size_coeff, S=1, burn_in_steps=0, noise_scale=1.0):
+                         lambda_data, step_size_coeff, S=1, burn_in_steps=0, noise_scale=1.0,
+                         tqdm_enabled=None):
     """
     退火ULA后验采样（含burn-in和数值稳定性保护）
 
@@ -344,6 +379,7 @@ def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per
         S: 样本数
         burn_in_steps: ★新增 每级sigma的burn-in步数（不收集中间样本）
         noise_scale: ★新增 Langevin噪声尺度
+        tqdm_enabled: ★新增 是否显示进度条（None=根据环境自动判断，True/False 强制开关）
 
     返回:
         (samples, n_diverged_steps) - 元组:
@@ -358,9 +394,12 @@ def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per
     # spatial std 是在"被救回的样本"上计算的，可能低估真实发散程度
     n_diverged_steps = 0
 
-    for sample_id in range(S):
-        print(f"[退火ULA] 正在采样第 {sample_id+1}/{S} 个样本...")
+    # ★ 解析 tqdm_enabled：None 时按全局开关自动判断
+    if tqdm_enabled is None:
+        tqdm_enabled = _TQDM_ENABLED
 
+    # ★ 外层 tqdm 进度条：30 个样本（用 disable 参数可一行关闭进度条）
+    for sample_id in _tqdm_auto(range(S), desc="[退火ULA] 采样样本", unit="个", ncols=80, disable=not tqdm_enabled):
         # ★ 为每个样本设置不同的随机种子（与DPS/PnP保持一致）
         torch.manual_seed(sample_id * 1000 + 42)
 
@@ -372,7 +411,7 @@ def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per
         x = x + 0.01 * torch.randn_like(x)
         x = x.clamp(0, 1)
 
-        # 退火循环
+        # 退火循环（每级 sigma 独立显示内层进度条）
         for sigma in sigma_schedule:
             step_size = step_size_coeff * (sigma ** 2)
 
@@ -381,7 +420,11 @@ def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per
             for _ in range(burn_in_steps):
                 # 计算score: (D(x,sigma) - x) / sigma^2
                 B = x.shape[0]
-                sigma_map = torch.ones(B, 1, x.shape[-2], x.shape[-1], device=device) * sigma
+                # ★ 修复：deepinv新版DRUNet要求sigma为1D张量（长度=B），
+                # 旧版兼容4D sigma_map，但新版会再次.view(B,1,1,1)导致shape mismatch。
+                # 这里统一传1D sigma张量，避免兼容性问题。
+                sigma_1d = torch.full((B,), float(sigma), device=device)
+                sigma_map = sigma_1d.view(B, 1, 1, 1)
 
                 with torch.no_grad():
                     denoised = model(x, sigma_map)
@@ -413,42 +456,54 @@ def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per
                 # 清理中间变量
                 del denoised, score, sigma_map, data_grad, grad, noise
 
-            # 正式采样阶段
-            for step in range(steps_per_sigma):
-                # 计算score
-                B = x.shape[0]
-                sigma_map = torch.ones(B, 1, x.shape[-2], x.shape[-1], device=device) * sigma
+            # ★ 正式采样阶段：内层 tqdm 进度条，每级 sigma 显示
+            # leave=False 让内层进度条用完即消失；总迭代数 = steps_per_sigma
+            with _tqdm_auto(total=steps_per_sigma,
+                      desc=f"  σ={sigma:.4f} 采样",
+                      unit="步",
+                      ncols=80,
+                      leave=False,
+                      disable=not tqdm_enabled) as pbar:
+                for step in range(steps_per_sigma):
+                    # 计算score
+                    B = x.shape[0]
+                    # ★ 修复：与burn-in阶段保持一致，传1D sigma张量
+                    sigma_1d = torch.full((B,), float(sigma), device=device)
+                    sigma_map = sigma_1d.view(B, 1, 1, 1)
 
-                # ★ 使用no_grad减少显存
-                with torch.no_grad():
-                    denoised = model(x, sigma_map)
+                    # ★ 使用no_grad减少显存
+                    with torch.no_grad():
+                        denoised = model(x, sigma_map)
 
-                score = (denoised - x) / (sigma ** 2)
+                    score = (denoised - x) / (sigma ** 2)
 
-                # 数据保真梯度
-                data_grad = physics.A_adjoint(physics.A(x) - y_obs) / (sigma_data ** 2)
+                    # 数据保真梯度
+                    data_grad = physics.A_adjoint(physics.A(x) - y_obs) / (sigma_data ** 2)
 
-                # 后验梯度
-                grad = score - lambda_data * data_grad
+                    # 后验梯度
+                    grad = score - lambda_data * data_grad
 
-                # Langevin更新（带噪声尺度控制）
-                noise = torch.randn_like(x)
-                x = x + step_size * grad + noise_scale * torch.sqrt(torch.tensor(2 * step_size, device=device)) * noise
+                    # Langevin更新（带噪声尺度控制）
+                    noise = torch.randn_like(x)
+                    x = x + step_size * grad + noise_scale * torch.sqrt(torch.tensor(2 * step_size, device=device)) * noise
 
-                # ★ 数值稳定性保护
-                if not torch.isfinite(x).all():
-                    n_diverged_steps += 1
-                    print(f"  [ula sample] non-finite state at sigma={sigma:.4f}, "
-                          f"clamping & resuming (total diverged={n_diverged_steps})")
-                    x = torch.nan_to_num(x, nan=0.5, posinf=1.0, neginf=0.0)
+                    # ★ 数值稳定性保护
+                    if not torch.isfinite(x).all():
+                        n_diverged_steps += 1
+                        print(f"  [ula sample] non-finite state at sigma={sigma:.4f}, "
+                              f"clamping & resuming (total diverged={n_diverged_steps})")
+                        x = torch.nan_to_num(x, nan=0.5, posinf=1.0, neginf=0.0)
 
-                # ★ 软投影：每步都保持遍历性
-                x = x.clamp(-0.1, 1.1)
+                    # ★ 软投影：每步都保持遍历性
+                    x = x.clamp(-0.1, 1.1)
 
-                # ★ 定期清理中间变量
-                del denoised, score, sigma_map, data_grad, grad, noise
-                if step % 20 == 0:
-                    clear_gpu()
+                    # ★ 定期清理中间变量
+                    del denoised, score, sigma_map, data_grad, grad, noise
+                    if step % 20 == 0:
+                        clear_gpu()
+
+                    # ★ 推进内层进度条
+                    pbar.update(1)
 
             # ★ 每级sigma结束后的最终硬约束
             # 保证进入下一级sigma时x在合法范围内
@@ -462,6 +517,8 @@ def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per
         clear_gpu()
 
     samples_tensor = torch.stack(samples)
+    # ★ 进度条结束换行（避免"完成"信息接在最后一个进度行后面）
+    print()
     print(f"[退火ULA] 完成。n_diverged_steps={n_diverged_steps} (0=无nan_to_num触发)")
     return samples_tensor, n_diverged_steps
 
@@ -767,13 +824,6 @@ if len(all_samples) < S:
 
         if denoiser_ula is not None:
             try:
-                # ★ 主动清理显存（释放之前可能残留的模型）
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    import gc
-                    gc.collect()
-                    print(f"[退火ULA] 显存已清理: {torch.cuda.memory_allocated()/1e9:.2f}GB")
-
                 print(f"[退火ULA] 参数配置:")
                 print(f"  - sigma_schedule: {sigma_schedule}")
                 print(f"  - steps_per_sigma: {ula_steps_each_sigma}")
@@ -809,14 +859,16 @@ if len(all_samples) < S:
                     # 估算每个样本的耗时（平均）
                     sample_times.append(t_total / samples_needed)
 
-                # 计算PSNR
+                # 计算PSNR（一次性统计，不再逐样本打印）
+                sample_psnrs = []
                 for i, sample in enumerate(annealed_samples):
                     # ★ 样本在CPU上，需移到GPU再计算PSNR
                     psnr_val = compute_psnr(x_true, sample.to(device))
-                    # ★ 显示2位小数，便于观察样本间是否有真实变化
-                    print(f"[退火ULA] 样本 {start_idx + i + 1}/{S} 完成: PSNR={psnr_val:.2f}dB")
-
+                    sample_psnrs.append(psnr_val)
+                # ★ 汇总报告（用一行展示，避免30行堆叠）
+                psnr_min, psnr_max, psnr_mean = min(sample_psnrs), max(sample_psnrs), sum(sample_psnrs) / len(sample_psnrs)
                 print(f"[退火ULA] 采样完成! 总耗时: {t_total:.1f}s")
+                print(f"[退火ULA] 样本 PSNR 范围: [{psnr_min:.2f}, {psnr_max:.2f}] dB, 均值: {psnr_mean:.2f}dB")
                 print(f"[退火ULA] 数值稳定性: n_diverged_steps={n_diverged} (0=无nan_to_num触发)")
                 print(f"[缓存] 已保存 {len(all_samples)} 个样本 (全部退火ULA)")
                 save_samples_to_cache(all_samples, sample_methods, sample_times)
@@ -1110,12 +1162,12 @@ q_high_cl = samples_tensor.quantile(1 - (1 - cl_max) / 2, dim=0)
 ci_width_cl = q_high_cl - q_low_cl
 
 # 统计量
-psnr_mean = compute_psnr(x_true, posterior_mean.to(device))
+posterior_mean_psnr = compute_psnr(x_true, posterior_mean.to(device))
 mean_std = posterior_std.mean().item()
 max_std = posterior_std.max().item()
 mean_ci_width_cl = ci_width_cl.mean().item()
 
-print(f"后验均值 PSNR: {psnr_mean:.2f} dB")
+print(f"后验均值 PSNR: {posterior_mean_psnr:.2f} dB")
 print(f"平均像素标准差: {mean_std:.4f}")
 print(f"最大像素标准差: {max_std:.4f}")
 print(f"平均经验分位数区间宽度(cl={cl_max:.0%}, S={S}):  {mean_ci_width_cl:.4f}")
@@ -1123,6 +1175,7 @@ print(f"⚠️ 注意: S={S} 时区间估计不可靠，建议 S≥30")
 
 # 各样本的PSNR分布
 sample_psnrs = [compute_psnr(x_true, s.to(device)) for s in all_samples]
+sample_psnr_mean = np.mean(sample_psnrs)  # ★ 样本 PSNR 的均值（直方图用）
 print(f"样本PSNR范围: {min(sample_psnrs):.2f} - {max(sample_psnrs):.2f} dB")
 print(f"样本PSNR标准差: {np.std(sample_psnrs):.2f} dB")
 
@@ -1245,7 +1298,7 @@ for i in range(min(3, len(all_samples))):
 # 第二行: 均值 + 观测 + 标准差地图 + CI宽度
 ax10 = fig.add_subplot(gs[1, 0])
 ax10.imshow(posterior_mean[0].cpu().permute(1, 2, 0).clamp(0, 1))
-ax10.set_title(f'后验均值\nPSNR={psnr_mean:.1f}dB', fontsize=11)
+ax10.set_title(f'后验均值\nPSNR={posterior_mean_psnr:.1f}dB', fontsize=11)
 ax10.axis('off')
 
 ax11 = fig.add_subplot(gs[1, 1])
@@ -1256,7 +1309,9 @@ ax11.axis('off')
 ax12 = fig.add_subplot(gs[1, 2])
 # 不确定性地图（灰度，越亮越不确定）
 std_map = posterior_std[0].cpu().mean(dim=0).numpy()
-im12 = ax12.imshow(std_map, cmap='hot', vmin=0, vmax=std_map.max())
+# 使用99%分位数作为色彩上限，避免个别极值将颜色范围过度拉伸导致"噪声化"视觉效果
+std_vmax = float(np.percentile(std_map, 99))
+im12 = ax12.imshow(std_map, cmap='hot', vmin=0, vmax=std_vmax)
 ax12.set_title('★ 不确定性地图\n(像素级std)', fontsize=11)
 ax12.axis('off')
 plt.colorbar(im12, ax=ax12, fraction=0.046, pad=0.04)
@@ -1264,7 +1319,9 @@ plt.colorbar(im12, ax=ax12, fraction=0.046, pad=0.04)
 ax13 = fig.add_subplot(gs[1, 3])
 # ★ 修改：主图展示主置信区间（动态cl_max，S=8时为75%）
 ci_map_cl = ci_width_cl[0].cpu().mean(dim=0).numpy()
-im13 = ax13.imshow(ci_map_cl, cmap='hot', vmin=0, vmax=ci_map_cl.max())
+# 同样使用99%分位数作为色彩上限，避免极值拉伸
+ci_vmax = float(np.percentile(ci_map_cl, 99))
+im13 = ax13.imshow(ci_map_cl, cmap='hot', vmin=0, vmax=ci_vmax)
 ax13.set_title(f'{cl_max:.0%}经验分位数区间宽度\n(S={S}, 可靠范围)', fontsize=10)
 ax13.axis('off')
 plt.colorbar(im13, ax=ax13, fraction=0.046, pad=0.04)
@@ -1287,14 +1344,15 @@ ax21.set_title(f'★ {cl_max:.0%}经验分位数覆盖图\n(S={S}, 可靠范围,
 ax21.axis('off')
 plt.colorbar(im21, ax=ax21, fraction=0.046, pad=0.04)
 
-# PSNR直方图
+# PSNR直方图（★ 显示两条线：样本均值 + 后验均值）
 ax22 = fig.add_subplot(gs[2, 2])
 ax22.hist(sample_psnrs, bins=max(5, S//2), color='steelblue', edgecolor='white', alpha=0.8)
-ax22.axvline(psnr_mean, color='red', linestyle='--', label=f'均值={psnr_mean:.1f}dB')
+ax22.axvline(sample_psnr_mean, color='red', linestyle='--', linewidth=2, label=f'样本均值={sample_psnr_mean:.1f}dB')
+ax22.axvline(posterior_mean_psnr, color='orange', linestyle=':', linewidth=2, label=f'后验均值={posterior_mean_psnr:.1f}dB')
 ax22.set_xlabel('PSNR (dB)', fontsize=10)
 ax22.set_ylabel('频次', fontsize=10)
 ax22.set_title('样本PSNR分布', fontsize=11)
-ax22.legend(fontsize=9)
+ax22.legend(fontsize=8, loc='upper right')
 
 # 误差分布
 ax23 = fig.add_subplot(gs[2, 3])
@@ -1636,7 +1694,7 @@ if len(all_samples) >= 4:
     s4_comparison = {
         'S4_PSNR': round(psnr_s4, 2),
         'S4_平均std': round(std_s4.mean().item(), 4),
-        'S4_vs_S30_PSNR差': round(psnr_mean - psnr_s4, 2),
+        'S4_vs_S30_PSNR差': round(posterior_mean_psnr - psnr_s4, 2),
         'S4_vs_S30_std差': round(mean_std - std_s4.mean().item(), 4)
     }
 
@@ -1665,7 +1723,7 @@ uq_results = {
     '观测PSNR': round(obs_psnr, 2),
 
     # ===== 后验重建质量 =====
-    '后验均值PSNR': round(psnr_mean, 2),
+    '后验均值PSNR': round(posterior_mean_psnr, 2),
     '样本PSNR范围': [round(min(sample_psnrs), 2), round(max(sample_psnrs), 2)],
     '样本PSNR标准差': round(sample_psnr_std, 4),
     '样本PSNR均值': round(float(np.mean(sample_psnrs)), 2),
@@ -1806,7 +1864,7 @@ print(f"""
 
 关键发现:
 - 采样方法: {ula_method}
-- 后验均值PSNR: {psnr_mean:.2f} dB
+- 后验均值PSNR: {posterior_mean_psnr:.2f} dB
 - {cl_max:.0%}CI覆盖率: {overall_coverage:.1%}
 
 所有图像已保存至: {SAVE_DIR}

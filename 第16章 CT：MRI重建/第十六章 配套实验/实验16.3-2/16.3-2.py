@@ -736,16 +736,117 @@ if cross_acs is not None:
     print("          核平滑对噪声较鲁棒。这正是 g 因子理论要刻画的 SENSE 类方法的致命弱点。")
 else:
     g0, g1 = acs_sweep["NMSE_GRAPPA_noisy"][0], acs_sweep["NMSE_GRAPPA_noisy"][-1]
-    c0, c1 = acs_sweep["NMSE_CGSENSE_noisy"][0], acs_sweep["NMSE_CGSENSE_noisy"][-1]
+    cg0, cg1 = acs_sweep["NMSE_CGSENSE_noisy"][0], acs_sweep["NMSE_CGSENSE_noisy"][-1]
     print("    关键发现（与直觉相反）：本扫描 ACS=24→4 时，GRAPPA 的 NMSE 从 "
           f"{g0:.4f} 暴涨到 {g1:.4f}（约 {g1/max(g0,1e-9):.0f} 倍）——核标定在极少校准线下")
-    print(f"          严重欠定、插值系统性误差失控；而 CG-SENSE 几乎不动（{c0:.4f}→{c1:.4f}），")
+    print(f"          严重欠定、插值系统性误差失控；而 CG-SENSE 几乎不动（{cg0:.4f}→{cg1:.4f}），")
     print("          它直接解最小二乘，少量 ACS 仍足以约束中心、保持良好条件数。因此这里并未出现")
     print("          “CG-SENSE 因 g 噪声放大反超 GRAPPA”，相反 GRAPPA 才是更“怕”小 ACS 的一方。")
     print("          g 因子（纯 R 上界，g_max≈183）是 CG-SENSE 的“理论噪声价格”，只在极端噪声或")
     print("          高 ky 信号区才会兑现；本 Shepp-Logan 体模信号集中于中心、且 ACS 再小也保住中心")
     print("          全采样，故 CG-SENSE 实际噪声放大远小于纯 R g 所示。要观察其斜率更快的噪声放大，")
     print("          应看 g 因子系数本身（步骤6 / 步骤7b 热力图），或把噪声档提到 σ≳0.3 对比二者斜率。")
+
+
+# ========== 步骤7c : 固定宽 ACS + 高加速比 + 高噪声 —— 分离出"纯 g 因子"导致的 CG-SENSE 反超 ==========
+print("\n>>> 步骤7c : 固定宽 ACS(=24行) + 高加速比(R=4~8) + 高噪声(σ=0.30)")
+print("           —— 把步骤7b 中混杂的两种因素拆开：ACS 始终充足(保证 GRAPPA 标定充分),")
+print("              只让 R 与噪声变化,单一考察 CG-SENSE 的 g 因子噪声放大何时压过 GRAPPA。")
+
+R_list_c = [4, 5, 6, 7, 8]
+acs_fixed = 24                  # 关键：ACS 不随 R 收缩,始终 24 行,使 GRAPPA 标定充分
+sigma_c = 0.30                  # 高噪声档,让 g 噪声放大充分兑现
+c_sweep = {"R": [], "acs_lines": acs_fixed, "sigma": sigma_c,
+           "effective_R": [],
+           "g_mean": [], "g_max": [],          # 均为“目标支撑区内”的 g 因子(已剔除空气背景)
+           "NMSE_GRAPPA_noisy": [], "NMSE_CGSENSE_noisy": []}
+
+# 目标支撑区：仅对体模内有意义的灵敏度区域统计 g 因子。背景空气处 8 通道灵敏度均≈0,
+# 会使 S^H S 近奇异、g 爆炸到 1e4 量级且无物理意义,故只取 SOS 灵敏度 > 5% 峰值处。
+sos_S = np.sqrt((np.abs(S) ** 2).sum(axis=0))
+supp = torch.tensor(sos_S > 0.05 * sos_S.max())
+
+for Rs in tqdm(R_list_c, desc='  高R+固定宽ACS', leave=False):
+    mask_c = np.zeros((N, N), dtype=np.float32)
+    mask_c[::Rs, :] = 1.0
+    mask_c[c0 - acs_fixed // 2: c0 + acs_fixed // 2, :] = 1.0
+    mask_c_t = torch.tensor(mask_c)
+    n_acq_c = int(mask_c.sum() / N)
+
+    y_full_c = mri_multicoil_forward(phantom_t, S_t, torch.ones_like(mask_c_t))
+    y_und_c = mri_multicoil_forward(phantom_t, S_t, mask_c_t)
+    x_ref_c = sos_combine(y_full_c)
+    y_und_c_np = y_und_c.numpy()
+
+    k_scale_c = float(np.mean(np.abs(y_full_c.numpy())))
+    np.random.seed(42)                                                  # 同种子,跨 R 噪声场可比
+    y_noisy_c = add_kspace_noise(y_und_c_np, sigma_c * k_scale_c, mask_c)
+
+    y_g_c = grappa_recon(y_noisy_c, mask_c, R=Rs, K=2, akx=1)
+    x_g_c = sos_combine(torch.tensor(y_g_c, dtype=torch.complex64))
+    x_cg_c = cg_sense(torch.tensor(y_noisy_c, dtype=torch.complex64), S_t, mask_c_t, n_iter=80)
+    _, _, nm_g_c = metrics(x_ref_c, x_g_c)
+    _, _, nm_cg_c = metrics(x_ref_c, x_cg_c)
+
+    g_c = gfactor_map(S, Rs)
+    g_supp = g_c[supp]                       # 仅目标支撑区内,剔除空气背景的奇异膨胀
+    g_mean_s = float(g_supp.mean())
+    g_max_s = float(g_supp.max())
+
+    c_sweep["R"].append(Rs)
+    c_sweep["effective_R"].append(float(N / n_acq_c))
+    c_sweep["g_mean"].append(g_mean_s)
+    c_sweep["g_max"].append(g_max_s)
+    c_sweep["NMSE_GRAPPA_noisy"].append(float(nm_g_c))
+    c_sweep["NMSE_CGSENSE_noisy"].append(float(nm_cg_c))
+    print(f"    R={Rs} (有效{N / n_acq_c:.2f}x): g_mean(支撑区)={g_mean_s:.2f}, g_max(支撑区)={g_max_s:.1f} | "
+          f"σ={sigma_c} NMSE GRAPPA={nm_g_c:.5f}, CG-SENSE={nm_cg_c:.5f}")
+
+fig_c, ax_c = plt.subplots(figsize=(7.5, 5))
+ax_c.plot(c_sweep["R"], c_sweep["NMSE_GRAPPA_noisy"], 'o-', label='GRAPPA', linewidth=2)
+ax_c.plot(c_sweep["R"], c_sweep["NMSE_CGSENSE_noisy"], 's-', label='CG-SENSE', linewidth=2)
+ax_c.set_xlabel('加速比 R（ACS 固定 24 行，σ=0.30 加噪）')
+ax_c.set_ylabel('NMSE')
+ax2 = ax_c.twinx()
+ax2.plot(c_sweep["R"], c_sweep["g_mean"], 'd--', label='g_mean (支撑区内)', linewidth=1.5, alpha=0.75)
+ax2.set_ylabel('g_mean (目标支撑区内)')
+l1, lb1 = ax_c.get_legend_handles_labels()
+l2, lb2 = ax2.get_legend_handles_labels()
+ax_c.legend(l1 + l2, lb1 + lb2, loc='upper left')
+ax_c.grid(True, alpha=0.3)
+ax_c.set_title('固定宽 ACS + 高噪声：CG-SENSE 的 g 噪声放大反超 GRAPPA')
+fig_c.tight_layout()
+fig_c.savefig(os.path.join(SAVE_DIR, '步骤7c_高R固定ACS高噪.png'), dpi=150, bbox_inches='tight')
+plt.show()
+plt.close(fig_c)
+print("    已保存：步骤7c_高R固定ACS高噪.png")
+
+# 自动结论：寻找 CG-SENSE 反超 GRAPPA 的临界 R
+cross_R_c = None
+for i in range(len(c_sweep["R"])):
+    if c_sweep["NMSE_CGSENSE_noisy"][i] > c_sweep["NMSE_GRAPPA_noisy"][i]:
+        cross_R_c = c_sweep["R"][i]
+        break
+if cross_R_c is not None:
+    ci = c_sweep["R"].index(cross_R_c)
+    print(f"    结论：固定 ACS=24、σ=0.30 时,当 R 升到 {cross_R_c}（有效加速≈"
+          f"{c_sweep['effective_R'][ci]:.2f}x, 支撑区内 g_mean={c_sweep['g_mean'][ci]:.1f}），")
+    print(f"          CG-SENSE 的 NMSE ({c_sweep['NMSE_CGSENSE_noisy'][ci]:.5f}) 首次反超 GRAPPA "
+          f"({c_sweep['NMSE_GRAPPA_noisy'][ci]:.5f})。")
+    print("          此时 GRAPPA 因 ACS 充足而标定稳健(核平滑抑制噪声),而 CG-SENSE 的逐像素噪声放大")
+    print("          g(r)·σ 随 R 增大而显著恶化,终于压过其'精确求解'的固有优势——这正是步骤7b 中因")
+    print("          ACS 同时收缩而没能单独显现的'纯 g 因子效应'。两实验互为对照：步骤7b 展示")
+    print("          '小 ACS→GRAPPA 标定崩溃';本步展示'宽 ACS 固定 + 高噪声→CG-SENSE g 反超'。")
+else:
+    print(f"    说明：在 R≤{c_sweep['R'][-1]} 且 ACS=24 固定下,尽管 CG-SENSE 的 NMSE 随 R 上升更快,")
+    print(f"          仍未在总 NMSE 上反超 GRAPPA。可进一步提高噪声档(σ>0.30)或加大 R 来观察临界点,")
+    print(f"          或参考步骤6 / 步骤7b 热力图直接读取 g 因子系数本身(高 R 下 g_mean="
+          f"{c_sweep['g_mean'][-1]:.1f})。")
+
+print("    ⚠ 教学区提醒：本步 R=4~8 仅配 Nc=8 个平滑环形线圈,在 R≥6 时已逼近这 8 个线圈")
+print("          几何上能编码的加速极限,S^H S 近奇异,g 因子爆炸(g_mean 达数千)本质上就是")
+print("          SENSE 的几何病态,而非数值假象。此区间仅用于直观展示'纯 g 因子放大→CG-SENSE")
+print("          反超'的趋势,不代表临床常用工作点(临床多用更宽 ACS、更多线圈、更低噪声)。")
 
 
 # ========== 步骤8 : 保存 JSON 结果 ==========
@@ -774,6 +875,7 @@ results = {
     "g_factor": {"mean": g_mean, "max": g_max, "R": R, "n_coils": Nc},
     "R_sweep": sweep,
     "acs_sweep": acs_sweep,
+    "acs_fixed_highR_sweep": c_sweep,
 }
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
     json.dump(_to_native(results), f, ensure_ascii=False, indent=2)
