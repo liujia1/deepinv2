@@ -1,0 +1,24 @@
+{
+  "experiment": "附录16D",
+  "title": "PET发射断层重建——OSEM / OSL",
+  "image_size": 111,
+  "n_angles": 180,
+  "total_expected_counts": 300000.0,
+  "background": 0.7361371765390663,
+  "num_subsets": 10,
+  "n_subiterations": 20,
+  "osl_prior_beta": 0.05,
+  "reference": "sirf Python examples/PET/osem_reconstruction.py, user_osmaposl.py, osl_reconstruction.py, acquisition_model.py",
+  "metrics": {
+    "OSEM": {
+      "PSNR_dB": 19.463418537586197,
+      "SSIM": 0.6936079959052135,
+      "NMSE": 0.19100795248038244
+    },
+    "OSL": {
+      "PSNR_dB": 20.099997950987394,
+      "SSIM": 0.7072677265052727,
+      "NMSE": 0.1649656443932819
+    }
+  }
+}

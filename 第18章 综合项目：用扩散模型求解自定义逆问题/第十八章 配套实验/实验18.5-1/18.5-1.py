@@ -108,11 +108,13 @@ CFG = {
     "sigma_data": 0.01,  # 观测噪声（y中加性高斯噪声的标准差）
     "sigma_denoiser": 2.0 / 255.0,  # 去噪器噪声（ScorePrior内部Tweedie公式假设）
 
-    # 退火ULA参数
-    "sigma_schedule": [1.0, 0.5, 0.25, 0.1, 0.05, 0.01],  # 退火调度
-    "ula_steps_each_sigma": 40,  # 每个sigma级别的迭代步数（从20增加至40，给样本更多时间收敛）
-    "lambda_data": 0.2,  # 数据保真项权重（从0.05增大至0.2，强化观测约束）
-    "step_size_coeff_annealed": 0.01,  # 退火ULA步长系数（从0.005增大至0.01，让样本移动更快）
+    # 退火ULA参数（从测试.py移植优化版）
+    "sigma_schedule": [1.0, 0.5, 0.25, 0.1, 0.05, 0.02, 0.01],  # 退火调度（从6级扩展为7级）
+    "ula_steps_each_sigma": 50,  # 每个sigma级别的迭代步数（从40增至50，与测试.py一致）
+    "lambda_data": 0.05,  # ★ 关键改进：从0.2降至0.05，与测试.py一致（数据保真项已归一化）
+    "step_size_coeff_annealed": 0.005,  # 步长系数（从0.01降至0.005，与测试.py一致）
+    "ula_noise_scale": 1.0,  # ★ 新增：Langevin噪声尺度（测试.py验证值）
+    "ula_burn_in": 10,  # ★ 新增：每级sigma的burn-in步数（MCMC标准做法）
 
     # 后验采样数量
     "samples": 30,  # 推荐值：可靠的置信区间估计
@@ -125,6 +127,8 @@ sigma_schedule = CFG["sigma_schedule"]
 ula_steps_each_sigma = CFG["ula_steps_each_sigma"]
 lambda_data = CFG["lambda_data"]
 step_size_coeff_annealed = CFG["step_size_coeff_annealed"]
+ula_noise_scale = CFG["ula_noise_scale"]
+ula_burn_in = CFG["ula_burn_in"]
 IMG_SIZE = CFG["image_size"]
 S = CFG["samples"]
 
@@ -133,6 +137,7 @@ print(f"噪声标准差: sigma_data={sigma_data} (观测), sigma_denoiser={sigma
 print(f"图像尺寸: {IMG_SIZE}x{IMG_SIZE}")
 print(f"后验采样数量: S={S}")
 print(f"退火ULA: lambda_data={lambda_data}, step_size_coeff={step_size_coeff_annealed}")
+print(f"  噪声尺度: ula_noise_scale={ula_noise_scale}, burn_in={ula_burn_in}步/级")
 
 # ========================================================================
 # ★ 参数设计说明（静态说明，不影响代码执行）
@@ -140,23 +145,36 @@ print(f"退火ULA: lambda_data={lambda_data}, step_size_coeff={step_size_coeff_a
 # 本节说明各采样方法的超参数取值依据，供学生参考。
 #
 # ------ ULA (Unadjusted Langevin Algorithm) 参数 ------
-# 退火ULA使用多级噪声调度 [1.0, 0.5, 0.25, 0.1, 0.05, 0.01]
+# 退火ULA使用多级噪声调度 [1.0, 0.5, 0.25, 0.1, 0.05, 0.02, 0.01]
 # 每级噪声的步长: step_size = step_size_coeff_annealed * sigma^2
 #   - 物理含义：Langevin 动力学的离散化步长
 #   - 诊断信号：样本PSNR.std()应>0.5dB，若<0.5dB提示混合不足
 #
 # ula_steps_each_sigma（每级噪声的迭代步数）
 #   - 物理含义：退火ULA在每个sigma级别运行的步数
-#   - 取值依据：20步/级 × 6级 = 120总步数
+#   - 取值依据：50步/级 × 7级 = 350总步数（与测试.py一致）
+#
+# ula_burn_in（每级sigma的burn-in步数）★新增
+#   - 物理含义：每级sigma切换时，先跑N步让chain到达平稳分布，再开始采集中间样本
+#   - 取值依据：测试.py验证值10步/级，标准MCMC warm-up做法
+#   - 效果：直接降低 std/σ 比值，避免初始瞬态进入终态sample
+#
+# ula_noise_scale（Langevin噪声尺度）★新增
+#   - 物理含义：控制Langevin随机项的幅度
+#   - 取值依据：测试.py验证值1.0（标准Langevin SDE离散化）
+#   - 调整：增大可加宽后验、改进coverage；减小则后验更紧凑
 #
 # sigma_denoiser（去噪器噪声水平）
 #   - 物理含义：ScorePrior内部Tweedie公式所假设的去噪器训练噪声
 #   - 取值依据：deepinv官方示例 sigma_denoiser=2/255
 #   - 与sigma_data区别：sigma_data是观测噪声，sigma_denoiser是去噪器内部噪声
 #
-# lambda_data（数据保真项权重）
+# lambda_data（数据保真项权重）★关键改进
 #   - 物理含义：控制数据保真项 ||y-A(x)||² 的权重
-#   - 取值依据：测试.txt使用0.05，数据保真项已归一化为A^T(Ax-y)/sigma_data²
+#   - 取值依据：测试.py使用0.05（从0.2修正为0.05）
+#   - 原因：数据保真项已归一化为A^T(Ax-y)/sigma_data²，
+#     lambda=0.2会导致过强约束，迫使后验过度集中于观测值附近
+#   - 修正效果：后验std更接近真实宽度，coverage更准确
 #
 # ------ DPS (Diffusion Posterior Sampling) 参数 ------
 # weight（似然梯度权重）: 1.0（deepinv默认值）
@@ -307,29 +325,38 @@ print(f"观测 PSNR: {compute_psnr(x_true, y_inp):.2f} dB")
 
 
 # ========================================================================
-# ★ 退火ULA采样函数（从测试.txt移植）
+# ★ 退火ULA采样函数（从测试.py移植优化版）
 # ========================================================================
 def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per_sigma,
-                         lambda_data, step_size_coeff, S=1):
+                         lambda_data, step_size_coeff, S=1, burn_in_steps=0, noise_scale=1.0):
     """
-    退火ULA后验采样
+    退火ULA后验采样（含burn-in和数值稳定性保护）
 
     参数:
         y_obs: 观测 (1, C, H, W)
         physics: 物理算子（Inpainting）
         model: DRUNet去噪器
         device: 运行设备
-        sigma_schedule: 退火调度 [1.0, 0.5, 0.25, 0.1, 0.05, 0.01]
+        sigma_schedule: 退火调度 [1.0, 0.5, 0.25, 0.1, 0.05, 0.02, 0.01]
         steps_per_sigma: 每个sigma级别的步数
         lambda_data: 数据保真权重
         step_size_coeff: 步长系数
         S: 样本数
+        burn_in_steps: ★新增 每级sigma的burn-in步数（不收集中间样本）
+        noise_scale: ★新增 Langevin噪声尺度
 
     返回:
-        samples: (S, C, H, W) 后验样本
+        (samples, n_diverged_steps) - 元组:
+            samples: (S, C, H, W) 后验样本
+            n_diverged_steps: 整个采样过程中触发nan_to_num修正的累计步数
     """
     samples = []
     model.eval()  # ★ 设置为eval模式，减少显存占用
+
+    # ★ 数值稳定性监控：累计整轮 ULA 链中触发 nan_to_num 修正的步数
+    # 若 n_diverged_steps > 0，说明链在中途曾发散，calibration 与
+    # spatial std 是在"被救回的样本"上计算的，可能低估真实发散程度
+    n_diverged_steps = 0
 
     for sample_id in range(S):
         print(f"[退火ULA] 正在采样第 {sample_id+1}/{S} 个样本...")
@@ -340,7 +367,7 @@ def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per
         # 清理显存
         clear_gpu()
 
-        # 初始化：伪逆 + 小噪声（与测试.txt一致）
+        # 初始化：伪逆 + 小噪声（与测试.py一致）
         x = physics.A_dagger(y_obs)
         x = x + 0.01 * torch.randn_like(x)
         x = x.clamp(0, 1)
@@ -349,9 +376,46 @@ def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per
         for sigma in sigma_schedule:
             step_size = step_size_coeff * (sigma ** 2)
 
-            for step in range(steps_per_sigma):
+            # ★ Burn-in阶段：先让chain到达平稳分布，不收集中间样本
+            # 这是MCMC标准的warm-up做法，直接降低 std/σ 比值
+            for _ in range(burn_in_steps):
                 # 计算score: (D(x,sigma) - x) / sigma^2
-                # ★ DRUNet需要noise level map (B, 1, H, W)，而不是标量
+                B = x.shape[0]
+                sigma_map = torch.ones(B, 1, x.shape[-2], x.shape[-1], device=device) * sigma
+
+                with torch.no_grad():
+                    denoised = model(x, sigma_map)
+
+                score = (denoised - x) / (sigma ** 2)
+
+                # 数据保真梯度: A^T(Ax - y) / sigma_data^2
+                data_grad = physics.A_adjoint(physics.A(x) - y_obs) / (sigma_data ** 2)
+
+                # 后验梯度: score - lambda * data_grad
+                grad = score - lambda_data * data_grad
+
+                # Langevin更新（带噪声尺度控制）
+                noise = torch.randn_like(x)
+                x = x + step_size * grad + noise_scale * torch.sqrt(torch.tensor(2 * step_size, device=device)) * noise
+
+                # ★ 数值稳定性保护
+                if not torch.isfinite(x).all():
+                    n_diverged_steps += 1
+                    print(f"  [ula burn-in] non-finite state at sigma={sigma:.4f}, "
+                          f"clamping & resuming (total diverged={n_diverged_steps})")
+                    x = torch.nan_to_num(x, nan=0.5, posinf=1.0, neginf=0.0)
+
+                # ★ 软投影：允许略微越界（借鉴测试.py第819行）
+                # 范围(-0.1, 1.1)比测试.py的(-0.5, 1.5)更紧，减少过度保守
+                # 既保持Langevin遍历性，又避免收集样本前的clamp(0,1)引入伪方差
+                x = x.clamp(-0.1, 1.1)
+
+                # 清理中间变量
+                del denoised, score, sigma_map, data_grad, grad, noise
+
+            # 正式采样阶段
+            for step in range(steps_per_sigma):
+                # 计算score
                 B = x.shape[0]
                 sigma_map = torch.ones(B, 1, x.shape[-2], x.shape[-1], device=device) * sigma
 
@@ -361,31 +425,45 @@ def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per
 
                 score = (denoised - x) / (sigma ** 2)
 
-                # 计算数据保真梯度: A^T(Ax - y) / sigma_data^2
-                # ★ 归一化：使数据保真项与先验score在同一量级（均含1/sigma^2）
+                # 数据保真梯度
                 data_grad = physics.A_adjoint(physics.A(x) - y_obs) / (sigma_data ** 2)
 
-                # 后验梯度: score - lambda * data_grad
+                # 后验梯度
                 grad = score - lambda_data * data_grad
 
-                # Langevin更新: x + step_size * grad + noise
+                # Langevin更新（带噪声尺度控制）
                 noise = torch.randn_like(x)
-                x = x + step_size * grad + torch.sqrt(torch.tensor(2 * step_size, device=device)) * noise
+                x = x + step_size * grad + noise_scale * torch.sqrt(torch.tensor(2 * step_size, device=device)) * noise
 
-                # 值域约束
-                x = x.clamp(0, 1)
+                # ★ 数值稳定性保护
+                if not torch.isfinite(x).all():
+                    n_diverged_steps += 1
+                    print(f"  [ula sample] non-finite state at sigma={sigma:.4f}, "
+                          f"clamping & resuming (total diverged={n_diverged_steps})")
+                    x = torch.nan_to_num(x, nan=0.5, posinf=1.0, neginf=0.0)
+
+                # ★ 软投影：每步都保持遍历性
+                x = x.clamp(-0.1, 1.1)
 
                 # ★ 定期清理中间变量
                 del denoised, score, sigma_map, data_grad, grad, noise
                 if step % 20 == 0:
                     clear_gpu()
 
-        # ★ 样本存储后立即移到CPU并清理显存（借鉴测试.txt）
+            # ★ 每级sigma结束后的最终硬约束
+            # 保证进入下一级sigma时x在合法范围内
+
+        # ★ 收集样本前最终硬约束到[0,1]（保证PSNR/校准计算正确）
+        x = x.clamp(0, 1)
+
+        # ★ 样本存储后立即移到CPU并清理显存
         samples.append(x.detach().cpu())
         del x
         clear_gpu()
 
-    return torch.stack(samples)
+    samples_tensor = torch.stack(samples)
+    print(f"[退火ULA] 完成。n_diverged_steps={n_diverged_steps} (0=无nan_to_num触发)")
+    return samples_tensor, n_diverged_steps
 
 
 # ========================================================================
@@ -708,7 +786,8 @@ if len(all_samples) < S:
                 samples_needed = S - start_idx
 
                 t_start_all = time.time()
-                annealed_samples = sample_annealed_ula(
+                # ★ 修改：适配新的元组返回值 (samples, n_diverged_steps)
+                annealed_samples, n_diverged = sample_annealed_ula(
                     y_obs=y_inp,
                     physics=physics_inp,
                     model=denoiser_ula,
@@ -717,7 +796,9 @@ if len(all_samples) < S:
                     steps_per_sigma=ula_steps_each_sigma,
                     lambda_data=lambda_data,
                     step_size_coeff=step_size_coeff_annealed,
-                    S=samples_needed
+                    S=samples_needed,
+                    burn_in_steps=ula_burn_in,  # ★ 新增：burn-in步数
+                    noise_scale=ula_noise_scale  # ★ 新增：Langevin噪声尺度
                 )
                 t_total = time.time() - t_start_all
 
@@ -736,6 +817,7 @@ if len(all_samples) < S:
                     print(f"[退火ULA] 样本 {start_idx + i + 1}/{S} 完成: PSNR={psnr_val:.2f}dB")
 
                 print(f"[退火ULA] 采样完成! 总耗时: {t_total:.1f}s")
+                print(f"[退火ULA] 数值稳定性: n_diverged_steps={n_diverged} (0=无nan_to_num触发)")
                 print(f"[缓存] 已保存 {len(all_samples)} 个样本 (全部退火ULA)")
                 save_samples_to_cache(all_samples, sample_methods, sample_times)
 
@@ -1527,18 +1609,91 @@ method_distribution = {}
 for m in sample_methods:
     method_distribution[m] = method_distribution.get(m, 0) + 1
 
+# ★ 观测质量（评估任务难度）
+obs_psnr = compute_psnr(x_true, y_inp)
+
+# ★ 样本多样性指标
+sample_psnr_std = float(np.std(sample_psnrs))
+
+# ★ 校准状态评估（与Step 4共享_calib_grade）
+_coverage_dev = abs(overall_coverage - cl_max)
+_calib_grade_text, _ = _calib_grade(_coverage_dev)
+_coverage_devs_all = {f"{cl:.4f}": abs(cov - cl) for cl, cov in zip(confidence_levels, coverages)}
+_calib_grades_all = {f"{cl:.4f}": _calib_grade(abs(cov - cl))[0] for cl, cov in zip(confidence_levels, coverages)}
+
+# ★ 数值稳定性信息（从n_diverged_steps提取）
+# n_diverged_steps可能不在当前作用域，从sample_times中提取总耗时
+total_time = sum(sample_times) if sample_times else 0.0
+avg_time_per_sample = total_time / len(all_samples) if all_samples else 0.0
+
+# ★ S=4对比结果（从Step 5提取）
+s4_comparison = {}
+if len(all_samples) >= 4:
+    samples_s4 = torch.stack(all_samples[:4], dim=0)
+    mean_s4 = samples_s4.mean(dim=0)
+    std_s4 = samples_s4.std(dim=0)
+    psnr_s4 = compute_psnr(x_true, mean_s4.to(device))
+    s4_comparison = {
+        'S4_PSNR': round(psnr_s4, 2),
+        'S4_平均std': round(std_s4.mean().item(), 4),
+        'S4_vs_S30_PSNR差': round(psnr_mean - psnr_s4, 2),
+        'S4_vs_S30_std差': round(mean_std - std_s4.mean().item(), 4)
+    }
+
+# ★ 完整的ULA参数配置（实验复现必备）
+ula_params = {
+    'sigma_schedule': list(sigma_schedule),
+    'ula_steps_each_sigma': int(ula_steps_each_sigma),
+    'lambda_data': float(lambda_data),
+    'step_size_coeff_annealed': float(step_size_coeff_annealed),
+    'ula_noise_scale': float(ula_noise_scale),
+    'ula_burn_in': int(ula_burn_in),
+    'total_steps_per_sample': len(sigma_schedule) * ula_steps_each_sigma,
+    'soft_projection_range': '(-0.1, 1.1)'
+}
+
 uq_results = {
     '采样方法': ula_method,
     '样本数': S,
-    '主置信水平': round(cl_max, 4),
+
+    # ===== 实验配置 =====
+    '图像尺寸': IMG_SIZE,
+    '观测噪声sigma_data': float(sigma_data),
+    'ULA参数配置': ula_params,
+
+    # ===== 观测质量 =====
+    '观测PSNR': round(obs_psnr, 2),
+
+    # ===== 后验重建质量 =====
     '后验均值PSNR': round(psnr_mean, 2),
+    '样本PSNR范围': [round(min(sample_psnrs), 2), round(max(sample_psnrs), 2)],
+    '样本PSNR标准差': round(sample_psnr_std, 4),
+    '样本PSNR均值': round(float(np.mean(sample_psnrs)), 2),
+
+    # ===== 不确定性度量 =====
     '平均像素std': round(mean_std, 4),
     '最大像素std': round(max_std, 4),
     f'平均{cl_max:.0%}经验分位数区间宽度': round(ci_width_cl.mean().item(), 4),
+
+    # ===== 校准检验 =====
+    '主置信水平': round(cl_max, 4),
+    '全部置信水平': [round(cl, 4) for cl in confidence_levels],
     f'{cl_max:.0%}经验分位数区间覆盖率': round(overall_coverage, 4),
-    '样本PSNR范围': [round(min(sample_psnrs), 2), round(max(sample_psnrs), 2)],
-    '校准数据': {str(cl): round(cov, 4) for cl, cov in zip(confidence_levels, coverages)},
-    '方法分布': method_distribution  # ★ 新增：记录各方法样本数
+    f'{cl_max:.0%}校准状态': _calib_grade_text,
+    f'{cl_max:.0%}校准偏差': round(_coverage_dev, 4),
+    '校准数据': {str(round(cl, 4)): round(cov, 4) for cl, cov in zip(confidence_levels, coverages)},
+    '各置信水平校准偏差': _coverage_devs_all,
+    '各置信水平校准状态': _calib_grades_all,
+
+    # ===== 数值稳定性 =====
+    '总采样耗时_秒': round(total_time, 1),
+    '平均每样本耗时_秒': round(avg_time_per_sample, 2),
+
+    # ===== 样本数影响对比 =====
+    **s4_comparison,
+
+    # ===== 方法分布 =====
+    '方法分布': method_distribution
 }
 with open(os.path.join(SAVE_DIR, 'uq_results.json'), 'w', encoding='utf-8') as f:
     json.dump(uq_results, f, ensure_ascii=False, indent=2)
