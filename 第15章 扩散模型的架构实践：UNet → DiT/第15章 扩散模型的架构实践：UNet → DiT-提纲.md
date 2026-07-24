@@ -102,6 +102,12 @@ Transformer革命（ViT→DiT如何替换UNet？）→ 架构选择（UNet vs Di
 UNet之所以能成为扩散模型的标准去噪架构，不仅因为其编码器-解码器+跳跃连接的设计，更因为一个被我们在前14章中反复使用但从未展开的关键机制——**时间步嵌入**。它让同一个网络在不同噪声水平下表现出不同的去噪策略。
 
 **来源**：Zhang et al. (2017) DnCNN; Ronneberger et al. (2015) UNet; Ho et al. (2020) DDPM; Song et al. (2021) Score-SDE; Ratti P35-37 (UNet去噪示例); CompImLab25 Part 3; Bologna_UNet_example
+- **15.1.4 Latent Diffusion：在压缩隐空间中训练**（★新增，Rombach2022）
+  - 动机：像素空间扩散的成本瓶颈（$O(n^2)$ 注意力）
+  - 两阶段训练：感知压缩（自编码器 + 对抗/LPIPS 损失）与语义压缩（隐空间扩散）
+  - 通用条件机制：cross-attention 注入任意语义条件（文本/类/布局）
+  - 与本书叙事衔接：LDM 是 UNet→DiT 之间的实践桥梁；隐空间逆问题求解见第13章
+  - 来源：Rombach2022
 
 ---
 

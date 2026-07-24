@@ -1,0 +1,26 @@
+{
+  "experiment": "2.3-2",
+  "title": "偏斜/多峰后验下 MMSE vs MAP 分歧可视化",
+  "skewed_posterior": {
+    "prior": "Laplace",
+    "b": 0.8,
+    "likelihood_sigma": 1.0,
+    "y_obs": 2.0,
+    "MAP": 0.7477477477477477,
+    "MMSE": 0.9653019258961726,
+    "divergence_MMSE_minus_MAP": 0.21755417814842493
+  },
+  "bimodal_posterior": {
+    "prior": "binary_mixture",
+    "w1": 0.6,
+    "mu1": 0.0,
+    "sigma1": 0.15,
+    "w2": 0.4,
+    "mu2": 1.0,
+    "sigma2": 0.15,
+    "MAP": 0.0005005005005005447,
+    "MMSE": 0.39987462065604945,
+    "MMSE_theory": 0.4,
+    "divergence_MMSE_minus_MAP": 0.3993741201555489
+  }
+}

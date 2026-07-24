@@ -246,6 +246,12 @@ Tikhonov的闭式解依赖于高斯先验的可微性。一旦换用Laplace先�
   - 物理含义：源条件刻画了真解 $u^\dagger$ 与正则项 $J$ 的"兼容程度"——$J$的假设越贴近真解的结构，源条件越容易满足
   - 带源条件的收敛速率：$D_J^{\text{symm}}(u_\alpha, u^\dagger) \leq \|v^\dagger\| \cdot \delta$，其中 $\alpha(\delta) \propto \delta$
   - 无源条件：收敛速率显著下降——源条件不是技术假设，而是问题可解性的度量
+  - **新增细化（Lorenz §10；Korolev & Latz §5.2）**：源条件 $x^\dagger=\phi(A^*A)x_0$ 下，Tikhonov qualification $\nu=1$ → Hölder 速率 $O(\delta^{1/2})$，迭代 Tikhonov $\nu=2$ → $O(\delta^{2/3})$；不满足则退化为对数速率（Tikhonov 饱和效应）；Landweber a-priori 停止 $m^*\propto\delta^{-2/(\nu+1)}$ 阶最优（Lorenz Thm 11.6）——串起 3.3 半收敛与参数选择
+
+- **频率学派参数选择（新增，Korolev & Latz §3.2 / Lorenz §8）**
+  - L-curve：对数坐标 $(\|x_\alpha\|,\|Ax_\alpha-y\|)$ 呈 L 形，最优 $\alpha$ 取拐角（曲率最大）
+  - GCV：留一法交叉验证目标 $\text{GCV}(\alpha)=\|Ax_\alpha-y\|^2/[\text{trace}(I-AA_\alpha)]^2$，分母=有效自由度
+  - 与 Morozov 对照：三者都在无真解时由数据决定 $\alpha$/早停；呼应 §2.1 $\lambda=\sigma^2/\sigma_x^2$
 
 - **迭代正则化的半收敛性**
   - Landweber迭代的典型行为：前期逼近真解，后期被噪声主导
@@ -299,9 +305,9 @@ Tikhonov的闭式解依赖于高斯先验的可微性。一旦换用Laplace先�
   - 第13章完成闭环：条件扩散采样 = 逆问题求解
 
 - **PnP——第三条路？**（已升格为3.7节内独立小节）
-  - 在MAP框架内，用学习到的去噪器替换近端算子 → PnP-ADMM / PnP-FISTA
-  - PnP绕过了显式先验的局限，但仍在优化框架内——它是"增强的MAP"，不是后验采样
-  - 真正的后验探索需要第4章的采样方法
+  - 在MAP框架内，用学习到的去噪器替换近端算子 → PnP-ADMM / PnP-FISTA（优化/点估计，"增强的MAP"）
+  - **澄清（Pereyra L3）**：PnP 有第二种形态——PnP-ULA / PnP-SGD 才是真正的后验采样器（Laumont 2021）；其更新用 $(D_\varepsilon(X)-X)/\varepsilon$ 作为得分代理（Tweedie），几何收敛到正则化后验邻域
+  - 书内当前偏向"PnP=增强MAP"，须细化为：PnP-ADMM/FISTA=MAP，PnP-ULA/SGD=采样
 
 **来源**：Pereyra L1 P30+; Pock L2 P18-24; invprobs_v2 Ch12; 成书/绪论 0.4
 

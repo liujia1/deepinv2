@@ -182,6 +182,16 @@ CNF的架构自由度是优势，但训练时的仿真代价是致命瓶颈。�
 
 **来源**：Chen et al. (2018) "Neural Ordinary Differential Equations"; Grathwohl et al. (2019) "FFJORD"; Rezende & Mohamed (2015) "Variational Inference with Normalizing Flows"
 
+#### 14.2.5 条件归一化流：高维逆问题的后验采样（新增）
+
+- **动机**：从"无条件 $p(x)$"走向逆问题所需的"条件后验 $p(x|y)$"（呼应第1、13、16章）
+- **cINN（Ardizzone et al., 2019）**：可逆网络同时条件于 $y$，$z=f_\phi(x;y)$、$x=f_\phi^{-1}(z;y)$；训练目标同 14.2.3 似然损失，耦合层显式条件于 $y$
+- **摊销后验采样**：训练后对任意新 $y$ 一次前向 $x=f_\phi^{-1}(z;y)$ 即得后验样本——与第13章 APS 同目标
+- **优势**：精确可逆 + 精确对数似然 → 可给密度 $p(x|y)$ 做不确定性量化；代价：高分辨率下 $x,y$ 维度大、显存/训练成本高（Pereyra L3 §6 "scaling to high dimensions"），常先编码到潜空间
+- **对照扩散式逆问题**：cINN 一次性端到端映射（速度+密度精确）vs DPS 迭代去噪（高分辨率表达力）；与第3章 PnP-ULA、第17章等变成像共构"数据驱动先验"工具箱；并呼应第12章 Score≡ELBO
+
+**来源**：Ardizzone et al. (2019) "Analyzing Inverse Problems with Invertible Neural Networks (INNs)"; Pereyra Lecture 3 §6
+
 ---
 
 ### 14.3 Flow Matching
@@ -282,9 +292,10 @@ CNF的架构自由度是优势，但训练时的仿真代价是致命瓶颈。�
 - **OT-CFM的训练**
   - 采样 $(x_0, x_1) \sim \Pi_{\text{OT}}$（而非独立采样）
   - 其余与CFM完全相同
-  - **Minibatch OT**（Pooladian et al., 2023; Tong et al., 2024）：在每个minibatch内求解OT问题
-    - 复杂度：$O(n^3)$（Sinkhorn加速至 $O(n^2)$）
-    - 实践效果：路径更直，FID更低，收敛更快
+- **Minibatch OT**（Pooladian et al., 2023; Tong et al., 2024）：在每个minibatch内求解OT问题
+  - 复杂度：$O(n^3)$（Sinkhorn加速至 $O(n^2)$）
+  - 实践效果：路径更直，FID更低，收敛更快
+- **精确 OT 求解视角（新增，Gondzio L5）**：Sinkhorn 是熵正则化近似（有熵偏差，见实验14.3-3 $\varepsilon=1$ 误差>60%）；原始 Kantorovich 是大规模 LP，精确解靠网络单纯形 / 内点法（IPM，KKT 系统用 PCG 迭代）；Flow Matching 选 Sinkhorn 因其可微可训练，精确 OT 用 IPM——呼应第2章"正则化换取可解性"母题
 - **McCann插值与直线路径**
   - OT耦合下的条件路径：$x_t = (1-t)x_1 + t\,x_0$（McCann插值/直线插值）
   - 条件向量场：$v_t(x|x_0, x_1) = x_0 - x_1$（常数速度！）

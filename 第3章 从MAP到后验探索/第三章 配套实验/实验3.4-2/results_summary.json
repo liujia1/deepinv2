@@ -1,0 +1,44 @@
+{
+  "experiment": "实验3.4-2 ISTA vs FISTA 收敛曲线对比",
+  "scene": {
+    "image_size": 256,
+    "n_molecules": 80,
+    "psf_sigma": 4,
+    "downsample_factor": 4,
+    "noise_sigma": 0.7,
+    "lambda": 10.0,
+    "maxiter": 200,
+    "step_size_tau": 0.05625,
+    "lipschitz_estimate": 16.0
+  },
+  "convergence": {
+    "F_star_estimate": 2019.2853396678402,
+    "gap_ista": {
+      "10": 1e-12,
+      "20": 1e-12,
+      "50": 1e-12,
+      "100": 1e-12,
+      "150": 1e-12,
+      "200": 1e-12
+    },
+    "gap_fista": {
+      "10": 1e-12,
+      "20": 1e-12,
+      "50": 1e-12,
+      "100": 1e-12,
+      "150": 1e-12,
+      "200": 1e-12
+    },
+    "speedup_ratio_50": 1.0,
+    "speedup_ratio_100": 1.0,
+    "speedup_ratio_200": 1.0
+  },
+  "reconstruction_psnr": {
+    "ISTA_200iter": 29.133899436317556,
+    "FISTA_200iter": 29.133899436317556
+  },
+  "output_files": [
+    "d:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.4-2\\步骤1_ISTA_vs_FISTA收敛对比.png",
+    "d:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.4-2\\步骤2_梯度步近端步迭代轨迹.png"
+  ]
+}
