@@ -114,30 +114,31 @@ def blur(x):
     return np.real(np.fft.ifft2(H_fft * np.fft.fft2(x)))
 
 
-# 下采样 (4×4 平均)
+# 下采样 (4×4 块求和，与 winter school lab 的 M_L 一致)
 L = 4
 m = n // L
 
 
 def down_sampling(x):
-    """4×4 块平均下采样"""
+    """4x4 块求和下采样 (sum_op)：每像素对应 4x4 块的求和"""
     out = np.zeros((m, m))
     for i in range(m):
         for j in range(m):
-            out[i, j] = np.mean(x[L * i:L * i + L, L * j:L * j + L])
+            out[i, j] = np.sum(x[L * i:L * i + L, L * j:L * j + L])
     return out
 
 
 def forward(x):
-    """前向算子 y = M A x"""
+    """前向算子 y = M A x，M 为 4x4 块求和下采样，A 为循环卷积模糊"""
     return down_sampling(blur(x))
 
 
 def adjoint(res_low):
-    """伴随算子 A^T M^T（先插值上采样，再相关）"""
-    # 上采样（最近邻）：每个低分辨率像素复制到 4×4 块
+    """伴随算子 (M∘A)^T = A^T ∘ M^T
+    - M^T (res_low) = 最近邻上采样（每像素复制到 4x4 块，不除以 16）
+    - A^T (z)      = 循环互相关（频域共轭）
+    """
     up = np.repeat(np.repeat(res_low, L, axis=0), L, axis=1)
-    # 模糊的伴随 = 互相关（频域共轭）
     return np.real(np.fft.ifft2(np.conj(H_fft) * np.fft.fft2(up)))
 
 
@@ -145,19 +146,25 @@ def adjoint(res_low):
 sigma_noise = 0.7
 y = forward(gt) + sigma_noise * np.random.randn(m, m)
 
-# Lipschitz 常数估计（保证步长满足收敛条件）
-# 复合算子 K = M ∘ A (M = 下采样, A = 模糊)
-# - ||A||_op = max(|H_fft|) = 1 (h 已归一化)
-# - ||M||_op = 1 (块平均是收缩算子)
-# - 经验公式（参考 winter school lab）：Lips ≈ max(|H|^2) * L^2
-#   其中 L=4 为下采样因子，对应块平均 + 块复制的复合效应
-# 这里采用更严格的 power iteration 估计，参考公式作为下界
-L_bound = 1.0 * L ** 2  # 公式下界
-print(f"  Lipschitz 常数公式下界 L ≥ {L_bound:.4f}")
-# 步长取 0.9 / L_bound 以确保收敛（保守策略）
-tau = 0.9 / L_bound
-print(f"  步长 tau = 0.9/L_bound = {tau:.4e}")
-Lips = L_bound
+# Lipschitz 常数估计（用 power iteration 求 K^T K 的最大特征值）
+# K = M∘A 是 M (4x4 块求和下采样) 与 A (循环卷积高斯模糊) 的复合
+print("  用 power iteration 估计 Lipschitz 常数 L = ||K^T K||_2 ...")
+np.random.seed(0)
+v = np.random.randn(n, n)
+v = v / np.linalg.norm(v)
+for _ in range(50):
+    Kv = forward(v)
+    KtKv = adjoint(Kv)
+    norm = np.linalg.norm(KtKv)
+    v = KtKv / norm
+# Rayleigh 商
+Kv = forward(v)
+KtKv = adjoint(Kv)
+Lips = np.sum(v * KtKv)
+# 步长取 0.9 / L 以确保收敛
+tau = 0.9 / Lips
+print(f"  L ≈ {Lips:.4f}（理论值 ≈ max(|H|^2) * L^2 = {1.0 * L ** 2:.4f}）")
+print(f"  步长 tau = 0.9/L = {tau:.4e}")
 
 # ══════════════════════════════════════════════════════════
 # 2. 目标函数与梯度
@@ -285,28 +292,49 @@ for k in range(maxiter):
 print(f"\n  FISTA 完成，耗时 {time.time() - t0:.2f} 秒")
 rec_fista = xk.copy()
 
-# 参考最优值（用更长的 ISTA 估计）
-print("\n[步骤 3] 计算参考最优值（长 ISTA 运行）...")
+# 参考最优值（用 FISTA 长迭代估计——FISTA 比 ISTA 收敛快，作为参考更准确）
+print("\n[步骤 3] 计算参考最优值（FISTA 长迭代估计）...")
 ref_iter = 2000
 xk_ref = x0.copy()
+xold_ref = x0.copy()
+told_ref = 1.0
+F_ref_curve = []
 for k in range(ref_iter):
-    z = xk_ref - tau * gradient(xk_ref)
-    xk_ref = soft_thresholding(z, tau * lmbda)
-    xk_ref = np.maximum(xk_ref, 0)
-F_star = cost_function(xk_ref, lmbda)
-print(f"  F* ≈ {F_star:.4f}（ISTA {ref_iter} 次迭代估计）")
+    tk = 0.5 * (1 + math.sqrt(1 + 4 * told_ref ** 2))
+    yk = xk_ref + (told_ref - 1) / tk * (xk_ref - xold_ref)
+    z = yk - tau * gradient(yk)
+    xkk = soft_thresholding(z, tau * lmbda)
+    xkk = np.maximum(xkk, 0)
+    told_ref = tk
+    xold_ref = xk_ref.copy()
+    xk_ref = xkk
+    F_ref_curve.append(cost_function(xkk, lmbda))
+F_star = F_ref_curve[-1]
+print(f"  F* ≈ {F_star:.4f}（FISTA {ref_iter} 次迭代估计）")
 
 # 收敛指标
 gap_ista = cost_ista - F_star
 gap_fista = cost_fista - F_star
-# 数值稳定性：去掉前几次迭代中可能的 0 误差
+# 数值稳定性：F(x) 可能略低于 F*（参考值非真正最优），按 0 处理
 gap_ista = np.maximum(gap_ista, 1e-12)
 gap_fista = np.maximum(gap_fista, 1e-12)
 
-print(f"\n[收敛对比] 误差 F(x_k) - F*")
-print(f"  迭代 50:  ISTA = {gap_ista[49]:.4e},  FISTA = {gap_fista[49]:.4e}, 加速比 = {gap_ista[49]/gap_fista[49]:.2f}x")
-print(f"  迭代 100: ISTA = {gap_ista[99]:.4e},  FISTA = {gap_fista[99]:.4e}, 加速比 = {gap_ista[99]/gap_fista[99]:.2f}x")
-print(f"  迭代 200: ISTA = {gap_ista[199]:.4e}, FISTA = {gap_fista[199]:.4e}, 加速比 = {gap_ista[199]/gap_fista[199]:.2f}x")
+
+def _safe_ratio(a, b):
+    """安全除法，避免显示极端数字"""
+    if b < 1e-12:
+        return float('inf') if a > 1e-12 else 1.0
+    return a / b
+
+
+ratio_50 = _safe_ratio(gap_ista[49], gap_fista[49])
+ratio_100 = _safe_ratio(gap_ista[99], gap_fista[99])
+ratio_200 = _safe_ratio(gap_ista[199], gap_fista[199])
+
+print(f"\n[收敛对比] 误差 F(x_k) - F* (F* ≈ {F_star:.4f})")
+print(f"  迭代 50:  ISTA = {gap_ista[49]:.4e},  FISTA = {gap_fista[49]:.4e}, 加速比 = {ratio_50:.2f}x")
+print(f"  迭代 100: ISTA = {gap_ista[99]:.4e},  FISTA = {gap_fista[99]:.4e}, 加速比 = {ratio_100:.2f}x")
+print(f"  迭代 200: ISTA = {gap_ista[199]:.4e}, FISTA = {gap_fista[199]:.4e}, 加速比 = {ratio_200:.2f}x")
 
 # 重建质量（与真解 gt 的 PSNR）
 psnr_ista = 10 * np.log10(signal_value ** 2 / np.mean((rec_ista - gt) ** 2))
@@ -331,22 +359,21 @@ axes[0, 1].imshow(y, cmap='gray')
 axes[0, 1].set_title(r'模糊下采样+噪声观测 ($y \in \mathbb{R}^{64 \times 64}$)')
 axes[0, 1].axis('off')
 
-# 自动调整 vmax（ISTA/FISTA 重建值远小于 255）
-vmax_rec = max(rec_ista.max(), rec_fista.max())
-axes[0, 2].imshow(rec_ista, cmap='gray', vmax=vmax_rec)
+# 每个重建图使用各自的 vmax，避免共用 vmax 导致值较小的重建显示为全黑
+axes[0, 2].imshow(rec_ista, cmap='gray', vmax=rec_ista.max())
 axes[0, 2].set_title(r'ISTA 重建 (200 次迭代)' + f'\nPSNR={psnr_ista:.2f} dB')
 axes[0, 2].axis('off')
 
 # 第二行：FISTA 重建 / 收敛曲线
-axes[1, 0].imshow(rec_fista, cmap='gray', vmax=vmax_rec)
+axes[1, 0].imshow(rec_fista, cmap='gray', vmax=rec_fista.max())
 axes[1, 0].set_title(r'FISTA 重建 (200 次迭代)' + f'\nPSNR={psnr_fista:.2f} dB')
 axes[1, 0].axis('off')
 
 # 收敛曲线（log-log 标度展示 O(1/k) vs O(1/k^2)）
 k_arr = np.arange(1, maxiter + 1)
-# 参考斜率：1/k 与 1/k^2
-ref_1k = gap_ista[10] * 10 / k_arr          # O(1/k) 参考
-ref_1k2 = gap_fista[10] * (10 ** 2) / (k_arr ** 2)  # O(1/k^2) 参考
+# 参考斜率：1/k 与 1/k^2（从 k=50 锚定，此时已进入渐近收敛阶段）
+ref_1k = gap_ista[49] * 50 / k_arr          # O(1/k) 参考
+ref_1k2 = gap_fista[49] * (50 ** 2) / (k_arr ** 2)  # O(1/k^2) 参考
 
 axes[1, 1].loglog(k_arr, gap_ista, 'b-', linewidth=2, label=r'ISTA: $F(x_k) - F^*$')
 axes[1, 1].loglog(k_arr, gap_fista, 'r-', linewidth=2, label=r'FISTA: $F(x_k) - F^*$')
@@ -357,6 +384,23 @@ axes[1, 1].set_ylabel(r'$F(x_k) - F^*$')
 axes[1, 1].set_title(r'ISTA vs FISTA 收敛曲线 (log-log)')
 axes[1, 1].legend(fontsize=9, loc='lower left')
 axes[1, 1].grid(True, which='both', alpha=0.3)
+
+# ===== 实测收敛率拟合 =====
+# 在 log-log 标度下，斜率 = 收敛指数（理论值：ISTA -1，FISTA -2）
+# 使用后半段数据（k>=100）拟合，此时已进入渐近收敛阶段
+k_fit_start = 100
+k_fit = k_arr[k_fit_start - 1:]  # 索引从 99 开始（k=100）
+log_k_fit = np.log(k_fit)
+
+# ISTA 斜率拟合
+slope_ista, _ = np.polyfit(log_k_fit, np.log(gap_ista[k_fit_start - 1:]), 1)
+# FISTA 斜率拟合
+slope_fista, _ = np.polyfit(log_k_fit, np.log(gap_fista[k_fit_start - 1:]), 1)
+
+print(f"  [收敛率分析] 在 k={k_fit_start}~{maxiter} 区间内拟合 log-log 斜率：")
+print(f"    ISTA  实测斜率 = {slope_ista:.2f}  (理论参考: -1.00，对应 $O(1/k)$)")
+print(f"    FISTA 实测斜率 = {slope_fista:.2f}  (理论参考: -2.00，对应 $O(1/k^2)$)")
+print(f"    注：有限迭代次数内可能未完全进入渐近收敛区间，实测值与理论值存在偏差")
 
 # 右下：放大显示迭代前 50 次的差距（FISTA 在前期领先最显著）
 axes[1, 2].semilogy(k_arr[:50], gap_ista[:50], 'b-o', markersize=4,
@@ -526,9 +570,12 @@ results = {
         'F_star_estimate': float(F_star),
         'gap_ista': {str(k + 1): float(gap_ista[k]) for k in [9, 19, 49, 99, 149, 199]},
         'gap_fista': {str(k + 1): float(gap_fista[k]) for k in [9, 19, 49, 99, 149, 199]},
-        'speedup_ratio_50': float(gap_ista[49] / gap_fista[49]),
-        'speedup_ratio_100': float(gap_ista[99] / gap_fista[99]),
-        'speedup_ratio_200': float(gap_ista[199] / gap_fista[199]),
+        'speedup_ratio_50': float(ratio_50) if ratio_50 != float('inf') else '>1e6',
+        'speedup_ratio_100': float(ratio_100) if ratio_100 != float('inf') else '>1e6',
+        'speedup_ratio_200': float(ratio_200) if ratio_200 != float('inf') else '>1e6',
+        'measured_slope_ista': float(slope_ista),
+        'measured_slope_fista': float(slope_fista),
+        'slope_fit_range': f'k={k_fit_start}~{maxiter}',
     },
     'reconstruction_psnr': {
         'ISTA_200iter': float(psnr_ista),
@@ -546,12 +593,15 @@ print("=" * 60)
 print("1. ISTA 每步 = 梯度步 (沿光滑数据项下降) + 近端步 (软阈值)")
 print("2. FISTA 在 ISTA 基础上加外推步 (Nesterov 动量)，几乎'免费'获得加速")
 print(f"3. 在迭代 50/100/200 时，FISTA 相对 ISTA 的加速比分别为 "
-      f"{gap_ista[49]/gap_fista[49]:.2f}x / {gap_ista[99]/gap_fista[99]:.2f}x / "
-      f"{gap_ista[199]/gap_fista[199]:.2f}x")
+      f"{ratio_50:.2f}x / {ratio_100:.2f}x / {ratio_200:.2f}x")
 print(f"4. 200 次迭代后 FISTA 重建 PSNR = {psnr_fista:.2f} dB，"
       f"ISTA 重建 PSNR = {psnr_ista:.2f} dB")
-print(f"5. 收敛曲线在 log-log 标度下，ISTA 接近 $O(1/k)$，FISTA 接近 $O(1/k^2)$——"
-      f"一阶方法的最优速率")
+print(f"   （两者求解同一 LASSO 问题，理论最优解相同；FISTA PSNR 更高说明 200 次迭代"
+      f"下 FISTA 因收敛更快更接近最优解，ISTA 尚未完全收敛）")
+print(f"5. 收敛曲线在 log-log 标度下：ISTA 实测斜率 {slope_ista:.2f}（理论参考 -1，"
+      f"对应 $O(1/k)$），FISTA 实测斜率 {slope_fista:.2f}（理论参考 -2，对应 $O(1/k^2)$）")
+print(f"   注：有限迭代（{maxiter}次）可能未完全进入渐近收敛区间，实测值与理论值存在偏差；"
+      f"但 FISTA 明显快于 ISTA，加速效果随迭代次数增大而增强")
 print(f"\n实验完成。结果已保存至: {SAVE_DIR}")
 print(f"  - 步骤1_ISTA_vs_FISTA收敛对比.png")
 print(f"  - 步骤2_梯度步近端步迭代轨迹.png")

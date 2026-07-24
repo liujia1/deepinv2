@@ -1,0 +1,30 @@
+{
+  "experiment": "实验3.6-2 Landweber 半收敛：U 形误差曲线",
+  "scene": {
+    "signal_dim": 64,
+    "sigma_diag_min": 0.006737946999085467,
+    "sigma_diag_max": 1.0,
+    "noise_sigma": 0.05,
+    "step_size_tau": 1.0,
+    "maxiter": 2000
+  },
+  "semiconvergence": {
+    "k_opt": 64,
+    "err_at_k0": 4.832183771339828,
+    "err_at_k_opt": 3.2775931164593706,
+    "err_at_k_max": 5.815310944951801,
+    "semiconvergence_ratio": 1.774262618428308
+  },
+  "k_opt_vs_noise": {
+    "0.01": 2000,
+    "0.02": 1254,
+    "0.05": 64,
+    "0.1": 11,
+    "0.2": 3
+  },
+  "output_files": [
+    "D:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-2\\步骤1a_U形误差曲线.png",
+    "D:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-2\\步骤1b_解对比与Picard条件.png",
+    "D:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-2\\步骤2_不同噪声下半收敛曲线族.png"
+  ]
+}

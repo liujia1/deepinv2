@@ -6,9 +6,9 @@
     "b": 0.8,
     "likelihood_sigma": 1.0,
     "y_obs": 2.0,
-    "MAP": 0.7477477477477477,
-    "MMSE": 0.9653019258961726,
-    "divergence_MMSE_minus_MAP": 0.21755417814842493
+    "MAP": 0.7479159719906638,
+    "MMSE": 0.9992353564979838,
+    "divergence_MMSE_minus_MAP": 0.25131938450731994
   },
   "bimodal_posterior": {
     "prior": "binary_mixture",

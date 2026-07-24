@@ -48,9 +48,6 @@ try:
 except ImportError:
     print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
 
-# 兼容不同 numpy 版本的梯形积分
-_trapz = getattr(np, 'trapezoid', np.trapz)
-
 # ══════════════════════════════════════════════════════════
 # 设置：噪声水平与先验参数
 # ══════════════════════════════════════════════════════════
@@ -112,9 +109,10 @@ for j, y in enumerate(tqdm(y_grid, desc='计算去噪器曲线 D(y)', ncols=80))
     for k, lp in priors.items():
         log_post = lp(x_grid) - (y - x_grid) ** 2 / (2 * sigma ** 2)
         log_post -= log_post.max()
+        # 未归一化权重 w_i ∝ p(x_i|y); 后验均值用 PMF 形式 E[x] = Σ x_i w_i / Σ w_i
+        # (等价于先归一化为密度 w/(Σw·dx) 再 trapz，但此写法与 dx 无关、更稳健)
         w = np.exp(log_post)
-        w /= w.sum()
-        D_num[k][j] = _trapz(x_grid * w, x_grid)
+        D_num[k][j] = np.sum(x_grid * w) / np.sum(w)
 
 # 闭式曲线 (与数值结果一致，作为清晰对照)
 D_closed = {
@@ -139,7 +137,6 @@ ax.plot(y_grid, D_closed['laplace'], 'g-', linewidth=2,
 ax.plot(y_grid, D_num['student_t'], 'r-', linewidth=2,
         label=f'Student-t 先验 (重尾), $\\nu={nu}$')
 
-ax.plot([-3, 3], [-3, 3], 'gray', linewidth=0.8, alpha=0.5)
 ax.set_xlim(-3, 3)
 ax.set_ylim(-3, 3)
 ax.set_xlabel('观测值 $y$', fontsize=13)
@@ -173,12 +170,25 @@ for yy in sample_y:
     print(f"  {yy:>6.1f} | {D_closed['gaussian'][iy]:>8.3f} | "
           f"{D_closed['laplace'][iy]:>8.3f} | {D_num['student_t'][iy]:>10.3f}")
 
-print("\n[核心观察]")
+# 量化近零处收缩：用与上方表格相同的网格点(最接近 0.2)，保证文字与数值输出完全一致
+_iy02 = np.argmin(np.abs(y_grid - 0.2))
+_y02 = y_grid[_iy02]
+_Dlap02 = D_closed['laplace'][_iy02]
+_Dst02 = D_num['student_t'][_iy02]
+_lap_supp = (1 - _Dlap02 / _y02) * 100
+_st_supp = (1 - _Dst02 / _y02) * 100
+
+print("\n[核心观察] (以下数值直接引用上方表格，与曲线一致)")
 print("  - 无先验: D(y)=y，对角直线，完全不做收缩 (没有利用任何先验)。")
-print("  - 高斯先验: 处处线性、斜率<1，远离原点仍接近 y —— 只做轻微均匀收缩。")
-print("  - Laplace 先验: 软阈值，近零处被压成 0，产生稀疏(边缘保持)效果。")
-print("  - Student-t 先验: 重尾，收缩更强、近硬阈值的'死区'去噪器，")
-print("    对小信号抑制更狠 —— 体现'重尾先验更偏好稀疏/近零解'。")
+print("  - 高斯先验: 处处线性、斜率<1，远离原点仍接近 y —— 只做均匀轻微收缩，无阈值。")
+print(f"  - Laplace 先验: 软阈值，近零处出现'死区' (y≈{_y02:.2f} 时仅剩 {_Dlap02:.3f}，压制约 {_lap_supp:.0f}%)，")
+print("    产生稀疏/边缘保持；大 y 处近似 y 减去固定偏移。")
+print(f"  - Student-t 先验(重尾): 收缩最温和 —— 近零处仅压制约 {_st_supp:.0f}% (远弱于 Laplace 的 {_lap_supp:.0f}%)，")
+print("    大 y 处收缩也略弱于 Laplace、最接近 y。它并不把小信号压成 0，")
+print("    而是呈平滑弱收缩。这正是'MMSE=后验均值'而非 MAP 的表现。")
+print("  → 注意: 人们常把重尾先验与'硬阈值/死区'联系在一起，但那是 MAP(后验众数)")
+print("    估计器的行为；MMSE 去噪器(本实验)对重尾先验是平滑弱收缩。")
+print("    这恰是 2.3 节'MMSE vs MAP 分歧'的又一例证 —— 同一先验，两种估计器形状迥异。")
 print("  → 先验 p(x) 的形状，直接决定了去噪器 D_σ(y) 的形状，")
 print("    这正是'先验的质量'在去噪器层面的具体体现。")
 

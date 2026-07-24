@@ -46,7 +46,7 @@ except ImportError:
     print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
 
 # 兼容不同 numpy 版本的梯形积分
-_trapz = getattr(np, 'trapezoid', np.trapz)
+_trapz = np.trapezoid if hasattr(np, 'trapezoid') else np.trapz
 
 
 # ══════════════════════════════════════════════════════════
@@ -65,7 +65,7 @@ def log_posterior_skew(x, y, b, sigma):
     return -np.abs(x) / b - (y - x) ** 2 / (2 * sigma ** 2)
 
 
-x_range_a = np.linspace(-2, 3, 1000)
+x_range_a = np.linspace(-5, 8, 3000)
 log_p_a = log_posterior_skew(x_range_a, y_obs, b, sigma)
 p_a = np.exp(log_p_a - log_p_a.max())
 p_a = p_a / (p_a.sum() * (x_range_a[1] - x_range_a[0]))
@@ -107,7 +107,7 @@ ax.plot(x_range_a, p_a, 'b-', linewidth=2, label='后验分布 $p(x|y)$')
 
 ax.axvline(x=x_map_a, color='red', linestyle='--', linewidth=2, alpha=0.8)
 ax.plot(x_map_a, p_a[map_idx_a], 'ro', markersize=12, zorder=5)
-ax.annotate(f'MAP = {x_map_a:.2f}\n(峰值，偏向零点)',
+ax.annotate(f'MAP = {x_map_a:.2f}\n(相对观测 $y$ 向零收缩)',
             xy=(x_map_a, p_a[map_idx_a]), xytext=(-1.5, p_a[map_idx_a] * 0.7),
             fontsize=11, ha='center', color='red',
             arrowprops=dict(arrowstyle='->', color='red', lw=1.5))
@@ -127,9 +127,7 @@ ax.annotate('尾部质量\n拉动 MMSE 向右', xy=(2.0, 0.02), xytext=(2.3, 0.0
             arrowprops=dict(arrowstyle='->', color='darkorange', lw=1.5))
 
 ax.axvline(x=0, color='gray', linestyle=':', linewidth=1, alpha=0.5)
-ax.text(0.05, ax.get_ylim()[1] * 0.9, '零点', fontsize=9, color='gray')
 ax.axvline(x=y_obs, color='purple', linestyle=':', linewidth=1.5, alpha=0.6)
-ax.text(y_obs + 0.05, ax.get_ylim()[1] * 0.8, f'观测 $y={y_obs}$', fontsize=9, color='purple')
 
 ax.set_xlabel('$x$', fontsize=13)
 ax.set_ylabel('后验概率密度 $p(x|y)$', fontsize=13)
@@ -137,6 +135,11 @@ ax.set_title('偏斜后验下 MAP vs MMSE 分歧\nLaplace 先验 + 高斯似然 
              fontsize=14, fontweight='bold', linespacing=1.8, pad=20)
 ax.legend(loc='upper left', fontsize=10)
 ax.grid(True, alpha=0.3)
+
+# 在所有图形元素添加完毕后获取最终 ylim，确保文本位置基于完整坐标范围
+ylim = ax.get_ylim()
+ax.text(0.05, ylim[1] * 0.9, '零点', fontsize=9, color='gray')
+ax.text(y_obs + 0.05, ylim[1] * 0.8, f'观测 $y={y_obs}$', fontsize=9, color='purple')
 plt.savefig(os.path.join(SAVE_DIR, '图2-3_偏斜分布MMSE_vs_MAP.png'), dpi=150, bbox_inches='tight')
 plt.close()
 
@@ -194,10 +197,10 @@ print("=" * 70)
 print("实验2.3-2 偏斜/多峰后验下 MMSE vs MAP 分歧可视化")
 print("=" * 70)
 print(f"\n[子图(a) 偏斜后验] Laplace 先验(b={b}) + 高斯似然(σ={sigma})，观测 y={y_obs}")
-print(f"  MAP  = {x_map_a:.4f}  (后验峰值，偏向零点)")
+print(f"  MAP  = {x_map_a:.4f}  (后验峰值，相对观测 y 向零收缩)")
 print(f"  MMSE = {x_mmse_a:.4f}  (后验均值，被右侧尾部质量拉远)")
 print(f"  分歧: MMSE - MAP = {x_mmse_a - x_map_a:.4f}")
-print("  核心观察: MAP 选后验峰值(最可能值)，偏零点；MMSE 取后验均值，")
+print("  核心观察: MAP 选后验峰值(最可能值)，相对观测 y 向零收缩；MMSE 取后验均值，")
 print("            被尾部质量拉离峰值。非对称分布下两者产生明显分歧。")
 
 print(f"\n[子图(b) 双峰后验] 二值图像双峰混合: {w1}·N({mu1},{sigma1}^2) + {w2}·N({mu2},{sigma2}^2)")
