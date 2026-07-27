@@ -438,6 +438,64 @@ print(f"  → 扩散耦合路径弯曲(κ大)，OT-CFM路径最直(κ小)")
 
 
 # ============================================================
+# 步骤3：学到的向量场可视化（箭头场，Lipman 2023 Fig.1 风格）
+# ============================================================
+# 在网格上评估学到的 v_θ(x_t, t)，画出箭头场，直观展示"向量场指向数据端"的含义。
+# 对比独立耦合 CFM 与 OT-CFM 学到的向量场形态差异（OT 更规则、更直）。
+
+def plot_vector_field(model, source, target, t_val, ax, title):
+    """在网格上评估向量场 v_θ(x_t, t) 并画箭头图。"""
+    model.eval()
+    # 构造网格
+    xs = np.linspace(-4, 4, 22)
+    ys = np.linspace(-4, 4, 22)
+    X, Y = np.meshgrid(xs, ys)
+    grid = torch.tensor(np.stack([X.ravel(), Y.ravel()], axis=1), dtype=torch.float32)
+    t_grid = torch.ones(grid.shape[0], 1) * t_val
+    with torch.no_grad():
+        V = model(grid, t_grid).numpy()  # (N, 2)
+    U = V[:, 0].reshape(X.shape)
+    W = V[:, 1].reshape(X.shape)
+    speed = np.hypot(U, W)
+    # 箭头图（颜色编码速度大小）
+    ax.quiver(X, Y, U, W, speed, cmap='viridis', alpha=0.9, scale=14,
+              width=0.0035, headwidth=4, headlength=5)
+    # 叠加源与目标分布
+    ax.scatter(source[:, 0], source[:, 1], c='blue', s=25, label='源分布 z',
+               zorder=5, edgecolors='k', linewidths=0.4)
+    ax.scatter(target[:, 0], target[:, 1], c='red', s=25, label='目标分布 x',
+               zorder=5, edgecolors='k', linewidths=0.4)
+    ax.set_xlim(-4, 4)
+    ax.set_ylim(-4, 4)
+    ax.set_aspect('equal')
+    ax.grid(alpha=0.3)
+    ax.set_title(f'{title}\n(t={t_val:.2f})', fontsize=12)
+    ax.legend(loc='upper right', fontsize=9)
+
+# 准备分布点（与步骤2一致的 source/target 规模）
+np.random.seed(123)
+source_vf = sample_source(n_points)
+target_vf = sample_target(n_points)
+ind_idx_vf = independent_coupling(n_points)
+target_vf_ind = target_vf[ind_idx_vf]
+ot_idx_vf = ot_coupling(source_vf, target_vf)
+target_vf_ot = target_vf[ot_idx_vf]
+
+fig_vf, axes_vf = plt.subplots(1, 2, figsize=(13, 6))
+plot_vector_field(model_ind, source_vf, target_vf_ind, 0.5, axes_vf[0],
+                  '(a) 独立耦合CFM 向量场')
+plot_vector_field(model_ot, source_vf, target_vf_ot, 0.5, axes_vf[1],
+                  '(b) OT-CFM 向量场')
+plt.suptitle('实验14.3-1：学到的向量场 $v_\\theta(x_t, t=0.5)$ 对比（箭头指向数据端）',
+             fontsize=14, y=1.02)
+plt.tight_layout()
+fig_path_vf = os.path.join(SAVE_DIR, '步骤3_向量场.png')
+plt.savefig(fig_path_vf, dpi=150, bbox_inches='tight')
+plt.close()
+print(f"图3已保存: {fig_path_vf}")
+
+
+# ============================================================
 # 总结
 # ============================================================
 print(f"\n{'='*60}")

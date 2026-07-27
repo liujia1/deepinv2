@@ -140,7 +140,7 @@ Langevin局限(7.1) → 正向SDE(7.2) → 逆向SDE(7.3) → 概率流ODE(7.4) 
     - VE-SDE：$\text{SNR}(t) = \|x_0\|^2 / \sigma(t)^2$——单调递减
     - VP-SDE：$\text{SNR}(t) = \bar\alpha_t / (1-\bar\alpha_t)$——单调递减
 
-**来源**：Song et al. (2021) Score-SDE; Tutorial_Diffusion_Imaging_Vision Sec 4.3; 2406.08929v2 Sec 2.4; 2508.01975v1 Sec 3.1
+**来源**：Song et al. (2021) Score-SDE; Tutorial_Diffusion_Imaging_Vision Sec 4.3; 2406.08929v2 Sec 2.4; 2209.14687v1 Sec 3.1
 
 正向SDE描述了数据如何被噪声逐步"淹没"——从干净数据到纯噪声的演化。而我们的目标是从噪声恢复数据，逆向SDE提供了这条"回家之路"。
 
@@ -261,7 +261,7 @@ Langevin局限(7.1) → 正向SDE(7.2) → 逆向SDE(7.3) → 概率流ODE(7.4) 
   - DDIM更快但可控：确定性使少步采样成为可能，但多样性受限
   - 实践中的选择：生成任务用DDPM（多样性），逆问题用DDIM/ODE（确定性、可控性）
 
-**来源**：Song et al. (2020); 2406.08929v2 Sec 3.5; 2508.01975v1 Sec 3.1; Tutorial_Diffusion_Imaging_Vision Sec 4.4
+**来源**：Song et al. (2020); 2406.08929v2 Sec 3.5; 2209.14687v1 Sec 3.1; Tutorial_Diffusion_Imaging_Vision Sec 4.4
 
 逆向SDE和PF-ODE提供了从噪声生成数据的连续方程，但计算机只能执行离散迭代。于是，如何将连续方程离散化为可执行的算法？数值离散化方法给出了答案。
 
@@ -502,12 +502,12 @@ Langevin局限(7.1) → 正向SDE(7.2) → 逆向SDE(7.3) → 概率流ODE(7.4) 
 |---|---|---|
 | 从Langevin到扩散SDE的连续推广 | Pock L2 P14; 2406.08929v2 Sec 2.4 | ✅ |
 | "离散→连续→重离散化"螺旋 | book_plan; 成书绪论 | ✅ |
-| 一般正向SDE框架 | Tutorial_Diffusion Sec 4.3; 2508.01975v1 | ✅ |
+| 一般正向SDE框架 | Tutorial_Diffusion Sec 4.3; 2209.14687v1 | ✅ |
 | VE-SDE推导 | Tutorial_Diffusion Theorem 4.3; Song et al. (2021) | ✅ |
 | VP-SDE推导 | Tutorial_Diffusion Theorem 4.1; Song et al. (2021) | ✅ |
 | VE-SDE vs VP-SDE对比 | Tutorial_Diffusion Sec 4.3; Karras et al. (2022) | ✅ |
 | 正向过程闭式解 | 2406.08929v2; Tutorial_Diffusion | ✅ |
-| Anderson逆向SDE定理 | Anderson (1982); 2406.08929v2; 2508.01975v1 | ✅ |
+| Anderson逆向SDE定理 | Anderson (1982); 2406.08929v2; 2209.14687v1 | ✅ |
 | 逆向VE-SDE | Tutorial_Diffusion Theorem 4.4 | ✅ |
 | 逆向VP-SDE | Tutorial_Diffusion Theorem 4.2 | ✅ |
 | 得分与条件期望的联系 | 2406.08929v2 Eq 28; Tweedie等式 | ✅ |

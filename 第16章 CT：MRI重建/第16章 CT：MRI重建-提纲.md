@@ -311,7 +311,7 @@ CT的正则化重建展示了"先验选择决定重建质量"这一核心原则�
 
 从FBP到扩散先验，CT/MRI重建方法的演化完美映射了全书的叙事弧——从显式先验到隐式先验、从点估计到后验采样、从手工设计到数据驱动。
 
-**来源**：Chung et al. (2025) DPS；DDRM (Kawar et al. 2022)；DiffPIR (Zhu et al. 2023)；deepinv demo_ddrm/diffpir；MiniProject_DenoisingPrior
+**来源**：Chung et al. (2023) DPS；DDRM (Kawar et al. 2022)；DiffPIR (Zhu et al. 2023)；deepinv demo_ddrm/diffpir；MiniProject_DenoisingPrior
 
 ---
 
@@ -376,7 +376,7 @@ CT的正则化重建展示了"先验选择决定重建质量"这一核心原则�
 | 16.2 | Siltanen Day3A P28-63；Siltanen Day2 P125-162 | Davison 1983；Natterer 1986；Frikel & Quinto 2013 |
 | 16.3 | IP_and_Im_Lectures-master magnetic_resonance_imaging.md | Lustig et al. (2008) CS-MRI |
 | 16.4 | Bologna_UNet_example.ipynb；Bologna_LGS_example.ipynb | Adler & Öktem (2018)；Benning L2 |
-| 16.5 | Chung et al. (2025)；deepinv demo_ddrm/diffpir | MiniProject_DenoisingPrior |
+| 16.5 | Chung et al. (2023)；deepinv demo_ddrm/diffpir | MiniProject_DenoisingPrior |
 | 附录16A | IP_and_Im_Lectures-master tomography.md L177-210 | Siltanen Day3A P51 |
 | 附录16B | IP_and_Im_Lectures-master magnetic_resonance_imaging.md L42-115 | Bloch (1946) |
 | 附录16C | Siltanen Day3A P55-63 | Greenleaf & Uhlmann 1989；Quinto 1993 |

@@ -213,4 +213,4 @@ DDRM的核心公式总结：
 
 DDRM的局限与DPS的互补性构成了第13章方法选择的重要维度：当算子线性且SVD可得时，DDRM提供更精确的条件化；当算子非线性或SVD不可得时，DPS提供更灵活的近似方案。
 
-**来源**：Kawar et al. (2022) "Denoising Diffusion Restoration Models"；Chung et al. (2508.01975) §3.1；第7章7.2-7.4节VP-SDE与DDIM
+**来源**：Kawar et al. (2022) "Denoising Diffusion Restoration Models"；Chung et al. (2209.14687) §3.1；第7章7.2-7.4节VP-SDE与DDIM

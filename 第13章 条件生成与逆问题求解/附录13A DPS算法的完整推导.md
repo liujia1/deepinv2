@@ -291,4 +291,4 @@ $$\underbrace{\nabla\log p(x_t|y) = \nabla\log p(x_t) + \nabla\log p(y|x_t)}_{\t
 
 DPS的简洁性来自于这两步近似的大胆简化——用delta函数替代不可解积分，用标量因子替代Jacobian矩阵。这些近似使得DPS在计算上极为高效（每步仅需一次额外的前向传播和反传），但也引入了理论上的不严格性——这正是ΠGDM（各向同性高斯近似）和DOC（精确反传）等改进方法的动机。
 
-**来源**：Chung et al. (2023) "Diffusion Posterior Sampling for General Noisy Inverse Problems"；Chung et al. (2508.01975) §3.2 公式(31)-(33)；第7章7.2-7.3节VP-SDE/VE-SDE与逆向SDE；第5章5.3节Tweedie等式
+**来源**：Chung et al. (2023) "Diffusion Posterior Sampling for General Noisy Inverse Problems"；Chung et al. (2209.14687) §3.2 公式(31)-(33)；第7章7.2-7.3节VP-SDE/VE-SDE与逆向SDE；第5章5.3节Tweedie等式

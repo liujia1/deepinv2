@@ -112,7 +112,7 @@ VAE单层局限(10.1) → 层级ELBO推导(10.1) → 高斯编码器=加噪(10.2
 - 后验方差：β̃_t = (1-ᾱ_{t-1})/(1-ᾱ_t) · β_t
 - 关键意义：后验仅依赖x_t和x_0，且方差固定（无需学习）
 
-**来源**：Tutorial on Diffusion Models Sec 2.2-2.3; DDPM (Ho et al. 2020); 2508.01975v1 Sec 2.2; Kingma et al. (2021) VDM
+**来源**：Tutorial on Diffusion Models Sec 2.2-2.3; DDPM (Ho et al. 2020); 2209.14687v1 Sec 2.2; Kingma et al. (2021) VDM
 
 至此，本节建立了扩散过程的变分框架：VLB三项分解、前向后验闭式解、均值匹配的化简方向。进一步的问题是，当层级数 $T \to \infty$ 时，离散的层级结构会发生什么？
 
@@ -156,7 +156,7 @@ VAE单层局限(10.1) → 层级ELBO推导(10.1) → 高斯编码器=加噪(10.2
 - ε预测参数化下的VLB ↔ 第6章的去噪得分匹配（DSM）
 - 预告第12章：DSM损失 ≡ VLB，两条路径即将汇合
 
-**来源**：Tutorial on Diffusion Models Sec 2.4-2.5; DDPM (Ho et al. 2020); 2406.08929v2 Sec 5; 2508.01975v1 Sec 2.2
+**来源**：Tutorial on Diffusion Models Sec 2.4-2.5; DDPM (Ho et al. 2020); 2406.08929v2 Sec 5; 2209.14687v1 Sec 2.2
 
 从变分下界出发，我们看到了扩散训练的概念框架：均值匹配、三种参数化、简化目标，以及与得分视角的初步对应。但这一切仍然在离散时间步 $T$ 的框架下，当 $T$ 趋近无穷时，离散的层级结构会发生什么？
 
@@ -283,7 +283,7 @@ L→∞ → 连续扩散SDE(10.4.1-10.4.3)
 | VAE局限性与层级动机 | Tutorial_Diffusion Sec 1; 第9章基础 | ✅ |
 | 层级潜变量与马尔可夫链 | Tutorial_Diffusion Sec 2.1; 2406.08929v2 Sec 5 | ✅ |
 | 层级ELBO推导 | Tutorial_Diffusion Theorem 2.3; DDPM Appendix A | ✅ |
-| 高斯编码器=加噪过程 | Tutorial_Diffusion Sec 2.1; 2508.01975v1 Sec 2.2 | ✅ |
+| 高斯编码器=加噪过程 | Tutorial_Diffusion Sec 2.1; 2209.14687v1 Sec 2.2 | ✅ |
 | 噪声调度与直接采样 | DDPM (Ho et al. 2020); Tutorial_Diffusion | ✅ |
 | VLB三项分解 | Tutorial_Diffusion Theorem 2.3-2.4; DDPM Eq.5 | ✅ |
 | 前向后验闭式解 | Tutorial_Diffusion Theorem 2.5; DDPM Appendix B | ✅ |

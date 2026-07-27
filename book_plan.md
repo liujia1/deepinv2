@@ -410,7 +410,7 @@ Part VI  实践与应用
        - 第一项：无条件扩散模型提供（已学到的先验得分）
        - 第二项：似然得分——所有方法的差异在于如何近似这一项
        - 证明思路：贝叶斯定理在得分函数层面的应用
-       - 来源：Chung et al. (2508.01975) 公式(3)
+       - 来源：Chung et al. (2209.14687) 公式(3)
      13.2.3 似然得分 ∇log p(y|x_t) 的计算挑战
        - 为什么不可直接计算：p(y|x_t) = ∫ p(y|x₀)p(x₀|x_t)dx₀，积分不可解
        - 直观理解：这一项将观测y"拉回"到与测量一致的轨迹上
@@ -750,7 +750,7 @@ Part VI  ███████████████░░░░░  75%  实�
 | DSM目标函数推导 | Tutorial_Diffusion Sec 3.3; Vincent (2011) | ✅ |
 | DSM=ESM+常数等价性证明 | Tutorial_Diffusion Theorem 3.4; Vincent (2011) | ✅ |
 | 去噪=得分匹配等价性 | 第5章Tweedie等式; Tutorial_Diffusion | ✅ |
-| 三种参数化（ε/s/x₀预测） | Tutorial_Diffusion; 2508.01975v1 | ✅ |
+| 三种参数化（ε/s/x₀预测） | Tutorial_Diffusion; 2209.14687v1 | ✅ |
 | SSM与Hutchinson迹估计 | Song et al. (2019) SSM; Hutchinson (1990) | ✅ |
 | ESM/ISM/DSM/SSM关系 | Tutorial_Diffusion Sec 3.3 | ✅ |
 | 多尺度得分匹配(NCSN) | Song & Ermon (2019); Tutorial_Diffusion | ✅ |
@@ -807,7 +807,7 @@ Part VI  ███████████████░░░░░  75%  实�
 | 从VAE到层级VAE | Tutorial_Diffusion Sec 1-2; Kingma & Welling (2014) | ✅ |
 | 马尔可夫推断链 | Tutorial_Diffusion Sec 2.1; 2406.08929v2 Sec 5 | ✅ |
 | 层级ELBO推导 | Tutorial_Diffusion Theorem 2.3; DDPM Appendix A | ✅ |
-| 高斯编码器=加噪过程 | Tutorial_Diffusion Sec 2.1; 2508.01975v1 Sec 2.2 | ✅ |
+| 高斯编码器=加噪过程 | Tutorial_Diffusion Sec 2.1; 2209.14687v1 Sec 2.2 | ✅ |
 | 噪声调度与直接采样 | DDPM (Ho et al. 2020); Tutorial_Diffusion | ✅ |
 | VLB三项分解 | Tutorial_Diffusion Theorem 2.3-2.4; DDPM Eq.5 | ✅ |
 | 前向后验闭式解 | Tutorial_Diffusion Theorem 2.5; DDPM Appendix B | ✅ |
@@ -847,12 +847,12 @@ Part VI  ███████████████░░░░░  75%  实�
 | 子主题 | 可用来源 | 状态 |
 |---|---|---|
 | 闭环叙事：逆问题→扩散→回到逆问题 | 第1-12章完整链 | ✅ |
-| 条件逆向SDE推导 | Chung et al. (2508.01975) §2 | ✅ |
-| 后验得分分解 ∇log p(x_t\|y) = ∇log p(x_t) + ∇log p(y\|x_t) | Chung et al. (2508.01975) 公式(3) | ✅ |
-| 似然得分∇log p(y\|x_t)的计算挑战与Tweedie闭环 | Chung et al. (2508.01975) Theorem 1 | ✅ |
-| DPS深度剖析：Laplace近似推导+算法伪代码 | Chung et al. (2508.01975) §3.2 | ✅ |
-| DPS缩放因子ζ与实践技巧 | Chung et al. (2508.01975) §3.2 | ✅ |
-| DPS近似链（delta→高斯→完整协方差） | Chung et al. (2508.01975) §3.2 | ✅ |
+| 条件逆向SDE推导 | Chung et al. (2209.14687) §2 | ✅ |
+| 后验得分分解 ∇log p(x_t\|y) = ∇log p(x_t) + ∇log p(y\|x_t) | Chung et al. (2209.14687) 公式(3) | ✅ |
+| 似然得分∇log p(y\|x_t)的计算挑战与Tweedie闭环 | Chung et al. (2209.14687) Theorem 1 | ✅ |
+| DPS深度剖析：Laplace近似推导+算法伪代码 | Chung et al. (2209.14687) §3.2 | ✅ |
+| DPS缩放因子ζ与实践技巧 | Chung et al. (2209.14687) §3.2 | ✅ |
+| DPS近似链（delta→高斯→完整协方差） | Chung et al. (2209.14687) §3.2 | ✅ |
 | 四类方法分类（显式近似/变分/CSGM/渐近精确） | Daras et al. Survey (2410.00083) | ✅ |
 | MAP-GA算法（MAP估计+一致性模型） | Gutha et al. WACV 2025 | ✅ |
 | Classifier Guidance与DPS的统一与差异 | diffusion-tutorials 06-classifier-guidance.ipynb + Chung et al. | 🟡 |
@@ -1045,7 +1045,7 @@ Part VI  ███████████████░░░░░  75%  实�
 | 文件 | 主题 | 对应章节 | 与book_plan的关系 |
 |---|---|---|---|
 | Daras et al. Survey (2410.00083) | 扩散逆问题方法全面综述，四类分类框架 | 第13章 | **核心参考**：四类方法分类直接用于第13章结构 |
-| Chung et al. (2508.01975) | 扩散逆问题书章，Tweedie/后验得分分解/DPS近似链 | 第5-7章、第13章 | **核心参考**：数学推导最详细，Tweedie和DPS链 |
+| Chung et al. (2209.14687) | 扩散逆问题书章，Tweedie/后验得分分解/DPS近似链 | 第5-7章、第13章 | **核心参考**：数学推导最详细，Tweedie和DPS链 |
 | Gutha et al. WACV 2025 (2407.20784) | MAP估计视角+一致性模型重参数化 | 第13章 | MAP-GA算法纳入第13章第三类方法 |
 | NeurIPS 2024 最优控制 | 扩散最优控制视角求解逆问题 | 第13章 | 控制论视角，第13章进阶内容 |
 | NeurIPS 2023 图逆问题 | 图上源定位的扩散模型 | 第13章 | 特定领域，可选提及 |
