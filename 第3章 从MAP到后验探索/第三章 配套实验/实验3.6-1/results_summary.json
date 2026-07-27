@@ -1,5 +1,5 @@
 {
-  "experiment": "实验3.6-2 Landweber 半收敛：U 形误差曲线",
+  "experiment": "实验3.6-1 Landweber 半收敛：U 形误差曲线",
   "scene": {
     "signal_dim": 64,
     "sigma_diag_min": 0.006737946999085467,
@@ -23,8 +23,8 @@
     "0.2": 3
   },
   "output_files": [
-    "D:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-2\\步骤1a_U形误差曲线.png",
-    "D:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-2\\步骤1b_解对比与Picard条件.png",
-    "D:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-2\\步骤2_不同噪声下半收敛曲线族.png"
+    "D:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-1\\步骤1a_U形误差曲线.png",
+    "D:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-1\\步骤1b_解对比与Picard条件.png",
+    "D:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-1\\步骤2_不同噪声下半收敛曲线族.png"
   ]
 }

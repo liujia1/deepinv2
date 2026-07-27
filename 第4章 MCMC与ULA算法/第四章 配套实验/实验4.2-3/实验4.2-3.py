@@ -87,11 +87,12 @@ def rwm_sampler(log_target, d, n_samples, sigma=1.0, burn_in=0, rng=None):
     for i in tqdm(range(n_samples + burn_in), desc="RWM采样", leave=False):
         proposal = x + sigma * rng.standard_normal(d)
         log_p = log_target(proposal)
-        alpha = min(1.0, np.exp(log_p - log_x))
-        accepted = False
-        if rng.random() < alpha:
+        # 对数域比较：log_alpha = min(0, log_p - log_x)；接受 iff log(u) < log_alpha
+        # 等价但避免 np.exp 在 |log_p-log_x| 大时溢出/下溢的 RuntimeWarning
+        log_alpha = min(0.0, log_p - log_x)
+        accepted = np.log(rng.random()) < log_alpha
+        if accepted:
             x, log_x = proposal, log_p
-            accepted = True
         if i >= burn_in:
             samples[i - burn_in] = x
             if accepted:
@@ -100,24 +101,49 @@ def rwm_sampler(log_target, d, n_samples, sigma=1.0, burn_in=0, rng=None):
     return samples, accept_rate
 
 
-# ── 有效样本数 (Geyer 交织法) ─────────────────────────────────────
+# ── 有效样本数 (Geyer 1992 initial positive sequence estimator, IPSE) ─
 def autocov_batch(x):
+    """FFT 版偏差自协方差估计（O(n log n)，比逐 lag 循环快 1-2 个数量级）。
+    返回 lag=0..max_lag 的 acov 数组。"""
     x = x - x.mean()
     n = len(x)
+    # 零填充到 2n 以避免循环卷积的"绕回"伪影
+    f = np.fft.fft(x, n=2 * n)
+    acov = np.fft.ifft(np.abs(f) ** 2).real[:n] / n
     max_lag = min(n - 1, 10000)
-    acov = np.zeros(max_lag + 1)
-    for lag in range(max_lag + 1):
-        acov[lag] = np.mean(x[:n - lag] * x[lag:])
-    return acov
+    return acov[:max_lag + 1]
 
 
 def ess(x):
+    """Geyer (1992) initial positive sequence estimator (IPSE)。
+
+    把自协方差**归一化**为自相关系数 ρ(k)=acov(k)/acov(0) 后两两配对为
+        Gamma_m = rho[2m] + rho[2m+1]   (m=0,1,2,...)
+    当 m 由小到大时，Gamma_m 起初为正、最终应趋于 0；找到首次
+    Gamma_m <= 0 的位置 m* 截断，剔除尾部噪声。tau = -1 + 2*sum Gamma_m，
+    ESS = n / tau。
+
+    注意：归一化非常关键——若直接对未归一化的 acov 配对，tau 的尺度会被
+    acov(0)（即样本方差）污染，导致对非单位方差的目标分布系统性偏差。
+    """
     acov = autocov_batch(x)
     if acov[0] <= 0:
         return 0.0
-    s = acov[0] + 2.0 * np.sum(acov[1:])
-    s = max(s, acov[0])
-    return len(x) * acov[0] / s
+    rho = acov / acov[0]                       # 归一化自相关系数
+    m_max = (len(acov) - 1) // 2
+    gamma = rho[0:2 * m_max:2] + rho[1:2 * m_max:2]   # Gamma_m = rho[2m]+rho[2m+1]
+    sum_pos = 0.0
+    for m in range(m_max):
+        if gamma[m] <= 0.0:
+            break
+        sum_pos += gamma[m]
+    else:
+        # 循环正常结束：未在 max_lag 内找到非正 Gamma，链混合很慢，
+        # 后续 Gamma 仍可能为正但被截断，ESS 估计会偏高
+        print(f"  [警告] ess()：未在 max_lag={len(acov)-1} 内找到 Gamma<=0，"
+              f"ESS 可能被高估（建议增大 max_lag 或检查链混合）")
+    tau = max(-1.0 + 2.0 * sum_pos, 1.0)
+    return len(x) / tau
 
 
 # ════════════════════════════════════════════════════════════════
@@ -135,10 +161,20 @@ for d in dims_s1:
     print(f"  d={d:4d}  接受率={ar:.4f}")
 
 fig, ax = plt.subplots(1, 2, figsize=(12, 5))
-ax[0].semilogy(dims_s1, acc_s1, 'o-', color='C0')
+# semilogy 遇到 0 会直接丢点（log(0) 未定义），造成"断点"假象；
+# 这里把 0 值替换为 0.5/n_samples 作为下界并打特殊标记，让读者看清
+floor = 0.5 / 20000
+acc_s1_log = [a if a > 0 else floor for a in acc_s1]
+zero_dims = [d for d, a in zip(dims_s1, acc_s1) if a == 0]
+ax[0].semilogy(dims_s1, acc_s1_log, 'o-', color='C0',
+               label='接受率（=0 的点用 0.5/N 作下界）')
+if zero_dims:
+    ax[0].plot(zero_dims, [floor] * len(zero_dims), 'rx', ms=10, mew=2,
+               label=f'实际为 0 的维度: {zero_dims}')
 ax[0].set_xlabel(r'维数 $d$', fontsize=12)
 ax[0].set_ylabel('接受率（对数轴）', fontsize=12)
 ax[0].set_title(r'步骤1: 固定步长 $\sigma=1$ 下接受率随维数衰减', fontsize=12)
+ax[0].legend(fontsize=9)
 ax[0].grid(True, which='both', alpha=0.3)
 
 ax[1].plot(dims_s1, acc_s1, 'o-', color='C0')
@@ -156,6 +192,9 @@ plt.close()
 print(f"  图已保存: {os.path.join(OUT_DIR, 'exp4_2-3_step1_acceptance_decay.png')}")
 
 # ── 步骤2：最优步长缩放 σ = 2.38/√d，接受率收敛到 ≈0.234 ──────────
+# 注：σ_opt = 2.38/√d 是 Roberts, Gelman & Gilks (1997) 渐近 (d→∞) 最优
+# 公式，对中等 d（如 d=1 时真实最优接受率约 0.44）并非严格最优；
+# 这里仅作为"按理论最优缩放"的代表演示，验证"高维 RWM 仍崩塌"的定性结论。
 print("\n[步骤2] 最优步长缩放 σ = 2.38/√d，接受率收敛到渐近值 ≈ 0.234")
 dims_s2 = [1, 2, 5, 10, 20, 50, 100, 200, 500]
 acc_s2, sigma_s2 = [], []
@@ -221,12 +260,15 @@ print(f"  图已保存: {os.path.join(OUT_DIR, 'exp4_2-3_step3_ess_decay.png')}"
 summary = {
     "实验": "实验4.2-3 MH接受率随维数衰减（随机游走 Metropolis）",
     "目标分布": "d 维标准高斯 N(0, I)",
+    "ESS算法": "Geyer (1992) IPSE：先归一化 rho=acov/acov[0]，再配对 Gamma_m=rho[2m]+rho[2m+1]，首次非正处截断",
     "步骤1_固定步长_接受率": {str(d): round(a, 4) for d, a in zip(dims_s1, acc_s1)},
     "步骤2_最优步长_接受率": {str(d): round(a, 4) for d, a in zip(dims_s2, acc_s2)},
     "步骤3_有效样本率ESS/N": {str(d): round(r, 4) for d, r in zip(dims_s3, ess_ratio)},
-    "结论": ("固定步长下接受率随维数指数衰减；按最优步长 σ=2.38/√d 缩放后接受率"
-             "收敛到 ≈0.234，但步长必须随维数缩小，且有效样本率 ESS/N 仍随维数下降，"
-             "说明 RWM 在高维下效率崩塌，需要维度无关的提议（见实验4.2-4 的 pCN）。")
+    "结论": ("固定步长下接受率随维数指数衰减；按渐近最优步长 σ=2.38/√d 缩放后接受率"
+             "收敛到 ≈0.234（注：2.38/√d 是 d→∞ 渐近最优，小 d 时并非严格最优，如 d=1"
+             "对应最优接受率约 0.44，这里仅作理论代表演示），但步长必须随维数缩小，"
+             "且有效样本率 ESS/N 仍随维数下降（Geyer IPSE 截断估计），说明 RWM 在高维下"
+             "效率崩塌，需要维度无关的提议（见实验4.2-4 的 pCN）。")
 }
 with open(os.path.join(OUT_DIR, 'exp4_2-3_summary.json'), 'w', encoding='utf-8') as f:
     json.dump(summary, f, ensure_ascii=False, indent=2)

@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 中文显示支持模块 - 兼容 Windows / Linux / Colab
+
+使用方法：
+    from chinese_font import setup_chinese_font
+    setup_chinese_font()
 """
 
 import os
@@ -20,6 +24,7 @@ plt.rcParams['axes.unicode_minus'] = False
 
 
 def _find_chinese_font():
+    """自动检测系统中可用的中文字体，兼容 Windows / Linux / Colab"""
     candidates = []
     if platform.system() == 'Windows':
         candidates = ['SimHei', 'Microsoft YaHei', 'KaiTi', 'FangSong']
@@ -46,16 +51,25 @@ def _find_chinese_font():
 
 
 def setup_chinese_font(save_dir=None):
+    """
+    设置中文字体支持
+    
+    参数:
+        save_dir: 字体缓存目录（可选，默认使用模块所在目录）
+    
+    返回:
+        str: 检测到的中文字体名称，或 None
+    """
     if save_dir is None:
         save_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in dir() else os.getcwd()
-
+    
     _cn_font = _find_chinese_font()
     if _cn_font:
         plt.rcParams['font.sans-serif'] = [_cn_font] + plt.rcParams.get('font.sans-serif', [])
         plt.rcParams['font.family'] = 'sans-serif'
         print(f"[Font] 已检测到中文字体: {_cn_font}")
         return _cn_font
-
+    
     if platform.system() != 'Windows':
         _font_url = 'https://github.com/jsntn/webfonts/raw/master/NotoSansSC-Regular.ttf'
         _font_file = os.path.join(save_dir, 'NotoSansSC-Regular.ttf')
@@ -83,7 +97,7 @@ def setup_chinese_font(save_dir=None):
                 print(f"[Font] 字体下载失败: {e}，中文可能显示为方框")
     else:
         print("[Font] 未找到中文字体，中文可能显示为方框")
-
+    
     return None
 
 

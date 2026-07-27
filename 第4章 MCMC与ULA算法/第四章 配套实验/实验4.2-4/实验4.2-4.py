@@ -95,9 +95,12 @@ def sample_prior(lam, rng):
 
 
 def log_prior_quad(x, lam):
-    """log 先验（省略常数）：-1/2 x^T L x = -1/2 sum_k lambda_k |xhat_k|^2。"""
+    """log 先验（省略常数）：-1/2 x^T L x = -(1/2d) sum_k lambda_k |xhat_k|^2。
+    这里 d = len(x) 是 numpy FFT 的非归一化约定（sum|x_n|^2 = (1/d) sum|xhat_k|^2），
+    因此二次型必须除以 d 才能与时域 x^T L x 一致。"""
     xf = np.fft.fft(x)
-    return -0.5 * np.sum(lam * np.abs(xf) ** 2)
+    d = len(x)
+    return -0.5 / d * np.sum(lam * np.abs(xf) ** 2)
 
 
 # ── 模糊前向算子 B（circulant，低通）──────────────────────────────
@@ -137,11 +140,11 @@ def rwm_sampler(log_target, d, n_samples, sigma, burn_in, rng):
     for i in tqdm(range(n_samples + burn_in), desc="RWM采样", leave=False):
         prop = x + sigma * rng.standard_normal(d)
         log_p = log_target(prop)
-        if rng.random() < min(1.0, np.exp(log_p - log_x)):
+        # 对数域比较，避免 np.exp 在 |log_p-log_x| 大时溢出/下溢的 RuntimeWarning
+        log_alpha = min(0.0, log_p - log_x)
+        accepted = np.log(rng.random()) < log_alpha
+        if accepted:
             x, log_x = prop, log_p
-            accepted = True
-        else:
-            accepted = False
         if i >= burn_in:
             samples[i - burn_in] = x
             n_acc += int(accepted)
@@ -160,11 +163,11 @@ def pcn_sampler(log_like, lam, blur_g, sigma_noise, d, n_samples, beta,
         xi = sample_prior(lam, rng)                     # xi ~ N(0, C)
         prop = np.sqrt(1.0 - beta ** 2) * x + beta * xi
         ll_p = log_likelihood(prop, y, blur_g, sigma_noise)
-        if rng.random() < min(1.0, np.exp(ll_p - ll_x)):   # 仅似然比
+        # 对数域比较，同 rwm_sampler
+        log_alpha = min(0.0, ll_p - ll_x)
+        accepted = np.log(rng.random()) < log_alpha
+        if accepted:
             x, ll_x = prop, ll_p
-            accepted = True
-        else:
-            accepted = False
         if i >= burn_in:
             samples[i - burn_in] = x
             n_acc += int(accepted)
@@ -200,6 +203,11 @@ for d in dims:
         return (log_likelihood(xi, _yt, _bg, SIGMA_NOISE)
                 + log_prior_quad(xi, _lam))
     # RWM：最优缩放步长 sigma=2.38/sqrt(d)（各向同性白噪声提议）
+    # 注：2.38/sqrt(d) 是 Roberts, Gelman & Gilks (1997) 在各向同性目标
+    # 下的渐近 (d→∞) 最优公式；本实验的后验是平滑先验 + 模糊似然，**显著各向异性**，
+    # 严格说并不满足该公式的推导前提。这里**刻意**复用一个不匹配的"教科书
+    # 调参公式"，目的正是用反例说明：即便按各向同性最优调参，RWM 在各向异性
+    # 后验上仍会失效——从而突出 pCN（先验度量提议）才是这类问题的根本解法。
     sig = 2.38 / np.sqrt(d)
     _, ar_rwm = rwm_sampler(log_post, d, n_samples=20000, sigma=sig,
                             burn_in=1000, rng=RNG)
@@ -275,6 +283,10 @@ plt.close()
 print(f"  图已保存: {os.path.join(OUT_DIR, 'exp4_2-4_reconstruction.png')}")
 
 # ── 小结 ──────────────────────────────────────────────────────────
+# 动态计算 pCN 接受率统计量，避免硬编码结论
+pcn_mean_acc = float(np.mean(acc_pcn))
+pcn_spread_acc = float(np.max(acc_pcn) - np.min(acc_pcn))
+rwm_mean_acc = float(np.mean(acc_rwm))
 summary = {
     "实验": "实验4.2-4 pCN-MCMC 实现：维度无关性验证",
     "设定": (f"1D 周期信号贝叶斯反卷积；先验 N(0,C), C=(I+{TAU}**2*(-Delta))^-1; "
@@ -283,20 +295,25 @@ summary = {
     "分辨率列表": dims,
     "RWM_接受率(sigma=2.38/sqrt(d))": {str(d): round(a, 4) for d, a in zip(dims, acc_rwm)},
     "pCN_接受率(beta={})".format(BETA): {str(d): round(a, 4) for d, a in zip(dims, acc_pcn)},
+    "pCN_接受率_均值": round(pcn_mean_acc, 4),
+    "pCN_接受率_最大最小差": round(pcn_spread_acc, 4),
+    "RWM_接受率_均值": round(rwm_mean_acc, 4),
     "d256_解析均值_vs_真值_MSE": mse_analytic_vs_truth,
     "d256_pCN均值_vs_真值_MSE": mse_pcn_vs_truth,
     "d256_pCN均值_vs_解析均值_MSE": mse_pcn_vs_analytic,
-    "结论": ("扫描分辨率 d 时，各向同性 RWM 在该平滑/各向异性后验上接受率几乎为 0"
-             "（白噪声提议无法适配先验几何，高维下更甚）；pCN 接受率在 beta 固定时基本不随"
-             " d 变化（≈0.34）→ 维度无关（dimension-free）。步骤4 用 Fourier 对角解析后验均值"
-             " 校验：pCN 经验后验均值与解析解 MSE 很小，证明 pCN 正确收敛到目标后验。")
+    "结论": (f"扫描分辨率 d 时，各向同性 RWM 在该平滑/各向异性后验上接受率均值≈"
+             f"{rwm_mean_acc:.4f}（白噪声提议无法适配先验几何）；pCN 接受率在 beta 固定时"
+             f"基本不随 d 变化（均值≈{pcn_mean_acc:.3f}，最大最小差≈{pcn_spread_acc:.3f}）"
+             f"→ 维度无关（dimension-free）。步骤4 用 Fourier 对角解析后验均值校验："
+             f"pCN 经验后验均值与解析解 MSE 很小（{mse_pcn_vs_analytic:.3e}），"
+             f"证明 pCN 正确收敛到目标后验。")
 }
 with open(os.path.join(OUT_DIR, 'exp4_2-4_summary.json'), 'w', encoding='utf-8') as f:
     json.dump(summary, f, ensure_ascii=False, indent=2)
 
 print("\n" + "=" * 60)
 print("结论:")
-print("  1. RWM 在该平滑逆问题上接受率几乎为 0（白噪声提议无法适配先验几何）")
+print("  1. RWM 接受率均值≈{:.4f}（白噪声提议无法适配先验几何）".format(rwm_mean_acc))
 print(f"  2. pCN(beta={BETA}) 接受率不随维数变化 → 维度无关（dimension-free）")
 print("  3. pCN 经验后验均值 ≈ 解析后验均值 → 校验 pCN 收敛到正确后验")
 print(f"\n实验完成。结果已保存至: {OUT_DIR}")
