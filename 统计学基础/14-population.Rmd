@@ -1,0 +1,1030 @@
+```{r load-tidy-123266341,message=FALSE,warning=FALSE}
+library(tidyverse)
+library(patchwork)
+```
+
+# Extended Example: World Population Data
+
+In this chapter, we analyze the United Nations' [World Population Prospects](https://population.un.org/wpp/Download/Standard/Population/) data. These
+data contain estimated population sizes for each country for single years from
+1950--2020, and projections for five year blocks from 2025--2100. 
+
+We will apply methods from each chapter of this course to answer questions
+about these data, the underlying true population of the world, and what the 
+population will look like in the future. More specifically, we will:
+
+1. Read in and prepare the data for analysis (**Chapter 2**),
+
+1. Build a simple linear regression model for the total world population over time
+(**Chapter 4**),
+
+1. Develop a Bayesian model for total world population (**Chapter 6**),
+
+1. Quantify uncertainty in our estimate for total world population (**Chapter 9**),
+
+1. Develop a Bayesian estimator for total world population (**Chapter 11**),
+
+1. Predict the population to the year 2100 and compare our predictions and
+uncertainty quantification with those reported by the UN (**Chapter 12**).
+
+## Read in and prepare the data for analysis
+
+The [World Population Prospects](https://population.un.org/wpp/Download/Standard/Population/) data
+contain estimated population sizes for each country for single years from
+1950--2020, and projections for five year blocks from 2025--2100. They are available
+for free download from that link. They are not in any form suitable for analysis,
+however. The data are contained in a spreadsheet with variables in both rows and
+columns, and summary statistics mixed in with the raw data.
+
+I have done a bit of manual editing and posted the files to the book data folder
+at `data/worldpop/*`. Let's read in the data corresponding to the world population
+estimates from 1950--2020. First, look at it, either in excel or on the command line:
+
+```{bash printworldpop-1}
+head data/worldpop/worldpop-estimates.csv
+```
+
+There is one character column containing the country and then $(2020 - 1950 + 1) = 71$
+numeric columns containing population counts.
+
+Let's read it in with those specs:
+```{r readworldpop-1}
+worldpop <- readr::read_csv(
+  file = "data/worldpop/worldpop-estimates.csv",
+  col_names = TRUE,
+  col_types = stringr::str_c(c("c",rep("n",71)),collapse = "")
+)
+glimpse(worldpop)
+```
+
+Does that look correct to you?
+
+No. Why is the world population only 2 for 1950? If you read the documentation
+for the data, you may notice that population is recorded in thousands, but I still
+think that there were more than $2,000$ people in the world in 1950. Also, I'm 
+pretty sure the single country of Comoros shouldn't have more people than the 
+entire world. 
+
+Always look at the data when you read it in.
+
+The problem is debugged by printing the data out on the command line like we did above,
+and noticing that in the original file, numbers are stored with spaces in them.
+We have to remove these spaces for `R` to read in the data correctly. This kind
+of simple but annoying thing happens *all the time* when analyzing data "in the wild".
+
+To remove the spaces (this works for any annoying character like a period, or a 
+dollar sign, or whatever), read the data in with all columns as character, process
+the data in `R`, and then convert to numeric. Check it out:
+
+```{r readworldpop-11}
+remove_space <- function(x) stringr::str_remove_all(x," ")
+worldpop <- readr::read_csv(
+  file = "data/worldpop/worldpop-estimates.csv",
+  col_names = TRUE,
+  col_types = stringr::str_c(rep("c",72),collapse = "")
+) %>%
+  # Remove the space
+  mutate_at(vars(`1950`:`2020`),remove_space) %>%
+  # Convert to numeric
+  mutate_at(vars(`1950`:`2020`),as.numeric)
+glimpse(worldpop)
+```
+
+Good. Verify that a few values of your choosing match their entries in the original
+text data.
+
+The data are in wide format, with the "year" variable contained in the columns. We
+want the data in long format for analysis, with two variables, `country` and `year`,
+and a variable containing the population count.
+
+We can do that:
+
+```{r readworldpop-2}
+worldpop <- worldpop %>%
+  pivot_longer(
+    `1950`:`2020`,
+    names_to = "year",
+    values_to = "population"
+  ) %>%
+  mutate(year = as.numeric(year))
+glimpse(worldpop)
+
+
+
+
+  
+```
+
+That looks better! Do the following exercises:
+
+**Exercises**:
+
+1. What is the estimated world population in 2020 (remember, the recorded
+values are in **thousands** of people. Answer this question in terms of
+**number of people**)?
+
+1. What is the estimated world population in Canada in 1975? Use the `filter` function.
+
+1. The total world population should equal the sum of the population in each country.
+Check this. Do the following:
+
+    a. Compute the world population by summing the population of each country.
+    Use the `filter` function to remove the `WORLD` row from each year. Then use
+    `group_by` and `summarize` to sum `population` over `country`. Save the result
+    in a dataframe called `worldpop_summed`.
+    
+    b. Pull the UN's estimated world population by using the `filter` function to
+    *keep* only the `WORLD` row from each year. Save this in a dataframe called
+    `worldpop_un`.
+    
+    c. Join them, and make a plot of the *difference* between the sum of the countries'
+    populations and the UN's estimate, for each year. Here's what I got for both the
+    data and the plot:
+    
+```{r worldpopexercise-1,echo=FALSE}
+worldpop_summed <- worldpop %>%
+  filter(country != "WORLD") %>%
+  group_by(year) %>%
+  summarize(worldpop = sum(population))
+
+worldpop_un <- worldpop %>% filter(country == "WORLD")
+
+worldpop_joined <- inner_join(worldpop_summed,worldpop_un,by = "year")
+glimpse(worldpop_joined)
+worldpop_joined %>%
+  ggplot(aes(x = year,y = worldpop - population)) +
+  theme_classic() + 
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "Difference in population estimates",
+       x = "Year",
+       y = "Sum of countries - UN estimate") +
+  scale_x_discrete(breaks = as.character(seq(1950,2020,by=5)))
+```
+
+*Hints*: use `scale_x_discrete(breaks = as.character(seq(1950,2020,by=5)))` to get
+the five-year axis, and use `theme(axis.text.x = element_text(angle = 90))` to make the axis text
+sideways. Use `geom_bar(stat = "identity")` to get the bar plot. Or, make another
+type of plot of your choosing! Don't be afraid to have some fun.
+
+Now, for later in this chapter, we're going to need data on the world population projections
+from 2020--2100. The median and "95\% intervals" (you'll learn what this means later)
+are all stored in seperate files. I'll read in the "median" one and then you'll read
+in the "interval" ones and then join them all together.
+
+The prediction data is mostly in the same format as the population estimates. The
+numbers are now stored with quotes and with thousands separated by commas, however.
+Like when it was stored with thousands separated by spaces, we have to read it in 
+as a character, and then process the data in `R` and convert to numeric.
+
+```{bash printmedian}
+head data/worldpop/worldpop-pred-median.csv
+```
+
+```{r readmedian-1}
+remove_comma <- function(x) stringr::str_remove_all(x,",")
+worldpop_pred_median <- readr::read_csv(
+  file = "data/worldpop/worldpop-pred-median.csv",
+  col_names = TRUE,
+  col_types = stringr::str_c(rep("c",18),collapse = "")
+) %>%
+  # Remove the commas. R already removed the quotes.
+  mutate_at(vars(`2020`:`2100`),remove_comma) %>%
+  # Convert to numeric
+  mutate_at(vars(`2020`:`2100`),as.numeric) %>%
+  # Pivot to long format
+  pivot_longer(
+    `2020`:`2100`,
+    names_to = "year",
+    values_to = "population"
+  ) %>%
+  mutate(year = as.numeric(year))
+glimpse(worldpop_pred_median)
+```
+
+**Exercise**: read in the `worldpop-pred-lower95.csv` and `worldpop-pred-upper95.csv`
+datasets into dataframes called `worldpop_pred_lower95` and `worldpop_pred_upper95`,
+with the `population` variable named `population_lower95` and `population_upper95`.
+Join the three dataframes into a dataframe `worldpop_pred` which looks like this:
+
+```{r readpoppred-11,echo = FALSE}
+worldpop_pred_lower95 <- readr::read_csv(
+  file = "data/worldpop/worldpop-pred-lower95.csv",
+  col_names = TRUE,
+  col_types = stringr::str_c(rep("c",18),collapse = "")
+) %>%
+  # Remove the commas. R already removed the quotes.
+  mutate_at(vars(`2020`:`2100`),remove_comma) %>%
+  # Convert to numeric
+  mutate_at(vars(`2020`:`2100`),as.numeric) %>%
+  # Pivot to long format
+  pivot_longer(
+    `2020`:`2100`,
+    names_to = "year",
+    values_to = "population_lower95"
+  ) %>%
+  mutate(year = as.numeric(year))
+worldpop_pred_upper95 <- readr::read_csv(
+  file = "data/worldpop/worldpop-pred-upper95.csv",
+  col_names = TRUE,
+  col_types = stringr::str_c(rep("c",18),collapse = "")
+) %>%
+  # Remove the commas. R already removed the quotes.
+  mutate_at(vars(`2020`:`2100`),remove_comma) %>%
+  # Convert to numeric
+  mutate_at(vars(`2020`:`2100`),as.numeric) %>%
+  # Pivot to long format
+  pivot_longer(
+    `2020`:`2100`,
+    names_to = "year",
+    values_to = "population_upper95"
+  ) %>%
+  mutate(year = as.numeric(year))
+
+worldpop_pred <- worldpop_pred_median %>%
+  inner_join(worldpop_pred_lower95,by = c("country","year")) %>%
+  inner_join(worldpop_pred_upper95,by = c("country","year"))
+
+glimpse(worldpop_pred)
+```
+
+We'll use these data later in this chapter.
+
+## Model world population over time
+
+Look at the world population across years:
+
+```{r countryhist}
+worldpopplot <- worldpop %>%
+  filter(country=='WORLD') %>%
+  ggplot(aes(x = year,y = population)) +
+  theme_classic() +
+  geom_point() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "World population over time",
+       x = "Year",
+       y = "World Population (Billions)") +
+  scale_x_continuous(breaks = seq(1950,2020,by=5)) +
+  scale_y_continuous(labels = function(x) x*1e-06)
+worldpopplot
+```
+
+It looks like population may be growing at a pretty constant rate, or 
+equivalently (sort of- bear with me), may be increasing by a constant 
+amount each year. What is this rate/increase?
+
+This is an **inference problem**. We have **data** (population counts for each year)
+and a **model** (population grows at a constant rate from year to year) and we 
+need to **infer** the value of an unknown **parameter** (the rate at which population
+grows).
+
+In order to do this, we need to write down our model more formally. Let $Y_{i}$ 
+be the random variable representing the world population in year $i$ with $i = 1950,\ldots,2020$.
+We think the population increases by the same amount per year on average, but want
+to allow for a bit of variability. We can model:
+$$
+Y_{i+1} - Y_{i} \overset{iid}{\sim}\text{Normal}\left(\Delta,\sigma^{2}\right)
+$$
+and then infer $\Delta$, the average increase in population. 
+
+**Exercise**: estimate $\Delta$ using the **sample mean** of the *differences*
+in population. You can use the `diff` function, or the `lag` function to
+compute the differences-- look up their documentation for help. I got the following:
+```{r countrydiffs1,echo = FALSE}
+popofworld <- worldpop %>% filter(country == 'WORLD') %>% pull(population)
+cat("Mean: ",mean(diff(popofworld)),"\n")
+```
+
+So it looks like the population increases by about 7.5 million on average (remember,
+population here is in thousands).
+
+It turns out that what we just did is similar to the following 
+**linear regression model**:
+$$
+Y_{i} = \beta_{0} + \Delta i + \epsilon_{i}, \ \epsilon_{i} \overset{iid}{\sim}\text{Normal}\left(0,\sigma^{2}/2\right)
+$$
+This is because:
+\begin{equation}\begin{aligned}
+Y_{i} &= \beta_{0} + \Delta i + \epsilon_{i} \\
+Y_{i+1} &= \beta_{0} + \Delta (i+1) + \epsilon_{i+1} \\
+\implies Y_{i+1} - Y_{i} &= \Delta + \left(\epsilon_{i+1} - \epsilon_{i}\right)
+\end{aligned}\end{equation}
+and $\left(\epsilon_{i+1} - \epsilon_{i}\right)\overset{iid}{\sim}\text{Normal}\left(0,\sigma^{2}\right)$. 
+
+```{r countrylm1}
+diffmod <- lm(population ~ as.numeric(year),data = filter(worldpop,country == 'WORLD'))
+summary(diffmod)
+unname(coef(diffmod)[2]) # Should be close to the mean difference
+```
+
+The estimated slope of the regression line is $\hat{\Delta} = 77877$, close to 
+the mean difference (estimating the standard deviation is a bit trickier).
+
+Plot the model:
+
+```{r plotdiffmod1}
+worldpopplot + geom_abline(slope = coef(diffmod)[2],intercept = coef(diffmod)[1])
+```
+
+It's ok. It looks like maybe the growth isn't by some constant value each year, 
+but rather maybe the *rate* of growth is constant.
+
+We can build a linear regression model for that, too. Consider the following
+growth model:
+$$
+Y_{i+1} = Y_{i}(1+\Delta)
+$$
+where the parameter $\Delta$ is now the *rate* of population growth. 
+We can model this approximately as a linear regression model:
+$$
+Y_{i} = \exp\left( \beta_{0} + \Delta i + \epsilon_{i}\right)
+$$
+This gives
+$$
+Y_{i+1}/Y_{i} = \exp\left(\Delta + \epsilon_{i+1} - \epsilon_{i}\right)
+$$
+which, ignoring the errors, gives $\exp(\Delta) \approx 1 + \Delta$. You may or may
+not recall that the approximation $e^{x} \approx 1 + x$ is a first-order Taylor
+expansion of $e^{x}$. 
+
+Wait, how is this even a *linear* regression model? That's obtained by taking logs:
+$$
+\log Y_{i} = \beta_{0} + \Delta i + \epsilon_{i}
+$$
+so we fit this model by computing a new variable $\log Y_{i}$ in the data, and then
+doing a linear regression model for that.
+
+**Exercise**: fit this model: 
+
+1. Create a new variable `logpopulation` using `mutate()`,
+
+1. Do a linear regression as above, like `lm(logpopulation ~ ...)`.
+
+Here's what I got, calling my model object `logmodel`:
+
+```{r logmodel1,echo=FALSE}
+logpopdat <- worldpop %>%
+  filter(country == 'WORLD') %>%
+  mutate(logpopulation = log(population))
+logmodel <- lm(logpopulation ~ year,data = logpopdat)
+```
+
+```{r logmodel2}
+summary(logmodel)
+exp(unname(coef(logmodel)[2])) - 1 # Delta
+```
+
+So it looks like population increases by about $1.66\%$ each year on average. 
+
+Check out how it looks (I called my new data `logpopdat`):
+
+```{r logmodel3}
+logpopdat %>%
+  ggplot(aes(x = year,y = logpopulation)) +
+  theme_classic() + 
+  geom_point() +
+  geom_abline(slope = coef(logmodel)[2],intercept = coef(logmodel)[1]) + 
+  coord_trans(y = "exp") + 
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "World population over time",
+       x = "Year",
+       y = "World Population (Billions)") +
+  scale_x_continuous(breaks = seq(1950,2020,by=5)) +
+  scale_y_continuous(breaks = log(3:8 * 1e06),labels = function(x) exp(x)*1e-06)
+```
+
+We don't yet have the tools to tell if one model is "better" than the other!
+
+## Bayesian model for world population
+
+The reported world populations are just estimates. We saw that when you sum up
+the populations for each country, the answer does not exactly equal the reported
+world population. Here we will describe a Bayesian method for estimating the
+total world population in a given year, based on the reported value for that year,
+attempting to account for error.
+
+For any chosen year, let $Y$ represent the reported world population. Let $\lambda$ be the true world population. We might have $Y > \lambda$ or $Y < \lambda$ due to
+reporting error-- $Y$ is random, $\lambda$ is fixed and unknown. We want
+to write down a **statistical model** for $Y$ which depends on $\lambda$
+and then use $Y$ to **infer** $\lambda$. One such model is
+$$
+Y \sim \text{Poisson}(\lambda)
+$$
+To do Bayesian inference, we require a prior distribution on $\lambda$. How do we
+choose this? This is completely subjective, and it might seem like we have absolutely
+no information (without looking at the data, of course). But this isn't true: we
+know $\lambda > 0$ (there can't, on average, be less than zero people on earth)
+and we know that $\lambda$ can't be something absurd like $10^{100}$. We want to
+choose what is called a *weakly informative* prior: one that restricts $\lambda$
+to be in a not-absurd range. Let's try a Gamma distribution with $95^{th}$ percentile
+equal to $10$billion and $5^{th}$ percentile equal to $1$ billion. Measuring
+$\lambda$ in billions, this corresponds to parameters of about 
+$\alpha = 3.358$ and $\beta = 0.778$:
+$$
+\lambda \sim\text{Gamma}(3.358,0.778)
+$$
+Let's plot this prior to see what it looks like:
+```{r plotgamma1}
+alpha <- 3.358
+beta <- 0.778
+priorplot <- tibble(xx = seq(0,15,length.out = 10000)) %>%
+  ggplot(aes(x = xx)) +
+  theme_classic() + 
+  stat_function(fun = dgamma,args = list(shape = alpha,rate = beta)) +
+  labs(title = "Prior on total world population",
+       x = "Total world population (billions)",
+       y = "Prior density") + 
+  scale_x_continuous(breaks = seq(0,15,by = 1),labels = function(x) scales::comma(x))
+priorplot
+```
+
+Now, you have to get the posterior for $\lambda|Y$. The likelihood is
+$$
+P(Y = y|\lambda) = \frac{\lambda^{y}e^{-\lambda}}{y!}
+$$
+The prior is
+$$
+\pi(\lambda) = \frac{\beta^{\alpha}}{\Gamma(\alpha)}\lambda^{\alpha-1}e^{-\beta\lambda}
+$$
+**Exercise**: show that the posterior is
+$$
+\lambda|Y \sim\Gamma\left( \alpha + y,\beta + 1\right)
+$$
+Now, with the posterior determined, we can infer the world population for any given
+year. For $2010$, say, we can plot the posterior (note that $Y$ is now converted to billions,
+from thousands):
+
+```{r plotgammapost1}
+observedpop <- worldpop %>% filter(country == 'WORLD',year == 2010) %>% pull(population)
+observedpop <- observedpop * 1e-06 # Convert to billions, from thousands
+priorplot +
+  stat_function(fun = dgamma,args = list(shape = alpha + observedpop,rate = beta+1),colour = "orange") +
+  geom_vline(xintercept = observedpop,linetype = 'dashed',colour='red') +
+  labs(title = "Prior (black) and posterior (orange) for total world population",
+       subtitle = "Red line: observed world population",
+       y = "Density")
+```
+
+We will see later how to use this to estimate the world population in a given year.
+
+**Exercise**: the prior pulls the posterior to the left of the observed values, 
+favouring the notion that the reported world population is an *overestimate* of
+the true value. Is this reasonable? Try it out with some different priors. I wrote
+you a helper function which lets you put in the $2.5\%$ and $97.5\%$ quantiles you
+want, and gives you the $\alpha,\beta$ that give you these quantiles:
+
+```{r helperfunction1,echo = FALSE}
+getgammaparams <- function(qlower,qupper) {
+    error <- function(x) {
+      alpha <- exp(x[1])
+      beta <- exp(x[2])
+      
+      e1 <- qgamma(.025,alpha,beta) - qlower
+      e2 <- qgamma(.975,alpha,beta) - qupper
+      
+      e1^2 + e2^2
+  }
+  erd <- function(x) numDeriv::grad(error,x)
+  opt <- optim(c(1,1),error,erd,method = "BFGS")
+  out <- exp(opt$par)
+  names(out) <- c('alpha','beta')
+  out
+}
+```
+
+```{r heplerfunction2}
+getgammaparams(1,10)
+```
+
+For example, if you wanted to use a Gamma distribution with lower quantile $0.1$ billion
+and upper quantile $15$ billion, you would use
+```{r heplerfunction3}
+getgammaparams(.1,15)
+```
+
+and so on.
+
+Try it with any/all unique combinations of 
+lower quantile $.01,.1,1,2,5$ billion and upper quantile $6,10,15,20,50$ billion.
+Is the posterior very sensitive to the choice of prior?
+
+## Quantifying uncertainty in estimates of world population: regression model
+
+We have done the following linear regression for world population:
+```{r plotdiffmodagain1}
+worldpopplot + geom_abline(slope = coef(diffmod)[2],intercept = coef(diffmod)[1])
+```
+The value of the regression line at any year gives an estimate of the population
+in that year.
+
+However, statistics is the study of **uncertainty**. We don't just want to give
+a single estimate of population, we want to **quantify uncertainty** in this estimate.
+We do so using the probability distribution of the predicted value, and constructing
+an interval in which the predicted value has a high probability of falling, under the
+model. 
+
+The observed world population in year $i$ is:
+$$
+Y_{i} = \beta_{0} + \Delta i + \epsilon_{i}
+$$
+This can be written as
+$$
+Y_{i} = \mu_{i} + \epsilon_{i}
+$$
+where $\mu_{i} = \beta_{0} + \Delta_{i} i$ is the actual world population, and $\epsilon_{i}$
+is some random error. In the linear regression output, we obtain estimates $\hat{\beta}_{0}$ and
+$\hat{\Delta}$. The regression line that is actually plotted is
+$$
+\hat{\mu}_{i} = \hat{\beta}_{0} + \hat{\Delta}i
+$$
+The predicted value of the world population in year $i$ is simply $\hat{\mu}_{i}$.
+Its value along with its standard deviation, $\text{SD}(\hat{\mu}_{i})$, can be obtained from the regression
+output using the `predict` function. To get the estimated world population and $95\%$
+confidence interval for 2010, for example, you could do
+```{r preddiffmod1}
+predict(diffmod,newdata = data.frame(year = 2010),se.fit = TRUE,interval = "confidence")$fit
+```
+
+There is a problem, though. A subtle problem. A confidence interval is interpreted as
+"if we repeated the experiment over and over again and calculated this interval, $95\%$
+of the intervals we calculated would contain the true value". This means that for
+the interval we just calculated, if we were to go into some parallel universe over
+and over again and measure the population of the world from 1950 -- 2020 and build
+this regression model and calculate this interval, the intervals would contain
+the true population of the world $95\%$ of the time.
+
+That's really confusing.
+
+What may instead calculate an interval which has a $95\%$ chance of containing the
+*measured* world population value for 2010 (say), accounting for both uncertainty
+in the estimated world population and the variability in the measurement of world
+population on any given year. If we went back and measured the population for 2010
+over and over again, we think that $95\%$ of such measurements would fall within
+this interval. We call this a **prediction interval** instead of a confidence interval.
+It is based off both the variability in $\hat{\mu}_{i}$ and the variability in
+$\epsilon_{i}$. It is obtained as 
+```{r preddiffmod2}
+predict(diffmod,newdata = data.frame(year = 2010),se.fit = TRUE,interval = "prediction")$fit
+```
+Notice how it is **wider** than the confidence interval, because it accounts for more
+types of uncertainty.
+
+Let's plot the confidence intervals on our plot:
+```{r plotconfdiffmod1}
+# Note: removing the "newdata" argument gives
+# predictions on the original values
+worldpoponlyworld <- filter(worldpop,country=='WORLD')
+preddat <- predict(diffmod,se.fit = TRUE,interval = "confidence")$fit %>%
+  as_tibble()
+preddat$year <- worldpoponlyworld$year
+worldpoppred <- inner_join(worldpoponlyworld,preddat,by = "year")
+glimpse(worldpoppred)
+
+predplotconfint <- worldpoppred %>%
+  ggplot(aes(x = year,y = fit)) +
+  theme_classic() + 
+  # Shaded region for the interval
+  geom_ribbon(aes(ymin = lwr,ymax = upr),fill = "darkgrey") +
+  geom_line() + 
+  geom_point(aes(y = population)) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "World population with estimate and 95% CI",
+       x = "Year",
+       y = "World Population (Billions)") +
+  scale_x_continuous(breaks = seq(1950,2020,by=5)) +
+  scale_y_continuous(labels = function(x) x*1e-06)
+  
+  
+
+predplotconfint
+```
+Notice how the interval is really narrow, and doesn't contain most of the actual
+measured values. This is because it is an interval for the true, unknown value
+of the world population, not the actual measured values themselves.
+
+**Exercise**: create the same plot but with a **prediction interval**. I got the
+following:
+
+```{r plotpreddiffmod1}
+# Note: removing the "newdata" argument gives
+# predictions on the original values
+worldpoponlyworld <- filter(worldpop,country=='WORLD')
+preddat <- predict(diffmod,se.fit = TRUE,interval = "prediction")$fit %>%
+  as_tibble()
+preddat$year <- worldpoponlyworld$year
+worldpoppred <- inner_join(worldpoponlyworld,preddat,by = "year")
+glimpse(worldpoppred)
+
+predplotpredint <- worldpoppred %>%
+  ggplot(aes(x = year,y = fit)) +
+  theme_classic() + 
+  # Shaded region for the interval
+  geom_ribbon(aes(ymin = lwr,ymax = upr),fill = "darkgrey") +
+  geom_line() + 
+  geom_point(aes(y = population)) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "World population with estimate and 95% PI",
+       x = "Year",
+       y = "World Population (Billions)") +
+  scale_x_continuous(breaks = seq(1950,2020,by=5)) +
+  scale_y_continuous(labels = function(x) x*1e-06)
+  
+  
+
+predplotpredint
+```
+
+Note how the interval is *much* wider, and contains about 19/20 $95\%$ of the measured
+values.
+
+**Exercise**: create the same two plots but for the **rate model** (the other
+regression model we did). I got:
+
+```{r plotratemod1,echo = FALSE}
+worldpoponlyworld <- filter(worldpop,country=='WORLD')
+preddat <- predict(logmodel,se.fit = TRUE,interval = "confidence")$fit %>%
+  as_tibble()
+preddat$year <- worldpoponlyworld$year
+worldpoppred <- inner_join(worldpoponlyworld,preddat,by = "year")
+
+logmodconfint <- worldpoppred %>%
+  ggplot(aes(x = year,y = fit)) +
+  theme_classic() + 
+  # Shaded region for the interval
+  geom_ribbon(aes(ymin = lwr,ymax = upr),fill = "darkgrey") +
+  geom_line() + 
+  geom_point(aes(y = log(population))) +
+  coord_trans(y = "exp") + 
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "World population with estimate and 95% CI",
+       x = "Year",
+       y = "World Population (Billions)") +
+  scale_x_continuous(breaks = seq(1950,2020,by=5)) +
+  scale_y_continuous(breaks = log(3:8 * 1e06),labels = function(x) exp(x)*1e-06)
+  
+worldpoponlyworld <- filter(worldpop,country=='WORLD')
+preddat <- predict(logmodel,se.fit = TRUE,interval = "prediction")$fit %>%
+  as_tibble()
+preddat$year <- worldpoponlyworld$year
+worldpoppred <- inner_join(worldpoponlyworld,preddat,by = "year")
+
+logmodpredint <- worldpoppred %>%
+  ggplot(aes(x = year,y = fit)) +
+  theme_classic() + 
+  # Shaded region for the interval
+  geom_ribbon(aes(ymin = lwr,ymax = upr),fill = "darkgrey") +
+  geom_line() + 
+  geom_point(aes(y = log(population))) +
+  coord_trans(y = "exp") + 
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "World population with estimate and 95% PI",
+       x = "Year",
+       y = "World Population (Billions)") +
+  scale_x_continuous(breaks = seq(1950,2020,by=5)) +
+  scale_y_continuous(breaks = log(3:8 * 1e06),labels = function(x) exp(x)*1e-06)
+  
+
+
+logmodconfint | logmodpredint
+```
+
+Comment on the difference in width of the two intervals.
+
+## Bayesian estimate of world population
+
+We previously looked at the model
+
+\begin{equation}\begin{aligned}
+Y &\sim \text{Poisson}(\lambda)
+\lambda &\sim\text{Gamma}(3.358,0.778)
+\implies \lambda | Y &\sim \Gamma(3.358 + Y,0.788 + 1)
+\end{aligned}\end{equation}
+where $Y$ is the measured value of world population in Billions, $\lambda$ is the real value
+of world population in Billions, and the prior on $\lambda$ was chosen so that
+$P(1 \leq \lambda \leq 10) = 95\%$. Previously we derived the posterior distribution,
+but we didn't actually use it to estimate or quantify uncertainty in $\lambda$.
+We'll do that now.
+
+### Estimation and uncertainty quantification
+
+The posterior distribution gives us both estimation and uncertainty quantification,
+but it's up to us to decide how to use it. There are three common ways to use a
+posterior for point estimation: the **posterior mode**,
+$$
+\hat{\lambda}_{\texttt{mode}} = \text{argmax}_{\lambda}\pi(\lambda | Y),
+$$
+the **posterior mean**,
+$$
+\hat{\lambda}_{\texttt{mean}} = E(\lambda|Y),
+$$
+and the **posterior median**, which is the value $\hat{\lambda}_{\texttt{med}}$ which
+satisfies
+$$
+P(\lambda < \hat{\lambda}_{\texttt{med}}|Y) = 0.5
+$$
+You can determine an expression for each of these posterior summaries using 
+your usual probability techniques.
+
+**Exercise**: show that $$\hat{\lambda}_{\texttt{mode}} = \frac{\alpha + Y - 1}{\beta + 1}$$
+where $(\alpha,\beta)$ are the prior parameters (i.e. $\lambda$ has a $\text{Gamma}(\alpha,\beta)$
+prior).
+
+**Exercise**: show that $$\hat{\lambda}_{\texttt{mean}} = \frac{\alpha + Y}{\beta + 1}.$$
+
+The posterior median does not have a closed-form expression in this example, although
+we can still compute it using `R`.
+
+Let's compute these three statistics:
+```{r computepost1}
+# Prior params
+alpha <- 3.358
+beta <- 0.778
+# Y: observed world population
+observedpop <- worldpop %>% filter(country == 'WORLD',year == 2010) %>% pull(population)
+observedpop <- observedpop * 1e-06 # Convert to billions, from thousands
+# Posterior mode
+lambda_mode <- (alpha + observedpop - 1) / (beta + 1)
+# Posterior mean
+lambda_mean <- (alpha + observedpop) / (beta + 1)
+# Posterior median
+lambda_med <- qgamma(.5,alpha + observedpop,beta+1)
+# Look at them all
+c(
+  'observed' = observedpop,
+  'post_mode' = lambda_mode,
+  'post_mean' = lambda_mean,
+  'post_med' = lambda_med
+)
+```
+
+Compare these to their corresponding *prior* values:
+
+```{r computepost2}
+# Prior params
+alpha <- 3.358
+beta <- 0.778
+# Prior mode
+prior_mode <- (alpha - 1) / (beta)
+# Prior mean
+prior_mean <- (alpha) / (beta)
+# Prior median
+prior_med <- qgamma(.5,alpha,beta)
+# Look at them all
+c(
+  'observed' = observedpop,
+  'prior_mode' = prior_mode,
+  'prior_mean' = prior_mean,
+  'prior_med' = prior_med
+)
+```
+
+Each statistic is pulled towards its corresponding prior value. The skewness in 
+the Gamma distribution means that the mode and median are less than the mean.
+The observed data affects not only the location but also the shape of the posterior
+relative to the prior. The observed value being higher than the prior mean and 
+mode causes them to be pulled up, but the median is actually pulled down.
+
+Since computing the posterior seems harder than working with a likelihood, and
+since coming up with a point estimator based on the posterior seems harder than
+maximizing a likelihood, you might be wondering why we're bothering with Bayesian
+inference at all. One compelling answer comes from **uncertainty quantification**.
+Using the non-Bayesian methods, it was difficult to come up with a way to quantify
+uncertainty. We did a lot of work and came up with an interval that "if you were
+to repeat the experiment over and over and calculate many such intervals, $95\%$
+of them would cover the true value of the parameter". This is difficult to explain
+and interpret, and also, when you move into more complicated statistical procedures,
+it becomes difficult or impossible to derive such a confidence interval. Because of this,
+some of the most popular modern statistical procedures use Bayesian inference to
+compute uncertainty estimates (even nominally frequentist techniques), or don't
+compute them at all. Since Statistics is the science of uncertainty, this means
+Bayesian inference is a lot more mainstream than it might appear to be when taught
+in introductory courses such as this.
+
+The reason is that computing uncertainty intervals in Bayesian stats is, for the
+most part, pretty straightforward. Uncertainty for $\lambda|Y$ is quantified by
+means of a **credible interval**. A $95\%$ (or some other level) credible interval
+is *any* pair of numbers $(L,U)$ which satisfy
+$$
+P(L \leq \lambda \leq U | Y) = 95\%.
+$$
+The interpretation is straightforward: given the observed data, $\lambda$ has a
+$95\%$ posterior probability of being between $L$ and $U$.
+
+You can use any $L$ and $U$ that satisfy this, but the common choice is to just
+use the $2.5\%$ and $97.5\%$ posterior quantiles, in analogy to the construction
+of frequentist confidence intervals. Less common but still sometimes done is to
+compute one sided intervals, taking $L$ or $U$ to be the endpoint of the parameter
+space (which might be $\pm\infty$). Here are three calculations and visualizations
+of posterior credible intervals:
+
+```{r postquants1}
+# Lower interval
+lowerint <- c(0,qgamma(.95,alpha+observedpop,beta+1))
+# Upper interval
+# Top point should be Inf, had to use big finite value for plotting
+upperint <- c(qgamma(.05,alpha+observedpop,beta+1),15) # Should be Inf
+# Middle interval, most common
+middleint <- qgamma(c(.025,.975),alpha+observedpop,beta+1)
+# Plot them
+baseplot <- tibble(x = c(0,15)) %>%
+  ggplot(aes(x = x)) +
+  theme_classic() + 
+  stat_function(fun = dgamma,args = list(shape = alpha+observedpop,rate = beta+1))
+
+lowerplot <- baseplot + 
+  stat_function(fun = dgamma,
+                args = list(shape = alpha+observedpop,rate = beta+1),
+                xlim = lowerint,
+                geom = "area",
+                alpha = 0.3) +
+  labs(title = "Lower one-sided 95% posterior credible interval",
+       x = expression(lambda),y = "Posterior Density")
+
+upperplot <- baseplot + 
+  stat_function(fun = dgamma,
+                args = list(shape = alpha+observedpop,rate = beta+1),
+                xlim = upperint,
+                geom = "area",
+                alpha = 0.3) +
+  labs(title = "Upper one-sided 95% posterior credible interval",
+       x = expression(lambda),y = "Posterior Density")
+
+middleplot <- baseplot + 
+  stat_function(fun = dgamma,
+                args = list(shape = alpha+observedpop,rate = beta+1),
+                xlim = middleint,
+                geom = "area",
+                alpha = 0.3) +
+  labs(title = "Two-sided 95% posterior credible interval",
+       x = expression(lambda),y = "Posterior Density")
+
+lowerplot / middleplot / upperplot
+
+
+```
+
+### Estimation by sampling
+
+Usually in practice you won't know the posterior distribution exactly, but
+you might have a sample from it. Alternatively, you might just want to calculate
+any estimates you want without having to do tedious math. Bayesian inference can
+be done using only a sample from the posterior. In fact, this is very desirable:
+all of your data analytic skills can be carried over and used for inference. We
+will briefly touch on this here.
+
+Suppose we have a sample from the posterior:
+```{r postsamp1}
+sample_from_the_posterior <- rgamma(1000,alpha+observedpop,beta+1)
+```
+You can compute an estimate of any quantity you like from this sample, without
+having to do math. Check it out and compare to what we did before:
+```{r postsamp2}
+# Mean
+mean(sample_from_the_posterior)
+lambda_mean
+# Ok, the mode is a bit trickier (actually in practice this is the one
+# that I would always calculate using math or brute-force optimization):
+ss <- round(sample_from_the_posterior,3)
+sst <- table(ss)
+names(sst[sst == max(sst)])
+lambda_mode
+# Difficult to calculate and not that accurate
+# Everything else is pretty good though:
+# Quantiles and median
+mm <- median(sample_from_the_posterior)
+q2.5 <- quantile(sample_from_the_posterior,.025)
+q97.5 <- quantile(sample_from_the_posterior,.975)
+c(q2.5,mm,q97.5)
+
+c(middleint[1],lambda_med,middleint[2])
+```
+
+Sample-based Bayesian inference is a subject of entire upper year courses!
+
+**Exercise**: these estimates and intervals are for the entire world population,
+and for 2010. Do the following:
+
+- Pick any country, and year (perhaps the current year, or the year you were born or first
+attended university),
+
+- Use Bayesian inference to estimate the population of that country in that year.
+Come up with a suitable prior (still use the Gamma, but change the parameters),
+and give a point and interval estimate based upon the posterior distribution.
+
+## Predicting world population
+
+Finally, let's predict world population through 2100 and see how our results
+compare to the predictions given by the WHO.
+
+In section 1 of this chapter we read in the files containing the WHO's predictions
+for world population until 2100:
+```{r worldpoppred1}
+glimpse(worldpop_pred)
+```
+The `population` variable contains their predicted world population for each `year`
+and the `population_lower95` and `population_upper95` contain the endpoints of 
+a $95\%$ prediction interval for population. Let's plot their predictions:
+
+```{r plotwhopred1}
+whopredplot <- worldpop_pred %>%
+  filter(country == 'WORLD') %>%
+  ggplot(aes(x = year)) +
+  theme_classic() +
+  geom_point(aes(y = population*1e-06)) +
+  geom_ribbon(aes(ymin = population_lower95*1e-06,ymax = population_upper95*1e-06),alpha = .1) + 
+  labs(title = "WHO predicted world population with 95% prediction interval",
+       x = "Year",
+       y = "World population (Billions)")
+whopredplot
+```
+It doesn't look like the WHO used a simple linear model like we did. We can plot
+*our* predictions with their associated prediction intervals like this:
+
+```{r plotourpreds1}
+# Predict for the same years as the WHO
+datatopredict <- data.frame(year = sort(unique(worldpop_pred$year)))
+preddat <- predict(diffmod,newdata = datatopredict,se.fit = TRUE,interval = "prediction")$fit %>%
+  as_tibble()
+preddat$year <- datatopredict$year
+worldpoppred <- inner_join(datatopredict,preddat,by = "year")
+glimpse(worldpoppred)
+
+predplotpredint <- worldpoppred %>%
+  ggplot(aes(x = year,y = fit)) +
+  theme_classic() + 
+  # Shaded region for the interval
+  geom_ribbon(aes(ymin = lwr,ymax = upr),alpha = .1) +
+  geom_line() + 
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "World population with estimate and 95% PI",
+       x = "Year",
+       y = "World Population (Billions)") +
+  scale_x_continuous(breaks = seq(2020,2100,by=10)) +
+  scale_y_continuous(labels = function(x) x*1e-06,breaks = (8:14)*1e06)
+  
+  
+
+predplotpredint | whopredplot
+```
+Our model is simpler than whatever the WHO did: we predict that population is
+going to go up by the same amount each year for the next 80 years. Does that seem
+reasonable? Because we impose such a stringent assumption on the phenomenon
+we're trying to model, we get really confident predictions, as measured by the
+width of the prediction interval. But, this is not necessarily good: we might be
+confidently incorrect! We probably are; the WHO knows what they are doing, and they
+built a model which allows for a curvy relationship between time and population,
+but with much wider uncertainty bands. Predictive modelling is an art as well as
+a science.
+
+**Exercise**: try it yourself. Use our previous "log" model which assumed a constant
+*rate* of population growth over time. I got the following:
+
+```{r plotourpreds2,echo=FALSE}
+datatopredict <- data.frame(year = sort(unique(worldpop_pred$year)))
+preddat <- predict(logmodel,newdata = datatopredict,se.fit = TRUE,interval = "prediction")$fit %>%
+  as_tibble()
+preddat$year <- datatopredict$year
+worldpoppred <- inner_join(datatopredict,preddat,by = "year")
+glimpse(worldpoppred)
+
+predplotpredint <- worldpoppred %>%
+  ggplot(aes(x = year,y = exp(fit))) +
+  theme_classic() + 
+  # Shaded region for the interval
+  geom_ribbon(aes(ymin = exp(lwr),ymax = exp(upr)),alpha = .1) +
+  geom_line() + 
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(title = "World population with estimate and 95% PI",
+       x = "Year",
+       y = "World Population (Billions)") +
+  scale_x_continuous(breaks = seq(2020,2100,by=10)) +
+  scale_y_continuous(labels = function(x) x*1e-06,breaks = seq(5,40,by=2)*1e06)
+  
+predplotpredint | whopredplot
+```
+Woah! This model looks even worse. However, it is a bit more flexible (just a bit) than
+the simple linear model, and the prediction interval is even wider.
+
+**Exercise**: pick your favourite country and year, and predict its population to
+2100 and compare with the WHO. Are your predictions more or less reasonable than
+what we did for the total world population?
+
+### Why aren't our predictions accurate?
+
+The WHO uses decades (centuries?) of demographic theory and research, combined
+with data on mortality, fertility, and other demographic factors to make its
+predictions. They are constantly changing as new information and theories become
+available. In contrast, we just took some numbers and plugged them into a textbook
+statistical procedure. It would be troubling if we got anything remotely comparable
+to what the WHO got using this approach.
+
+Keep this in mind as you approach your future projects and industry or academic
+work. This example was useful for teaching the mechanics of prediction, but
+there is an upper limit to how good you can get without domain-specific knowledge
+and additional data sources. In upper year courses you'll learn about new types
+of fancy predictive (and other) models, which is great, but it always always always
+pays to think about the problem harder too! Better statistical techniques are
+not a replacement for better science.
+
+With that, you're done STA238. Hope you enjoyed the course, and maybe see you
+in future courses too :).
