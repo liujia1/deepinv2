@@ -200,6 +200,133 @@ def sobolev_denoise_exact(y, lam):
     
     return x_exact
 
+def generate_figure_2_1(save_dir):
+    """
+    图2-1：L1 vs L2 几何解释——为什么L1促稀疏
+    对应章节：2.2 经典先验族 - Laplace先验
+    知识点：L1约束（菱形）与L2约束（圆形）的几何差异；角点处相切→稀疏解
+    合并自 temp/图2-1_L1_vs_L2几何解释/图2-1_L1_vs_L2几何解释.py
+    """
+    # 确保中文字体在绘图前加载
+    plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei'] + plt.rcParams.get('font.sans-serif', [])
+    plt.rcParams['font.family'] = 'sans-serif'
+    plt.rcParams['axes.unicode_minus'] = False
+
+    theta = np.linspace(0, 2*np.pi, 400)
+
+    # L1 正则项等高线：菱形（旋转45度的正方形）
+    # R(w) = |w1| + |w2| = C → 参数方程
+    def l1_contour(C, n=100):
+        """生成L1等高线（菱形）的点"""
+        pts = []
+        t = np.linspace(0, C, n)
+        # 第一象限: (t, C-t), t∈[0,C]
+        pts.extend([(x, C - x) for x in t])
+        # 第二/三/四象限（去掉与第一象限重复的端点）
+        pts.extend([(-x, C - x) for x in t[1:]])
+        pts.extend([(-x, -(C - x)) for x in t[1:]])
+        pts.extend([(x, -(C - x)) for x in t[1:]])
+        return np.array(pts)
+
+    # 损失函数等高线（数据项）：椭圆
+    def ellipse_contour(cx, cy, a, b, n=200):
+        """椭圆等高线"""
+        t = np.linspace(0, 2*np.pi, n)
+        return np.column_stack([cx + a*np.cos(t), cy + b*np.sin(t)])
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    # ── 左子图：L2正则化（圆形）──
+    # 几何构造：先选切点 w* 在圆上，再由相切条件反推椭圆参数
+    # 圆: ||w||₂ = r, 切点 w* = (0.8, 0.6), 法向量 n = w* = (0.8, 0.6)
+    # 椭圆中心 w_ls = (1.5, 1.0), 半轴 a, b（未旋转）
+    # 相切条件: 椭圆在 w* 处的梯度 ∝ n
+    #   椭圆方程: ((w1-1.5)/a)² + ((w2-1.0)/b)² = 1
+    #   梯度: (-0.7/a², -0.4/b²) ∝ (0.8, 0.6) → b²/a² = 16/21
+    #   代入 w* 在椭圆上: 0.49/a² + 0.16/b² = 1 → a²=0.7, b²=16/30
+    ax = axes[0]
+    r_l2_1, r_l2_2 = 1.0, 1.5
+    for r, alpha in [(r_l2_1, 0.3), (r_l2_2, 0.15)]:
+        ax.fill(np.cos(theta)*r, np.sin(theta)*r, alpha=alpha, color='steelblue')
+        ax.plot(np.cos(theta)*r, np.sin(theta)*r, 'b-', linewidth=1.5)
+    # 损失函数等高线（椭圆）：中心(1.5,1.0)，半轴由相切条件确定
+    ell = ellipse_contour(1.5, 1.0, 0.837, 0.730)
+    ax.plot(ell[:, 0], ell[:, 1], 'r-', linewidth=2, label='损失函数等高线')
+    ell2 = ellipse_contour(1.5, 1.0, 1.299, 1.133)
+    ax.plot(ell2[:, 0], ell2[:, 1], 'r-', linewidth=1.5, alpha=0.5)
+    w_opt_l2 = np.array([0.8, 0.6])  # 严格切点（非稀疏）
+    ax.plot(w_opt_l2[0], w_opt_l2[1], 'ko', markersize=12, zorder=5)
+    ax.annotate('最优解\n(非稀疏)', xy=w_opt_l2, xytext=(w_opt_l2[0]+0.5, w_opt_l2[1]+0.3),
+                fontsize=11, ha='center',
+                arrowprops=dict(arrowstyle='->', color='black', lw=1.5))
+    ax.axhline(y=0, color='k', linewidth=0.5)
+    ax.axvline(x=0, color='k', linewidth=0.5)
+    ax.set_xlim(-2.5, 2.5)
+    ax.set_ylim(-2.5, 2.5)
+    ax.set_aspect('equal')
+    ax.set_xlabel('$w_1$', fontsize=13)
+    ax.set_ylabel('$w_2$', fontsize=13)
+    ax.set_title('L2正则化（高斯先验）\n约束集：圆形', fontsize=13, fontweight='bold')
+    from matplotlib.patches import Patch
+    legend_elements = [Patch(facecolor='steelblue', alpha=0.3, edgecolor='blue', label='L2正则项等高线'),
+                       plt.Line2D([0], [0], color='red', linewidth=2, label='损失函数等高线')]
+    ax.legend(handles=legend_elements, loc='upper left', fontsize=9)
+
+    # ── 右子图：L1正则化（菱形）──
+    ax = axes[1]
+    l1_c1 = l1_contour(1.2, n=80)
+    l1_c2 = l1_contour(1.8, n=80)
+    ax.fill(l1_c1[:, 0], l1_c1[:, 1], alpha=0.3, color='forestgreen')
+    ax.plot(l1_c1[:, 0], l1_c1[:, 1], 'g-', linewidth=1.5)
+    ax.fill(l1_c2[:, 0], l1_c2[:, 1], alpha=0.15, color='forestgreen')
+    ax.plot(l1_c2[:, 0], l1_c2[:, 1], 'g-', linewidth=1.5, alpha=0.7)
+    # 损失函数等高线（椭圆）：中心(0.6,0.3)，半轴由相切条件确定
+    # 切点 w* = (1.2, 0) 在菱形顶点，椭圆须过该点且梯度在L1次微分内
+    # 椭圆方程: ((w1-0.6)/a)² + ((w2-0.3)/b)² = 1
+    # 过(1.2,0): 0.36/a² + 0.09/b² = 1
+    # 梯度方向: (0.6/a², -0.3/b²)，需 |0.3·a²/(0.6·b²)| ≤ 1 → a² ≤ 2b²
+    # 取等号 a²=2b²: 0.18/b² + 0.09/b² = 0.27/b² = 1 → b²=0.27, a²=0.54
+    ell = ellipse_contour(0.6, 0.3, 0.7348, 0.5196)
+    ax.plot(ell[:, 0], ell[:, 1], 'r-', linewidth=2, label='损失函数等高线')
+    # 外层椭圆：按相同比例放大1.5倍
+    ell2 = ellipse_contour(0.6, 0.3, 1.1023, 0.7794)
+    ax.plot(ell2[:, 0], ell2[:, 1], 'r-', linewidth=1.5, alpha=0.5)
+    w_opt_l1 = np.array([1.2, 0.0])  # 在w1轴上（w2=0）→ 稀疏解
+    ax.plot(w_opt_l1[0], w_opt_l1[1], 'ko', markersize=12, zorder=5)
+    ax.annotate('最优解\n(稀疏：$w_2=0$)', xy=w_opt_l1, xytext=(w_opt_l1[0]+0.6, w_opt_l1[1]+0.5),
+                fontsize=11, ha='center',
+                arrowprops=dict(arrowstyle='->', color='black', lw=1.5))
+    # 标注角点
+    ax.plot(0, 1.2, 'g^', markersize=8, alpha=0.7)
+    ax.plot(0, -1.2, 'gv', markersize=8, alpha=0.7)
+    ax.plot(1.2, 0, 'g>', markersize=8, alpha=0.7)
+    ax.plot(-1.2, 0, 'g<', markersize=8, alpha=0.7)
+    ax.text(1.4, 0.15, '角点', fontsize=9, color='green')
+    ax.axhline(y=0, color='k', linewidth=0.5)
+    ax.axvline(x=0, color='k', linewidth=0.5)
+    ax.set_xlim(-2.5, 2.5)
+    ax.set_ylim(-2.5, 2.5)
+    ax.set_aspect('equal')
+    ax.set_xlabel('$w_1$', fontsize=13)
+    ax.set_ylabel('$w_2$', fontsize=13)
+    ax.set_title('L1正则化（Laplace先验）\n约束集：菱形', fontsize=13, fontweight='bold')
+    legend_elements = [Patch(facecolor='forestgreen', alpha=0.3, edgecolor='green', label='L1正则项等高线'),
+                       plt.Line2D([0], [0], color='red', linewidth=2, label='损失函数等高线')]
+    ax.legend(handles=legend_elements, loc='upper left', fontsize=9)
+
+    fig.suptitle('L1 vs L2 几何解释\n为什么L1促稀疏', fontsize=15, fontweight='bold', y=0.96, linespacing=1.5)
+    fig.text(0.5, 0.04,
+             '核心直觉：L2的圆形约束集没有"角点"，最优解通常不在坐标轴上；'
+             'L1的菱形约束集有4个角点，椭圆更容易在角点处与之相切，从而得到稀疏解（某些分量为0）',
+             ha='center', va='bottom', fontsize=9, linespacing=1.5,
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3), wrap=True)
+
+    plt.subplots_adjust(wspace=0.12, hspace=0.3, bottom=0.15, top=0.85)
+    out_path = os.path.join(save_dir, '图2-1_L1_vs_L2几何解释.png')
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print("图2-1已生成：", out_path)
+
 sigma_x_data = x_true.std()
 sigma_x_prior = 1.0
 
@@ -460,6 +587,9 @@ plt.suptitle('Sobolev去噪：迭代解 vs 频域闭式解', fontsize=14)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤4_迭代解与闭式解对比.png'), dpi=150, bbox_inches='tight')
 plt.close()
+
+# 补充图2-1：L1 vs L2 几何解释（合并自 temp）
+generate_figure_2_1(SAVE_DIR)
 
 print("\n" + "=" * 70)
 print("【高斯先验的特点总结】")

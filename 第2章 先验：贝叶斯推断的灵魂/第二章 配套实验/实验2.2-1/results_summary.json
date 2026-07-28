@@ -1,0 +1,33 @@
+{
+  "image_size": 64,
+  "noise_level": 0.1,
+  "psnr_noisy_dB": 20.03,
+  "ssim_noisy": 0.4272,
+  "tikhonov_data": {
+    "lambda": 0.131742,
+    "psnr_dB": 19.17,
+    "ssim": 0.4445
+  },
+  "tikhonov_prior": {
+    "lambda": 0.01,
+    "psnr_dB": 20.1,
+    "ssim": 0.4289
+  },
+  "sobolev": {
+    "lambda_0.05": {
+      "psnr_dB": 21.51,
+      "ssim": 0.4703,
+      "converged_iters": 6
+    },
+    "lambda_0.10": {
+      "psnr_dB": 22.6,
+      "ssim": 0.5044,
+      "converged_iters": 8
+    },
+    "lambda_0.20": {
+      "psnr_dB": 24.02,
+      "ssim": 0.5562,
+      "converged_iters": 11
+    }
+  }
+}
