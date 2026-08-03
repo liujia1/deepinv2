@@ -1,6 +1,8 @@
 # 附录18A deepinv Physics类详解与自定义算子完整示例
 
-> 定位：18.2节介绍了Physics类的设计哲学和基本用法，完整的API详解和代码示例放入本附录。
+> 定位：18.2 节讲了 Physics 类的设计哲学和"为什么要成对写 $A$ 与 $A^\top$"。这一附录是"工具箱说明书"——把 `LinearPhysics` 的每个方法、每个常用内置类、以及 18.2 里那个多视角下采样算子的**完整可跑代码**摊开给你。想直接 copy 改，看这里。
+
+> 提示：本附录是 API 参考，公式与代码为主、叙述为辅，可跳过不影响主线。
 
 ## LinearPhysics类的方法详解
 
@@ -156,7 +158,7 @@ physics = dinv.physics.Tomography(
 
 ## 自定义多视角算子完整代码
 
-以下是MiniProject_DefiningOperator中多视角下采样算子的完整实现：
+以下是MiniProject_DefiningOperator中多视角下采样算子的完整实现。它是 18.2 节 `MultiViewPhysics` 的"完整可跑版"——注意看 `A_adjoint` 里我们**没有手推仿射的伴随**，而是直接交给 `adjoint_function` 用自动微分兜底，这正是 18.2.4 说的"正确性 >> 速度"：
 
 ```python
 import torch
@@ -321,4 +323,4 @@ $$A^\top y = \frac{\partial}{\partial x}\langle A(x), y\rangle$$
 **优势**：无需手动推导和实现伴随算子
 **劣势**：计算效率略低于手动实现（约慢10-50%，取决于算子复杂度）
 
-**来源**：MiniProject_DefiningOperator（多视角算子代码）；deepinv文档（Physics API）；deepinv源码（LinearPhysics类）
+> 小贴士：把这份代码当成"备料间"就好——主线读 18.1→18.5 时用到的 `MultiViewPhysics`、`Blur`、`Downsampling` 都在这里能找到完整可跑版。写完自己的算子，记得先跑一遍 `adjointness_test` 再进求解器，这是 18.2 反复强调的"公证"步骤。

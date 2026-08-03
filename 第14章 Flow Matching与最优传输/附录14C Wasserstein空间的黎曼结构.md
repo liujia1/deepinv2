@@ -1,75 +1,59 @@
 # 附录14C Wasserstein空间的黎曼结构
 
-> **定位**：对理解OT与生成模型的关系有深层价值，但涉及黎曼几何，超出本书主要读者群体的背景。本附录提供概念性介绍，严格的数学处理参见Villani (2008) 和Ambrosio et al. (2008)。
+> **定位**：对理解 OT 与生成模型的关系有深层价值，但涉及黎曼几何，超出本书主要读者群体的背景。本附录提供概念性介绍，严格数学处理参见 Villani (2008) 和 Ambrosio et al. (2008)。想"看懂主线"的读者可以只读加粗的三句话。
 
 ## 概率分布空间上的黎曼结构
 
-### 动机
+### 动机（因果：我们要给分布空间一个"几何"）
 
-14.1节定义了Wasserstein距离 $W_2$，它赋予概率分布空间 $\mathcal{P}_2(\mathbb{R}^d)$ 以度量结构。一个深刻的问题是：这个度量空间是否具有更丰富的几何结构——例如黎曼结构？答案是肯定的。
+14.1 节定义了 Wasserstein 距离 $W_2$，它给概率分布空间 $\mathcal{P}_2(\mathbb{R}^d)$ 赋予了度量结构。一个深刻的问题：这个度量空间有没有更丰富的几何——比如流形上的"切空间""测地线"？答案是肯定的，这就是 **Wasserstein 空间** 的黎曼结构。
 
-### Wasserstein空间的切空间
+### Wasserstein 空间的切空间
 
-在黎曼几何中，切空间描述了流形上某一点的"无穷小邻域"。在Wasserstein空间 $\mathcal{P}_2(\mathbb{R}^d)$ 中，概率分布 $\mu$ 处的"切向量"是一个向量场 $v: \mathbb{R}^d \to \mathbb{R}^d$，它描述了分布 $\mu$ 的一个无穷小扰动。
+在黎曼几何里，切空间描述流形上某点的"无穷小邻域"。在 Wasserstein 空间里，分布 $\mu$ 处的"切向量"是一个向量场 $v:\mathbb{R}^d\to\mathbb{R}^d$，描述 $\mu$ 的一个无穷小扰动。
 
-形式化地，设 $\mu_t$ 是一条在Wasserstein空间中的光滑路径，$\mu_0 = \mu$。由连续性方程，存在向量场 $v_0$ 使得：
+形式化地，设 $\mu_t$ 是 Wasserstein 空间里一条光滑路径，$\mu_0=\mu$。由连续性方程，存在向量场 $v_0$ 使
 
 $$\frac{\partial \mu_t}{\partial t}\bigg|_{t=0} + \nabla \cdot (\mu\,v_0) = 0$$
 
-向量场 $v_0$ 就是 $\mu$ 处沿路径 $\mu_t$ 方向的"切向量"。
+这个 $v_0$ 就是 $\mu$ 处沿路径方向的"切向量"。**白话：在分布空间里"挪一小步"，等价于在整个空间里定义一个向量场。**
 
 ### 黎曼度量
 
-Wasserstein空间上的黎曼度量由切向量的 $L^2$ 内积定义：对两个切向量 $v_1, v_2$，
+Wasserstein 空间上的黎曼度量由切向量的 $L^2$ 内积定义：对切向量 $v_1,v_2$，
 
 $$\langle v_1, v_2 \rangle_\mu = \int \langle v_1(x), v_2(x) \rangle\,d\mu(x)$$
 
-这个内积诱导的范数 $\|v\|_\mu^2 = \int \|v(x)\|^2 d\mu(x)$ 恰好是传输代价——Wasserstein距离的"微分"正是这个范数的积分。
+诱导的范数 $\|v\|_\mu^2=\int\|v(x)\|^2d\mu(x)$ **恰好就是传输代价**——Wasserstein 距离的"微分"正是这个范数的积分。这把"搬运距离"和"几何长度"统一了。
 
-### Otto calculus
+### Otto calculus（白话：在分布空间里做微积分）
 
-Otto (2001) 发展了一套在Wasserstein空间上的微分计算框架，称为**Otto calculus**。其核心思想是将概率分布空间视为一个无限维黎曼流形，传统的黎曼几何操作（梯度、Hessian、测地线等）都有对应的Wasserstein版本。
-
-**Wasserstein梯度**：在Wasserstein空间中，泛函 $\mathcal{F}(\mu)$ 的梯度为：
+Otto (2001) 发展了一套在 Wasserstein 空间上的微分计算，叫 **Otto calculus**——把概率分布空间看成无限维黎曼流形，梯度、Hessian、测地线都有对应版本。Wasserstein 梯度：
 
 $$\text{grad}_W \mathcal{F}(\mu) = \nabla \frac{\delta \mathcal{F}}{\delta \mu}$$
 
-其中 $\frac{\delta \mathcal{F}}{\delta \mu}$ 是 $\mathcal{F}$ 的一阶变分（函数导数）。
+其中 $\frac{\delta\mathcal{F}}{\delta\mu}$ 是泛函 $\mathcal{F}$ 的一阶变分（函数导数）。
 
-### 与Langevin动力学的联系
+### 与 Langevin 动力学的联系（因果：把前面章节串起来）
 
-Otto calculus的一个重要应用是理解Langevin动力学。考虑KL散度 $\text{KL}(\mu \| p)$ 作为Wasserstein空间上的泛函：
+把 KL 散度 $\mathcal{F}(\mu)=\text{KL}(\mu\|p)=\int\mu\log\frac{\mu}{p}$ 看作 Wasserstein 空间上的泛函，其 Wasserstein 梯度为
 
-$$\mathcal{F}(\mu) = \text{KL}(\mu \| p) = \int \mu \log\frac{\mu}{p}$$
+$$\text{grad}_W \text{KL}(\mu\|p) = \nabla\log\frac{\mu}{p} = \nabla\log\mu - \nabla\log p$$
 
-其Wasserstein梯度为：
+Wasserstein 梯度流：
 
-$$\text{grad}_W \text{KL}(\mu \| p) = \nabla\log\frac{\mu}{p} = \nabla\log\mu - \nabla\log p$$
+$$\frac{\partial \mu_t}{\partial t} = \nabla\cdot(\mu_t\,\text{grad}_W\text{KL}) = \nabla\cdot(\mu_t\nabla\log\mu_t) - \nabla\cdot(\mu_t\nabla\log p) = \Delta\mu_t - \nabla\cdot(\mu_t\nabla\log p)$$
 
-Wasserstein梯度流为：
+这正是 Fokker-Planck 方程——Langevin SDE $\frac{dx}{dt}=\nabla\log p(x)+\sqrt{2}\,dw$ 的概率密度演化。**含义：Langevin 动力学 = KL 散度在 Wasserstein 空间上的梯度流 + 噪声。** 梯度流部分把分布推向 $p$，噪声部分防止坍缩到众数。这深化了第4-5章的讨论：Langevin 不仅是"得分驱动采样"，更是 Wasserstein 空间里的"梯度下降 + 正则化"。
 
-$$\frac{\partial \mu_t}{\partial t} = \nabla \cdot (\mu_t\,\text{grad}_W \text{KL}(\mu_t \| p)) = \nabla \cdot (\mu_t\,\nabla\log\mu_t) - \nabla \cdot (\mu_t\,\nabla\log p)$$
+### 与 Flow Matching 的联系（因果收束）
 
-$$= \Delta\mu_t - \nabla \cdot (\mu_t\,\nabla\log p)$$
+从 Otto calculus 看，Flow Matching 训练的是 Wasserstein 空间里的一条传输映射——从基础分布 $q$ 到数据分布 $p$ 的测地线（OT 映射）或近似测地线：
+- **OT-CFM**：直接逼近 Wasserstein 测地线（最短路径）；
+- **Rectified Flow + Reflow**：迭代逼近测地线（每轮 Reflow 减少与测地线距离）；
+- **扩散模型**：走非测地线路径（由 SDE 结构决定，弯曲）。
 
-这正是Fokker-Planck方程——Langevin SDE $\frac{dx}{dt} = \nabla\log p(x) + \sqrt{2}\,dw$ 的概率密度演化方程。
-
-**含义**：Langevin动力学是KL散度在Wasserstein空间上的梯度流 + 噪声。
-
-- **梯度流部分**（$\nabla \cdot (\mu_t\,\nabla\log p)$）：驱动分布向 $p$ 移动
-- **噪声部分**（$\Delta\mu_t$）：防止分布坍缩到众数
-
-这个视角深化了第4-5章的讨论——Langevin动力学不仅是"得分驱动采样"，更是Wasserstein空间中的"梯度下降 + 正则化"。
-
-### 与Flow Matching的联系
-
-从Otto calculus的视角看，Flow Matching训练的是一个Wasserstein空间中的传输映射——从基础分布 $q$ 到数据分布 $p$ 的测地线（OT映射）或近似测地线。
-
-- **OT-CFM**：直接逼近Wasserstein测地线——OT映射是最短路径
-- **Rectified Flow + Reflow**：迭代逼近Wasserstein测地线——每次Reflow减少与测地线的距离
-- **扩散模型**：走的是一条非测地线路径——由SDE结构决定，路径弯曲
-
-这三者都可以在Wasserstein空间的黎曼框架下统一理解——区别仅在于所走的路径是否是测地线。
+三者都能在 Wasserstein 空间的黎曼框架下统一理解——区别仅在于所走路径是不是测地线。
 
 ## 参考文献
 
