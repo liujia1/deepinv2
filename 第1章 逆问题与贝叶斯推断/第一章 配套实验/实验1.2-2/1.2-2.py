@@ -106,11 +106,16 @@ axes[1, 1].set_title('误差热力图\n|x - x_FBP|')
 axes[1, 1].axis('off')
 plt.colorbar(im2, ax=axes[1, 1], fraction=0.046, pad=0.04)
 
-axes[1, 2].text(0.1, 0.7, f'FBP 重建指标:', fontsize=12, fontweight='bold')
-axes[1, 2].text(0.1, 0.5, f'投影角度数: {len(theta)}', fontsize=11)
-axes[1, 2].text(0.1, 0.3, f'RMSE: {rmse_fbp:.4f}', fontsize=11)
-axes[1, 2].text(0.1, 0.1, f'PSNR: {psnr_fbp:.2f} dB', fontsize=11)
-axes[1, 2].axis('off')
+# 第 6 格：稀疏角度下的正弦图——直观展示"投影角度不足时正向信息大量缺失"，
+# 为 1.3 节不适定性（角度不足→信息不可逆丢失）埋下伏笔
+theta_sparse = np.linspace(0, 180, 30, endpoint=False)
+sinogram_sparse = radon(phantom, theta=theta_sparse, circle=True)
+im3 = axes[1, 2].imshow(sinogram_sparse, cmap='gray', aspect='auto',
+                        extent=[theta_sparse.min(), theta_sparse.max(), sinogram_sparse.shape[0], 0])
+axes[1, 2].set_title(f'稀疏角度正弦图 (仅 {len(theta_sparse)} 个角度)\n采样不足 → 正向信息缺失', fontsize=11)
+axes[1, 2].set_xlabel('投影角度 θ (°)')
+axes[1, 2].set_ylabel('探测器位置 t')
+plt.colorbar(im3, ax=axes[1, 2], fraction=0.046, pad=0.04)
 
 plt.suptitle('Radon 变换与 FBP 重建\n（CT 成像的正向模型 $y = Ax$ 与逆问题求解）', fontsize=14, y=1.02)
 plt.tight_layout()
@@ -129,6 +134,7 @@ import json
 results_summary = {
     'image_size': n,
     'num_projection_angles': len(theta),
+    'num_projection_angles_sparse': len(theta_sparse),
     'rmse_fbp': float(round(rmse_fbp, 6)),
     'psnr_fbp_dB': float(round(psnr_fbp, 2)),
 }

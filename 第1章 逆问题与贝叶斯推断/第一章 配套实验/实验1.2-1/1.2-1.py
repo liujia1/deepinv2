@@ -95,9 +95,19 @@ axes[0, 1].imshow(y_blur, cmap='gray')
 axes[0, 1].set_title('模糊图像 y = Ax\n(高斯PSF, σ=5)')
 axes[0, 1].axis('off')
 
-axes[0, 2].imshow(y_ds, cmap='gray')
+# 下采样图真实尺寸只有 128×128，这里不拉升、保持真实像素尺寸，
+# 用 extent 把它居中放在 512×512 坐标系的正中，四周留白，
+# 让它在其子图框内明显比其它 512×512 的子图小，直观体现"信息不可逆丢失"
+half = y_ds.shape[0] / 2.0
+cx = n / 2.0
+axes[0, 2].imshow(y_ds, cmap='gray',
+                  extent=[cx - half, cx + half, cx + half, cx - half],
+                  aspect='equal')
+axes[0, 2].set_xlim(0, n)
+axes[0, 2].set_ylim(n, 0)          # imshow 原点在左上，故 y 轴反向
 axes[0, 2].set_title('下采样图像 (4x)\nm < n, A不可逆')
-axes[0, 2].axis('off')
+axes[0, 2].set_xticks([])
+axes[0, 2].set_yticks([])
 
 axes[0, 3].imshow(y_mask, cmap='gray')
 axes[0, 3].set_title('掩码图像 (50%丢失)\ny = Mx')

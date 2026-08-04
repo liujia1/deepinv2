@@ -1,0 +1,9 @@
+{
+  "image_size": 512,
+  "psf_sigma": 5.0,
+  "downsample_factor": 4,
+  "mask_keep_ratio": 0.5,
+  "noise_level_deconv": 0.01,
+  "reconstruction_error_clean": 0.214939,
+  "reconstruction_error_noisy": 1.098883
+}
