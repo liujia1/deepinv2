@@ -442,9 +442,8 @@ def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per
             for _ in range(burn_in_steps):
                 # 计算score: (D(x,sigma) - x) / sigma^2
                 B = x.shape[0]
-                # ★ 修复：deepinv新版DRUNet要求sigma为1D张量（长度=B），
-                # 旧版兼容4D sigma_map，但新版会再次.view(B,1,1,1)导致shape mismatch。
-                # 这里统一传1D sigma张量，避免兼容性问题。
+                # ★ sigma 兼容性处理：构造4D sigma_map (B,1,1,1) 传入 DRUNet。
+                # deepinv 的 DRUNet 同时兼容 1D 和 4D sigma 输入，此处使用 4D 形式。
                 sigma_1d = torch.full((B,), float(sigma), device=device)
                 sigma_map = sigma_1d.view(B, 1, 1, 1)
 
@@ -489,7 +488,7 @@ def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per
                 for step in range(steps_per_sigma):
                     # 计算score
                     B = x.shape[0]
-                    # ★ 修复：与burn-in阶段保持一致，传1D sigma张量
+                    # ★ 与burn-in阶段保持一致，构造4D sigma_map
                     sigma_1d = torch.full((B,), float(sigma), device=device)
                     sigma_map = sigma_1d.view(B, 1, 1, 1)
 
@@ -519,10 +518,10 @@ def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per
                     # ★ 软投影：每步都保持遍历性
                     x = x.clamp(-0.1, 1.1)
 
-                    # ★ 定期清理中间变量
+                    # ★ 定期清理中间变量（仅empty_cache，gc.collect留到每样本结束）
                     del denoised, score, sigma_map, data_grad, grad, noise
-                    if step % 20 == 0:
-                        clear_gpu()
+                    if step % 20 == 0 and torch.cuda.is_available():
+                        torch.cuda.empty_cache()
 
                     # ★ 推进内层进度条
                     pbar.update(1)
@@ -619,6 +618,8 @@ def _compute_fingerprint():
         'ula_steps_each_sigma': int(ula_steps_each_sigma),
         'lambda_data': float(lambda_data),
         'step_size_coeff_annealed': float(step_size_coeff_annealed),
+        'ula_noise_scale': float(ula_noise_scale),  # ★ 补充：Langevin噪声尺度影响采样结果
+        'ula_burn_in': int(ula_burn_in),  # ★ 补充：burn-in步数影响采样结果
     }
 
 def _compare_fingerprint(stored_fp, current_fp):
@@ -1202,7 +1203,7 @@ print(f"样本PSNR标准差: {np.std(sample_psnrs):.2f} dB")
 #   1. max_std > 0.5: 像素标准差超过图像合法值域 [0,1] 的一半，说明样本间差异过大
 #   2. 样本包含 NaN: 数值不稳定
 #   3. 样本包含极端值 (abs > 3): 链走向了错误区域
-#   4. PSNR < 10 dB: 重建质量过低（inpainting 任务预期 18-25 dB）
+#   4. PSNR < 10 dB: 重建质量过低（本配置下单样本预期≈12dB, 后验均值≈15.7dB）
 DIAG_MAX_STD_THRESHOLD = 0.5  # 像素 std 阈值
 DIAG_PSNR_MIN_THRESHOLD = 10.0  # PSNR 最低阈值（inpainting 任务）
 has_nan = torch.isnan(samples_tensor).any().item()
