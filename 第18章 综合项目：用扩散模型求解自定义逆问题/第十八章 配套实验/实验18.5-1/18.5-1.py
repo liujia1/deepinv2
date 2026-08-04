@@ -20,7 +20,7 @@ Step 5: ★ 样本数对不确定性估计的影响
 运行前提：需GPU（Colab T4即可），需下载预训练模型(DRUNet/DiffUNet)
 """
 
-import os, sys, time, pickle, hashlib, gc
+import os, sys, time, pickle, hashlib, gc, math
 import numpy as np
 import torch
 
@@ -131,6 +131,22 @@ ula_noise_scale = CFG["ula_noise_scale"]
 ula_burn_in = CFG["ula_burn_in"]
 IMG_SIZE = CFG["image_size"]
 S = CFG["samples"]
+
+# ★ 有效ULA方法集合（用于缓存质量判断：best_achieved / cache_best 等）
+#   与 Step 3 的 VALID_POSTERIOR_METHODS 不同：此处仅含 ULA 系列，
+#   DPS 虽是严格后验方法但非 ULA，不作为"最优方法"的判据。
+VALID_ULA_METHODS = {"ULA", "退火ULA"}
+
+# ★ 不确定性地图色彩上限分位数（避免个别极值将颜色范围过度拉伸）
+#   Step 3 与 Step 5 的 std_map 必须使用同一分位数, 否则跨图对比会产生误读
+STD_VMAX_PERCENTILE = 99
+
+# ★ 采样种子公式：s * 1000 + 42
+#   各采样分支（ULA/DPS/PnP/伪逆）统一使用此公式, 确保不同方法对同一样本索引
+#   产生不同的随机初始化, 同时保持跨方法可复现性。
+def _sample_seed(s):
+    """根据样本索引生成随机种子, 保证跨方法一致性。"""
+    return s * 1000 + 42
 
 # ★ 打印关键参数
 print(f"噪声标准差: sigma_data={sigma_data} (观测), sigma_denoiser={sigma_denoiser:.5f} (去噪器)")
@@ -354,7 +370,6 @@ print(f"观测 PSNR: {compute_psnr(x_true, y_inp):.2f} dB")
 #  - Jupyter/Colab 环境下 tqdm.auto 会自动选择 notebook widget
 #  - 纯脚本/管道/CI 环境下自动降级为 ASCII 进度条
 #  - 需要静默运行（如重定向到日志）时，置为 False 即可
-import sys
 try:
     from tqdm.auto import tqdm as _tqdm_auto
 except Exception:
@@ -362,8 +377,8 @@ except Exception:
 # 检测 stdout 是否是 tty：管道/CI 环境关闭进度条避免刷屏
 _TQDM_ENABLED = sys.stdout.isatty() or bool(getattr(sys, 'ps1', None))
 def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per_sigma,
-                         lambda_data, step_size_coeff, S=1, burn_in_steps=0, noise_scale=1.0,
-                         tqdm_enabled=None):
+                         lambda_data, step_size_coeff, sigma_data, S=1, burn_in_steps=0,
+                         noise_scale=1.0, tqdm_enabled=None):
     """
     退火ULA后验采样（含burn-in和数值稳定性保护）
 
@@ -376,6 +391,7 @@ def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per
         steps_per_sigma: 每个sigma级别的步数
         lambda_data: 数据保真权重
         step_size_coeff: 步长系数
+        sigma_data: 观测噪声标准差（用于数据保真项 A^T(Ax-y)/sigma_data^2 的归一化）
         S: 样本数
         burn_in_steps: ★新增 每级sigma的burn-in步数（不收集中间样本）
         noise_scale: ★新增 Langevin噪声尺度
@@ -398,22 +414,28 @@ def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per
     if tqdm_enabled is None:
         tqdm_enabled = _TQDM_ENABLED
 
+    # ★ 预计算伪逆初始化基线（所有样本共享同一 y_obs 和 physics，伪逆结果相同）
+    #   循环内只需 clone 并加随机噪声, 避免 30 次重复计算 A_dagger
+    x_init_base = physics.A_dagger(y_obs)
+
     # ★ 外层 tqdm 进度条：30 个样本（用 disable 参数可一行关闭进度条）
     for sample_id in _tqdm_auto(range(S), desc="[退火ULA] 采样样本", unit="个", ncols=80, disable=not tqdm_enabled):
         # ★ 为每个样本设置不同的随机种子（与DPS/PnP保持一致）
-        torch.manual_seed(sample_id * 1000 + 42)
+        torch.manual_seed(_sample_seed(sample_id))
 
         # 清理显存
         clear_gpu()
 
         # 初始化：伪逆 + 小噪声（与测试.py一致）
-        x = physics.A_dagger(y_obs)
-        x = x + 0.01 * torch.randn_like(x)
+        x = x_init_base.clone() + 0.01 * torch.randn_like(x_init_base)
         x = x.clamp(0, 1)
 
         # 退火循环（每级 sigma 独立显示内层进度条）
         for sigma in sigma_schedule:
             step_size = step_size_coeff * (sigma ** 2)
+            # ★ 预计算 Langevin 噪声尺度项 sqrt(2*step_size)
+            #   避免在内层循环中重复创建 torch.tensor（每级 sigma 仅计算一次）
+            sqrt_2_step = math.sqrt(2 * step_size)
 
             # ★ Burn-in阶段：先让chain到达平稳分布，不收集中间样本
             # 这是MCMC标准的warm-up做法，直接降低 std/σ 比值
@@ -439,7 +461,7 @@ def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per
 
                 # Langevin更新（带噪声尺度控制）
                 noise = torch.randn_like(x)
-                x = x + step_size * grad + noise_scale * torch.sqrt(torch.tensor(2 * step_size, device=device)) * noise
+                x = x + step_size * grad + noise_scale * sqrt_2_step * noise
 
                 # ★ 数值稳定性保护
                 if not torch.isfinite(x).all():
@@ -485,7 +507,7 @@ def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per
 
                     # Langevin更新（带噪声尺度控制）
                     noise = torch.randn_like(x)
-                    x = x + step_size * grad + noise_scale * torch.sqrt(torch.tensor(2 * step_size, device=device)) * noise
+                    x = x + step_size * grad + noise_scale * sqrt_2_step * noise
 
                     # ★ 数值稳定性保护
                     if not torch.isfinite(x).all():
@@ -504,9 +526,6 @@ def sample_annealed_ula(y_obs, physics, model, device, sigma_schedule, steps_per
 
                     # ★ 推进内层进度条
                     pbar.update(1)
-
-            # ★ 每级sigma结束后的最终硬约束
-            # 保证进入下一级sigma时x在合法范围内
 
         # ★ 收集样本前最终硬约束到[0,1]（保证PSNR/校准计算正确）
         x = x.clamp(0, 1)
@@ -691,8 +710,7 @@ if use_cache and os.path.exists(cache_file):
                 if best_achieved is None:
                     # 旧版缓存: 检查是否所有方法都是有效后验方法（ULA/退火ULA）
                     # ★ 修复：原代码硬编码 ["ULA"]，无法识别 "退火ULA"
-                    valid_ula_methods = {"ULA", "退火ULA"}
-                    best_achieved = all(m in valid_ula_methods for m in method_counts.keys())
+                    best_achieved = all(m in VALID_ULA_METHODS for m in method_counts.keys())
                 if not best_achieved:
                     print(f"⚠️⚠️⚠️ [缓存] 缓存中的样本并非全部来自 ULA (最优方法)")
                     print(f"⚠️⚠️⚠️ [缓存] 方法分布: {method_counts}")
@@ -716,7 +734,7 @@ if use_cache and os.path.exists(cache_file):
         print(f"[缓存] 缓存文件损坏，将重新采样")
         try:
             os.remove(cache_file)
-        except:
+        except OSError:
             pass
     except Exception as e:
         print(f"[缓存] 加载失败: {e}")
@@ -742,8 +760,7 @@ def save_samples_to_cache(samples, methods, times=None):
         # ★ best_achieved: 仅当所有样本方法标签都是有效ULA方法时为 True
         # "混合采样" 或任何降级方法都会让 best_achieved = False
         # ★ 修复：原代码硬编码 m == "ULA"，无法识别 "退火ULA"
-        valid_ula_methods = {"ULA", "退火ULA"}
-        best_achieved = bool(methods) and all(m in valid_ula_methods for m in methods)
+        best_achieved = bool(methods) and all(m in VALID_ULA_METHODS for m in methods)
         # ★ 堆叠为单个张量后再保存，大幅减少序列化开销
         #   保留 list 形式以兼容后续 all_samples[i] 索引访问
         samples_tensor = torch.stack(samples, dim=0)  # (S, 1, C, H, W)
@@ -846,6 +863,7 @@ if len(all_samples) < S:
                     steps_per_sigma=ula_steps_each_sigma,
                     lambda_data=lambda_data,
                     step_size_coeff=step_size_coeff_annealed,
+                    sigma_data=sigma_data,  # ★ 显式传入观测噪声（避免隐式全局依赖）
                     S=samples_needed,
                     burn_in_steps=ula_burn_in,  # ★ 新增：burn-in步数
                     noise_scale=ula_noise_scale  # ★ 新增：Langevin噪声尺度
@@ -928,9 +946,9 @@ if len(all_samples) < S:
 
                 for s in pbar:
                     # ★ 使用差异更大的种子确保样本多样性
-                    torch.manual_seed(s * 1000 + 42)
+                    torch.manual_seed(_sample_seed(s))
                     t_start = time.time()
-                    dps_result = dps(y_inp, physics_inp, seed=s * 1000 + 42)
+                    dps_result = dps(y_inp, physics_inp, seed=_sample_seed(s))
                     x_sample = dps_result[0] if isinstance(dps_result, tuple) else dps_result
                     t_sample = time.time() - t_start
                     all_samples.append(x_sample.detach().cpu())
@@ -944,7 +962,7 @@ if len(all_samples) < S:
                     save_samples_to_cache(all_samples, sample_methods, sample_times)
 
                 if sample_times:
-                    cache_best = all(m in {"ULA", "退火ULA"} for m in sample_methods)
+                    cache_best = all(m in VALID_ULA_METHODS for m in sample_methods)
                     print(f"[DPS] 采样完成! 平均耗时: {np.mean(sample_times[-(S-start_idx):]):.2f}s")
                     if use_cache:
                         qtag = "全部ULA(最优)" if cache_best else "含降级样本"
@@ -990,7 +1008,7 @@ if len(all_samples) < S:
                 for s in pbar_outer:
                     t_start = time.time()
                     # ★ 与 ULA/DPS 一致, 使用 s*1000+42 公式
-                    torch.manual_seed(s * 1000 + 42)
+                    torch.manual_seed(_sample_seed(s))
                     x_pnp = physics_inp.A_adjoint(y_inp) + 0.05 * torch.randn_like(x_true)
 
                     n_iter = 20
@@ -1019,7 +1037,7 @@ if len(all_samples) < S:
                     pbar_outer.set_postfix({"耗时": f"{t_sample:.1f}s"})
 
                 if sample_times:
-                    cache_best = all(m in {"ULA", "退火ULA"} for m in sample_methods)
+                    cache_best = all(m in VALID_ULA_METHODS for m in sample_methods)
                     print(f"[PnP] 采样完成! 平均耗时: {np.mean(sample_times[-(S-start_idx):]):.2f}s")
                     if use_cache:
                         qtag = "全部ULA(最优)" if cache_best else "含降级样本"
@@ -1045,8 +1063,8 @@ if len(all_samples) < S:
                     bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]")
         for s in pbar:
             t_start = time.time()
-            # ★ 与 ULA/DPS/PnP 一致, 使用 s*1000+42 公式
-            torch.manual_seed(s * 1000 + 42)
+            # ★ 与 ULA/DPS/PnP 一致, 使用统一种子公式
+            torch.manual_seed(_sample_seed(s))
             x_approx = physics_inp.A_adjoint(y_inp) + 0.02 * torch.randn_like(x_true)
             t_sample = time.time() - t_start
             all_samples.append(x_approx.cpu())
@@ -1063,7 +1081,7 @@ if len(all_samples) < S:
             pbar.set_postfix({"耗时": f"{t_sample:.1f}s"})
 
         if use_cache:
-            cache_best = all(m in {"ULA", "退火ULA"} for m in sample_methods)
+            cache_best = all(m in VALID_ULA_METHODS for m in sample_methods)
             qtag = "全部ULA(最优)" if cache_best else "含降级样本"
             print(f"[缓存] 已保存 {len(all_samples)} 个样本 (含 fingerprint, {qtag})")
 
@@ -1310,7 +1328,7 @@ ax12 = fig.add_subplot(gs[1, 2])
 # 不确定性地图（灰度，越亮越不确定）
 std_map = posterior_std[0].cpu().mean(dim=0).numpy()
 # 使用99%分位数作为色彩上限，避免个别极值将颜色范围过度拉伸导致"噪声化"视觉效果
-std_vmax = float(np.percentile(std_map, 99))
+std_vmax = float(np.percentile(std_map, STD_VMAX_PERCENTILE))
 im12 = ax12.imshow(std_map, cmap='hot', vmin=0, vmax=std_vmax)
 ax12.set_title('★ 不确定性地图\n(像素级std)', fontsize=11)
 ax12.axis('off')
@@ -1384,6 +1402,9 @@ print("="*70)
 #   偏差 ≥ 0.15  → 严重失配 (✗)
 _CALIB_GOOD_THRESH = 0.05
 _CALIB_FAIR_THRESH = 0.15
+# ★ 样本数建议的校准可靠阈值：介于 GOOD(0.05) 与 FAIR(0.15) 之间
+#   S≥30 且偏差 < 此阈值时, 认为校准检验结果可作为可靠结论
+_CALIB_SAMPLE_RELIABLE_THRESH = 0.10
 
 def _calib_grade(dev):
     """根据覆盖率偏差 |coverage - cl| 返回 (等级文字, 标记符号)。"""
@@ -1526,6 +1547,8 @@ print("""
 本步骤对比: S=4 vs S={S} 样本数对不确定性的影响""".format(S=S))
 
 # 减少样本数的不确定性对比
+# ★ s4_comparison 在此初始化, Step 5 内填充, JSON 保存时直接引用（避免重复计算）
+s4_comparison = {}
 if len(all_samples) >= 4:
     # 用前4个样本
     samples_s4 = torch.stack(all_samples[:4], dim=0)
@@ -1535,6 +1558,14 @@ if len(all_samples) >= 4:
 
     # 用全部样本
     psnr_full = compute_psnr(x_true, posterior_mean.to(device))
+
+    # ★ 填充 s4_comparison（供 JSON 保存直接引用, 避免后续重复计算）
+    s4_comparison = {
+        'S4_PSNR': round(psnr_s4, 2),
+        'S4_平均std': round(std_s4.mean().item(), 4),
+        'S4_vs_S30_PSNR差': round(posterior_mean_psnr - psnr_s4, 2),
+        'S4_vs_S30_std差': round(mean_std - std_s4.mean().item(), 4)
+    }
 
     print(f"\nS=4 采样:  PSNR={psnr_s4:.2f} dB, 平均std={std_s4.mean():.4f}")
     print(f"S={S} 采样: PSNR={psnr_full:.2f} dB, 平均std={posterior_std.mean():.4f}")
@@ -1548,7 +1579,7 @@ if len(all_samples) >= 4:
     axes[0, 0].axis('off')
 
     std_s4_map = std_s4[0].cpu().mean(dim=0).numpy()
-    im01 = axes[0, 1].imshow(std_s4_map, cmap='hot', vmin=0, vmax=np.percentile(std_s4_map, 98))
+    im01 = axes[0, 1].imshow(std_s4_map, cmap='hot', vmin=0, vmax=np.percentile(std_s4_map, STD_VMAX_PERCENTILE))
     axes[0, 1].set_title(f'S=4 不确定性\n平均std={std_s4.mean():.4f}', fontsize=11)
     axes[0, 1].axis('off')
     plt.colorbar(im01, ax=axes[0, 1], fraction=0.046)
@@ -1565,7 +1596,7 @@ if len(all_samples) >= 4:
     axes[1, 0].set_title(f'S={S} 后验均值\nPSNR={psnr_full:.1f}dB', fontsize=11)
     axes[1, 0].axis('off')
 
-    im11 = axes[1, 1].imshow(std_map, cmap='hot', vmin=0, vmax=np.percentile(std_map, 98))
+    im11 = axes[1, 1].imshow(std_map, cmap='hot', vmin=0, vmax=np.percentile(std_map, STD_VMAX_PERCENTILE))
     axes[1, 1].set_title(f'S={S} 不确定性\n平均std={posterior_std.mean():.4f}', fontsize=11)
     axes[1, 1].axis('off')
     plt.colorbar(im11, ax=axes[1, 1], fraction=0.046)
@@ -1684,19 +1715,7 @@ _calib_grades_all = {f"{cl:.4f}": _calib_grade(abs(cov - cl))[0] for cl, cov in 
 total_time = sum(sample_times) if sample_times else 0.0
 avg_time_per_sample = total_time / len(all_samples) if all_samples else 0.0
 
-# ★ S=4对比结果（从Step 5提取）
-s4_comparison = {}
-if len(all_samples) >= 4:
-    samples_s4 = torch.stack(all_samples[:4], dim=0)
-    mean_s4 = samples_s4.mean(dim=0)
-    std_s4 = samples_s4.std(dim=0)
-    psnr_s4 = compute_psnr(x_true, mean_s4.to(device))
-    s4_comparison = {
-        'S4_PSNR': round(psnr_s4, 2),
-        'S4_平均std': round(std_s4.mean().item(), 4),
-        'S4_vs_S30_PSNR差': round(posterior_mean_psnr - psnr_s4, 2),
-        'S4_vs_S30_std差': round(mean_std - std_s4.mean().item(), 4)
-    }
+# ★ S=4对比结果（Step 5 已计算并填充 s4_comparison, 此处直接引用）
 
 # ★ 完整的ULA参数配置（实验复现必备）
 ula_params = {
@@ -1786,7 +1805,7 @@ else:
     _convergence_msg = f"样本数S={S}过少，未绘制PSNR-vs-S曲线"
 
 # 3. 样本数建议（根据实际校准偏差和S大小动态调整）
-if S >= 30 and _coverage_dev < 0.10:
+if S >= 30 and _coverage_dev < _CALIB_SAMPLE_RELIABLE_THRESH:
     _sample_advice = f"S={S}已满足推荐阈值，校准检验较为可靠"
 elif S >= 30:
     _sample_advice = f"S={S}已满足推荐阈值，但校准偏差较大（{_coverage_dev:.1%}），需检查采样方法"
