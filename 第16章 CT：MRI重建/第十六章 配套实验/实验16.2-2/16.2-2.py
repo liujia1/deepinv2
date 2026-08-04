@@ -15,7 +15,7 @@ from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from skimage.transform import radon, iradon
+from skimage.transform import radon, iradon, resize
 from skimage.data import shepp_logan_phantom
 from skimage.metrics import peak_signal_noise_ratio as psnr_metric
 import os
@@ -163,20 +163,22 @@ def astra_fanbeam_reconstruct(phantom, angles, vol_geom, num_of_lines=512,
 # skimage回退版本：平行束CT
 # ========================================================================
 
-def skimage_parallel_reconstruct(phantom, theta_deg, filter_name='ramp'):
+def skimage_parallel_reconstruct(phantom, theta_deg, filter_name='ramp', sinogram=None):
     """
     skimage平行束投影与FBP重建
 
     参数:
-        phantom: 原始图像 (2D numpy array)
+        phantom: 原始图像 (2D numpy array)（仅用于形状参考）
         theta_deg: 投影角度数组 (角度制)
         filter_name: FBP滤波器名称
+        sinogram: 预生成的sinogram（IC-free）。如果为None，则用radon直接生成（不推荐）
 
     返回:
         sinogram: 正弦图
         reconstruction: 重建图像
     """
-    sinogram = radon(phantom, theta=theta_deg, circle=True)
+    if sinogram is None:
+        sinogram = radon(phantom, theta=theta_deg, circle=True)
     reconstruction = iradon(sinogram, theta=theta_deg, circle=True, filter_name=filter_name)
     reconstruction = normalize_reconstruction(reconstruction)
     return sinogram, reconstruction
@@ -221,6 +223,33 @@ plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤1_幻影.png'), dpi=150, bbox_inches='tight')
 plt.close()
 print("  幻影已生成并保存。")
+
+
+# ========================================================================
+# 避免inverse crime：数据生成使用高分辨率模型，反演使用低分辨率模型
+# ========================================================================
+n_data = (512, 512)  # 数据生成分辨率（2倍）
+
+# 高分辨率phantom（用于数据生成）
+if ASTRA_AVAILABLE:
+    phantom_fine = random_ellipses(50, n_data)
+else:
+    from skimage.transform import resize as sk_resize
+    phantom_fine = sk_resize(phantom, n_data, order=1, preserve_range=True, anti_aliasing=True)
+    phantom_fine = phantom_fine / phantom_fine.max()
+
+def generate_sinogram_ic_free(phantom_fine, theta, n_recon_size, noise_sigma=0.0):
+    """避免inverse crime的sinogram生成（skimage路径）：
+    在n_data高分辨率下用radon正向投影，添加噪声后
+    resize到n_recon对应的探测器尺寸。"""
+    sinogram_fine = radon(phantom_fine, theta=theta, circle=True)
+    if noise_sigma > 0:
+        sinogram_fine = sinogram_fine + noise_sigma * np.random.randn(*sinogram_fine.shape)
+    # circle=True时探测器尺寸=图像尺寸
+    target_det = n_recon_size[0]
+    from skimage.transform import resize as sk_resize
+    sinogram_recon = sk_resize(sinogram_fine, (target_det, len(theta)), order=1, preserve_range=True, anti_aliasing=True)
+    return sinogram_recon
 
 
 # ========================================================================
@@ -310,8 +339,10 @@ else:
 
     results = {}
     for cfg in tqdm(configs, desc='  skimage重建进度'):
+        # IC-free：高分辨率生成sinogram，低分辨率重建
+        sino_ic = generate_sinogram_ic_free(phantom_fine, cfg['theta'], size)
         sinogram, reconstruction = skimage_parallel_reconstruct(
-            phantom, cfg['theta'], filter_name='ramp'
+            phantom, cfg['theta'], filter_name='ramp', sinogram=sino_ic
         )
         p = compute_psnr(phantom, reconstruction)
         results[cfg['name']] = {
@@ -462,7 +493,9 @@ if ASTRA_AVAILABLE:
 else:
     for na in tqdm(sparse_angle_counts, desc='  稀疏角度扫描'):
         theta = np.linspace(0, 180, na, endpoint=False)
-        sino, rec = skimage_parallel_reconstruct(phantom, theta, filter_name='ramp')
+        # IC-free：高分辨率生成sinogram
+        sino_ic = generate_sinogram_ic_free(phantom_fine, theta, size)
+        sino, rec = skimage_parallel_reconstruct(phantom, theta, filter_name='ramp', sinogram=sino_ic)
         psnr_sparse_curve.append(compute_psnr(phantom, rec))
 
 # 扫描2：有限角度——改变角度覆盖范围
@@ -482,7 +515,9 @@ if ASTRA_AVAILABLE:
 else:
     for angle_range_deg in tqdm(limited_ranges, desc='  有限角度扫描'):
         theta = np.linspace(0, angle_range_deg, 180, endpoint=False)
-        sino, rec = skimage_parallel_reconstruct(phantom, theta, filter_name='ramp')
+        # IC-free：高分辨率生成sinogram
+        sino_ic = generate_sinogram_ic_free(phantom_fine, theta, size)
+        sino, rec = skimage_parallel_reconstruct(phantom, theta, filter_name='ramp', sinogram=sino_ic)
         psnr_limited_curve.append(compute_psnr(phantom, rec))
 
 

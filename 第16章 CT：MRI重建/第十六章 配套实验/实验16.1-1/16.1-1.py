@@ -70,9 +70,29 @@ print(f"实验16.1-1: CT成像基础——Radon变换与FBP重建")
 print(f"{'='*60}")
 
 # ---- 准备Shepp-Logan幻影 ----
-n = 128
-phantom = resize(shepp_logan_phantom(), (n, n), order=0, preserve_range=True, anti_aliasing=False)
+n = 128  # 重建分辨率
+n_data = 256  # 数据生成分辨率（2倍于重建分辨率，避免inverse crime）
+
+# 在高分辨率下创建phantom用于数据生成
+phantom_fine = resize(shepp_logan_phantom(), (n_data, n_data), order=0, preserve_range=True, anti_aliasing=False)
+phantom_fine = phantom_fine / phantom_fine.max()
+
+# 重建分辨率下的phantom（由高分辨率降采样得到）
+phantom = resize(phantom_fine, (n, n), order=1, preserve_range=True, anti_aliasing=True)
 phantom = phantom / phantom.max()
+
+def generate_sinogram_ic_free(theta, noise_sigma=0.0):
+    """避免inverse crime的sinogram生成：
+    在n_data=256高分辨率下用radon正向投影，添加噪声后
+    resize到n=128低分辨率探测器尺寸。
+    这样数据生成的离散化模型与反演时使用的iradon不同，
+    避免了"用同一矩阵既造数据又反演"的inverse crime问题。"""
+    sinogram_fine = radon(phantom_fine, theta=theta, circle=True)
+    if noise_sigma > 0:
+        sinogram_fine = sinogram_fine + noise_sigma * np.random.randn(*sinogram_fine.shape)
+    # circle=True时探测器尺寸=图像尺寸，从256 resize到128
+    sinogram_recon = resize(sinogram_fine, (n, len(theta)), order=1, preserve_range=True, anti_aliasing=True)
+    return sinogram_recon
 
 
 # ========================================================================
@@ -85,8 +105,9 @@ print("=" * 60)
 theta_full = np.linspace(0, 180, 180, endpoint=False)
 theta_sparse = np.linspace(0, 180, 30, endpoint=False)
 
-sinogram_full = radon(phantom, theta=theta_full, circle=True)
-sinogram_sparse = radon(phantom, theta=theta_sparse, circle=True)
+# IC-free：高分辨率生成sinogram，resize到低分辨率
+sinogram_full = generate_sinogram_ic_free(theta_full)
+sinogram_sparse = generate_sinogram_ic_free(theta_sparse)
 
 fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
 
@@ -161,7 +182,8 @@ print("步骤3：FBP滤波器选择——分辨率与噪声的权衡（16.1.4节
 print("=" * 60)
 
 noise_sigma = 0.05
-sinogram_noisy = sinogram_full + noise_sigma * np.random.randn(*sinogram_full.shape)
+# IC-free：在高分辨率n_data=256下生成sinogram并添加噪声，再resize到n=128
+sinogram_noisy = generate_sinogram_ic_free(theta_full, noise_sigma=noise_sigma)
 
 filter_names = ['ramp', 'shepp-logan', 'cosine', 'hann']
 filter_labels = ['Ramp $|\\omega|$', 'Shepp-Logan $|\\omega|\\mathrm{sinc}$',

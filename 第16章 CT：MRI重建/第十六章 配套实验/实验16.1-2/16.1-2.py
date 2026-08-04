@@ -4,6 +4,7 @@
 
 实验目的：使用工业级CT重建工具箱ASTRA实现CT正向模型和FBP重建，
           理解不同投影几何（平行束/扇形束）的差异和GPU加速的优势
+          避免inverse crime：数据生成使用512x512高分辨率，反演使用256x256低分辨率
 
 素材来源：基于astra_operators_example.ipynb
 运行前提：ASTRA仅支持Linux+CUDA；非Linux+CUDA环境自动回退到skimage版本
@@ -15,7 +16,7 @@ from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from skimage.transform import radon, iradon
+from skimage.transform import radon, iradon, resize
 from skimage.data import shepp_logan_phantom
 from skimage.metrics import peak_signal_noise_ratio as psnr_metric
 import os
@@ -121,6 +122,8 @@ print("步骤1：随机椭圆幻影生成（16.1.2节）")
 print("=" * 60)
 
 size = (256, 256)
+# 避免inverse crime：数据生成使用高分辨率模型，反演使用低分辨率模型
+n_data = (512, 512)  # 数据生成分辨率（2倍）
 amount_of_ellipses = 50
 ellipses = random_ellipses(amount_of_ellipses, size)
 
@@ -147,6 +150,24 @@ plt.show()
 
 print(f"  随机椭圆幻影尺寸: {ellipses.shape}")
 print(f"  像素值范围: [{ellipses.min():.3f}, {ellipses.max():.3f}]")
+
+# ---- 避免inverse crime的工具函数 ----
+# 高分辨率phantom（用于数据生成）
+phantom_fine = random_ellipses(amount_of_ellipses, n_data)
+# 重建分辨率phantom已生成（ellipses, 256x256）
+
+def generate_sinogram_ic_free_skimage(phantom_fine, theta, n_recon_size, noise_sigma=0.0):
+    """避免inverse crime的sinogram生成（skimage路径）：
+    在n_data高分辨率下用radon正向投影，添加噪声后
+    resize到n_recon对应的探测器尺寸。"""
+    sinogram_fine = radon(phantom_fine, theta=theta, circle=True)
+    if noise_sigma > 0:
+        sinogram_fine = sinogram_fine + noise_sigma * np.random.randn(*sinogram_fine.shape)
+    # circle=True时探测器尺寸=图像尺寸
+    target_det = n_recon_size[0]
+    from skimage.transform import resize as sk_resize
+    sinogram_recon = sk_resize(sinogram_fine, (target_det, len(theta)), order=1, preserve_range=True, anti_aliasing=True)
+    return sinogram_recon
 
 
 # ========================================================================
@@ -216,9 +237,10 @@ if ASTRA_AVAILABLE:
     print(f"  平行束FBP PSNR: {parall_psnr:.1f} dB")
 
 else:
-    # ---- skimage回退版本 ----
+    # ---- skimage回退版本（避免inverse crime）----
     theta_full = np.linspace(0., 180., 360, endpoint=False)
-    sinogram_full = radon(ellipses, theta=theta_full, circle=True)
+    # IC-free：高分辨率生成sinogram，低分辨率重建
+    sinogram_full = generate_sinogram_ic_free_skimage(phantom_fine, theta_full, size)
     recon_full = iradon(sinogram_full, theta=theta_full, circle=True, filter_name='ramp')
     recon_full = np.clip(recon_full, 0, None)
     if recon_full.max() > 0:
@@ -336,17 +358,17 @@ else:
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
-    # 平行束sinogram（标准0-180°）
+    # 平行束sinogram（标准0-180°）（IC-free：高分辨率生成）
     theta_par = np.linspace(0., 180., 180, endpoint=False)
-    sino_par = radon(ellipses, theta=theta_par, circle=True)
+    sino_par = generate_sinogram_ic_free_skimage(phantom_fine, theta_par, size)
     axes[0].imshow(sino_par, cmap='gray', aspect='auto')
     axes[0].set_title('平行束Sinogram (0-180°)\n对称正弦曲线')
     axes[0].set_xlabel('投影角度 $\\theta$ ($^{\\circ}$)')
     axes[0].set_ylabel('探测器位置 s')
 
-    # 0-360°采样（仍为平行束，仅增加角度数量）
+    # 0-360°采样（仍为平行束，仅增加角度数量）（IC-free：高分辨率生成）
     theta_fan = np.linspace(0., 360., 720, endpoint=False)
-    sino_fan = radon(ellipses, theta=theta_fan, circle=True)
+    sino_fan = generate_sinogram_ic_free_skimage(phantom_fine, theta_fan, size)
     axes[1].imshow(sino_fan, cmap='gray', aspect='auto')
     axes[1].set_title('平行束Sinogram (0-360°)\n（注意：仍是对称的，非真实扇形束）')
     axes[1].set_xlabel('投影角度 $\\theta$ ($^{\\circ}$)')
@@ -424,12 +446,13 @@ if ASTRA_AVAILABLE:
         print(f"  滤波器 '{filt}': PSNR = {p:.1f} dB")
 
 else:
-    # ---- skimage回退版本 ----
+    # ---- skimage回退版本（避免inverse crime：phantom_fine 512→size 256）----
     filters = [None, 'ramp', 'shepp-logan', 'cosine']
     filter_labels = ['无滤波', 'Ramp $|\\omega|$', 'Shepp-Logan $|\\omega|\\mathrm{sinc}$', 'Cosine $|\\omega|\\cos$']
 
     theta = np.linspace(0., 180., 360, endpoint=False)
-    sino = radon(ellipses, theta=theta, circle=True)
+    # IC-free：在512分辨率下投影，resize到256分辨率探测器
+    sino = generate_sinogram_ic_free_skimage(phantom_fine, theta, size)
 
     fig, axes = plt.subplots(1, 4, figsize=(16, 4))
     filter_psnrs = []

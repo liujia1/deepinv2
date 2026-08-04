@@ -71,13 +71,33 @@ print(f"实验16.2-1: CT不适定性与正则化重建")
 print(f"{'='*60}")
 
 # ---- 准备Shepp-Logan幻影 ----
-n = 128
-phantom = resize(shepp_logan_phantom(), (n, n), order=0, preserve_range=True, anti_aliasing=False)
+# 避免inverse crime：数据生成使用高分辨率模型，反演使用低分辨率模型
+n = 128           # 重建分辨率
+n_data = 256      # 数据生成分辨率（2倍，制造模型失配）
+
+# 高分辨率phantom（用于数据生成）
+phantom_fine = resize(shepp_logan_phantom(), (n_data, n_data), order=0, preserve_range=True, anti_aliasing=False)
+phantom_fine = phantom_fine / phantom_fine.max()
+# 低分辨率phantom（用于重建和PSNR比较，由高分辨率降采样得到）
+phantom = resize(phantom_fine, (n, n), order=1, preserve_range=True, anti_aliasing=True)
 phantom = phantom / phantom.max()
 
-# 先做全角FBP作为参考
+def generate_sinogram_ic_free(theta, noise_sigma=0.0):
+    """避免inverse crime的sinogram生成：
+    在n_data=256高分辨率下用radon正向投影，添加噪声后
+    resize到n=128低分辨率探测器尺寸。
+    这样数据生成的离散化模型与反演时使用的forward_radon不同，
+    避免了"用同一矩阵既造数据又反演"的inverse crime问题。"""
+    sinogram_fine = radon(phantom_fine, theta=theta, circle=True)
+    if noise_sigma > 0:
+        sinogram_fine = sinogram_fine + noise_sigma * np.random.randn(*sinogram_fine.shape)
+    # circle=True时探测器尺寸=图像尺寸，从256 resize到128
+    sinogram_recon = resize(sinogram_fine, (n, len(theta)), order=1, preserve_range=True, anti_aliasing=True)
+    return sinogram_recon
+
+# 先做全角FBP作为参考（使用IC-free sinogram）
 theta_full = np.linspace(0, 180, 180, endpoint=False)
-sinogram_full = radon(phantom, theta=theta_full, circle=True)
+sinogram_full = generate_sinogram_ic_free(theta_full)
 recon_fbp_full = iradon(sinogram_full, theta=theta_full, circle=True, filter_name='ramp')
 psnr_fbp_full = psnr(phantom, recon_fbp_full, data_range=1.0)
 noise_sigma = 0.05
@@ -90,14 +110,14 @@ print("\n" + "=" * 60)
 print("步骤1：稀疏角度与有限角度CT——两种不同的不适定性")
 print("=" * 60)
 
-# 稀疏角度：30个均匀分布在[0,180)
+# 稀疏角度：30个均匀分布在[0,180)（IC-free数据生成）
 theta_sparse30 = np.linspace(0, 180, 30, endpoint=False)
-sino_sparse = radon(phantom, theta=theta_sparse30, circle=True)
+sino_sparse = generate_sinogram_ic_free(theta_sparse30)
 recon_sparse = iradon(sino_sparse, theta=theta_sparse30, circle=True, filter_name='ramp')
 
-# 有限角度：0°-120°（缺失60°-180°）
+# 有限角度：0°-120°（缺失60°-180°）（IC-free数据生成）
 theta_limited = np.linspace(0, 120, 120, endpoint=False)
-sino_limited = radon(phantom, theta=theta_limited, circle=True)
+sino_limited = generate_sinogram_ic_free(theta_limited)
 recon_limited = iradon(sino_limited, theta=theta_limited, circle=True, filter_name='ramp')
 
 p_sparse = psnr(phantom, recon_sparse, data_range=1.0)
@@ -152,7 +172,7 @@ print("步骤2：迭代正则化重建")
 print("=" * 60)
 
 def forward_radon(x, theta):
-    """正向Radon变换"""
+    """正向Radon变换（低分辨率n=128模型，与数据生成模型不同→避免inverse crime）"""
     return radon(x, theta=theta, circle=True)
 
 def backward_radon(sino, theta):
@@ -194,8 +214,7 @@ def gradient_descent_recon(y, theta, n_iter=100, lam=0.1, reg_type='tikhonov'):
 
     return x
 
-sino_sparse_noisy = radon(phantom, theta=theta_sparse30, circle=True)
-sino_sparse_noisy = sino_sparse_noisy + noise_sigma * np.random.randn(*sino_sparse_noisy.shape)
+sino_sparse_noisy = generate_sinogram_ic_free(theta_sparse30, noise_sigma=noise_sigma)
 
 print("  正在执行Tikhonov正则化重建...")
 recon_tikh = gradient_descent_recon(sino_sparse_noisy, theta_sparse30, n_iter=100, lam=0.1, reg_type='tikhonov')
@@ -249,11 +268,12 @@ psnr_noisy_curve = []
 
 for na in tqdm(n_angles_list, desc='  稀疏角度扫描'):
     theta = np.linspace(0, 180, na, endpoint=False)
-    sino = radon(phantom, theta=theta, circle=True)
+    # IC-free：高分辨率生成，低分辨率重建
+    sino = generate_sinogram_ic_free(theta)
     recon = iradon(sino, theta=theta, circle=True, filter_name='ramp')
     psnr_clean.append(psnr(phantom, recon, data_range=1.0))
 
-    sino_n = sino + noise_sigma * np.random.randn(*sino.shape)
+    sino_n = generate_sinogram_ic_free(theta, noise_sigma=noise_sigma)
     recon_n = iradon(sino_n, theta=theta, circle=True, filter_name='shepp-logan')
     psnr_noisy_curve.append(psnr(phantom, recon_n, data_range=1.0))
 
@@ -271,7 +291,8 @@ limited_ranges = [30, 60, 90, 120, 150, 180]
 psnr_limited = []
 for angle_range in tqdm(limited_ranges, desc='  有限角度扫描'):
     theta = np.linspace(0, angle_range, min(angle_range, 180), endpoint=False)
-    sino = radon(phantom, theta=theta, circle=True)
+    # IC-free：高分辨率生成，低分辨率重建
+    sino = generate_sinogram_ic_free(theta)
     recon = iradon(sino, theta=theta, circle=True, filter_name='ramp')
     psnr_limited.append(psnr(phantom, recon, data_range=1.0))
 
