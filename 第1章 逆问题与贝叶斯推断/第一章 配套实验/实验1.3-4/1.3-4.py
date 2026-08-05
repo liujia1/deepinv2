@@ -1,4 +1,6 @@
-import numpy as np
+﻿import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from skimage.data import astronaut
 from skimage.color import rgb2gray
