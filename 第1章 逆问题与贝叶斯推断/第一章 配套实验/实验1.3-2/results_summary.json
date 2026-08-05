@@ -1,0 +1,13 @@
+{
+  "image_size": 32,
+  "matrix_size": 1024,
+  "noise_sigma": 0.01,
+  "condition_number_A": 1101915027.7593,
+  "psnr_pseudo_inverse_dB": 3.58,
+  "psnr_truncated_SVD": {
+    "50": 15.1,
+    "100": 15.46,
+    "200": 16.24,
+    "500": 4.78
+  }
+}

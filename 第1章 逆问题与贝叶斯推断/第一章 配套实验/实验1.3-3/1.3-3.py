@@ -76,7 +76,7 @@ for freq in frequencies:
     attenuation = np.linalg.norm(Ad_test) / np.linalg.norm(d_test)
     attenuations.append(attenuation)
 
-# 使用频率 15 作为幽灵分量（中等衰减，视觉效果明显）
+# 使用频率 15 作为幽灵分量（高频衰减，已被模糊算子近乎完全抹平，视觉效果明显）
 freq = 15
 alpha = 0.3  # 幽灵分量的幅度系数，意图明确：控制扰动强度
 

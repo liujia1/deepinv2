@@ -49,7 +49,7 @@ def gaussian_psf(size, sigma):
     h = np.exp(-(xx ** 2 + yy ** 2) / (2 * sigma ** 2))
     return h / h.sum()
 
-h = gaussian_psf(n, sigma=3.0)
+h = gaussian_psf(n, sigma=1.5)
 H_fft = np.fft.fft2(h)
 
 # 逐列构建 A 矩阵（小尺寸可行）
@@ -76,9 +76,13 @@ x_pinv = Vt.T @ (np.diag(1.0 / sigma) @ (U.T @ y_noisy))
 # 截断 SVD 解（保留前 k 个奇异值）
 truncation_levels = [50, 100, 200, 500]
 x_trunc = {}
+psnr_vals = []
 for k in truncation_levels:
     k = min(k, len(sigma))
-    x_trunc[k] = Vt[:k, :].T @ (np.diag(1.0 / sigma[:k]) @ (U[:, :k].T @ y_noisy))
+    xk = Vt[:k, :].T @ (np.diag(1.0 / sigma[:k]) @ (U[:, :k].T @ y_noisy))
+    x_trunc[k] = xk
+    xk_img = np.clip(xk.reshape(n, n), 0, 1)
+    psnr_vals.append(peak_signal_noise_ratio(x, xk_img))
 
 # ---- 5. Picard 图 ----
 coeffs_clean = np.abs(U.T @ y_clean)
@@ -124,9 +128,12 @@ axes[1, 1].set_title(f'伪逆重建 (含噪)\nPSNR={psnr_pinv:.1f}dB ✗')
 axes[1, 1].axis('off')
 
 # (f) 截断 SVD 重建
-best_k = truncation_levels[1]  # 展示 k=100 的结果
+# 把硬编码的 best_k = truncation_levels[1] (=100)
+# 改为自动选择 PSNR 峰值对应的 k
+best_idx = np.argmax(psnr_vals)
+best_k = truncation_levels[best_idx]  # 大约会是 50~70
 x_trunc_img = np.clip(x_trunc[best_k].reshape(n, n), 0, 1)
-psnr_trunc = peak_signal_noise_ratio(x, x_trunc_img)
+psnr_trunc = psnr_vals[best_idx]
 axes[1, 2].imshow(x_trunc_img, cmap='gray')
 axes[1, 2].set_title(f'截断 SVD (k={best_k})\nPSNR={psnr_trunc:.1f}dB ✓')
 axes[1, 2].axis('off')

@@ -50,7 +50,7 @@ x_true = np.random.randn(n)
 # 
 # 这种简化让我们能专注于理解"奇异值衰减→误差放大"的核心机制
 # 条件数从 1 到 10^12（统一使用浮点数，避免字典键类型不一致）
-kappas = [10.0**k for k in [0, 1, 2, 3, 4, 6, 8, 10, 12]]
+kappas = [10.0**k for k in [0, 1, 2, 3, 4, 6, 7, 8, 10, 12]]
 # 数据中的噪声水平。取 1e-8，正好对应 1.3 节开头那个悬念：
 # "数据 y 只有亿分之一(10^-8)相对误差、条件数 κ=10^10 时最坏误差多大？"
 # 跑一遍就能亲眼看到小噪声被放大成一团乱麻。
@@ -100,14 +100,14 @@ fig, axes = plt.subplots(1, 2, figsize=(14, 6))
 # 重建误差 vs 条件数
 axes[0].loglog(kappas, rel_errors, 'o-', linewidth=2, markersize=8, label='朴素逆重建')
 
-# 理论上界
-axes[0].loglog(kappas, theory_bound, '--', alpha=0.7, label='理论上界 κ·(‖δy‖/‖y‖)')
+# 理论上界（显式用橙色，避免依赖默认色序；对应说明中的"橙色虚线"）
+axes[0].loglog(kappas, theory_bound, '--', color='C1', alpha=0.7, label='理论上界 κ·(‖δy‖/‖y‖)')
 
 # 添加垂直参考线：κ = 1/noise_level，这是误差开始超过信号的理论拐点
 kappa_critical = 1.0 / noise_level
 # 开头悬念对应的条件数 κ=10^10，正好超过临界点 1e8，是"完全失真"的典型
 kappa_hook = 1e10
-axes[0].axvline(kappa_critical, color='gray', linestyle=':', linewidth=1.5, alpha=0.6)
+axes[0].axvline(kappa_critical, color='dimgray', linestyle=':', linewidth=2.0, alpha=0.8)
 # 在参考线旁添加注释：同时说明公式和含义
 axes[0].text(kappa_critical*1.3, 2e-4, 
              f'κ = 1/ε = {kappa_critical:.0e}\n(误差≈1，开始失真)', 
@@ -151,9 +151,11 @@ plt.show()
 # ===== 新增：同一信号、不同条件数下的重建对比（对应开头悬念 κ=10^10）=====
 # 固定一组可复现随机种子，让对比图稳定可重绘
 np.random.seed(123)
-# 用一条清晰的平滑波形作待重建信号，放大成"乱麻"的对比才强烈
+# 用一条含丰富高频细节的波形作待重建信号：高频越密，κ=10^6 的"发钝"越明显
 t_demo = np.linspace(0, 1, n)
-x_demo = np.sin(2 * np.pi * 3 * t_demo) + 0.3 * np.cos(2 * np.pi * 7 * t_demo)
+x_demo = (np.sin(2 * np.pi * 6 * t_demo)
+          + 0.5 * np.cos(2 * np.pi * 16 * t_demo)
+          + 0.35 * np.sin(2 * np.pi * 28 * t_demo))
 
 # 关键：所有 κ 共用同一份观测噪声，这样唯一的变量就是条件数 → 对比最纯净
 e_shared = noise_level * np.random.randn(n)
@@ -165,16 +167,18 @@ def naive_recon(kappa):
     rel = np.linalg.norm(xr - x_demo) / np.linalg.norm(x_demo)
     return xr, rel
 
-demo_kappas = [1e6, 1e10]
+# 用 κ=10^7（蓝，发钝）与 κ=10^10（红，一团乱麻）作对照，
+# 直接呼应开头悬念"数据仅 10^-8 误差、κ=10^10 炸成乱麻"。
+demo_kappas = [1e7, 1e10]
 recons = {kk: naive_recon(kk) for kk in demo_kappas}
 
 # 方案：全部画在同一张坐标系里，用不同颜色叠加，直观对比"恢复 vs 乱麻"
 fig2, ax2 = plt.subplots(1, 1, figsize=(11, 5))
 # 干净信号（黑色粗线，作为基准）
 ax2.plot(t_demo, x_demo, color='black', linewidth=2.5, label='干净信号 x（基准）')
-# 各条件数重建：κ 越小越接近"能恢复"，越大越"一团乱麻"，颜色由橙→红
-colors = {1e6: 'steelblue', 1e10: 'crimson'}
-tags = {1e6: '明显糊化', 1e10: '一团乱麻'}
+# 各条件数重建：κ 越小越接近"能恢复"，越大越"一团乱麻"，颜色由蓝→红
+colors = {1e7: 'steelblue', 1e10: 'crimson'}
+tags = {1e7: '轻微发钝', 1e10: '一团乱麻'}
 for kk in demo_kappas:
     xr, rel = recons[kk]
     ax2.plot(t_demo, xr, color=colors[kk], alpha=0.85,

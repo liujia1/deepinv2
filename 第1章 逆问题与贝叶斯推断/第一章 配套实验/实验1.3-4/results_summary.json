@@ -1,0 +1,24 @@
+{
+  "image_size": 512,
+  "sigma_model": 5.0,
+  "sigma_true": 5.3,
+  "noise_sigma": 0.01,
+  "tikhonov_lambda": 0.01,
+  "psnr_naive_noisy_dB": 4.67,
+  "psnr_naive_clean_dB": 20.51,
+  "psnr_tikhonov_IC_dB": 22.34,
+  "psnr_tikhonov_noIC_dB": 21.93,
+  "psnr_IC_vs_noIC_diff_dB": 0.41,
+  "psnr_vs_modeling_deviation": {
+    "dsigma_-2.0": 20.87,
+    "dsigma_-1.0": 22.76,
+    "dsigma_-0.5": 22.81,
+    "dsigma_0.0": 22.34,
+    "dsigma_0.3": 21.93,
+    "dsigma_0.5": 21.64,
+    "dsigma_1.0": 20.93,
+    "dsigma_2.0": 19.7,
+    "dsigma_3.0": 18.77,
+    "dsigma_5.0": 17.48
+  }
+}
