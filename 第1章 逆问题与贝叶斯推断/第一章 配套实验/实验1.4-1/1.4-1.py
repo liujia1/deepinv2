@@ -38,15 +38,16 @@ y_gauss = x + sigma_gauss * np.random.randn(n, n)
 y_gauss = np.clip(y_gauss, 0, 1)
 
 # (b) Poisson 噪声：y_i ~ Poisson((Ax)_i / gain) * gain，信号依赖
-# 调节 gain 使 PSNR 与高斯噪声大致相当
-gain = 0.01
+# 调节 gain 使 PSNR 与高斯噪声大致相当（gain 越大噪声越强、PSNR 越低）
+gain = 0.08
 y_poisson = np.random.poisson(x / gain).astype(np.float64) * gain
 # 注意：clip 操作会截断高亮度区域的噪声，导致实测 σ 在高亮度处低于理论值
 # 这是因为当 x 接近 1 时，λ = x/gain = 100，方差较大，部分样本会被 clip 到 1
 y_poisson = np.clip(y_poisson, 0, 1)
 
 # (c) 脉冲噪声（椒盐噪声）：随机像素被替换为 0 或 1
-amount_sp = 0.05
+# 调节 amount 使 PSNR 与高斯噪声大致相当（amount 越小噪声越弱、PSNR 越高）
+amount_sp = 0.01
 y_sp = random_noise(x, mode='s&p', amount=amount_sp)
 
 # ---- 3. 计算质量度量 ----
@@ -81,9 +82,20 @@ for i, (y, name) in enumerate(zip(noisy_list, names)):
 
     # 噪声直方图
     residual = (y - x).ravel()
-    axes[i, 2].hist(residual, bins=100, density=True, alpha=0.7, color=f'C{i}')
-    axes[i, 2].set_title(f'噪声直方图\nμ={residual.mean():.4f}, σ={residual.std():.4f}')
-    axes[i, 2].set_xlabel('残差值')
+    # 高斯噪声：保留完整数据直方图（含 clip 在 0 处的尖峰，体现真实情况），
+    # 并叠加理论 N(0, σ²) 曲线作对照，使读者能分辨"钟形是真高斯、0 处尖峰是 clip 截断"。
+    if name == '高斯噪声':
+        axes[i, 2].hist(residual, bins=100, density=True, alpha=0.7,
+                        color=f'C{i}', label='含噪残差')
+        t = np.linspace(-0.6, 0.6, 400)
+        theory = (1 / (np.sqrt(2 * np.pi) * sigma_gauss)) * np.exp(-0.5 * (t / sigma_gauss) ** 2)
+        axes[i, 2].plot(t, theory, 'k--', lw=2, label=f'理论 N(0, {sigma_gauss}²)')
+        axes[i, 2].legend(loc='upper right', fontsize=7)
+        axes[i, 2].set_title(f'高斯噪声直方图（完整数据）\nμ={residual.mean():.4f}, σ={residual.std():.4f}')
+    else:
+        axes[i, 2].hist(residual, bins=100, density=True, alpha=0.7, color=f'C{i}')
+        axes[i, 2].set_title(f'噪声直方图\nμ={residual.mean():.4f}, σ={residual.std():.4f}')
+    axes[i, 2].set_xlabel('残差值 (y - x)')
     axes[i, 2].set_ylabel('概率密度')
 
 plt.suptitle('三种噪声模型对比', fontsize=16, y=1.01)

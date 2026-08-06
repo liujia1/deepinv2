@@ -1,0 +1,18 @@
+{
+  "image_size": 256,
+  "gaussian_noise": {
+    "sigma": 0.1,
+    "psnr_dB": 21.71,
+    "ssim": 0.1856
+  },
+  "poisson_noise": {
+    "gain": 0.08,
+    "psnr_dB": 21.05,
+    "ssim": 0.6617
+  },
+  "impulse_noise": {
+    "amount": 0.01,
+    "psnr_dB": 22.89,
+    "ssim": 0.7685
+  }
+}
