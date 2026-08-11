@@ -1,28 +1,25 @@
 """
-实验2.2-2 TV先验的局限：阶梯效应
-对应章节：2.2 经典先验族 - TV先验
-知识点：TV保边但产生阶梯效应；TV偏好分段常数；与Sobolev先验的对比
+实验2.2-2 Laplace先验的稀疏魔力：为什么它真的能把系数"压成零"
+对应章节：2.2 经典先验族 - Laplace先验（稀疏促成的几何解释）
+知识点：Laplace先验(双指数)在原点处的尖峰(不可导)→ MAP诱导L1惩罚
+          → 对小系数"置零"而非"缩小"；与高斯先验(岭回归)的对比；
+          三视角(几何/概率/优化)在一维稀疏恢复上的统一体现
 
 素材来源：
-  - 2.5.py: TV去噪与阶梯效应展示
+  - 2.2章节 Laplace先验小节：零点奇性、L1促稀疏、稀疏表示框架
+  - 实验2.2-1：作为对照（高斯先验→岭回归）
 
 修改说明：
-  - 将简单Tikhonov改为Sobolev（smoothness prior），使"平滑vs保边"对比更有意义
-  - 步骤1图补充原始无噪图像
-  - 正则项图同时画t²和|t|对比
-  - 统一配色方案
-  - 补充参数选参依据说明
+  1. 一维稀疏信号 + 加噪观测，构造可手算的 MAP 问题
+  2. 同 λ 下对比 LASSO (L1) 与 Ridge (L2) 的系数估计
+  3. 用软阈值(soft-thresholding)闭式解展示 Laplace 的"硬置零"机制
+  4. 输出三张图：①先验密度对比 ②系数估计对比 ③软阈值函数
 """
 
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from skimage import data
-from skimage.util import random_noise
-from skimage.restoration import denoise_tv_chambolle
-from skimage.transform import resize
-from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 import os
 import sys
 
@@ -40,298 +37,300 @@ try:
     setup_chinese_font(save_dir=_chinese_path)
 except ImportError:
     print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
-    print("请确保 .chinese 文件夹已上传到 Google Drive 的正确位置")
 
 np.random.seed(42)
 
-DATA_RANGE = 1.0
-COLOR_ORIGINAL = 'black'
-COLOR_NOISY = 'gray'
-COLOR_SOBOLEV = 'steelblue'
-COLOR_TV = 'crimson'
+# ─── 实验参数配置 ───
+N        = 50          # 信号维度
+K        = 5           # 真实非零系数个数（稀疏度）
+LAMBDA   = 0.6         # 正则强度（L1 与 L2 共用同一 λ 以便公平对比）
+SNR_DB   = 20          # 观测信噪比
+GRID     = 200         # 绘图网格密度
 
-n = 128
-camera = resize(data.camera(), (n, n))
+# ─── 构造稀疏真值 x* 与观测 y = x* + 噪声 ───
+def make_sparse_signal(n, k, seed=0):
+    rng = np.random.default_rng(seed)
+    x = np.zeros(n)
+    idx = rng.choice(n, size=k, replace=False)
+    # 正负交替、幅度不一，制造"少数大系数 + 大量零"的稀疏结构
+    x[idx] = rng.uniform(-2.5, 2.5, size=k)
+    return x, idx
 
-sigma = 0.1
-camera_noisy = random_noise(camera, mode='gaussian', var=sigma**2, rng=42)
+x_true, support = make_sparse_signal(N, K, seed=7)
+# 加性高斯噪声，按目标 SNR 定标
+sig = np.linalg.norm(x_true) / (10 ** (SNR_DB / 20))
+noise = np.random.normal(0, sig, size=N)
+y = x_true + noise
 
-def sobolev_denoise(y, lam):
-    """
-    Sobolev去噪闭式解（周期边界，与 denoise_tv_chambolle 保持一致）
-    
-    目标函数: J(x) = 0.5||y-x||² + 0.5λ||∇x||²
-    频域解: X(ω) = Y(ω) / (1 - λ·Δ̂(ω))
-    
-    其中 Δ̂(ω) = 2(cos(ωx) + cos(ωy) - 2) 是离散Laplacian的特征值。
-    
-    Args:
-        y: 输入图像，必须为方形（行数=列数）
-        lam: 正则化参数
-    """
-    assert y.shape[0] == y.shape[1], "sobolev_denoise 仅支持方形图像"
-    n = y.shape[0]
-    freq = np.fft.fftfreq(n) * 2 * np.pi
-    fx, fy = np.meshgrid(freq, freq)
-    lap_eig = 2 * (np.cos(fx) + np.cos(fy) - 2)
-    denom = 1 - lam * lap_eig
-    return np.real(np.fft.ifft2(np.fft.fft2(y) / denom))
+# ─── 闭式 MAP 估计 ───
+# 似然 ~ N(0,1)：负对数似然 = ||y - x||^2
+# 高斯先验 N(0, 1/λ) → L2 惩罚 λ||x||^2/2 → Ridge 闭式解 x = y / (1+λ)
+# Laplace 先验 → L1 惩罚 λ|x| → 软阈值 x = sign(y)·max(|y|-λ, 0)
+def ridge_estimate(y, lam):
+    return y / (1.0 + lam)
 
-def find_staircase_position(tv_img, sob_img, margin=20, window_size=7):
-    """
-    找到阶梯效应最明显的位置
-    
-    方法：阶梯效应的特征是"TV有梯度但Sobolev平滑"的区域。
-    使用 (grad_tv - grad_sob) 作为核心指标，排除真实边缘（两者梯度都大）。
-    
-    Returns:
-        tuple: (stair_x, stair_y) - matplotlib坐标系下的位置，x=列，y=行
-    """
-    from scipy.ndimage import uniform_filter
-    
-    grad_tv_x = np.roll(tv_img, -1, axis=1) - tv_img
-    grad_tv_y = np.roll(tv_img, -1, axis=0) - tv_img
-    grad_tv_mag = np.sqrt(grad_tv_x**2 + grad_tv_y**2)
-    
-    grad_sob_x = np.roll(sob_img, -1, axis=1) - sob_img
-    grad_sob_y = np.roll(sob_img, -1, axis=0) - sob_img
-    grad_sob_mag = np.sqrt(grad_sob_x**2 + grad_sob_y**2)
-    
-    tv_excess = np.maximum(grad_tv_mag - grad_sob_mag, 0)
-    
-    diff = np.abs(tv_img - sob_img)
-    
-    staircase_score = tv_excess * uniform_filter(diff, size=window_size)
-    
-    staircase_score[:margin, :] = 0
-    staircase_score[-margin:, :] = 0
-    staircase_score[:, :margin] = 0
-    staircase_score[:, -margin:] = 0
-    
-    max_idx = np.unravel_index(np.argmax(staircase_score), staircase_score.shape)
-    
-    return (max_idx[1], max_idx[0])
+def lasso_estimate(y, lam):
+    return np.sign(y) * np.maximum(np.abs(y) - lam, 0.0)
 
-lam_sob = 0.15
-camera_sob = sobolev_denoise(camera_noisy, lam_sob)
+x_ridge = ridge_estimate(y, LAMBDA)
+x_lasso = lasso_estimate(y, LAMBDA)
 
-alpha_tv = 0.15
-camera_tv = denoise_tv_chambolle(camera_noisy, weight=alpha_tv)
+# ─── 评估：恢复误差 + 支撑恢复率 ───
+def support_recovery(x_hat, x_true, tol=1e-6):
+    true_sup = np.abs(x_true) > tol
+    est_sup = np.abs(x_hat) > tol
+    if true_sup.sum() == 0:
+        return 1.0
+    return np.mean(est_sup[true_sup])  # 真支撑中被正确检出的比例
 
-staircase_pos = find_staircase_position(camera_tv, camera_sob)
+mse_ridge = np.mean((x_ridge - x_true) ** 2)
+mse_lasso = np.mean((x_lasso - x_true) ** 2)
+rec_ridge = support_recovery(x_ridge, x_true)
+rec_lasso = support_recovery(x_lasso, x_true)
+n_zero_ridge = int(np.sum(np.abs(x_ridge) < 1e-6))
+n_zero_lasso = int(np.sum(np.abs(x_lasso) < 1e-6))
 
-psnr_noisy = peak_signal_noise_ratio(camera, camera_noisy, data_range=DATA_RANGE)
-psnr_sob = peak_signal_noise_ratio(camera, camera_sob, data_range=DATA_RANGE)
-psnr_tv = peak_signal_noise_ratio(camera, camera_tv, data_range=DATA_RANGE)
+print(f"λ={LAMBDA}  SNR={SNR_DB}dB")
+print(f"Ridge(L2): MSE={mse_ridge:.4f}  支撑恢复率={rec_ridge:.2%}  精确置零数={n_zero_ridge}")
+print(f"LASSO(L1): MSE={mse_lasso:.4f}  支撑恢复率={rec_lasso:.2%}  精确置零数={n_zero_lasso}")
 
-ssim_noisy = structural_similarity(camera, camera_noisy, data_range=DATA_RANGE)
-ssim_sob = structural_similarity(camera, camera_sob, data_range=DATA_RANGE)
-ssim_tv = structural_similarity(camera, camera_tv, data_range=DATA_RANGE)
+# ─── 图1：先验密度对比（几何/概率视角）───
+fig, ax = plt.subplots(figsize=(7, 4.5))
+t = np.linspace(-3, 3, GRID)
+p_gauss = np.exp(-0.5 * t ** 2) / np.sqrt(2 * np.pi)
+p_lap = 0.5 * np.exp(-np.abs(t))
+ax.plot(t, p_gauss, lw=2, label='高斯先验 N(0,1)：处处光滑、原点平缓')
+ax.plot(t, p_lap, lw=2, label='Laplace先验：原点尖峰(不可导)')
+ax.axvline(0, color='gray', ls=':', lw=1)
+ax.set_title('Laplace vs 高斯：先验密度在原点处的形态差异')
+ax.set_xlabel('系数取值 x')
+ax.set_ylabel('先验密度 p(x)')
+ax.legend(fontsize=9)
+ax.grid(alpha=0.3)
+fig.tight_layout()
+fig.savefig(os.path.join(SAVE_DIR, '图1_先验密度对比.png'), dpi=120)
+plt.close(fig)
 
-print("=" * 70)
-print("实验2.2-2 TV先验的局限：阶梯效应")
-print("=" * 70)
+# ─── 图2：系数估计对比（恢复效果）───
+fig, axes = plt.subplots(1, 3, figsize=(13, 4), sharey=True)
+coords = np.arange(N)
+for ax, x_, title, color in [
+    (axes[0], x_true, '真实稀疏信号 x*', 'black'),
+    (axes[1], x_ridge, f'Ridge (L2)\nMSE={mse_ridge:.3f}', 'tab:blue'),
+    (axes[2], x_lasso, f'LASSO (L1)\nMSE={mse_lasso:.3f}', 'tab:red'),
+]:
+    ax.stem(coords, x_, basefmt=' ')
+    ax.set_title(title, fontsize=10)
+    ax.set_xlabel('系数索引')
+    ax.axhline(0, color='gray', lw=0.8)
+    ax.grid(alpha=0.3)
+axes[0].set_ylabel('系数值')
+fig.suptitle(f'同 λ={LAMBDA} 下：高斯先验只"缩小"、Laplace先验能"置零"', fontsize=12)
+fig.tight_layout()
+fig.savefig(os.path.join(SAVE_DIR, '图2_系数估计对比.png'), dpi=120)
+plt.close(fig)
 
-print("\n【参数设置】")
-print(f"  图像尺寸: {n}×{n}")
-print(f"  噪声标准差 σ = {sigma}")
-print(f"\n  参数选择说明:")
-print(f"    - Sobolev λ = {lam_sob}：控制梯度平滑强度")
-print(f"    - TV α = {alpha_tv}：控制全变差正则化强度")
-print(f"    注：两者量纲不同，λ惩罚||∇x||²，α惩罚||∇x||₁")
-print(f"    本实验取相近数值以展示定性差异，非严格最优对比")
+# ─── 图3：软阈值函数（优化视角）───
+fig, ax = plt.subplots(figsize=(7, 4.5))
+u = np.linspace(-3, 3, GRID)
+soft = np.sign(u) * np.maximum(np.abs(u) - LAMBDA, 0)
+hard_ridge = u / (1 + LAMBDA)
+ax.plot(u, u, 'k--', lw=1, label='恒等（无正则，y=x）')
+ax.plot(u, hard_ridge, lw=2, color='tab:blue', label=f'Ridge 映射 x=y/(1+λ)')
+ax.plot(u, soft, lw=2, color='tab:red', label=f'软阈值 S_λ(y)=sign(y)·max(|y|-λ,0)')
+ax.axvspan(-LAMBDA, LAMBDA, color='tab:red', alpha=0.12, label=f'置零死区 [-λ, λ]={LAMBDA}')
+ax.set_title('软阈值 vs 岭映射：为什么 L1 能把小系数真正压成 0')
+ax.set_xlabel('观测 y')
+ax.set_ylabel('估计 x')
+ax.legend(fontsize=9)
+ax.grid(alpha=0.3)
+fig.tight_layout()
+fig.savefig(os.path.join(SAVE_DIR, '图3_软阈值函数.png'), dpi=120)
+plt.close(fig)
 
-print("\n【去噪结果对比】")
-print(f"  含噪图像: PSNR = {psnr_noisy:.2f} dB, SSIM = {ssim_noisy:.3f}")
-print(f"  Sobolev (smoothness prior): PSNR = {psnr_sob:.2f} dB, SSIM = {ssim_sob:.3f}")
-print(f"  TV先验: PSNR = {psnr_tv:.2f} dB, SSIM = {ssim_tv:.3f}")
+print("已保存：图1_先验密度对比.png / 图2_系数估计对比.png / 图3_软阈值函数.png")
 
-print("\n【TV先验特点】")
-print("  优势: 保边 - 边缘锐利")
-print("  局限: 阶梯效应 - 渐变区域出现阶梯状伪影")
-print("  原因: TV偏好分段常数函数")
 
-fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+# ======================================================================
+# Part B：从 ℓ¹ 到 ℓ⁰ —— 压缩感知下的迭代硬阈值 / 重加权 ℓ¹ / OMP
+# 对应章节：2.2 经典先验族 · "从 ℓ¹ 到 ℓ⁰"说明框（271-281 行）
+# 动机：Laplace 先验在"变换域系数 α"上生效（249-265 行）。
+#       这里 α 即合成形式 min‖y-Aα‖² + λ‖α‖₁ 中的稀疏系数，
+#       用 1D 压缩感知构造一个真正欠定(A 为 M×N, M<N)且 α* 稀疏的问题，
+#       对比三种"逼近 ℓ⁰"的实用算法。
+# ======================================================================
 
-axes[0].imshow(camera, cmap='gray')
-axes[0].set_title('原始图像\n(无噪)')
-axes[0].axis('off')
+# ─── Part B 实验参数 ───
+N_B      = 256         # 信号维度（系数个数）
+K_B      = 10          # 真实非零系数个数（稀疏度）
+M_B      = 80          # 观测数（M < N，真正欠定）
+SNR_B    = 30          # 观测信噪比
+SEED_B   = 7           # 与 Part A 一致，便于复现
 
-axes[1].imshow(camera_noisy, cmap='gray')
-axes[1].set_title(f'含噪图像\nPSNR={psnr_noisy:.2f}dB, SSIM={ssim_noisy:.3f}')
-axes[1].axis('off')
 
-axes[2].imshow(camera_sob, cmap='gray')
-axes[2].set_title(f'Sobolev去噪 (λ={lam_sob})\nPSNR={psnr_sob:.2f}dB, SSIM={ssim_sob:.3f}\n边缘模糊')
-axes[2].axis('off')
+def make_cs_problem(n, k, m, snr, seed=0):
+    """构造 1D 压缩感知问题：y = A α* + 噪声，α* 仅 k 个分量非零。"""
+    rng = np.random.default_rng(seed)
+    alpha = np.zeros(n)
+    idx = rng.choice(n, size=k, replace=False)
+    alpha[idx] = rng.uniform(-3, 3, size=k)
+    # 高斯随机测量矩阵（归一化列，近似满足 RIP）
+    A = rng.standard_normal((m, n))
+    A = A / np.linalg.norm(A, axis=0, keepdims=True)
+    sigma = np.linalg.norm(A @ alpha) / (10 ** (snr / 20))
+    noise = rng.standard_normal(m) * sigma
+    y = A @ alpha + noise
+    return A, y, alpha, idx
 
-axes[3].imshow(camera_tv, cmap='gray')
-axes[3].set_title(f'TV去噪 (α={alpha_tv})\nPSNR={psnr_tv:.2f}dB, SSIM={ssim_tv:.3f}\n边缘锐利')
-axes[3].annotate('', xy=staircase_pos, xytext=(staircase_pos[0]-15, staircase_pos[1]-15),
-                 arrowprops=dict(arrowstyle='->', color='red', lw=2))
-axes[3].text(staircase_pos[0]-20, staircase_pos[1]-25, '阶梯效应', color='red', fontsize=9, ha='center')
-axes[3].axis('off')
 
-plt.suptitle('Sobolev先验 vs TV先验：边缘保持的代价', fontsize=14)
-plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤1_TV去噪对比.png'), dpi=150, bbox_inches='tight')
-plt.close()
+A_b, y_b, alpha_true, support_b = make_cs_problem(N_B, K_B, M_B, SNR_B, seed=SEED_B)
 
-stair_x, stair_y = staircase_pos
-row = stair_y
-half_win = 24
-grad_region = slice(max(0, stair_x - half_win), min(n, stair_x + half_win))
 
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+# ─── 算法 1：迭代硬阈值 IHT ───
+def IHT(A, y, K_max, max_iter=500, tol=1e-8):
+    """交替做梯度步 + 硬阈值（只保留绝对值最大的 K_max 个分量）。"""
+    At = A.T
+    alpha = np.zeros(A.shape[1])
+    for _ in range(max_iter):
+        grad = At @ (y - A @ alpha)
+        alpha_new = alpha + grad  # 梯度步（等价为简单 ISTA 步，步长 1）
+        # 硬阈值：保留绝对值最大的 K_max 个分量，其余置零
+        if K_max < alpha_new.size:
+            thresh = np.sort(np.abs(alpha_new))[-K_max]
+            alpha_new[np.abs(alpha_new) < thresh] = 0.0
+        else:
+            alpha_new[:] = alpha_new
+        if np.linalg.norm(alpha_new - alpha) < tol:
+            alpha = alpha_new
+            break
+        alpha = alpha_new
+    return alpha
 
-axes[0].plot(camera[row, :], color=COLOR_ORIGINAL, linewidth=2, label='真实信号')
-axes[0].plot(camera_noisy[row, :], color=COLOR_NOISY, linewidth=0.5, alpha=0.5, label='含噪')
-axes[0].plot(camera_sob[row, :], color=COLOR_SOBOLEV, linewidth=1.5, label='Sobolev (边缘模糊)')
-axes[0].plot(camera_tv[row, :], color=COLOR_TV, linewidth=1.5, label='TV (边缘锐利)')
-axes[0].axvline(x=stair_x, color='red', linestyle='--', linewidth=1, alpha=0.5, label='检测位置')
-axes[0].set_title(f'第{row}行剖面对比（自动检测）')
-axes[0].legend()
-axes[0].set_xlabel('像素索引')
-axes[0].set_ylabel('灰度值')
-axes[0].grid(True, alpha=0.3)
 
-axes[1].plot(camera[row, grad_region], color=COLOR_ORIGINAL, linewidth=2, label='真实（渐变区域）')
-axes[1].plot(camera_sob[row, grad_region], color=COLOR_SOBOLEV, linewidth=1.5, label='Sobolev（平滑渐变）')
-axes[1].plot(camera_tv[row, grad_region], color=COLOR_TV, linewidth=1.5, label='TV（阶梯效应）')
-axes[1].set_title(f'渐变区域放大：TV阶梯效应 vs Sobolev平滑\n（以检测位置x={stair_x}为中心）')
-axes[1].legend()
-axes[1].set_xlabel('像素索引')
-axes[1].set_ylabel('灰度值')
-axes[1].grid(True, alpha=0.3)
+# ─── 算法 2：重加权 ℓ¹（IRL1）───
+def Reweighted_L1(A, y, n_outer=12, eps=1e-2, lam=0.1, max_inner=300):
+    """外层迭代更新权重 w_i = 1/(|α_i|+ε)，内层用 ISTA 软阈值求解 ℓ¹ 子问题。"""
+    m, n = A.shape
+    At = A.T
+    L = np.linalg.norm(A, 2) ** 2  # Lipschitz 常数（用于 ISTA 步长）
+    step = 1.0 / L
+    alpha = np.zeros(n)
+    w = np.ones(n)
+    for _ in range(n_outer):
+        for _ in range(max_inner):
+            grad = At @ (y - A @ alpha)
+            soft = np.sign(alpha + step * grad) * np.maximum(
+                np.abs(alpha + step * grad) - step * lam * w, 0.0)
+            if np.linalg.norm(soft - alpha) < 1e-8:
+                alpha = soft
+                break
+            alpha = soft
+        w = 1.0 / (np.abs(alpha) + eps)
+    return alpha
 
-plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤2_阶梯效应分析.png'), dpi=150, bbox_inches='tight')
-plt.close()
 
-fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+# ─── 算法 3：正交匹配追踪 OMP ───
+def OMP(A, y, K_max, tol=1e-6):
+    """贪心法：每步挑一个最能降低残差的基础原子，逐步搭起支撑集后做最小二乘。"""
+    m, n = A.shape
+    residual = y.copy()
+    idx_set = []
+    alpha = np.zeros(n)
+    for _ in range(K_max):
+        corr = A.T @ residual
+        new_idx = int(np.argmax(np.abs(corr)))
+        if new_idx in idx_set:
+            break
+        idx_set.append(new_idx)
+        Asub = A[:, idx_set]
+        coef, *_ = np.linalg.lstsq(Asub, y, rcond=None)
+        residual = y - Asub @ coef
+        if np.linalg.norm(residual) < tol:
+            break
+    alpha[idx_set] = coef
+    return alpha
 
-t = np.linspace(-2, 2, 400)
-axes[0].plot(t, t**2, color=COLOR_SOBOLEV, linewidth=2, label='t² (Sobolev/平滑先验)')
-axes[0].plot(t, np.abs(t), color=COLOR_TV, linewidth=2, label='|t| (TV先验)')
-axes[0].set_title('正则项形态对比\nL2均匀惩罚 vs L1促稀疏')
-axes[0].legend()
-axes[0].set_xlabel('t (梯度值)')
-axes[0].set_ylabel('惩罚值')
-axes[0].set_ylim(-0.2, 4)
-axes[0].grid(True, alpha=0.3)
 
-grad_orig_x = np.roll(camera, -1, axis=1) - camera
-grad_orig_y = np.roll(camera, -1, axis=0) - camera
-grad_orig_mag = np.sqrt(grad_orig_x**2 + grad_orig_y**2).flatten()
+# ─── 运行三种算法 ───
+alpha_iht  = IHT(A_b, y_b, K_B)
+alpha_rw   = Reweighted_L1(A_b, y_b, n_outer=12, eps=1e-2, lam=0.1)
+alpha_omp  = OMP(A_b, y_b, K_B)
 
-grad_sob_x = np.roll(camera_sob, -1, axis=1) - camera_sob
-grad_sob_y = np.roll(camera_sob, -1, axis=0) - camera_sob
-grad_sob_mag = np.sqrt(grad_sob_x**2 + grad_sob_y**2).flatten()
+# 收敛曲线（记录 IHT 每步相对误差，重加权记录外层相对误差）
+iht_errs, alpha_iter = [], np.zeros(N_B)
+for it in range(200):
+    alpha_iter = alpha_iter + A_b.T @ (y_b - A_b @ alpha_iter)
+    if K_B < alpha_iter.size:
+        th = np.sort(np.abs(alpha_iter))[-K_B]
+        alpha_iter[np.abs(alpha_iter) < th] = 0.0
+    iht_errs.append(np.linalg.norm(alpha_iter - alpha_true) / np.linalg.norm(alpha_true))
+    if it > 0 and np.linalg.norm(iht_errs[-1] - iht_errs[-2]) < 1e-8:
+        break
 
-grad_tv_x = np.roll(camera_tv, -1, axis=1) - camera_tv
-grad_tv_y = np.roll(camera_tv, -1, axis=0) - camera_tv
-grad_tv_mag = np.sqrt(grad_tv_x**2 + grad_tv_y**2).flatten()
+rw_errs, alpha_rw_iter, w_iter = [], np.zeros(N_B), np.ones(N_B)
+L_b = np.linalg.norm(A_b, 2) ** 2
+for outer in range(12):
+    for _ in range(300):
+        g = A_b.T @ (y_b - A_b @ alpha_rw_iter)
+        s = np.sign(alpha_rw_iter + g / L_b) * np.maximum(
+            np.abs(alpha_rw_iter + g / L_b) - (1.0 / L_b) * 0.1 * w_iter, 0.0)
+        if np.linalg.norm(s - alpha_rw_iter) < 1e-8:
+            alpha_rw_iter = s
+            break
+        alpha_rw_iter = s
+    rw_errs.append(np.linalg.norm(alpha_rw_iter - alpha_true) / np.linalg.norm(alpha_true))
+    w_iter = 1.0 / (np.abs(alpha_rw_iter) + 1e-2)
 
-bins = np.linspace(0, 0.5, 50)
-axes[1].hist(grad_orig_mag, bins=bins, alpha=0.5, color=COLOR_ORIGINAL, label='原始', density=True)
-axes[1].hist(grad_sob_mag, bins=bins, alpha=0.6, color=COLOR_SOBOLEV, label='Sobolev', density=True)
-axes[1].hist(grad_tv_mag, bins=bins, alpha=0.6, color=COLOR_TV, label='TV', density=True)
-axes[1].set_title('梯度幅值直方图\nTV产生大量零梯度（分段常数）')
-axes[1].legend()
-axes[1].set_xlabel('|∇x|')
-axes[1].set_ylabel('密度')
-axes[1].grid(True, alpha=0.3)
 
-tv_zero_grad = np.sum(grad_tv_mag < 0.01) / len(grad_tv_mag) * 100
-sob_zero_grad = np.sum(grad_sob_mag < 0.01) / len(grad_sob_mag) * 100
-axes[1].text(0.62, 0.88, f'TV零梯度比例: {tv_zero_grad:.1f}%\nSobolev零梯度比例: {sob_zero_grad:.1f}%',
-             transform=axes[1].transAxes, fontsize=9,
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+# ─── 评估：恢复相对误差 + 非零个数 ───
+def rel_err(a_hat, a_true):
+    return np.linalg.norm(a_hat - a_true) / np.linalg.norm(a_true)
 
-methods = ['含噪', 'Sobolev\n(smoothness)', 'TV先验']
-psnrs = [psnr_noisy, psnr_sob, psnr_tv]
-ssims_scaled = [ssim_noisy * 100, ssim_sob * 100, ssim_tv * 100]
+def n_nonzero(a_hat, tol=1e-6):
+    return int(np.sum(np.abs(a_hat) > tol))
 
-COLOR_PSNR = '#4C72B0'
-COLOR_SSIM = '#DD8452'
-
-x_pos = np.arange(len(methods))
-width = 0.35
-
-ax1 = axes[2]
-ax1.bar(x_pos - width/2, psnrs, width, color=COLOR_PSNR, alpha=0.8, label='PSNR (dB)')
-ax1.axhline(y=psnr_noisy, color='black', linestyle='--', linewidth=1, alpha=0.5)
-ax1.set_ylabel('PSNR (dB)', color=COLOR_PSNR)
-ax1.tick_params(axis='y', labelcolor=COLOR_PSNR)
-ax1.set_ylim([min(psnrs) - 2, max(psnrs) + 3])
-
-ax2 = ax1.twinx()
-ax2.bar(x_pos + width/2, ssims_scaled, width, color=COLOR_SSIM, alpha=0.7, label='SSIM×100')
-ax2.set_ylabel('SSIM×100', color=COLOR_SSIM)
-ax2.tick_params(axis='y', labelcolor=COLOR_SSIM)
-ax2.set_ylim([min(ssims_scaled) - 5, max(ssims_scaled) + 5])
-
-ax1.set_xticks(x_pos)
-ax1.set_xticklabels(methods, fontsize=9)
-ax1.set_title('去噪性能对比\n(注: PSNR高不代表视觉自然)')
-
-lines1, labels1 = ax1.get_legend_handles_labels()
-lines2, labels2 = ax2.get_legend_handles_labels()
-ax1.legend(lines1 + lines2, labels1 + labels2, fontsize=8, loc='upper left')
-
-plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤3_正则项与性能对比.png'), dpi=150, bbox_inches='tight')
-plt.close()
-
-print("\n" + "=" * 70)
-print("【TV先验总结】")
-print("=" * 70)
-print("\nTV正则项: ||∇x||₁")
-print("\n优势:")
-print("  1. 保边性: 边缘不会被过度平滑")
-print("  2. 稀疏性: 梯度稀疏假设对自然图像合理")
-print("  3. 凸性: 优化问题可高效求解")
-print("\n局限:")
-print("  1. 阶梯效应: 渐变区域出现阶梯状伪影")
-print("  2. 分段常数假设: 无法自然表示渐变")
-print("  3. 参数敏感: α需要仔细调节")
-print("\n改进方向:")
-print("  - TGV (附录2B): 引入二阶信息，允许分段仿射")
-print("  - 隐式先验 (2.4节): 从数据中学习先验")
-
-print(f"\n【实验完成】结果已保存至: {SAVE_DIR}")
-
-# ===== 保存数值结果 =====
-import json
-results_summary = {
-    'image_size': n,
-    'noise_sigma': float(sigma),
-    'sobolev_lambda': float(lam_sob),
-    'tv_alpha': float(alpha_tv),
-    'psnr_noisy_dB': float(round(psnr_noisy, 2)),
-    'psnr_sobolev_dB': float(round(psnr_sob, 2)),
-    'psnr_tv_dB': float(round(psnr_tv, 2)),
-    'ssim_noisy': float(round(ssim_noisy, 4)),
-    'ssim_sobolev': float(round(ssim_sob, 4)),
-    'ssim_tv': float(round(ssim_tv, 4)),
-    'tv_zero_gradient_pct': float(round(tv_zero_grad, 2)),
-    'sobolev_zero_gradient_pct': float(round(sob_zero_grad, 2)),
+results_b = {
+    'IHT (硬阈值→ℓ⁰)':      (alpha_iht, rel_err(alpha_iht, alpha_true), n_nonzero(alpha_iht)),
+    'Reweighted ℓ¹':        (alpha_rw,  rel_err(alpha_rw,  alpha_true), n_nonzero(alpha_rw)),
+    'OMP (贪婪)':           (alpha_omp, rel_err(alpha_omp, alpha_true), n_nonzero(alpha_omp)),
 }
+print(f"\n[Part B] N={N_B} K={K_B} M={M_B} SNR={SNR_B}dB  真支撑大小={len(support_b)}")
+for name, (a, e, nz) in results_b.items():
+    print(f"  {name:18s} 相对误差={e:.4f}  恢复非零个数={nz}")
 
-def _to_native(obj):
-    import numpy as np
-    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
-    if isinstance(obj, (np.integer,)): return int(obj)
-    if isinstance(obj, (np.floating,)): return float(obj)
-    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
-    try:
-        import torch
-        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
-    except: pass
-    return obj
+# ─── 图4：四合一茎叶图——真值 vs 三算法恢复 ───
+fig, axes = plt.subplots(1, 4, figsize=(16, 4), sharey=True)
+coords = np.arange(N_B)
+for ax, (title, (a, _, _)), color in [
+    (axes[0], ('真实稀疏系数 α*', (alpha_true, 0, 0)), 'black'),
+    (axes[1], ('IHT',            results_b['IHT (硬阈值→ℓ⁰)']), 'tab:red'),
+    (axes[2], ('Reweighted ℓ¹',  results_b['Reweighted ℓ¹']),   'tab:green'),
+    (axes[3], ('OMP',            results_b['OMP (贪婪)']),      'tab:blue'),
+]:
+    ax.stem(coords, a, basefmt=' ')
+    ax.set_title(title, fontsize=10)
+    ax.set_xlabel('系数索引')
+    ax.axhline(0, color='gray', lw=0.8)
+    ax.grid(alpha=0.3)
+axes[0].set_ylabel('系数值')
+fig.suptitle(f'压缩感知(N={N_B}, M={M_B}<N)：三种"逼近 ℓ⁰"算法对稀疏系数 α 的恢复', fontsize=12)
+fig.tight_layout()
+fig.savefig(os.path.join(SAVE_DIR, '图4_1D恢复对比.png'), dpi=120)
+plt.close(fig)
 
-results_summary = {k: _to_native(v) for k, v in results_summary.items()}
-with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
-    json.dump(results_summary, f, ensure_ascii=False, indent=2)
-print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
+# ─── 图5：收敛曲线（IHT 与重加权 ℓ¹ 的相对误差）───
+fig, ax = plt.subplots(figsize=(7, 4.5))
+ax.semilogy(np.arange(1, len(iht_errs) + 1), iht_errs, lw=2, color='tab:red',
+            label='IHT（每步硬阈值）')
+ax.semilogy(np.arange(1, len(rw_errs) + 1), rw_errs, lw=2, color='tab:green',
+            label='Reweighted ℓ¹（外层迭代）')
+ax.set_xlabel('迭代次数')
+ax.set_ylabel('相对恢复误差 ‖α̂−α*‖ / ‖α*‖')
+ax.set_title('IHT 与重加权 ℓ¹ 的收敛行为：从 ℓ¹ 走向更贴近 ℓ⁰ 的解')
+ax.legend(fontsize=9)
+ax.grid(alpha=0.3, which='both')
+fig.tight_layout()
+fig.savefig(os.path.join(SAVE_DIR, '图5_收敛曲线.png'), dpi=120)
+plt.close(fig)
+
+print("已保存：图4_1D恢复对比.png / 图5_收敛曲线.png")

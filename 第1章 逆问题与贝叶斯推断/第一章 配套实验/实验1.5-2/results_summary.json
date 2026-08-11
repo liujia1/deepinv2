@@ -1,0 +1,11 @@
+{
+  "signal_dimension": 256,
+  "noise_sigma": 1.0,
+  "proportionality_factor": 0.5,
+  "max_relative_deviation": 0.0,
+  "verification_passed": true,
+  "least_squares_at_true": 242.9279,
+  "neg_log_likelihood_at_true": 121.464,
+  "ratio_nll_over_ls_at_true": 0.5,
+  "n_candidates": 200
+}

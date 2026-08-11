@@ -1,0 +1,14 @@
+{
+  "image_size": 128,
+  "noise_level": 0.1,
+  "psnr_noisy_dB": 19.97,
+  "psnr_tikhonov_dB": 20.05,
+  "psnr_lasso_dB": 20.05,
+  "psnr_tv_dB": 26.91,
+  "lambda_tikhonov": 0.01,
+  "lambda_lasso": 0.02,
+  "lambda_tv": 0.15,
+  "mse_tikhonov": 0.009895,
+  "mse_lasso": 0.009894,
+  "mse_tv": 0.002036
+}

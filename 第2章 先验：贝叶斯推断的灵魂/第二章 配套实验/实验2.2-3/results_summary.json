@@ -1,0 +1,14 @@
+{
+  "image_size": 128,
+  "noise_sigma": 0.1,
+  "sobolev_lambda": 0.15,
+  "tv_alpha": 0.15,
+  "psnr_noisy_dB": 20.38,
+  "psnr_sobolev_dB": 23.64,
+  "psnr_tv_dB": 26.99,
+  "ssim_noisy": 0.3539,
+  "ssim_sobolev": 0.4586,
+  "ssim_tv": 0.7621,
+  "tv_zero_gradient_pct": 37.62,
+  "sobolev_zero_gradient_pct": 0.97
+}
