@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 实验2.2-2 Laplace先验的稀疏魔力：为什么它真的能把系数"压成零"
 对应章节：2.2 经典先验族 - Laplace先验（稀疏促成的几何解释）
@@ -14,29 +15,59 @@
   2. 同 λ 下对比 LASSO (L1) 与 Ridge (L2) 的系数估计
   3. 用软阈值(soft-thresholding)闭式解展示 Laplace 的"硬置零"机制
   4. 输出三张图：①先验密度对比 ②系数估计对比 ③软阈值函数
+  5. Part B：1D 压缩感知下 IHT / 重加权 ℓ¹ / OMP 三种逼近 ℓ⁰ 算法
 """
 
 import numpy as np
+from tqdm import tqdm
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
 import os
 import sys
+import io
+import json
+import warnings
+import logging
 
+# 设置控制台输出为 UTF-8 (Windows 下避免中文乱码)
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+
+# 静默 matplotlib 相关警告
+logging.getLogger('matplotlib').setLevel(logging.ERROR)
+logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*U\\+2212.*")
+warnings.filterwarnings("ignore", message=".*glyph.*")
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+# ====== 中文字体配置(兼容本地和 Google Colab) ======
 _gdrive = '/content/drive/MyDrive'
-if os.path.isdir(_gdrive):
-    _chinese_path = os.path.join(_gdrive, '实验2.2-2', '.chinese')
+_IN_COLAB = 'google.colab' in sys.modules
+
+if _IN_COLAB:
+    from google.colab import drive
+    if not os.path.isdir(_gdrive):
+        print("正在挂载 Google Drive...")
+        drive.mount('/content/drive')
     SAVE_DIR = os.path.join(_gdrive, '实验2.2-2')
-    os.makedirs(SAVE_DIR, exist_ok=True)
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
-    _chinese_path = '.chinese'
-    SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
+    try:
+        SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        SAVE_DIR = os.getcwd()
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+
+os.makedirs(_chinese_path, exist_ok=True)
 sys.path.insert(0, _chinese_path)
 try:
     from chinese_font import setup_chinese_font
     setup_chinese_font(save_dir=_chinese_path)
 except ImportError:
     print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
+# ========================================================
 
 np.random.seed(42)
 
@@ -125,7 +156,7 @@ for ax, x_, title, color in [
     ax.axhline(0, color='gray', lw=0.8)
     ax.grid(alpha=0.3)
 axes[0].set_ylabel('系数值')
-fig.suptitle(f'同 λ={LAMBDA} 下：高斯先验只"缩小"、Laplace先验能"置零"', fontsize=12)
+fig.suptitle(f'同 $\\lambda={LAMBDA}$ 下：高斯先验只"缩小"、Laplace先验能"置零"', fontsize=12)
 fig.tight_layout()
 fig.savefig(os.path.join(SAVE_DIR, '图2_系数估计对比.png'), dpi=120)
 plt.close(fig)
@@ -135,13 +166,13 @@ fig, ax = plt.subplots(figsize=(7, 4.5))
 u = np.linspace(-3, 3, GRID)
 soft = np.sign(u) * np.maximum(np.abs(u) - LAMBDA, 0)
 hard_ridge = u / (1 + LAMBDA)
-ax.plot(u, u, 'k--', lw=1, label='恒等（无正则，y=x）')
-ax.plot(u, hard_ridge, lw=2, color='tab:blue', label=f'Ridge 映射 x=y/(1+λ)')
-ax.plot(u, soft, lw=2, color='tab:red', label=f'软阈值 S_λ(y)=sign(y)·max(|y|-λ,0)')
-ax.axvspan(-LAMBDA, LAMBDA, color='tab:red', alpha=0.12, label=f'置零死区 [-λ, λ]={LAMBDA}')
-ax.set_title('软阈值 vs 岭映射：为什么 L1 能把小系数真正压成 0')
-ax.set_xlabel('观测 y')
-ax.set_ylabel('估计 x')
+ax.plot(u, u, 'k--', lw=1, label='恒等（无正则，$y=x$）')
+ax.plot(u, hard_ridge, lw=2, color='tab:blue', label=f'Ridge 映射 $x=y/(1+\\lambda)$')
+ax.plot(u, soft, lw=2, color='tab:red', label=f'软阈值 $S_\\lambda(y)=\\operatorname{{sign}}(y)\\cdot\\max(|y|-\\lambda,0)$')
+ax.axvspan(-LAMBDA, LAMBDA, color='tab:red', alpha=0.12, label=f'置零死区 $[-\\lambda, \\lambda]={LAMBDA}$')
+ax.set_title('软阈值 vs 岭映射：为什么 $L_1$ 能把小系数真正压成 0')
+ax.set_xlabel('观测 $y$')
+ax.set_ylabel('估计 $x$')
 ax.legend(fontsize=9)
 ax.grid(alpha=0.3)
 fig.tight_layout()
@@ -149,6 +180,24 @@ fig.savefig(os.path.join(SAVE_DIR, '图3_软阈值函数.png'), dpi=120)
 plt.close(fig)
 
 print("已保存：图1_先验密度对比.png / 图2_系数估计对比.png / 图3_软阈值函数.png")
+
+# ─── Part A 结果保存为 JSON ───
+part_a_results = {
+    'lambda': LAMBDA,
+    'snr_db': SNR_DB,
+    'N': N,
+    'K': K,
+    'Ridge_L2': {
+        'MSE': float(mse_ridge),
+        'support_recovery_rate': float(rec_ridge),
+        'exact_zero_count': n_zero_ridge,
+    },
+    'LASSO_L1': {
+        'MSE': float(mse_lasso),
+        'support_recovery_rate': float(rec_lasso),
+        'exact_zero_count': n_zero_lasso,
+    },
+}
 
 
 # ======================================================================
@@ -187,19 +236,23 @@ A_b, y_b, alpha_true, support_b = make_cs_problem(N_B, K_B, M_B, SNR_B, seed=SEE
 
 
 # ─── 算法 1：迭代硬阈值 IHT ───
-def IHT(A, y, K_max, max_iter=500, tol=1e-8):
-    """交替做梯度步 + 硬阈值（只保留绝对值最大的 K_max 个分量）。"""
+def IHT(A, y, K_max, max_iter=500, tol=1e-8, record_err=None, alpha_ref=None):
+    """交替做梯度步 + 硬阈值（只保留绝对值最大的 K_max 个分量）。
+    步长取 1/L，L=‖A‖₂²（谱范数平方），保证在欠定情形下收敛。"""
+    m, n = A.shape
     At = A.T
-    alpha = np.zeros(A.shape[1])
-    for _ in range(max_iter):
+    L = np.linalg.norm(A, 2) ** 2
+    step = 1.0 / L
+    alpha = np.zeros(n)
+    for _ in tqdm(range(max_iter), desc='IHT', leave=False):
         grad = At @ (y - A @ alpha)
-        alpha_new = alpha + grad  # 梯度步（等价为简单 ISTA 步，步长 1）
+        alpha_new = alpha + step * grad  # 梯度步（步长 1/L）
         # 硬阈值：保留绝对值最大的 K_max 个分量，其余置零
         if K_max < alpha_new.size:
             thresh = np.sort(np.abs(alpha_new))[-K_max]
             alpha_new[np.abs(alpha_new) < thresh] = 0.0
-        else:
-            alpha_new[:] = alpha_new
+        if record_err is not None and alpha_ref is not None:
+            record_err.append(np.linalg.norm(alpha_new - alpha_ref) / np.linalg.norm(alpha_ref))
         if np.linalg.norm(alpha_new - alpha) < tol:
             alpha = alpha_new
             break
@@ -208,7 +261,7 @@ def IHT(A, y, K_max, max_iter=500, tol=1e-8):
 
 
 # ─── 算法 2：重加权 ℓ¹（IRL1）───
-def Reweighted_L1(A, y, n_outer=12, eps=1e-2, lam=0.1, max_inner=300):
+def Reweighted_L1(A, y, n_outer=12, eps=1e-2, lam=0.1, max_inner=300, record_err=None, alpha_ref=None):
     """外层迭代更新权重 w_i = 1/(|α_i|+ε)，内层用 ISTA 软阈值求解 ℓ¹ 子问题。"""
     m, n = A.shape
     At = A.T
@@ -216,8 +269,8 @@ def Reweighted_L1(A, y, n_outer=12, eps=1e-2, lam=0.1, max_inner=300):
     step = 1.0 / L
     alpha = np.zeros(n)
     w = np.ones(n)
-    for _ in range(n_outer):
-        for _ in range(max_inner):
+    for _ in tqdm(range(n_outer), desc='Reweighted l1', leave=False):
+        for _ in tqdm(range(max_inner), desc='  ISTA', leave=False):
             grad = At @ (y - A @ alpha)
             soft = np.sign(alpha + step * grad) * np.maximum(
                 np.abs(alpha + step * grad) - step * lam * w, 0.0)
@@ -226,6 +279,8 @@ def Reweighted_L1(A, y, n_outer=12, eps=1e-2, lam=0.1, max_inner=300):
                 break
             alpha = soft
         w = 1.0 / (np.abs(alpha) + eps)
+        if record_err is not None and alpha_ref is not None:
+            record_err.append(np.linalg.norm(alpha - alpha_ref) / np.linalg.norm(alpha_ref))
     return alpha
 
 
@@ -236,7 +291,7 @@ def OMP(A, y, K_max, tol=1e-6):
     residual = y.copy()
     idx_set = []
     alpha = np.zeros(n)
-    for _ in range(K_max):
+    for _ in tqdm(range(K_max), desc='OMP', leave=False):
         corr = A.T @ residual
         new_idx = int(np.argmax(np.abs(corr)))
         if new_idx in idx_set:
@@ -252,34 +307,16 @@ def OMP(A, y, K_max, tol=1e-6):
 
 
 # ─── 运行三种算法 ───
-alpha_iht  = IHT(A_b, y_b, K_B)
 alpha_rw   = Reweighted_L1(A_b, y_b, n_outer=12, eps=1e-2, lam=0.1)
 alpha_omp  = OMP(A_b, y_b, K_B)
+# alpha_iht 在下方收敛曲线段通过 IHT(..., record_err=...) 一并计算
 
-# 收敛曲线（记录 IHT 每步相对误差，重加权记录外层相对误差）
-iht_errs, alpha_iter = [], np.zeros(N_B)
-for it in range(200):
-    alpha_iter = alpha_iter + A_b.T @ (y_b - A_b @ alpha_iter)
-    if K_B < alpha_iter.size:
-        th = np.sort(np.abs(alpha_iter))[-K_B]
-        alpha_iter[np.abs(alpha_iter) < th] = 0.0
-    iht_errs.append(np.linalg.norm(alpha_iter - alpha_true) / np.linalg.norm(alpha_true))
-    if it > 0 and np.linalg.norm(iht_errs[-1] - iht_errs[-2]) < 1e-8:
-        break
+# 收敛曲线：IHT 每步相对误差 + 重加权 ℓ¹ 外层相对误差
+iht_errs = []
+alpha_iht = IHT(A_b, y_b, K_B, max_iter=200, record_err=iht_errs, alpha_ref=alpha_true)
 
-rw_errs, alpha_rw_iter, w_iter = [], np.zeros(N_B), np.ones(N_B)
-L_b = np.linalg.norm(A_b, 2) ** 2
-for outer in range(12):
-    for _ in range(300):
-        g = A_b.T @ (y_b - A_b @ alpha_rw_iter)
-        s = np.sign(alpha_rw_iter + g / L_b) * np.maximum(
-            np.abs(alpha_rw_iter + g / L_b) - (1.0 / L_b) * 0.1 * w_iter, 0.0)
-        if np.linalg.norm(s - alpha_rw_iter) < 1e-8:
-            alpha_rw_iter = s
-            break
-        alpha_rw_iter = s
-    rw_errs.append(np.linalg.norm(alpha_rw_iter - alpha_true) / np.linalg.norm(alpha_true))
-    w_iter = 1.0 / (np.abs(alpha_rw_iter) + 1e-2)
+rw_errs = []
+alpha_rw = Reweighted_L1(A_b, y_b, n_outer=12, eps=1e-2, lam=0.1, record_err=rw_errs, alpha_ref=alpha_true)
 
 
 # ─── 评估：恢复相对误差 + 非零个数 ───
@@ -302,9 +339,9 @@ for name, (a, e, nz) in results_b.items():
 fig, axes = plt.subplots(1, 4, figsize=(16, 4), sharey=True)
 coords = np.arange(N_B)
 for ax, (title, (a, _, _)), color in [
-    (axes[0], ('真实稀疏系数 α*', (alpha_true, 0, 0)), 'black'),
+    (axes[0], (r'真实稀疏系数 $\alpha^*$', (alpha_true, 0, 0)), 'black'),
     (axes[1], ('IHT',            results_b['IHT (硬阈值→ℓ⁰)']), 'tab:red'),
-    (axes[2], ('Reweighted ℓ¹',  results_b['Reweighted ℓ¹']),   'tab:green'),
+    (axes[2], (r'Reweighted $\ell^1$',  results_b['Reweighted ℓ¹']),   'tab:green'),
     (axes[3], ('OMP',            results_b['OMP (贪婪)']),      'tab:blue'),
 ]:
     ax.stem(coords, a, basefmt=' ')
@@ -313,7 +350,7 @@ for ax, (title, (a, _, _)), color in [
     ax.axhline(0, color='gray', lw=0.8)
     ax.grid(alpha=0.3)
 axes[0].set_ylabel('系数值')
-fig.suptitle(f'压缩感知(N={N_B}, M={M_B}<N)：三种"逼近 ℓ⁰"算法对稀疏系数 α 的恢复', fontsize=12)
+fig.suptitle(f'压缩感知($N={N_B}, M={M_B}<N$)：三种"逼近 $\\ell^0$"算法对稀疏系数 $\\alpha$ 的恢复', fontsize=12)
 fig.tight_layout()
 fig.savefig(os.path.join(SAVE_DIR, '图4_1D恢复对比.png'), dpi=120)
 plt.close(fig)
@@ -323,10 +360,10 @@ fig, ax = plt.subplots(figsize=(7, 4.5))
 ax.semilogy(np.arange(1, len(iht_errs) + 1), iht_errs, lw=2, color='tab:red',
             label='IHT（每步硬阈值）')
 ax.semilogy(np.arange(1, len(rw_errs) + 1), rw_errs, lw=2, color='tab:green',
-            label='Reweighted ℓ¹（外层迭代）')
+            label=r'Reweighted $\ell^1$（外层迭代）')
 ax.set_xlabel('迭代次数')
-ax.set_ylabel('相对恢复误差 ‖α̂−α*‖ / ‖α*‖')
-ax.set_title('IHT 与重加权 ℓ¹ 的收敛行为：从 ℓ¹ 走向更贴近 ℓ⁰ 的解')
+ax.set_ylabel('相对恢复误差 $\\|\\hat{\\alpha}-\\alpha^*\\| / \\|\\alpha^*\\|$')
+ax.set_title('IHT 与重加权 $\\ell^1$ 的收敛行为：从 $\\ell^1$ 走向更贴近 $\\ell^0$ 的解')
 ax.legend(fontsize=9)
 ax.grid(alpha=0.3, which='both')
 fig.tight_layout()
@@ -334,3 +371,37 @@ fig.savefig(os.path.join(SAVE_DIR, '图5_收敛曲线.png'), dpi=120)
 plt.close(fig)
 
 print("已保存：图4_1D恢复对比.png / 图5_收敛曲线.png")
+
+# ─── Part B 结果保存为 JSON ───
+part_b_results = {
+    'N': N_B,
+    'K': K_B,
+    'M': M_B,
+    'snr_db': SNR_B,
+    'true_support_size': int(len(support_b)),
+    'algorithms': {
+        'IHT (硬阈值→ℓ⁰)': {
+            'relative_error': float(rel_err(alpha_iht, alpha_true)),
+            'recovered_nonzeros': n_nonzero(alpha_iht),
+        },
+        'Reweighted ℓ¹': {
+            'relative_error': float(rel_err(alpha_rw, alpha_true)),
+            'recovered_nonzeros': n_nonzero(alpha_rw),
+        },
+        'OMP (贪婪)': {
+            'relative_error': float(rel_err(alpha_omp, alpha_true)),
+            'recovered_nonzeros': n_nonzero(alpha_omp),
+        },
+    },
+}
+
+# ─── 合并 A / B 两 Part 结果，统一写入 results.json ───
+all_results = {
+    'experiment': '2.2-2',
+    'title': 'Laplace先验的稀疏魔力：从 ℓ¹ 到 ℓ⁰',
+    'part_A_L1_soft_threshold': part_a_results,
+    'part_B_l0_approximation': part_b_results,
+}
+with open(os.path.join(SAVE_DIR, 'results.json'), 'w', encoding='utf-8') as f:
+    json.dump(all_results, f, ensure_ascii=False, indent=2)
+print("已保存：results.json（Part A + Part B 数值结果）")

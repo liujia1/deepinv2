@@ -82,10 +82,10 @@ except Exception as e:
     else:
         print(f"[字体] 中文显示功能未启用，图片上中文可能出现乱码 ({e})")
 
-# 静默 matplotlib 字形警告
+# 仅静默中文/数学符号字形相关警告（精确匹配），不屏蔽其他 UserWarning，
+# 以便 skimage radon 在重建圆外有非零像素时仍能抛出真实几何警告
 warnings.filterwarnings("ignore", message=".*glyph.*")
 warnings.filterwarnings("ignore", message=".*U\\+2212.*")
-warnings.filterwarnings("ignore", category=UserWarning)
 
 # Matplotlib LaTeX 渲染（数学符号）
 rcParams['text.usetex'] = False              # 不使用完整 LaTeX 引擎
@@ -202,6 +202,10 @@ class VDSR(nn.Module):
 
     架构：conv(1→64) → 18×conv(64→64)+ReLU → conv(64→1) → + 输入
 
+    注：原论文（CVPR 2016）使用 SGD + 较大学习率(0.1) + 梯度裁剪来加速深层收敛；
+    此处为教学清晰与稳定，改用 Adam(lr=1e-3) 且不做梯度裁剪，训练更平稳，
+    但偏离了原文"高学习率 + 裁剪"的设计动机——如需对照论文，请知悉此差异。
+
     Args:
         in_ch: 输入通道数
         n_layers: 总卷积层数（含首尾），默认 20
@@ -235,38 +239,77 @@ class VDSR(nn.Module):
 # 2. CT 数据生成
 # ============================================================
 
-def generate_random_phantom(size=128, n_ellipses=None):
+def generate_random_phantom(size=128, n_ellipses=None, style='random'):
     """
     生成随机椭圆 phantom（模拟 2D 人体截面）
 
     每个 phantom 包含若干个随机位置、大小、旋转角度的椭圆。
-    灰度值在 [0, 1] 之间。
+    灰度值归一化到 [0, 1]，最大值恒为 1（与 Shepp-Logan 一致）。
+
+    style 参数：
+      - 'random':  椭圆重叠取最大灰度（类似 CT 截面中不同组织的叠加）
+      - 'layered': 后绘制的覆盖前面的，形成清晰的多灰度层次（类似 Shepp-Logan）
     """
     if n_ellipses is None:
         n_ellipses = np.random.randint(3, 9)
     img = np.zeros((size, size), dtype=np.float32)
     cy, cx = size // 2, size // 2
-    for _ in range(n_ellipses):
-        a  = np.random.uniform(5, size * 0.35)       # 半长轴
-        b  = np.random.uniform(3, a * 0.8)            # 半短轴
-        theta = np.random.uniform(0, np.pi)
-        x0 = np.random.uniform(cx - size * 0.25, cx + size * 0.25)
-        y0 = np.random.uniform(cy - size * 0.25, cy + size * 0.25)
-        intensity = np.random.uniform(0.15, 0.85)
-        yy, xx = np.mgrid[0:size, 0:size]
-        dx = xx - x0
-        dy = yy - y0
-        r1 =  dx * np.cos(theta) + dy * np.sin(theta)
-        r2 = -dx * np.sin(theta) + dy * np.cos(theta)
-        mask = (r1 / a) ** 2 + (r2 / b) ** 2 <= 1.0
-        img[mask] = np.maximum(img[mask], intensity)   # 取最大灰度（模拟重叠结构）
-    # 添加圆形背景
-    bg_cx, bg_cy = cx + np.random.uniform(-15, 15), cy + np.random.uniform(-15, 15)
-    bg_r = size * 0.48
+
+    if style == 'layered':
+        # 类似 Shepp-Logan：先生成所有椭圆参数，按灰度排序后逐层覆盖
+        ellipses = []
+        for _ in range(n_ellipses):
+            a  = np.random.uniform(5, size * 0.35)
+            b  = np.random.uniform(3, a * 0.8)
+            theta = np.random.uniform(0, np.pi)
+            x0 = np.random.uniform(cx - size * 0.25, cx + size * 0.25)
+            y0 = np.random.uniform(cy - size * 0.25, cy + size * 0.25)
+            intensity = np.random.uniform(0.05, 0.95)
+            ellipses.append((a, b, theta, x0, y0, intensity))
+        # 亮的先画，暗的后覆盖（亮=大背景，暗=内部结构）
+        ellipses.sort(key=lambda e: e[5], reverse=True)
+        for a, b, theta, x0, y0, intensity in ellipses:
+            yy, xx = np.mgrid[0:size, 0:size]
+            dx = xx - x0
+            dy = yy - y0
+            r1 =  dx * np.cos(theta) + dy * np.sin(theta)
+            r2 = -dx * np.sin(theta) + dy * np.cos(theta)
+            mask = (r1 / a) ** 2 + (r2 / b) ** 2 <= 1.0
+            img[mask] = intensity   # 覆盖而非取 max，形成清晰灰度层次
+    else:
+        # 原有 random 风格：椭圆重叠取最大灰度（模拟重叠结构）
+        for _ in range(n_ellipses):
+            a  = np.random.uniform(5, size * 0.35)
+            b  = np.random.uniform(3, a * 0.8)
+            theta = np.random.uniform(0, np.pi)
+            x0 = np.random.uniform(cx - size * 0.25, cx + size * 0.25)
+            y0 = np.random.uniform(cy - size * 0.25, cy + size * 0.25)
+            intensity = np.random.uniform(0.15, 0.85)
+            yy, xx = np.mgrid[0:size, 0:size]
+            dx = xx - x0
+            dy = yy - y0
+            r1 =  dx * np.cos(theta) + dy * np.sin(theta)
+            r2 = -dx * np.sin(theta) + dy * np.cos(theta)
+            mask = (r1 / a) ** 2 + (r2 / b) ** 2 <= 1.0
+            img[mask] = np.maximum(img[mask], intensity)
+
+    # 添加圆形背景（固定居中，避免随机偏移导致背景超出重建圆）
+    bg_r = size * 0.45
     yy, xx = np.mgrid[0:size, 0:size]
-    bg_mask = (xx - bg_cx) ** 2 + (yy - bg_cy) ** 2 <= bg_r ** 2
+    bg_mask = (xx - cx) ** 2 + (yy - cy) ** 2 <= bg_r ** 2
     img[~bg_mask] = 0.0
-    return np.clip(img, 0.0, 1.0).astype(np.float32)
+
+    # 显式裁剪到 Radon 重建圆内（radius = size/2），保证 circle=True 前提：
+    # 重建圆外像素必须为 0，否则 FBP 边缘失真会混入"噪声/欠采样"伪影，误导教学
+    recon_r = size / 2.0
+    img[(xx - cx) ** 2 + (yy - cy) ** 2 > recon_r ** 2] = 0.0
+
+    # 统一归一化到 [0, 1]，确保 max=1（与 Shepp-Logan 一致，消除尺度失配）
+    img = np.clip(img, 0.0, None)
+    img_max = img.max()
+    if img_max > 1e-8:
+        img = img / img_max
+    return img.astype(np.float32)
 
 
 def forward_ct(phantom, n_angles=90, noise_sigma=0.03, circle=True):
@@ -292,49 +335,71 @@ def forward_ct(phantom, n_angles=90, noise_sigma=0.03, circle=True):
     sino_noisy = sino_noisy * (sino_clean.max() + 1e-8)
     # FBP 重建
     fbp = iradon(sino_noisy, theta=theta, circle=circle, filter_name='ramp')
-    # 裁剪到 [0, 1] 并归一化
-    fbp = np.clip(fbp, 0, None)
-    fbp_max = fbp.max()
-    if fbp_max > 1e-8:
-        fbp = fbp / fbp_max
+    # 仅做 [0, 1] 裁剪，保持与输入 phantom 一致的原始线性尺度
+    # （Radon/iradon 是线性算子，FBP 输出尺度与输入 phantom 一致；
+    #  不做 per-sample 归一化到 max=1，避免人为压低 FBP PSNR）
+    fbp = np.clip(fbp, 0.0, 1.0)
     return fbp.astype(np.float32), phantom.astype(np.float32), sino_noisy.astype(np.float32)
 
 
 def build_ct_dataset(n_train=400, n_test=50, size=128, n_angles=90, noise_sigma=0.03,
                      force_regen=False):
-    """生成/加载合成 CT phantom 数据集"""
+    """生成/加载合成 CT phantom 数据集
+
+    通过 _meta.json 记录关键生成参数，加载时自动校验是否匹配；
+    不匹配（或任一 .npy 缺失）时自动重建，无需人工记忆 force_regen。
+    """
     train_fbp_path = os.path.join(DATA_DIR, 'train_fbp.npy')
     train_gt_path  = os.path.join(DATA_DIR, 'train_gt.npy')
     test_fbp_path  = os.path.join(DATA_DIR, 'test_fbp.npy')
     test_gt_path   = os.path.join(DATA_DIR, 'test_gt.npy')
     sl_fbp_path    = os.path.join(DATA_DIR, 'shepp_logan_fbp.npy')
     sl_gt_path     = os.path.join(DATA_DIR, 'shepp_logan_gt.npy')
+    meta_path      = os.path.join(DATA_DIR, '_meta.json')
 
-    exists = all(os.path.exists(p) for p in
-                 [train_fbp_path, train_gt_path, test_fbp_path, test_gt_path,
-                  sl_fbp_path, sl_gt_path])
-    if exists and not force_regen:
-        print("[数据] 检测到已有数据集，直接加载...")
+    def _meta_match():
+        """校验已存 _meta.json 与当前生成参数是否一致"""
+        if not os.path.exists(meta_path):
+            return False
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+        except Exception:
+            return False
+        return (meta.get('size') == size and meta.get('n_angles') == n_angles
+                and abs(meta.get('noise_sigma', -1) - noise_sigma) < 1e-9
+                and meta.get('n_train') == n_train and meta.get('n_test') == n_test)
+
+    npy_paths = [train_fbp_path, train_gt_path, test_fbp_path, test_gt_path,
+                 sl_fbp_path, sl_gt_path]
+    exists = all(os.path.exists(p) for p in npy_paths)
+
+    if exists and not force_regen and _meta_match():
+        print("[数据] 检测到已有数据集且配置匹配，直接加载...")
         return (np.load(train_fbp_path), np.load(train_gt_path),
                 np.load(test_fbp_path),  np.load(test_gt_path),
                 np.load(sl_fbp_path),    np.load(sl_gt_path))
+    if exists and not force_regen and not _meta_match():
+        print("[数据] 检测到已有数据集但生成配置不匹配，自动重建...")
 
     print(f"[数据] 生成合成 CT 数据集 ({n_train} 训练 + {n_test} 测试 + 1 Shepp-Logan)...")
 
-    # 训练集
+    # 训练集：混合 random 和 layered 两种风格（约 3:2），提升多样性
     train_fbp, train_gt = [], []
     for i in tqdm(range(n_train), desc='生成训练数据', ncols=80, leave=False):
-        ph = generate_random_phantom(size=size)
+        style = 'layered' if i % 5 < 2 else 'random'   # 40% layered, 60% random
+        ph = generate_random_phantom(size=size, style=style)
         fbp, gt, _ = forward_ct(ph, n_angles=n_angles, noise_sigma=noise_sigma)
         train_fbp.append(fbp)
         train_gt.append(gt)
     train_fbp = np.array(train_fbp, dtype=np.float32)
     train_gt  = np.array(train_gt, dtype=np.float32)
 
-    # 测试集
+    # 测试集：同样混合两种风格
     test_fbp, test_gt = [], []
     for i in tqdm(range(n_test), desc='生成测试数据', ncols=80, leave=False):
-        ph = generate_random_phantom(size=size)
+        style = 'layered' if i % 5 < 2 else 'random'
+        ph = generate_random_phantom(size=size, style=style)
         fbp, gt, _ = forward_ct(ph, n_angles=n_angles, noise_sigma=noise_sigma)
         test_fbp.append(fbp)
         test_gt.append(gt)
@@ -356,6 +421,10 @@ def build_ct_dataset(n_train=400, n_test=50, size=128, n_angles=90, noise_sigma=
                    (test_fbp_path, test_fbp), (test_gt_path, test_gt),
                    (sl_fbp_path, sl_fbp), (sl_gt_path, sl_gt)]:
         np.save(p, arr)
+    # 保存生成配置 meta，供下次加载时自动校验
+    with open(meta_path, 'w', encoding='utf-8') as f:
+        json.dump({'size': size, 'n_angles': n_angles, 'noise_sigma': noise_sigma,
+                   'n_train': n_train, 'n_test': n_test}, f, indent=2)
     print("[数据] 数据集已保存到 ./data/ct_phantoms/")
     return train_fbp, train_gt, test_fbp, test_gt, sl_fbp, sl_gt
 
@@ -377,13 +446,18 @@ class CTDataset(Dataset):
 # 3. 训练工具
 # ============================================================
 
+def compute_psnr_single(img, target, data_range=1.0):
+    """单张图像 PSNR（skimage.metrics.peak_signal_noise_ratio 封装）"""
+    return psnr(target, img, data_range=data_range)
+
+
 def compute_psnr_batch(output, target):
-    """批量计算 PSNR"""
+    """批量计算 PSNR（对单张计算求平均）"""
     out_np = output.detach().cpu().numpy()
     tgt_np = target.cpu().numpy()
     vals = []
     for i in range(len(out_np)):
-        vals.append(psnr(tgt_np[i, 0], out_np[i, 0], data_range=1.0))
+        vals.append(compute_psnr_single(out_np[i, 0], tgt_np[i, 0]))
     return np.mean(vals)
 
 
@@ -408,14 +482,17 @@ def train_one_model(model, train_loader, test_loader, device, ckpt_path,
             print(f"\n[{model_name}] 检测到最终权重 ({ckpt_path})，直接加载，跳过训练过程。")
             model.load_state_dict(ckpt['model_state'])
             model.to(device)
-            model._train_info = {
-                'losses': ckpt.get('losses', []),
-                'val_psnrs': ckpt.get('val_psnrs', []),
-                'best_psnr': ckpt.get('best_psnr', 0),
-                'best_epoch': ckpt.get('best_epoch', 0),
-            }
             return model, ckpt.get('losses', [])
         else:
+            # 存在中断（非 final）checkpoint：CPU 环境下不继续跑剩余 epoch，
+            # 直接加载已有权重并跳过，避免 CPU 上触发长时间训练
+            if device.type == 'cpu':
+                print(f"\n[{model_name}] [跳过] CPU 环境且检测到中断 checkpoint "
+                      f"(epoch {ckpt['epoch']})，不继续训练。")
+                print(f"         请在有 GPU 的环境下运行以完成训练：{ckpt_path}")
+                model.load_state_dict(ckpt['model_state'])
+                model.to(device)
+                return model, ckpt.get('losses', [])
             model.load_state_dict(ckpt['model_state'])
             start_epoch = ckpt['epoch'] + 1
             loss_history = ckpt.get('losses', [])
@@ -452,16 +529,18 @@ def train_one_model(model, train_loader, test_loader, device, ckpt_path,
     start_time = time.time()
 
     # ---- 训练循环 ----
+    # 单个持久进度条覆盖"全部 epoch 的总 batch 数"，全程 position=0 第一行原位刷新，
+    # 不嵌套内层进度条（position=1 在 Windows 终端会真正占用第二行，造成多行累积）。
+    # 当前 epoch 与 batch loss 通过 postfix 实时显示，始终只有一行。
+    total_steps = (n_epochs - start_epoch) * len(train_loader)
+    global_pbar = tqdm(total=total_steps, desc=model_name, position=0, leave=True,
+                       ncols=100)
     for epoch in range(start_epoch, n_epochs):
         model.train()
         epoch_loss = 0.0
         n_batches = len(train_loader)
 
-        # 批次进度条
-        pbar = tqdm(enumerate(train_loader), total=n_batches,
-                    desc=f'{model_name} E{epoch+1}/{n_epochs}',
-                    leave=False, ncols=100)
-        for i, (x_in, x_gt) in pbar:
+        for i, (x_in, x_gt) in enumerate(train_loader):
             x_in, x_gt = x_in.to(device), x_gt.to(device)
             optimizer.zero_grad()
             output = model(x_in)
@@ -469,17 +548,11 @@ def train_one_model(model, train_loader, test_loader, device, ckpt_path,
             loss.backward()
             optimizer.step()
             epoch_loss += loss.item()
-            pbar.set_postfix({'loss': f'{loss.item():.4f}'})
-        pbar.close()
-        print()  # 进度条结束后强制换行，避免后续 \r 叠在 tqdm 残留行上
-
+            global_pbar.set_postfix({'E': f'{epoch+1}/{n_epochs}',
+                                     'loss': f'{loss.item():.4f}'})
+            global_pbar.update(1)
         avg_loss = epoch_loss / n_batches
         train_losses.append(avg_loss)
-
-        # 同一行显示 epoch 摘要（不换行，但先清除整行残留再写）
-        _epoch_msg = f'  {model_name} Epoch {epoch+1}/{n_epochs} | Loss: {avg_loss:.6f}'
-        sys.stdout.write('\r' + ' ' * 120 + '\r' + _epoch_msg)
-        sys.stdout.flush()
 
         # ---- 验证 ----
         if (epoch + 1) % eval_every == 0 or epoch == n_epochs - 1:
@@ -521,6 +594,9 @@ def train_one_model(model, train_loader, test_loader, device, ckpt_path,
     }
     torch.save(final_ckpt, ckpt_path)
 
+    # 关闭持久进度条，确保终端回到正常换行模式
+    global_pbar.close()
+
     elapsed = time.time() - start_time
     sys.stdout.write('\n')
     sys.stdout.flush()
@@ -529,14 +605,6 @@ def train_one_model(model, train_loader, test_loader, device, ckpt_path,
 
     # 合并 loss_history
     loss_history = train_losses
-    # 存储完整信息到 model 属性方便后续使用
-    model._train_info = {
-        'losses': train_losses,
-        'val_psnrs': val_psnrs,
-        'best_psnr': best_psnr,
-        'best_epoch': best_epoch,
-        'elapsed': elapsed,
-    }
     return model, loss_history
 
 
@@ -557,16 +625,17 @@ def main():
     IMG_SIZE  = 128
     N_ANGLES  = 90
     NOISE_SIG = 0.03
-    N_TRAIN   = 400
+    N_TRAIN   = 800
     N_TEST    = 50
     BATCH     = 32
-    N_EPOCHS_UNET  = 30
-    N_EPOCHS_VDSR  = 25
-    N_EPOCHS_MAE   = 15
+    N_EPOCHS_UNET  = 50
+    N_EPOCHS_VDSR  = 40
+    N_EPOCHS_MAE   = 30
 
+    # force_regen=False：数据集缓存由 _meta.json 自动校验配置，不匹配时自动重建
     train_fbp, train_gt, test_fbp, test_gt, sl_fbp, sl_gt = build_ct_dataset(
         n_train=N_TRAIN, n_test=N_TEST, size=IMG_SIZE,
-        n_angles=N_ANGLES, noise_sigma=NOISE_SIG)
+        n_angles=N_ANGLES, noise_sigma=NOISE_SIG, force_regen=False)
 
     train_dataset = CTDataset(train_fbp, train_gt)
     test_dataset  = CTDataset(test_fbp, test_gt)
@@ -644,10 +713,19 @@ def main():
     print("阶段 5：方法对比与可视化")
     print("─" * 40)
 
-    # 模型就绪检查：ckpt 文件存在即表示有已训练的权重
-    unet_ready     = os.path.exists(ckpt_unet)     or len(loss_unet) > 0
-    vdsr_ready     = os.path.exists(ckpt_vdsr)     or len(loss_vdsr) > 0
-    unet_mae_ready = os.path.exists(ckpt_unet_mae) or len(loss_unet_mae) > 0
+    # 模型就绪检查：读取 ckpt 内的 is_final 标志，避免把中断后的中间权重误判为"就绪"
+    def _is_ckpt_final(ckpt_path):
+        if not os.path.exists(ckpt_path):
+            return False
+        try:
+            c = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+            return c.get('is_final', False)
+        except Exception:
+            return False
+
+    unet_ready     = _is_ckpt_final(ckpt_unet)     or len(loss_unet) > 0
+    vdsr_ready     = _is_ckpt_final(ckpt_vdsr)     or len(loss_vdsr) > 0
+    unet_mae_ready = _is_ckpt_final(ckpt_unet_mae) or len(loss_unet_mae) > 0
 
     if not any([unet_ready, vdsr_ready, unet_mae_ready]):
         print("\n[跳过] 所有模型均未训练（首次在 CPU 环境下运行），跳过评估。")
@@ -666,13 +744,6 @@ def main():
             json.dump(results, f, indent=2, ensure_ascii=False)
         print(f"[结果] JSON 已保存: {json_path}")
         return
-
-    # 加载未训练的模型权重（如果 ckpt 存在但模型未加载）
-    def _ensure_weights(model, ckpt_path, ready_flag):
-        if ready_flag and not (hasattr(model, '_train_info') and model._train_info.get('losses')):
-            # 模型有 ckpt 但未加载（例如 train_one_model 返回 early 但 is_final=True 路径已加载）
-            pass
-        return model
 
     unet.to(device).eval()
     vdsr.to(device).eval()
@@ -752,7 +823,7 @@ def main():
     }
 
     # ---- 可视化 ----
-    psnr_label = lambda a, b: f'{psnr(a, b, data_range=1.0):.1f}'
+    psnr_label = lambda a, b: f'{compute_psnr_single(a, b):.1f}'
 
     # 图 1：随机测试样本对比
     fig, axes = plt.subplots(2, 3, figsize=(14, 9))
@@ -795,19 +866,21 @@ def main():
 
     fig.suptitle('CT $\\rightarrow$ FBP $\\rightarrow$ Post-Processing: UNet vs VDSR',
                  fontsize=13, fontweight='bold')
-    plt.tight_layout()
+    # rect 顶部留出 7% 空间给 suptitle，避免与子图标题重叠
+    plt.tight_layout(rect=[0, 0, 1, 0.93])
     fig_path1 = os.path.join(OUTPUT_DIR, 'comparison_test_sample.png')
     fig.savefig(fig_path1, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"\n[图片] 已保存: {fig_path1}")
 
     # 图 2：Shepp-Logan 可视化（只展示可用的模型）
-    n_panels = 3 + [unet_ready, vdsr_ready, unet_mae_ready].count(True)
-    n_cols = min(n_panels, 3)
-    n_rows = (n_panels + 2) // 3
-    fig2, axes2 = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 5 * n_rows))
-    if n_panels == 1:
-        axes2 = np.array([axes2])
+    # 无条件绘制的基础面板：FBP + GT（2 张），再按 ready 情况追加各模型面板
+    n_panels = 2 + [unet_ready, vdsr_ready, unet_mae_ready].count(True)
+    # 单行横排布局（最多 5 张图：FBP + GT + 3 个模型），避免 2×3 布局末尾出现空面板
+    n_cols = n_panels
+    n_rows = 1
+    fig2, axes2 = plt.subplots(n_rows, n_cols, figsize=(4.2 * n_cols, 4.5 * n_rows))
+    axes2 = np.atleast_1d(axes2)
 
     panel_idx = 0
     def _add_sl_panel(ax, img, title):
@@ -840,7 +913,8 @@ def main():
 
     fig2.suptitle('Shepp-Logan Phantom: FBP vs Learned Post-Processing',
                   fontsize=13, fontweight='bold')
-    plt.tight_layout()
+    # rect 顶部留出 7% 空间给 suptitle，避免与子图标题重叠
+    plt.tight_layout(rect=[0, 0, 1, 0.93])
     fig_path2 = os.path.join(OUTPUT_DIR, 'comparison_shepp_logan.png')
     fig2.savefig(fig_path2, dpi=150, bbox_inches='tight')
     plt.close(fig2)
@@ -911,7 +985,7 @@ def main():
         json.dump(results, f, indent=2, ensure_ascii=False)
     print(f"\n[结果] JSON 已保存: {json_path}")
 
-    # ---- 小结 ----
+    # ---- 小结（动态推导，绝不硬编码结论） ----
     print("\n" + "=" * 60)
     print("  实验 16.4-2 完成！")
     print("=" * 60)
@@ -919,10 +993,31 @@ def main():
     if unet_ready and vdsr_ready:
         print(f"    1. UNet/VDSR 后处理均能显著超越 FBP 基线"
               f"（+{psnr_unet - fbp_psnr_base:.1f} dB / +{psnr_vdsr - fbp_psnr_base:.1f} dB）")
+        gap = psnr_unet - psnr_vdsr
+        if abs(gap) < 0.3:
+            comp_txt = f"VDSR 与 UNet 表现相当（PSNR 差距 {gap:+.2f} dB）"
+        elif gap > 0:
+            comp_txt = f"UNet 优于 VDSR（+{gap:.2f} dB）"
+        else:
+            comp_txt = f"VDSR 优于 UNet（+{-gap:.2f} dB）"
+        print(f"    2. {comp_txt}")
+    elif unet_ready or vdsr_ready:
+        print(f"    1-2. 仅完成部分模型训练，UNet/VDSR 对比暂不可用")
     else:
-        print(f"    1. 模型尚未全部训练完成（需 GPU 环境）")
-    print(f"    2. VDSR 的深层残差结构在 CT 后处理上与 UNet 表现相当")
-    print(f"    3. MSE 损失（优化 PSNR）vs MAE 损失（更鲁棒）需根据任务选择")
+        print(f"    1-2. 模型尚未全部训练完成（需 GPU 环境）")
+
+    if unet_ready and unet_mae_ready:
+        gap_loss = psnr_unet - psnr_unet_mae
+        if abs(gap_loss) < 0.3:
+            loss_txt = f"MSE 与 MAE 损失下 UNet 表现相近（差距 {gap_loss:+.2f} dB）"
+        elif gap_loss > 0:
+            loss_txt = f"MSE 损失下 UNet 更优（+{gap_loss:.2f} dB），但 MAE 理论上对异常像素更鲁棒"
+        else:
+            loss_txt = f"MAE 损失下 UNet 更优（+{-gap_loss:.2f} dB）"
+        print(f"    3. {loss_txt}")
+    else:
+        print(f"    3. MSE/MAE 损失对比数据不完整（需两个模型均训练完成）")
+
     print(f"    4. 非扩散 UNet（无时间步条件）与扩散 UNet（实验 15.1-1）的区别一目了然")
     print()
 

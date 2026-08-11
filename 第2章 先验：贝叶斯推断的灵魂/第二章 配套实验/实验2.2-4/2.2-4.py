@@ -27,20 +27,32 @@ import sys
 
 _gdrive = '/content/drive/MyDrive'
 if os.path.isdir(_gdrive):
-    _chinese_path = os.path.join(_gdrive, '实验2.2-4', '.chinese')
     SAVE_DIR = os.path.join(_gdrive, '实验2.2-4')
     # 确保保存目录存在
     os.makedirs(SAVE_DIR, exist_ok=True)
 else:
-    _chinese_path = '.chinese'
     SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
-sys.path.insert(0, _chinese_path)
-try:
-    from chinese_font import setup_chinese_font
-    setup_chinese_font(save_dir=_chinese_path)
-except ImportError:
-    print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
-    print("请确保 .chinese 文件夹已上传到 Google Drive 的正确位置")
+
+# ─── 中文字体配置 ───
+# 不依赖外部 chinese_font 模块：直接在本机已安装的字体中查找可用的中文字体
+# （Windows 常见为 SimHei/微软雅黑；Linux 为 WenQuanYi/Noto Sans CJK）。
+# 用 rcParams 设置后，图上中文即可正常渲染，数学符号仍走 matplotlib 内置 mathtext。
+import matplotlib.font_manager as fm
+_cjk_candidates = [
+    'SimHei', 'Microsoft YaHei', 'Microsoft YaHei UI', 'WenQuanYi Micro Hei',
+    'WenQuanYi Zen Hei', 'Noto Sans CJK SC', 'Noto Sans CJK JP',
+    'Source Han Sans SC', 'STHeiti', 'Arial Unicode MS',
+]
+_available = {f.name for f in fm.fontManager.ttflist}
+_chinese_font = next((name for name in _cjk_candidates if name in _available), None)
+if _chinese_font is not None:
+    plt.rcParams['font.family'] = _chinese_font
+    plt.rcParams['font.sans-serif'] = [_chinese_font]
+    plt.rcParams['mathtext.fontset'] = 'stix'   # 数学符号用 stix，减号正常
+    plt.rcParams['axes.unicode_minus'] = False  # 普通文本负号用 ASCII '-'
+    print(f"已启用中文字体: {_chinese_font}")
+else:
+    print("警告: 未在本机找到中文字体，中文可能显示为方框。请安装 SimHei/Noto Sans CJK 等中文字体。")
 
 np.random.seed(42)
 
@@ -214,7 +226,7 @@ axes[1, 2].set_title('中心行剖面对比')
 axes[1, 2].legend()
 axes[1, 2].set_xlabel('像素索引')
 
-plt.suptitle('经典先验族对比：不同假设->不同正则项->不同解形态', fontsize=14)
+plt.suptitle('经典先验族对比：不同假设→不同正则项→不同解形态', fontsize=14)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤1_三种先验对比.png'), dpi=150, bbox_inches='tight')
 plt.close()
@@ -222,8 +234,8 @@ plt.close()
 fig, axes = plt.subplots(1, 3, figsize=(14, 4))
 
 t = np.linspace(-2, 2, 400)
-axes[0].plot(t, t**2, 'b-', linewidth=2, label='L2: t^2 (高斯先验)')
-axes[0].plot(t, np.abs(t), 'g-', linewidth=2, label='L1: |t| (Laplace先验)')
+axes[0].plot(t, t**2, 'b-', linewidth=2, label=r'$L^2$: $t^2$ (高斯先验)')
+axes[0].plot(t, np.abs(t), 'g-', linewidth=2, label=r'$L^1$: $|t|$ (Laplace先验)')
 axes[0].set_title('正则项形态对比')
 axes[0].legend()
 axes[0].set_xlabel('t')
@@ -247,9 +259,9 @@ axes[1].semilogx(lambdas, psnr_tikh_list, 'b-o', markersize=3, label='Tikhonov')
 axes[1].semilogx(lambdas, psnr_lasso_list, 'g-s', markersize=3, label='LASSO')
 axes[1].semilogx(lambdas, psnr_tv_list, 'r-^', markersize=3, label='TV')
 axes[1].axhline(y=psnr_noisy, color='k', linestyle='--', alpha=0.5, label='含噪')
-axes[1].set_xlabel('lambda')
+axes[1].set_xlabel(r'$\lambda$')
 axes[1].set_ylabel('PSNR (dB)')
-axes[1].set_title('不同先验的PSNR-lambda曲线')
+axes[1].set_title(r'不同先验的 PSNR-$\lambda$ 曲线')
 axes[1].legend()
 axes[1].grid(True, alpha=0.3)
 

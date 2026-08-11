@@ -1,0 +1,7 @@
+{
+  "size": 128,
+  "n_angles": 90,
+  "noise_sigma": 0.03,
+  "n_train": 800,
+  "n_test": 50
+}

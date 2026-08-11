@@ -1,0 +1,41 @@
+{
+  "experiment": "2.2-2",
+  "title": "Laplace先验的稀疏魔力：从 ℓ¹ 到 ℓ⁰",
+  "part_A_L1_soft_threshold": {
+    "lambda": 0.6,
+    "snr_db": 20,
+    "N": 50,
+    "K": 5,
+    "Ridge_L2": {
+      "MSE": 0.09845094688187427,
+      "support_recovery_rate": 1.0,
+      "exact_zero_count": 0
+    },
+    "LASSO_L1": {
+      "MSE": 0.04272154609648183,
+      "support_recovery_rate": 0.8,
+      "exact_zero_count": 41
+    }
+  },
+  "part_B_l0_approximation": {
+    "N": 256,
+    "K": 10,
+    "M": 80,
+    "snr_db": 30,
+    "true_support_size": 10,
+    "algorithms": {
+      "IHT (硬阈值→ℓ⁰)": {
+        "relative_error": 0.14045966938971838,
+        "recovered_nonzeros": 10
+      },
+      "Reweighted ℓ¹": {
+        "relative_error": 0.13357384467555944,
+        "recovered_nonzeros": 7
+      },
+      "OMP (贪婪)": {
+        "relative_error": 0.20617971310174416,
+        "recovered_nonzeros": 10
+      }
+    }
+  }
+}

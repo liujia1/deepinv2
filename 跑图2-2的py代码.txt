@@ -1,0 +1,112 @@
+# ============================================================
+# 0. 在 Colab 上安装中文字体并注册（解决乱码问题）
+# ============================================================
+import subprocess
+import glob
+import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
+
+print("正在配置 Colab 中文字体...")
+# 安装系统级开源中文字体
+subprocess.run(["apt-get", "update", "-qq"], check=True)
+subprocess.run(["apt-get", "install", "-y", "-qq", "fonts-noto-cjk"], check=True)
+
+# 强制重建字体缓存并直接按绝对路径注册
+fm._load_fontmanager(try_read_cache=False)
+
+cjk_candidates = (
+    glob.glob("/usr/share/fonts/**/NotoSansCJK*sc*.ttf", recursive=True)
+    + glob.glob("/usr/share/fonts/**/NotoSansCJK*SC*.otf", recursive=True)
+    + glob.glob("/usr/share/fonts/**/NotoSansCJK*SC*.ttc", recursive=True)
+    + glob.glob("/usr/share/fonts/opentype/**/NotoSansCJK*SC*", recursive=True)
+)
+
+if not cjk_candidates:
+    cjk_candidates = glob.glob("/usr/share/fonts/**/*Noto*", recursive=True)
+
+cjk_path = cjk_candidates[0]
+fm.fontManager.addfont(cjk_path)
+cjk_name = fm.FontProperties(fname=cjk_path).get_name()
+
+# 绑定 Matplotlib 字体配置
+plt.rcParams['font.family'] = cjk_name       # 硬绑定中文字体
+plt.rcParams['axes.unicode_minus'] = False    # 确保负号正常显示，不会变成方块
+
+# ============================================================
+# 1. 真实图片像素处理与梯度计算
+# ============================================================
+import numpy as np
+from scipy.ndimage import gaussian_filter, rotate
+from skimage import data
+
+print("正在处理真实图片像素（随机旋转平滑各向异性）...")
+
+# 获取真实自然图像
+builtin_imgs = [
+    data.camera(), data.coins(), data.clock(), data.moon(),
+    data.astronaut()[:, :, 0], data.coffee()[:, :, 0],
+    data.chelsea()[:, :, 0], data.cat()[:, :, 0]
+]
+
+gx_list, gy_list = [], []
+
+# 对真实图片随机旋转角度（消去水平/垂直的方向偏见，还原各向同性）
+np.random.seed(42)
+for img in builtin_imgs:
+    for angle in [0, 15, 30, 45, 60, 75]:  # 多个角度采样
+        img_rot = rotate(img, angle, reshape=False, mode='reflect')
+        # 加入微小连续扰动打破整数量化网格
+        img_f = img_rot.astype(np.float64) + np.random.uniform(-0.5, 0.5, img_rot.shape)
+        
+        gx = img_f[:, 1:] - img_f[:, :-1]
+        gy = img_f[1:, :] - img_f[:-1, :]
+        
+        min_h, min_w = min(gx.shape[0], gy.shape[0]), min(gx.shape[1], gy.shape[1])
+        gx_list.append(gx[:min_h, :min_w].ravel())
+        gy_list.append(gy[:min_h, :min_w].ravel())
+
+all_gx = np.concatenate(gx_list)
+all_gy = np.concatenate(gy_list)
+
+# 计算 2D 直方图并应用核密度平滑
+BINS = 101
+MAX_GRAD = 40
+edges = np.linspace(-MAX_GRAD, MAX_GRAD, BINS)
+H, xedges, yedges = np.histogram2d(all_gx, all_gy, bins=edges)
+
+# 概率归一化与高斯平滑
+P = H / np.sum(H)
+P_smooth = gaussian_filter(P, sigma=1.2)  # 平滑离散采样噪声
+log_P = np.log(P_smooth + 1e-8)
+
+x_centers = (xedges[:-1] + xedges[1:]) / 2
+y_centers = (yedges[:-1] + yedges[1:]) / 2
+X, Y = np.meshgrid(x_centers, y_centers)
+
+# ============================================================
+# 2. 渲染 3D 图（使用中文标题与坐标轴）
+# ============================================================
+print("正在绘制 3D 对数联合梯度分布图...")
+fig = plt.figure(figsize=(9, 8), dpi=150)
+ax = fig.add_subplot(111, projection='3d')
+ax.set_box_aspect([1, 1, 1.4])
+
+surf = ax.plot_surface(
+    X, Y, log_P.T, 
+    cmap='magma', 
+    rstride=1, cstride=1, 
+    linewidth=0, 
+    antialiased=True,
+    alpha=0.95
+)
+
+# 纯正中文 + LaTeX 格式结合（普通文本与公式完美拼接）
+ax.set_title("3D 对数联合梯度分布\n真实自然图像（多角度各向同性采样）", 
+             fontsize=13, fontweight='bold', pad=15)
+ax.set_xlabel("水平梯度 " + r"$\nabla_x$", fontsize=10, labelpad=8)
+ax.set_ylabel("垂直梯度 " + r"$\nabla_y$", fontsize=10, labelpad=8)
+ax.set_zlabel(r"$\ln P(\nabla_x, \nabla_y)$", fontsize=10, labelpad=8)
+
+ax.view_init(elev=20, azim=45)
+plt.tight_layout()
+plt.show()
