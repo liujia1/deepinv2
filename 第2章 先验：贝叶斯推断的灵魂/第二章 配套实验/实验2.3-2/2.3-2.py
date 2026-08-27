@@ -164,7 +164,7 @@ ax.axvline(x=x_mmse_b, color='green', linestyle='--', linewidth=2, alpha=0.8)
 mmse_p_idx_b = np.argmin(np.abs(x_range_b - x_mmse_b))
 ax.plot(x_mmse_b, p_b[mmse_p_idx_b], 'go', markersize=12, zorder=5)
 ax.annotate(f'MMSE = {x_mmse_b:.2f}\n(加权平均)',
-            xy=(x_mmse_b, p_b[mmse_p_idx_b]), xytext=(x_mmse_b + 0.35, p_b[mmse_p_idx_b] + 0.3),
+            xy=(x_mmse_b, p_b[mmse_p_idx_b]), xytext=(x_mmse_b + 0.12, p_b[mmse_p_idx_b] + 0.3),
             fontsize=11, ha='center', color='green',
             arrowprops=dict(arrowstyle='->', color='green', lw=1.5))
 
@@ -172,7 +172,7 @@ ax.annotate('', xy=(x_mmse_b, 0.05), xytext=(mu1, 0.05),
             arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
 ax.annotate('', xy=(mu2, 0.05), xytext=(x_mmse_b, 0.05),
             arrowprops=dict(arrowstyle='<->', color='gray', lw=1.5))
-ax.text(x_mmse_b, 0.08, 'MMSE在两峰之间', fontsize=9, ha='center', color='gray')
+ax.text(x_mmse_b+0.15, 0.1, 'MMSE在两峰之间', fontsize=9, ha='center', color='gray')
 
 ax.text(mu1, -0.15, '像素值=0\n(背景)', fontsize=9, ha='center', color='blue')
 ax.text(mu2, -0.15, '像素值=1\n(前景)', fontsize=9, ha='center', color='blue')

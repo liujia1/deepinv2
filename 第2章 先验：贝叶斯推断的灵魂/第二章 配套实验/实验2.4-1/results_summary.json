@@ -1,0 +1,13 @@
+{
+  "experiment": "2.4-1 FoE 双层优化与参数学习",
+  "device": "cpu",
+  "num_epochs": 30,
+  "num_experts": 6,
+  "kernel_size": 7,
+  "gamma": 1.0,
+  "noise_level": 0.12,
+  "psnr_noisy_dB": 18.5,
+  "psnr_foe_before_dB": 20.58,
+  "psnr_foe_after_dB": 23.42,
+  "psnr_foe_after_10steps_dB": 23.81
+}
