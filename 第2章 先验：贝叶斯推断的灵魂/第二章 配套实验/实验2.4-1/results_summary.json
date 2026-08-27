@@ -8,6 +8,6 @@
   "noise_level": 0.12,
   "psnr_noisy_dB": 18.5,
   "psnr_foe_before_dB": 20.58,
-  "psnr_foe_after_dB": 23.42,
-  "psnr_foe_after_10steps_dB": 23.81
+  "psnr_foe_after_dB": 23.4,
+  "psnr_foe_after_10steps_dB": 23.75
 }
