@@ -1,0 +1,12 @@
+{
+  "n": 32,
+  "sigma_noise": 0.05,
+  "sigma_prior": 0.5,
+  "lam": 0.01,
+  "psnr_map": 15.02,
+  "psnr_init_good": 14.6,
+  "psnr_init_bad": 14.64,
+  "E_map": 509.0,
+  "E_init_good": 722.78,
+  "E_init_bad": 598.97
+}

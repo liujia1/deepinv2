@@ -95,7 +95,7 @@ fig, axes = plt.subplots(2, 3, figsize=(16, 10))
 axes[0, 0].semilogy(np.arange(1, len(sigma) + 1), sigma, 'b-', linewidth=1)
 axes[0, 0].set_xlabel('奇异值索引 i')
 axes[0, 0].set_ylabel(r'$\sigma_i$')
-axes[0, 0].set_title(r'奇异值衰减曲线\n$\sigma_i \to 0$ 导致 $1/\sigma_i \to \infty$')
+axes[0, 0].set_title(r'奇异值衰减曲线' + '\n$\sigma_i \to 0$ 导致 $1/\sigma_i \to \infty$')
 axes[0, 0].grid(True)
 
 # (b) Picard 图
@@ -112,7 +112,7 @@ axes[0, 1].grid(True)
 axes[0, 2].semilogy(i_range, 1.0 / sigma[:len(i_range)], 'r-', linewidth=1)
 axes[0, 2].set_xlabel('奇异值索引 i')
 axes[0, 2].set_ylabel(r'$1/\sigma_i$')
-axes[0, 2].set_title(r'伪逆放大因子 $1/\sigma_i$\n小奇异值→巨大放大')
+axes[0, 2].set_title(r'伪逆放大因子 $1/\sigma_i$' + '\n小奇异值→巨大放大')
 axes[0, 2].grid(True)
 
 # (d) 原始图像

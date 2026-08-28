@@ -186,7 +186,7 @@ ax3.axis('off')
 # 第二行：后验不确定性 → 能量分解（居中且适度分开，中间留1列间隙）
 ax4 = fig.add_subplot(gs[1, 1:3])  # 左侧图（占据第1-2列）
 im = ax4.imshow(post_var, cmap='hot')
-ax4.set_title(r'后验边缘方差 $\mathrm{diag}(\Sigma_{\mathrm{post}})$\n不确定性量化（忽略像素间相关性）')
+ax4.set_title(r'后验边缘方差 $\mathrm{diag}(\Sigma_{\mathrm{post}})$' + '\n不确定性量化（忽略像素间相关性）')
 ax4.axis('off')
 plt.colorbar(im, ax=ax4, fraction=0.046)
 

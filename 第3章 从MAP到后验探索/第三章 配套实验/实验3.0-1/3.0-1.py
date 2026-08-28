@@ -10,7 +10,7 @@
       3) TV 近端（TV 先验，保边，Chambolle-Pock 原始-对偶）
   - 直观看到：不同先验=不同正则项，把"朴素逆（噪声炸开）"的答案拉回了不同形状的合理解。
 
-只需 numpy + scipy + matplotlib，无私有包依赖。运行：python 第3章章末代码.py
+只需 numpy + scipy + matplotlib，无私有包依赖。运行：python 3.0-1.py
 """
 
 import numpy as np

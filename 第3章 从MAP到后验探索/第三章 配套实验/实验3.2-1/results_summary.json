@@ -1,0 +1,14 @@
+{
+  "n": 32,
+  "N": 1024,
+  "sigma_noise": 0.05,
+  "lam": 0.01,
+  "L": 1.01,
+  "tau_opt": 0.990099,
+  "tau_max": 1.980198,
+  "J_star": 1.3163,
+  "results": {
+    "tau_opt = 1/L": {
+      "tau": 0.990099,
+      "psnr": 14.64,
+      "convergent": 

@@ -332,7 +332,7 @@ axes_bottom[2].semilogy(gap_near_safe, color='#d7191c', linewidth=1.5)
 axes_bottom[2].axhline(y=1e-16, color='gray', linestyle='--', linewidth=0.5)
 axes_bottom[2].set_xlabel('迭代次数 $k$')
 axes_bottom[2].set_ylabel(r'$J(x_k) - J^*$')
-axes_bottom[2].set_title(r'近边界步长 $\tau=1.8/L$ 放大\n收敛慢，接近振荡边界')
+axes_bottom[2].set_title(r'近边界步长 $\tau=1.8/L$ 放大' + '\n收敛慢，接近振荡边界')
 axes_bottom[2].grid(True, alpha=0.3)
 
 plt.suptitle(r'实验3.2-1: 梯度下降优化——步长选择与收敛分析', fontsize=14)
