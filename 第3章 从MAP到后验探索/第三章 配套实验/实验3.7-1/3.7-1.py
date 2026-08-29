@@ -196,20 +196,85 @@ plt.close()
 print(f"  已保存：{out_path1}")
 
 # ══════════════════════════════════════════════════════════
-# 场景B：两条路径分叉（文字说明）
+# 场景B：两条路径分叉（概念图）
 # ══════════════════════════════════════════════════════════
-print("\n[场景 B] 两条路径分叉——从 MAP 点估计到分布级推理")
+print("\n[场景 B] 绘制'从 MAP 到后验'的两条路径分叉概念图...")
 print("  后验推断的两条路径（众数 ≠ 典型驱动从点估计走向分布级推理）：")
-print("  ")
-print("  后验 p(x|y)")
-print("    ├─ 点估计 (MAP): x_MAP = argmax p(x|y)  →  众数 → 典型?")
-print("    └─ 分叉点")
-print("         ├─ 路径 1: 采样 (Part II)")
-print("         │    MCMC / 变分推断  →  扩散模型采样: x_T ~ p_T → x_0")
-print("         └─ 路径 2: 近似 (Part III)")
-print("              直接近似 / 端到端学习  →  条件生成器 G_θ(y) 端到端反演网络")
-print("  ")
-print("  高维高斯：众数在原点 (范数=0)，典型样本在 sqrt(n) 壳层（范数集中）")
+print("  - 采样主线（Part II 第4–7章）：MCMC/ULA → Score Matching → Langevin 动态 → 扩散")
+print("  - 近似副线（Part III 第8–11章）：变分推断 → ELBO/VAE → 层级模型 → 扩散")
+print("  - 殊途同归：两路都在第12章汇合于扩散模型（Score ≡ ELBO）")
+
+
+def draw_path_fork(save_dir):
+    """绘制'从 MAP 到后验'两条路径分叉概念图，保存为 步骤2_两条路径分叉.png。"""
+    fig, ax = plt.subplots(figsize=(13, 9))
+    ax.set_xlim(0, 12)
+    ax.set_ylim(0, 10)
+    ax.axis('off')
+
+    def box(x, y, w, h, text, fc, ec, fs=10):
+        ax.add_patch(plt.Rectangle((x, y), w, h, facecolor=fc,
+                                   edgecolor=ec, linewidth=1.6, zorder=3))
+        ax.text(x + w / 2, y + h / 2, text, ha='center', va='center',
+                fontsize=fs, zorder=4, linespacing=1.4)
+
+    def arrow(x1, y1, x2, y2, color='#555555'):
+        ax.annotate('', xy=(x2, y2), xytext=(x1, y1),
+                    arrowprops=dict(arrowstyle='->', color=color, lw=2.0), zorder=2)
+
+    # 顶部：高维后验
+    box(4.3, 8.7, 3.4, 1.0, r"后验 $p(x|y)$" + "\n（高维后验，算不出）",
+        fc='#FFF3CD', ec='#B8860B', fs=11)
+    ax.text(6, 8.15, "分叉点：MAP 只给一个点，够吗？", ha='center', va='center',
+            fontsize=9, style='italic', color='#8B0000')
+
+    # 左侧：采样主线（Part II）
+    box(0.3, 6.7, 5.3, 0.95, "采样主线 · 逆问题驱动\n（Part II 第4–7章）",
+        fc='#E8F5E9', ec='#2E7D32', fs=10)
+    box(0.3, 5.3, 5.3, 0.85, "MCMC / ULA", fc='#F1F8E9', ec='#2E7D32')
+    box(0.3, 3.9, 5.3, 0.85, "Score Matching（去噪学得分）", fc='#F1F8E9', ec='#2E7D32')
+    box(0.3, 2.5, 5.3, 0.85, "Langevin 动力学（连续化）", fc='#F1F8E9', ec='#2E7D32')
+
+    # 右侧：近似副线（Part III）
+    box(6.4, 6.7, 5.3, 0.95, "近似副线 · 生成建模驱动\n（Part III 第8–11章）",
+        fc='#FFF8E1', ec='#EF6C00', fs=10)
+    box(6.4, 5.3, 5.3, 0.85, "变分推断", fc='#FFFDE7', ec='#EF6C00')
+    box(6.4, 3.9, 5.3, 0.85, "ELBO / VAE", fc='#FFFDE7', ec='#EF6C00')
+    box(6.4, 2.5, 5.3, 0.85, "层级模型（层级 VAE）", fc='#FFFDE7', ec='#EF6C00')
+
+    # 底部：汇合点
+    box(4.15, 1.15, 3.7, 0.95, "扩散模型\n（第12章 殊途同归）", fc='#F3E5F5', ec='#6A1B9A', fs=11)
+    ax.text(6, 0.62, "条件生成 = 逆问题求解（第13章 · 全书闭环）", ha='center', va='center',
+            fontsize=9.5, color='#6A1B9A', fontweight='bold')
+
+    # 箭头：后验 → 两条路径
+    arrow(5.9, 8.7, 2.95, 7.65, '#2E7D32')
+    arrow(6.1, 8.7, 9.05, 7.65, '#EF6C00')
+    # 左列纵向
+    arrow(2.95, 6.7, 2.95, 6.15, '#2E7D32')
+    arrow(2.95, 5.3, 2.95, 4.75, '#2E7D32')
+    arrow(2.95, 3.9, 2.95, 3.35, '#2E7D32')
+    # 右列纵向
+    arrow(9.05, 6.7, 9.05, 6.15, '#EF6C00')
+    arrow(9.05, 5.3, 9.05, 4.75, '#EF6C00')
+    arrow(9.05, 3.9, 9.05, 3.35, '#EF6C00')
+    # 两路汇聚到扩散模型
+    arrow(3.2, 2.5, 5.4, 2.1, '#2E7D32')
+    arrow(8.8, 2.5, 6.6, 2.1, '#EF6C00')
+    # 扩散 → 闭环
+    arrow(6, 1.15, 6, 0.72, '#6A1B9A')
+
+    ax.text(6, 9.55, "从 MAP 点估计到后验探索：两条路径，殊途同归",
+            ha='center', va='center', fontsize=13, fontweight='bold')
+
+    out_path2 = os.path.join(save_dir, '步骤2_两条路径分叉.png')
+    plt.savefig(out_path2, dpi=150, bbox_inches='tight')
+    plt.close()
+    return out_path2
+
+
+out_path2 = draw_path_fork(SAVE_DIR)
+print(f"  已保存：{out_path2}")
 
 # ══════════════════════════════════════════════════════════
 # 保存数值结果
@@ -249,7 +314,7 @@ results = {
         f'高维高斯 N(0, I_n) 的众数在 x=0（范数=0），但典型样本位于半径 sqrt(n) 的薄壳层。'
         f'当 n=1000 时，典型范数 ≈ {typical_norm[1000]:.1f}（接近√n≈{np.sqrt(1000):.1f}），而众数处范数恒为 0。'
     ),
-    'output_files': [out_path1],
+    'output_files': [out_path1, out_path2],
 }
 
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
@@ -265,4 +330,5 @@ print("4. 驱动推断从'点估计'走向'分布级推理'（采样 / 端到端
 print("5. 两条路径分叉：MCMC/变分推断（Part II 主线）vs 端到端学习（Part III 副线）")
 print(f"\n实验完成。结果已保存至: {SAVE_DIR}")
 print(f"  - 步骤1_高维高斯众数不等于典型.png")
+print(f"  - 步骤2_两条路径分叉.png")
 print(f"  - results_summary.json")

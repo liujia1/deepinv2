@@ -1,0 +1,31 @@
+{
+  "experiment": "实验14.2-2 cINN 条件归一化流：高维逆问题的后验采样",
+  "setting": {
+    "prior": "2D 双峰高斯混合 μ=(-2.5,-2.5),(2.5,2.5), σ=1.0",
+    "forward": "y = A x + ε, A=[[1,0]], σ_obs=0.25（只观测第一维）",
+    "cinn": "两层交替仿射耦合层（RealNVP 风格），训练 6000 步 Adam lr=1e-3"
+  },
+  "final_nll": -0.3827901780605316,
+  "test_statistics": [
+    {
+      "y": -2.5,
+      "mean_error_l2": 0.09290109408598582,
+      "cov_spectral_norm_error": 0.11130821036060687
+    },
+    {
+      "y": 0.0,
+      "mean_error_l2": 0.06813022941313122,
+      "cov_spectral_norm_error": 0.23401906752243495
+    },
+    {
+      "y": 2.5,
+      "mean_error_l2": 0.05623837429168456,
+      "cov_spectral_norm_error": 0.2067173637373919
+    }
+  ],
+  "output_files": [
+    "H:\\deepinv\\deepinv2\\第14章 Flow Matching与最优传输\\第十四章 配套实验\\实验14.2-2\\步骤2_cINN训练收敛.png",
+    "H:\\deepinv\\deepinv2\\第14章 Flow Matching与最优传输\\第十四章 配套实验\\实验14.2-2\\步骤3_cINN后验采样.png",
+    "H:\\deepinv\\deepinv2\\第14章 Flow Matching与最优传输\\第十四章 配套实验\\实验14.2-2\\步骤4_后验统计对比.png"
+  ]
+}
