@@ -1,48 +1,20 @@
-# -*- coding: utf-8 -*-
-"""
-实验1.5-2 高斯似然 = 最小二乘：负对数似然与数据项的代数等价
-对应章节：1.5 贝叶斯框架：从似然到后验
-
-知识点：
-  - 高斯噪声假设下，负对数似然 -ln p(y|x) 正比于最小二乘数据项 ||y - Ax||^2
-  - 后验能量 = 数据项 + 正则项 中"数据项"的来源
-  - 似然只关心数据拟合，与先验无关
-
-实验内容：
-  - 构造线性正向模型 y = A x + noise（一维信号，频域对角算子，无外部文件依赖）
-  - 在多个候选 x 上同时计算最小二乘目标 ||y - Ax||^2 与高斯负对数似然
-  - 验证二者仅差常数因子 1/(2 sigma^2)，曲线完全重合 -> 代数等价成立
-
-素材来源：
-  - 1.5 节"动手感受一下"代码段（仅抽取"似然=最小二乘"部分，去掉与 1.3-1 重复的噪声放大部分）
-"""
-
 import numpy as np
 import matplotlib
-matplotlib.use('Agg')  # 静默模式，非交互式后端，不弹出 GUI 窗口
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from skimage.data import shepp_logan_phantom
+from skimage.transform import resize
 import os
 import sys
 
 # ====== 中文字体配置（兼容本地和 Google Colab）======
 _gdrive = '/content/drive/MyDrive'
-_IN_COLAB = 'google.colab' in sys.modules
-
-if _IN_COLAB:
-    from google.colab import drive
-    if not os.path.isdir(_gdrive):
-        print("正在挂载 Google Drive...")
-        drive.mount('/content/drive')
+if os.path.isdir(_gdrive):
+    _chinese_path = os.path.join(_gdrive, '实验1.5-2', '.chinese')
     SAVE_DIR = os.path.join(_gdrive, '实验1.5-2')
-    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
-    os.makedirs(SAVE_DIR, exist_ok=True)
 else:
-    try:
-        SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
-    except NameError:
-        SAVE_DIR = os.getcwd()
-    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
-
+    _chinese_path = '.chinese'
+    SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
 sys.path.insert(0, _chinese_path)
 from chinese_font import setup_chinese_font
 setup_chinese_font(save_dir=_chinese_path)
@@ -50,129 +22,161 @@ setup_chinese_font(save_dir=_chinese_path)
 
 np.random.seed(42)
 
-print("=" * 60)
-print("实验1.5-2：高斯似然 = 最小二乘")
-print("=" * 60)
-print("验证：高斯噪声假设下 -ln p(y|x) = (1/(2 sigma^2)) * ||y - A x||^2 + const")
+# ---- 1. 准备小尺寸问题 ----
+# 警告：n=32 时 N=1024，矩阵求逆 O(N³) 约 10⁹ 次运算，勉强可行
+# n>32（如 n=64 → N=4096）会导致 ~1GB 内存和数分钟求逆时间
+n = 32
+assert n <= 32, "n>32 时矩阵求逆不可行，请改用迭代法（如共轭梯度）"
+phantom = resize(shepp_logan_phantom(), (n, n), order=3,
+                 preserve_range=True, anti_aliasing=True)
+x = phantom / phantom.max()
+x_vec = x.ravel()
+N = n * n
 
-# ---- 1. 构造自包含的一维线性逆问题 ----
-# 用频域对角算子 A（高斯低通）：A 在 DFT 基下对角，对角元 = 频域传递函数 H
-# 这样无需外部图片，即可演示 y = A x + noise
-n = 256
-t = np.linspace(0, 1, n)
-x_true = np.sin(2 * np.pi * 3 * t) + 0.5 * np.cos(2 * np.pi * 7 * t)
+# ---- 2. 构造模糊算子矩阵 A ----
+def gaussian_psf(size, sigma):
+    ax = np.concatenate((np.arange(0, size // 2), np.arange(-size // 2, 0)))
+    xx, yy = np.meshgrid(ax, ax)
+    h = np.exp(-(xx ** 2 + yy ** 2) / (2 * sigma ** 2))
+    return h / h.sum()
 
-sigma_psf = 4.0               # 频域高斯核标准差（小 => 严重低通 => 病态）
-k = np.fft.fftfreq(n) * n     # 频率坐标
-H = np.exp(-0.5 * (k / sigma_psf) ** 2)  # 频域传递函数，高频 -> 0
-H = H.astype(complex)
+h = gaussian_psf(n, sigma=2.0)
+H_fft = np.fft.fft2(h)
 
-# 正向生成含噪观测 y = A x + noise
-X = np.fft.fft(x_true)
-y_clean = np.real(np.fft.ifft(H * X))
+A = np.zeros((N, N))
+for j in range(N):
+    e_j = np.zeros(N)
+    e_j[j] = 1.0
+    A[:, j] = np.real(np.fft.ifft2(H_fft * np.fft.fft2(e_j.reshape(n, n)))).ravel()
+# 注：以上使用 FFT 实现循环卷积，隐含周期边界条件假设
+# 实际图像通常不满足周期边界，边缘处会产生振铃伪影
 
-sigma = 1.0                   # 噪声标准差
-noise = sigma * np.random.randn(n)
-y = y_clean + noise
+# ---- 3. 生成含噪观测 ----
+sigma_noise = 0.05
+y = A @ x_vec + sigma_noise * np.random.randn(N)
 
-print(f"\n[问题设置]")
-print(f"  信号维度 n = {n}")
-print(f"  噪声标准差 sigma = {sigma}")
-print(f"  正向算子 A 类型：频域对角（高斯低通），高频被压制")
+# ---- 4. 贝叶斯框架：高斯噪声 + 高斯先验 → Tikhonov ----
+# 先验: x ~ N(0, σ_x² I)
+# 似然: y|x ~ N(Ax, σ² I)
+# 后验: x|y ~ N(μ_post, Σ_post)
+# μ_post = (A^T A + λ I)^{-1} A^T y, λ = σ²/σ_x²
 
-# ---- 2. 构造一组候选解 x，对比两种目标 ----
-# 候选解：真实解 + 一系列扰动，覆盖"拟合好"到"拟合差"
-n_candidates = 200
-least_squares_list = []
-neg_log_lik_list = []
+sigma_prior = 0.5
+lam = sigma_noise ** 2 / sigma_prior ** 2
 
-for i in range(n_candidates):
-    # 扰动幅度从 0（完美拟合）到较大（拟合差），均匀采样
-    scale = (i / (n_candidates - 1)) * 2.0
-    x_cand = x_true + scale * np.random.randn(n)
-    residual = y - np.real(np.fft.ifft(H * np.fft.fft(x_cand)))
-    ls = np.sum(residual ** 2)                       # ||y - A x||^2
-    nll = 0.5 / sigma ** 2 * np.sum(residual ** 2)   # -ln p(y|x) 不计常数
-    least_squares_list.append(ls)
-    neg_log_lik_list.append(nll)
+# 闭式解：直接矩阵求逆（小规模问题可行）
+AtA = A.T @ A
+Aty = A.T @ y
+mu_post = np.linalg.solve(AtA + lam * np.eye(N), Aty)
 
-least_squares_list = np.array(least_squares_list)
-neg_log_lik_list = np.array(neg_log_lik_list)
+# ---- 5. 后验不确定性：后验方差 ----
+# Σ_post = σ² (A^T A + λ I)^{-1}
+# 用 Cholesky 分解计算对角线
+# 注：此处仍构造 N×N 矩阵 Z，内存与 inv 相当
+# 优势在于数值稳定性更好，且可扩展为只取对角线的迭代版本
+L = np.linalg.cholesky(AtA + lam * np.eye(N))
+Z = np.linalg.solve(L, np.eye(N))
+post_var = sigma_noise**2 * np.sum(Z**2, axis=0).reshape(n, n)
 
-# 验证等价性：nll 应约等于 (1/(2 sigma^2)) * ls
-factor = 1.0 / (2.0 * sigma ** 2)
-predicted_nll = factor * least_squares_list
-max_rel_err = float(np.max(np.abs(neg_log_lik_list - predicted_nll) /
-                           (np.abs(predicted_nll) + 1e-12)))
+# ---- 6. λ 扫描：验证 λ=σ²/σ_x² 附近最优 ----
+# 注意：λ* = σ²/σ_x² 最小化的是期望 MSE（对噪声样本取平均），
+# 而非保证单次实验 PSNR 最高。单次结果因噪声实现不同会有波动。
+# 扫描时直接算 MSE（不 clip），避免 clip 掩盖负值导致的误差低估
+# 注：λ<1e-4 时系统极度病态，PSNR 下降同时包含数值误差的贡献
+lambdas_sweep = np.logspace(-5, 1, 50)  # 峰值在 λ≈0.01，1e1 已足够
+psnrs = []
+for l in lambdas_sweep:
+    mu_l = np.linalg.solve(AtA + l * np.eye(N), Aty)
+    mse = np.mean((x - mu_l.reshape(n, n))**2)
+    psnrs.append(10 * np.log10(1.0 / mse) if mse > 1e-12 else float('-inf'))
 
-print(f"\n[等价性验证]")
-print(f"  理论比例因子 1/(2 sigma^2) = {factor:.4f}")
-print(f"  最大相对偏差 = {max_rel_err:.3e}  （应接近 0）")
-if max_rel_err < 1e-10:
-    print(f"  [验证通过] 负对数似然与最小二乘仅差常数因子，二者代数等价")
-else:
-    print(f"  [警告] 偏差偏大，请检查实现")
+# 选取三个代表性 λ 进行可视化对比
+lambdas_demo = [1e-4, lam, 10.0]
+recons_demo = {}
+for l in lambdas_demo:
+    mu_l = np.linalg.solve(AtA + l * np.eye(N), Aty)
+    recons_demo[l] = mu_l.reshape(n, n)
 
-# 在"完美候选"处（residual = noise）单独打印一次直观对比
-residual_ideal = y - y_clean
-ls_ideal = float(np.sum(residual_ideal ** 2))
-nll_ideal = float(0.5 / sigma ** 2 * np.sum(residual_ideal ** 2))
-print(f"\n[单点直观对比]（候选 = 真实 x，residual 应≈纯噪声）")
-print(f"  最小二乘 ||y - A x||^2          = {ls_ideal:.4f}")
-print(f"  高斯负对数似然 (不计常数)       = {nll_ideal:.4f}")
-print(f"  比值 nll / ls                   = {nll_ideal / ls_ideal:.4f}  (= 1/(2 sigma^2) = {factor:.4f} [OK])")
+# ---- 7. 可视化 ----
+fig, axes = plt.subplots(2, 4, figsize=(18, 9))
 
-# ---- 3. 可视化：两条曲线完全重合 ----
-fig, ax = plt.subplots(1, 2, figsize=(14, 5))
+# 原始图像
+axes[0, 0].imshow(x, cmap='gray')
+axes[0, 0].set_title('原始图像 x')
+axes[0, 0].axis('off')
 
-# 左：最小二乘 vs 负对数似然（按候选排序，两条线应完全重合）
-ax[0].plot(least_squares_list, label=r'$\|y - A x\|^2$（最小二乘）', linewidth=2)
-ax[0].plot(neg_log_lik_list, '--', label=r'$-\ln p(y|x)$（负对数似然）', linewidth=2)
-ax[0].set_xlabel('候选解索引')
-ax[0].set_ylabel('目标值')
-ax[0].set_title(r'最小二乘 vs 负对数似然（完全重合 = 代数等价）')
-ax[0].legend(fontsize=9)
-ax[0].grid(True, alpha=0.3)
+# 模糊含噪观测
+axes[0, 1].imshow(y.reshape(n, n), cmap='gray')
+axes[0, 1].set_title(f'模糊含噪观测 y\n$\\sigma$={sigma_noise}')
+axes[0, 1].axis('off')
 
-# 右：负对数似然 对 最小二乘 的散点，应落在过原点的直线 y = (1/(2 sigma^2)) x 上
-ax[1].scatter(least_squares_list, neg_log_lik_list, s=10, alpha=0.5, label=r'样本点')
-ls_grid = np.linspace(least_squares_list.min(), least_squares_list.max(), 100)
-ax[1].plot(ls_grid, factor * ls_grid, 'r-', linewidth=2, label=r'$y = \frac{1}{2\sigma^2} x$')
-ax[1].set_xlabel(r'$\|y - A x\|^2$（最小二乘）')
-ax[1].set_ylabel(r'$-\ln p(y|x)$（负对数似然）')
-ax[1].set_title(r'负对数似然 正比于 最小二乘（斜率 = $1/(2\sigma^2)$）')
-ax[1].legend(fontsize=9)
-ax[1].grid(True, alpha=0.3)
+# 贝叶斯闭式解
+mse_closed = np.mean((x - mu_post.reshape(n, n))**2)
+psnr_closed = 10 * np.log10(1.0 / mse_closed) if mse_closed > 1e-12 else float('-inf')
+axes[0, 2].imshow(np.clip(mu_post.reshape(n, n), 0, 1), cmap='gray')
+axes[0, 2].set_title(f'贝叶斯后验均值 $\\mu_{{post}}$\n$\\lambda=\\sigma^2/\\sigma_x^2$={lam:.4f}\nPSNR={psnr_closed:.1f}dB')
+axes[0, 2].axis('off')
 
-plt.suptitle(r'实验1.5-2：高斯似然 = 最小二乘（$y = A x + \varepsilon,\ \varepsilon\sim\mathcal{N}(0,\sigma^2 I)$）',
-             fontsize=13)
+# 后验不确定性图（直接显示方差，不叠加原图）
+im = axes[0, 3].imshow(post_var, cmap='hot')
+axes[0, 3].set_title('后验方差 $\\mathrm{diag}(\\Sigma_{{post}})$\n不确定性量化')
+axes[0, 3].axis('off')
+plt.colorbar(im, ax=axes[0, 3], fraction=0.046)
+
+# λ 扫描展示
+lambda_labels = []
+for l in lambdas_demo:
+    if np.isclose(l, lam, rtol=1e-3):
+        lambda_labels.append(f'$\\lambda$={lam:.4f}（贝叶斯最优）')
+    elif l < lam:
+        lambda_labels.append(f'$\\lambda$={l:.1g}（过小）')
+    else:
+        lambda_labels.append(f'$\\lambda$={l:.1g}（过大）')
+
+for i, l in enumerate(lambdas_demo):
+    img = np.clip(recons_demo[l], 0, 1)
+    mse_l = np.mean((x - recons_demo[l])**2)
+    psnr_l = 10 * np.log10(1.0 / mse_l) if mse_l > 1e-12 else float('-inf')
+    axes[1, i].imshow(img, cmap='gray')
+    axes[1, i].set_title(f'{lambda_labels[i]}\nPSNR={psnr_l:.1f}dB')
+    axes[1, i].axis('off')
+
+# 合并 λ 扫描曲线到第4个位置
+axes[1, 3].semilogx(lambdas_sweep, psnrs, 'b-', linewidth=2)
+axes[1, 3].axvline(x=lam, color='r', linestyle='--',
+                   label=f'$\\lambda=\\sigma^2/\\sigma_x^2$={lam:.4f}')
+axes[1, 3].set_xlabel('正则化参数 $\\lambda$')
+axes[1, 3].set_ylabel('PSNR (dB)')
+axes[1, 3].set_title('$\\lambda$ 扫描：$\\lambda=\\sigma^2/\\sigma_x^2$ 附近最优\n左：$\\lambda$过小（欠正则化） 右：$\\lambda$过大（过正则化）')
+axes[1, 3].legend()
+axes[1, 3].grid(True)
+
+plt.suptitle('Tikhonov 正则化的贝叶斯验证\n后验 = 似然 × 先验 → 后验能量 = 数据项 + 正则项',
+             fontsize=14)
 plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '实验1_5_2_似然等于最小二乘.png'), dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, '实验1_5_2_Tikhonov贝叶斯验证.png'),
+            dpi=150, bbox_inches='tight')
 plt.show()
-plt.close()
 
-# ---- 4. 结论 ----
-print("\n" + "=" * 60)
-print("结论")
-print("=" * 60)
-print("1. 高斯噪声假设下，负对数似然 -ln p(y|x) 正比于最小二乘数据项 ||y - Ax||^2")
-print("2. 比例因子 = 1/(2 sigma^2)，与候选 x 无关 -> 仅缩放不影响最优解位置")
-print("3. 因此最大化似然 == 最小化 ||y - Ax||^2，MAP 退化为经典最小二乘（无先验时）")
-print("4. 这正是 1.5 节'后验能量 = 数据项 + 正则项'中数据项的来源")
-print("5. 若加入先验 p(x)（如高斯），则后验能量 = ||y - Ax||^2 + (sigma^2/sigma_x^2)||x||^2 = Tikhonov")
+print("\n=== 贝叶斯验证 ===")
+print(f"后验均值 PSNR: {psnr_closed:.2f} dB")
+print(f"贝叶斯最优 λ = σ²/σ_x² = {sigma_noise**2:.4f}/{sigma_prior**2:.4f} = {lam:.4f}")
+print(f"λ 扫描中 PSNR 最大值: {max(psnrs):.2f} dB")
+print(f"对应 λ: {lambdas_sweep[np.argmax(psnrs)]:.4f} (期望最优 {lam:.4f})")
+print(f"注：λ*={lam:.4f}=σ²/σ_x² 最小化期望 MSE，单次实验峰值可能略有偏移")
+print("\n结论：λ*=σ²/σ_x² 使 PSNR 接近峰值，验证了贝叶斯-正则化等价性（期望最优性）。")
 
 # ===== 保存数值结果 =====
 import json
 results_summary = {
-    'signal_dimension': int(n),
-    'noise_sigma': float(sigma),
-    'proportionality_factor': float(round(factor, 6)),
-    'max_relative_deviation': float(f"{max_rel_err:.3e}"),
-    'verification_passed': bool(max_rel_err < 1e-10),
-    'least_squares_at_true': float(round(ls_ideal, 4)),
-    'neg_log_likelihood_at_true': float(round(nll_ideal, 4)),
-    'ratio_nll_over_ls_at_true': float(round(nll_ideal / ls_ideal, 4)),
-    'n_candidates': int(n_candidates),
+    'image_size': n,
+    'noise_sigma': float(sigma_noise),
+    'prior_sigma': float(sigma_prior),
+    'bayesian_lambda': float(round(lam, 6)),
+    'psnr_posterior_mean_dB': float(round(psnr_closed, 2)),
+    'lambda_sweep_max_psnr_dB': float(round(max(psnrs), 2)),
+    'lambda_sweep_best_lambda': float(round(lambdas_sweep[np.argmax(psnrs)], 6)),
+    'lambda_demo_psnr': {f'lambda_{l:.4g}': float(round(10 * np.log10(1.0 / np.mean((x - recons_demo[l])**2)), 2)) if np.mean((x - recons_demo[l])**2) > 1e-12 else float('-inf') for l in lambdas_demo},
 }
 
 def _to_native(obj):
@@ -191,4 +195,4 @@ def _to_native(obj):
 results_summary = {k: _to_native(v) for k, v in results_summary.items()}
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
     json.dump(results_summary, f, ensure_ascii=False, indent=2)
-print(f"\n数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

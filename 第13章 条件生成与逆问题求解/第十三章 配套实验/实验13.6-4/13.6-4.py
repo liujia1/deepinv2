@@ -208,7 +208,7 @@ if HAS_DEPS:
             print(f"  CLIP参数: {sum(p.numel() for p in text_encoder.parameters()) / 1e6:.0f}M")
 
             # ---- 实际运行示例：生成一张img2img结果 ----
-            print("\n正在生成img2img示例...")
+            print("\n正在生成img2img对比图...")
             from PIL import Image
 
             # 创建一个简单的初始图像（渐变背景）- 使用numpy高效生成
@@ -246,16 +246,12 @@ if HAS_DEPS:
                 generator=torch.Generator(device=device).manual_seed(42),
             )
 
-            # 保存结果
-            result_img = Image.fromarray(output_image)
-            result_img.save(os.path.join(SAVE_DIR, "img2img示例.png"))
-            print("img2img示例已保存")
-
             # 对比展示
             fig, axes = plt.subplots(1, 2, figsize=(10, 5))
             axes[0].imshow(init_image)
             axes[0].axis('off')
             axes[0].set_title('初始图像（渐变背景）')
+            result_img = Image.fromarray(output_image)
             axes[1].imshow(result_img)
             axes[1].axis('off')
             axes[1].set_title(f'img2img结果 (strength={strength})')

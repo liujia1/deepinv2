@@ -1,10 +1,10 @@
-# 附录12C Karras et al. (2022) 统一框架：VE-SDE 与 VP-SDE 的等价性
+# 附录12B Karras et al. (2022) 统一框架：VE-SDE 与 VP-SDE 的等价性
 
 本附录介绍 Karras et al. (2022) 的统一参数化框架，展示 VE-SDE 和 VP-SDE 是该框架的不同参数化选择，从而在更基础的层面上说明：DSM ≡ VLB 的等价性不依赖于特定的 SDE 形式。正文 12.3 节观察 2 和 12.5 节都用到了它。
 
 ---
 
-## C.1 统一参数化
+## B.1 统一参数化
 
 ### 一般加噪过程
 
@@ -46,7 +46,7 @@ $$\hat{x}_0(x_t) = \mathbb{E}[x_0|x_t] = \frac{x_t + \sigma^2(t)\nabla_{x_t}\log
 
 ---
 
-## C.2 统一框架下的 Tweedie 等式
+## B.2 统一框架下的 Tweedie 等式
 
 在统一参数化下，Tweedie 等式的一般形式为：
 
@@ -65,7 +65,7 @@ $$\nabla\log p_t(x_t) = -\frac{\epsilon_\theta(x_t, t)}{\sqrt{1-\bar\alpha_t}}$$
 
 ---
 
-## C.3 统一框架下的训练目标
+## B.3 统一框架下的训练目标
 
 ### 统一 DSM 目标
 
@@ -85,7 +85,7 @@ $w(t)$ 由 $(s(t), \sigma(t))$ 的动力学方程确定。
 
 ---
 
-## C.4 从 VE-SDE 到 VP-SDE 的权重映射
+## B.4 从 VE-SDE 到 VP-SDE 的权重映射
 
 给定 VE-SDE 下的权重 $\lambda_\text{VE}(\sigma)$，可通过 SNR 对应映射到 VP-SDE 下的权重：
 

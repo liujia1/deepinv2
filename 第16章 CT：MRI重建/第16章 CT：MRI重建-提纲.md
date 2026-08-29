@@ -267,7 +267,7 @@ CT的正则化重建展示了"先验选择决定重建质量"这一核心原则�
 
 #### 16.5.2 DiffPIR for CT/MRI
 
-- **DiffPIR算法回顾**（第13章13.3.4节）：
+- **DiffPIR算法回顾**（第13章 13.3 节分类体系）：
   - 隐空间优化+扩散去噪交替
   - 每步：预测$\hat{x}_0$→数据一致性步→去噪步
 - **CT上的DiffPIR**：
@@ -279,11 +279,11 @@ CT的正则化重建展示了"先验选择决定重建质量"这一核心原则�
 
 #### 16.5.3 DDRM与DPS for CT/MRI
 
-- **DDRM**（第13章13.3.1节）：
+- **DDRM**（第13章 13.3 节分类体系）：
   - 基于SVD分解的方法——适用于线性问题
   - CT：SVD可由ASTRA计算，但大规模时计算代价高
   - MRI：$A = M_\Omega F$，SVD退化为对角化（特别高效）
-- **DPS**（第13章13.3.2节）：
+- **DPS**（第13章 13.3 节分类体系）：
   - Laplace近似：$p(y|x_t) \approx p(y|\hat{x}_{0|t})$
   - CT：$\nabla_{x_t} \log p(y|x_t) \approx \zeta A^T(y - A\hat{x}_{0|t})$
   - MRI：$\nabla_{x_t} \log p(y|x_t) \approx \zeta F^T M_\Omega^T(y - M_\Omega F\hat{x}_{0|t})$

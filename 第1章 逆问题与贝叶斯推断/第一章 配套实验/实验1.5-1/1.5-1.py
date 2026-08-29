@@ -1,186 +1,126 @@
-﻿import numpy as np
+# -*- coding: utf-8 -*-
+"""
+实验1.5-1 信念如何被数据"洗掉"：Beta-Bernoulli 共轭的贝叶斯更新
+对应章节：1.5 贝叶斯框架：从似然到后验（"信念更新叙事"小节）
+
+知识点：
+  - 共轭先验让后验更新有解析形式：Beta 先验 + 伯努利似然 -> Beta 后验
+  - 数据越多，后验从"又宽又平"变"又尖又锁定"，先验话语权被数据稀释
+  - 后验均值向真实参数移动，方差（不确定性）随 n 增大而收拢
+
+实验内容：
+  - 硬币正面概率的先验取 Beta(1,1)（均匀，啥也不知道），真实 θ=0.7
+  - 逐批观测抛掷结果，用共轭公式 a_n = a_0 + 正面数, b_n = b_0 + 反面数 更新后验
+  - 绘制随数据量 {0,2,10,50,500} 演化的后验密度曲线，观察移动与收拢
+
+素材来源：
+  - 绪论 0.10"动手感受一下（二）"内嵌代码段迁移而来，规范化成本章配套实验
+"""
+
+import numpy as np
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('Agg')  # 静默模式，非交互式后端，不弹出 GUI 窗口
 import matplotlib.pyplot as plt
-from skimage.data import shepp_logan_phantom
-from skimage.transform import resize
+from scipy.stats import beta
 import os
 import sys
 
 # ====== 中文字体配置（兼容本地和 Google Colab）======
 _gdrive = '/content/drive/MyDrive'
-if os.path.isdir(_gdrive):
-    _chinese_path = os.path.join(_gdrive, '实验1.5-1', '.chinese')
+_IN_COLAB = 'google.colab' in sys.modules
+
+if _IN_COLAB:
+    from google.colab import drive
+    if not os.path.isdir(_gdrive):
+        print("正在挂载 Google Drive...")
+        drive.mount('/content/drive')
     SAVE_DIR = os.path.join(_gdrive, '实验1.5-1')
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+    os.makedirs(SAVE_DIR, exist_ok=True)
 else:
-    _chinese_path = '.chinese'
-    SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
+    try:
+        SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        SAVE_DIR = os.getcwd()
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+
 sys.path.insert(0, _chinese_path)
 from chinese_font import setup_chinese_font
 setup_chinese_font(save_dir=_chinese_path)
 # ========================================================
 
-np.random.seed(42)
+rng = np.random.default_rng(42)
+theta_true = 0.7          # 硬币真实的正面概率（你假装不知道）
+n_flips_list = [0, 2, 10, 50, 500]   # 逐步增多的数据量
+results = []
+a, b = 1.0, 1.0           # 先验 Beta(a,b) 的参数
 
-# ---- 1. 准备小尺寸问题 ----
-# 警告：n=32 时 N=1024，矩阵求逆 O(N³) 约 10⁹ 次运算，勉强可行
-# n>32（如 n=64 → N=4096）会导致 ~1GB 内存和数分钟求逆时间
-n = 32
-assert n <= 32, "n>32 时矩阵求逆不可行，请改用迭代法（如共轭梯度）"
-phantom = resize(shepp_logan_phantom(), (n, n), order=3,
-                 preserve_range=True, anti_aliasing=True)
-x = phantom / phantom.max()
-x_vec = x.ravel()
-N = n * n
+# 预先生成好 500 次抛掷，按当前需要的次数截取
+flips = (rng.random(500) < theta_true).astype(int)
 
-# ---- 2. 构造模糊算子矩阵 A ----
-def gaussian_psf(size, sigma):
-    ax = np.concatenate((np.arange(0, size // 2), np.arange(-size // 2, 0)))
-    xx, yy = np.meshgrid(ax, ax)
-    h = np.exp(-(xx ** 2 + yy ** 2) / (2 * sigma ** 2))
-    return h / h.sum()
+print("=" * 60)
+print("实验1.5-1：信念如何被数据'洗掉'（Beta-Bernoulli 共轭）")
+print("=" * 60)
+print(f"真实正面概率 θ = {theta_true}，先验 Beta(1,1)（均匀，啥也不知道）\n")
+print(f"{'数据量 n':>10} | {'正面/反面':>14} | {'后验均值':>12} | {'后验方差':>12}")
+print("-" * 58)
 
-h = gaussian_psf(n, sigma=2.0)
-H_fft = np.fft.fft2(h)
+for n in n_flips_list:
+    heads = int(flips[:n].sum())
+    tails = n - heads
+    a_post = a + heads     # 共轭更新：后验参数 = 先验参数 + 观测计数
+    b_post = b + tails
+    mean = a_post / (a_post + b_post)
+    var = (a_post * b_post) / ((a_post + b_post) ** 2 * (a_post + b_post + 1))
+    results.append((n, a_post, b_post, heads))
+    print(f"{n:>10} | {heads:>6} / {tails:<6} | {mean:>12.4f} | {var:>12.6f}")
 
-A = np.zeros((N, N))
-for j in range(N):
-    e_j = np.zeros(N)
-    e_j[j] = 1.0
-    A[:, j] = np.real(np.fft.ifft2(H_fft * np.fft.fft2(e_j.reshape(n, n)))).ravel()
-# 注：以上使用 FFT 实现循环卷积，隐含周期边界条件假设
-# 实际图像通常不满足周期边界，边缘处会产生振铃伪影
+print(f"\n观察：数据从 0 增到 500，后验均值从 0.5 -> 向真实值 0.7 收敛，方差不断收缩。")
 
-# ---- 3. 生成含噪观测 ----
-sigma_noise = 0.05
-y = A @ x_vec + sigma_noise * np.random.randn(N)
-
-# ---- 4. 贝叶斯框架：高斯噪声 + 高斯先验 → Tikhonov ----
-# 先验: x ~ N(0, σ_x² I)
-# 似然: y|x ~ N(Ax, σ² I)
-# 后验: x|y ~ N(μ_post, Σ_post)
-# μ_post = (A^T A + λ I)^{-1} A^T y, λ = σ²/σ_x²
-
-sigma_prior = 0.5
-lam = sigma_noise ** 2 / sigma_prior ** 2
-
-# 闭式解：直接矩阵求逆（小规模问题可行）
-AtA = A.T @ A
-Aty = A.T @ y
-mu_post = np.linalg.solve(AtA + lam * np.eye(N), Aty)
-
-# ---- 5. 后验不确定性：后验方差 ----
-# Σ_post = σ² (A^T A + λ I)^{-1}
-# 用 Cholesky 分解计算对角线
-# 注：此处仍构造 N×N 矩阵 Z，内存与 inv 相当
-# 优势在于数值稳定性更好，且可扩展为只取对角线的迭代版本
-L = np.linalg.cholesky(AtA + lam * np.eye(N))
-Z = np.linalg.solve(L, np.eye(N))
-post_var = sigma_noise**2 * np.sum(Z**2, axis=0).reshape(n, n)
-
-# ---- 6. λ 扫描：验证 λ=σ²/σ_x² 附近最优 ----
-# 注意：λ* = σ²/σ_x² 最小化的是期望 MSE（对噪声样本取平均），
-# 而非保证单次实验 PSNR 最高。单次结果因噪声实现不同会有波动。
-# 扫描时直接算 MSE（不 clip），避免 clip 掩盖负值导致的误差低估
-# 注：λ<1e-4 时系统极度病态，PSNR 下降同时包含数值误差的贡献
-lambdas_sweep = np.logspace(-5, 1, 50)  # 峰值在 λ≈0.01，1e1 已足够
-psnrs = []
-for l in lambdas_sweep:
-    mu_l = np.linalg.solve(AtA + l * np.eye(N), Aty)
-    mse = np.mean((x - mu_l.reshape(n, n))**2)
-    psnrs.append(10 * np.log10(1.0 / mse) if mse > 1e-12 else float('-inf'))
-
-# 选取三个代表性 λ 进行可视化对比
-lambdas_demo = [1e-4, lam, 10.0]
-recons_demo = {}
-for l in lambdas_demo:
-    mu_l = np.linalg.solve(AtA + l * np.eye(N), Aty)
-    recons_demo[l] = mu_l.reshape(n, n)
-
-# ---- 7. 可视化 ----
-fig, axes = plt.subplots(2, 4, figsize=(18, 9))
-
-# 原始图像
-axes[0, 0].imshow(x, cmap='gray')
-axes[0, 0].set_title('原始图像 x')
-axes[0, 0].axis('off')
-
-# 模糊含噪观测
-axes[0, 1].imshow(y.reshape(n, n), cmap='gray')
-axes[0, 1].set_title(f'模糊含噪观测 y\n$\\sigma$={sigma_noise}')
-axes[0, 1].axis('off')
-
-# 贝叶斯闭式解
-mse_closed = np.mean((x - mu_post.reshape(n, n))**2)
-psnr_closed = 10 * np.log10(1.0 / mse_closed) if mse_closed > 1e-12 else float('-inf')
-axes[0, 2].imshow(np.clip(mu_post.reshape(n, n), 0, 1), cmap='gray')
-axes[0, 2].set_title(f'贝叶斯后验均值 $\\mu_{{post}}$\n$\\lambda=\\sigma^2/\\sigma_x^2$={lam:.4f}\nPSNR={psnr_closed:.1f}dB')
-axes[0, 2].axis('off')
-
-# 后验不确定性图（直接显示方差，不叠加原图）
-im = axes[0, 3].imshow(post_var, cmap='hot')
-axes[0, 3].set_title('后验方差 $\\mathrm{diag}(\\Sigma_{{post}})$\n不确定性量化')
-axes[0, 3].axis('off')
-plt.colorbar(im, ax=axes[0, 3], fraction=0.046)
-
-# λ 扫描展示
-lambda_labels = []
-for l in lambdas_demo:
-    if np.isclose(l, lam, rtol=1e-3):
-        lambda_labels.append(f'$\\lambda$={lam:.4f}（贝叶斯最优）')
-    elif l < lam:
-        lambda_labels.append(f'$\\lambda$={l:.1g}（过小）')
-    else:
-        lambda_labels.append(f'$\\lambda$={l:.1g}（过大）')
-
-for i, l in enumerate(lambdas_demo):
-    img = np.clip(recons_demo[l], 0, 1)
-    mse_l = np.mean((x - recons_demo[l])**2)
-    psnr_l = 10 * np.log10(1.0 / mse_l) if mse_l > 1e-12 else float('-inf')
-    axes[1, i].imshow(img, cmap='gray')
-    axes[1, i].set_title(f'{lambda_labels[i]}\nPSNR={psnr_l:.1f}dB')
-    axes[1, i].axis('off')
-
-# 合并 λ 扫描曲线到第4个位置
-axes[1, 3].semilogx(lambdas_sweep, psnrs, 'b-', linewidth=2)
-axes[1, 3].axvline(x=lam, color='r', linestyle='--',
-                   label=f'$\\lambda=\\sigma^2/\\sigma_x^2$={lam:.4f}')
-axes[1, 3].set_xlabel('正则化参数 $\\lambda$')
-axes[1, 3].set_ylabel('PSNR (dB)')
-axes[1, 3].set_title('$\\lambda$ 扫描：$\\lambda=\\sigma^2/\\sigma_x^2$ 附近最优\n左：$\\lambda$过小（欠正则化） 右：$\\lambda$过大（过正则化）')
-axes[1, 3].legend()
-axes[1, 3].grid(True)
-
-plt.suptitle('Tikhonov 正则化的贝叶斯验证\n后验 = 似然 × 先验 → 后验能量 = 数据项 + 正则项',
-             fontsize=14)
+# ---- 画图：随着数据增多，后验从又宽又平 -> 又尖又锁定在 0.7 ----
+xs = np.linspace(0, 1, 400)
+fig, ax = plt.subplots(figsize=(10, 4))
+for i, (n, ap, bp, heads) in enumerate(results):
+    ax.plot(xs, beta.pdf(xs, ap, bp), lw=2, label=f"抛 {n} 次（{heads} 正）")
+ax.axvline(theta_true, color='k', ls='--', alpha=0.6, label=f"真实概率 {theta_true}")
+ax.set_xlabel("硬币正面概率 θ")
+ax.set_ylabel("后验密度")
+ax.set_title("后验随数据增多：移动并收拢，先验被'洗掉'")
+ax.legend(fontsize=9)
+ax.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '实验1_5_1_Tikhonov贝叶斯验证.png'),
-            dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, '实验1_5_1_硬币贝叶斯更新.png'), dpi=150, bbox_inches='tight')
 plt.show()
+plt.close()
 
-print("\n=== 贝叶斯验证 ===")
-print(f"后验均值 PSNR: {psnr_closed:.2f} dB")
-print(f"贝叶斯最优 λ = σ²/σ_x² = {sigma_noise**2:.4f}/{sigma_prior**2:.4f} = {lam:.4f}")
-print(f"λ 扫描中 PSNR 最大值: {max(psnrs):.2f} dB")
-print(f"对应 λ: {lambdas_sweep[np.argmax(psnrs)]:.4f} (期望最优 {lam:.4f})")
-print(f"注：λ*={lam:.4f}=σ²/σ_x² 最小化期望 MSE，单次实验峰值可能略有偏移")
-print("\n结论：λ*=σ²/σ_x² 使 PSNR 接近峰值，验证了贝叶斯-正则化等价性（期望最优性）。")
+# ---- 结论 ----
+print("\n" + "=" * 60)
+print("结论")
+print("=" * 60)
+print("1. Beta 先验 + 伯努利似然 -> Beta 后验（共轭），更新只靠计数：a_n=a_0+正面, b_n=b_0+反面")
+print("2. 数据越多，后验越窄、越锁向真实值 0.7；最初的均匀先验（Beta(1,1)）不再起作用")
+print("3. 这与 1.5 节'世界人口估计（Poisson-Gamma 共轭）'是同一个故事：先验被数据稀释")
+print("4. 这就是贝叶斯'信念更新'的全部精髓：数据按量级逐步稀释先验的话语权，并收拢不确定性")
 
 # ===== 保存数值结果 =====
 import json
 results_summary = {
-    'image_size': n,
-    'noise_sigma': float(sigma_noise),
-    'prior_sigma': float(sigma_prior),
-    'bayesian_lambda': float(round(lam, 6)),
-    'psnr_posterior_mean_dB': float(round(psnr_closed, 2)),
-    'lambda_sweep_max_psnr_dB': float(round(max(psnrs), 2)),
-    'lambda_sweep_best_lambda': float(round(lambdas_sweep[np.argmax(psnrs)], 6)),
-    'lambda_demo_psnr': {f'lambda_{l:.4g}': float(round(10 * np.log10(1.0 / np.mean((x - recons_demo[l])**2)), 2)) if np.mean((x - recons_demo[l])**2) > 1e-12 else float('-inf') for l in lambdas_demo},
+    'theta_true': float(theta_true),
+    'prior': {'dist': 'Beta', 'a': float(a), 'b': float(b)},
+    'data_sizes': n_flips_list,
+    'posterior': [],
 }
+for n in n_flips_list:
+    h = int(flips[:n].sum())
+    ap, bp = a + h, b + (n - h)
+    results_summary['posterior'].append({
+        'n': n, 'heads': h,
+        'a_post': float(ap), 'b_post': float(bp),
+        'mean': float(ap / (ap + bp)),
+        'var': float(ap * bp / ((ap + bp) ** 2 * (ap + bp + 1))),
+    })
 
 def _to_native(obj):
-    import numpy as np
     if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
     if isinstance(obj, (np.integer,)): return int(obj)
@@ -189,10 +129,11 @@ def _to_native(obj):
     try:
         import torch
         if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
-    except: pass
+    except Exception:
+        pass
     return obj
 
 results_summary = {k: _to_native(v) for k, v in results_summary.items()}
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
     json.dump(results_summary, f, ensure_ascii=False, indent=2)
-print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
+print(f"\n数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

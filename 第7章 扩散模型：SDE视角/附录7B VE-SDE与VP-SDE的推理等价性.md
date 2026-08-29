@@ -50,32 +50,12 @@ $$\hat{x}_t = x_0 + \hat{\sigma}(t)\,\epsilon$$
 
 ## Karras et al. (2022) 的统一框架：把两种"方言"并成一门口语
 
-Karras et al. 在"Elucidating the Design Space of Diffusion-Based Generative Models"中提出统一框架，把 VE-SDE 和 VP-SDE 视为同一框架的两种参数化。
+> **迁移说明**：VE-SDE 与 VP-SDE 在 Karras 统一框架下的**完整形式化**（统一正向 SDE、转移核、最优设计 $c_{\text{skip}}/c_{\text{out}}/c_{\text{in}}/c_{\text{noise}}$、统一训练目标）已收进第 12 章 附录 12C，与"Score ≡ ELBO"一起呈现，那里也是全书统一记号的主场。本附录只保留结论与直觉，不再重复推导。
 
-统一 SDE 引入两个设计选择：
+Karras et al. (2022) 的 EDM 框架证明：VE-SDE 和 VP-SDE 只是同一框架的两种参数化，区别只在**信号缩放 $s(t)$** 和**噪声调度 $\sigma(t)$** 的选择。其核心洞见是：
 
-- **信号缩放** $s(t)$：控制信号的幅度；
-- **噪声调度** $\sigma(t)$：控制噪声的方差。
+**VE-SDE 和 VP-SDE 不是根本不同的方法——它们只是信号缩放和噪声调度的不同选择。统一框架消除了表面差异，让设计者专注于真正重要的选择：信噪比曲线的形状。**
 
-统一正向 SDE：
-
-$$dx = \frac{\dot{s}(t)}{s(t)}x\,dt + s(t)\sqrt{2\dot{\sigma}(t)\sigma(t)}\,dw$$
-
-转移核：
-
-$$p_{0t}(x_t|x_0) = \mathcal{N}(x_t | s(t)x_0, s(t)^2\sigma(t)^2 I)$$
-
-- **VE-SDE**：$s(t) \equiv 1$（无缩放），$\sigma(t)$ 自由选择；
-- **VP-SDE**：$s(t) = e^{-\frac{1}{2}\int_0^t\beta(\tau)\,d\tau}$，$\sigma(t) = \sqrt{(1-\bar\alpha_t)/\bar\alpha_t}/s(t)$。
-
-Karras et al. 进一步推荐了一种"最优"设计：
-
-- $s(t) = 1$（无缩放，避免信号幅度变化）；
-- $\sigma(t)$ 选使 $\dot{\sigma}/\sigma$ 近似常数（几何调度）；
-- 去噪器输出 $D_\theta(x_t, \sigma(t)) = c_{\text{skip}}x_t + c_{\text{out}}F_\theta(c_{\text{in}}x_t, c_{\text{noise}}\sigma(t))$
-
-其中 $c_{\text{skip}}, c_{\text{out}}, c_{\text{in}}, c_{\text{noise}}$ 是精心设计的系数，保证训练目标的单位方差。
-
-**核心洞见**：VE-SDE 和 VP-SDE 不是根本不同的方法——它们只是信号缩放和噪声调度的不同选择。统一框架消除了表面差异，让设计者专注于真正重要的选择：**信噪比曲线的形状**。
+详细公式与逐项推导见附录 12C。
 
 **来源**：Kawar et al. (2022); Karras et al. (2022); Song et al. (2021)
