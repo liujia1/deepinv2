@@ -1,0 +1,12 @@
+{
+  "n": 200,
+  "sigma_blur": 1.0,
+  "noise_level": 0.05,
+  "lam_tik": 0.02,
+  "mu_l1": 0.05,
+  "lam_tv": 0.05,
+  "rel_err_naive": 2.5229,
+  "rel_err_tikhonov": 0.2158,
+  "rel_err_l1": 0.5714,
+  "rel_err_tv": 0.0537
+}
