@@ -2,7 +2,7 @@
 
 > 这一节是 13.2~13.3 节 DPS 算法的"厨房后台"——把每一步推导摊开给你看。如果你只想用 DPS，跳到 13.3.2 的伪代码就够了；但如果你想搞清楚"为什么 delta 近似是合理的""Jacobian 到底是省还是不省"，这里把账算到底。
 
-本附录给出 DPS（Diffusion Posterior Sampling）算法的严格数学推导，从后验得分分解出发，经 Jensen 近似、链式法则、Tweedie 等式，最终得 VP-SDE 和 VE-SDE 下具体算法形式。
+本附录给出 DPS（Diffusion Posterior Sampling）算法的严格数学推导，从后验得分分解出发，经 Jensen 近似、链式法则、Tweedie 等式，最终得 VP-SDE 和 VE-SDE 下具体算法形式。整条推导贯穿同一个思想：DPS 的一切技巧，都是把"算不出的似然得分"逐步替换成"算得出的近似"——下面的每一步都在为这个目标服务。
 
 ---
 
@@ -83,7 +83,7 @@ $$p(x_0|x_t) \approx \delta(x_0 - \hat{x}_{0|t})$$
 
 $$p(y|x_t) = \int p(y|x_0)\,p(x_0|x_t)\,dx_0 \approx \int p(y|x_0)\,\delta(x_0 - \hat{x}_{0|t})\,dx_0 = p(y|\hat{x}_{0|t})$$
 
-**近似解读**：DPS 假设给定 `x_t` 时 `x_0` 全部概率质量集中在后验均值 `x̂_{0|t}` 处。这是最粗近似——丢了 `p(x_0|x_t)` 所有高阶矩（方差、偏度等），只留一阶矩（均值）。
+**近似解读**：DPS 假设给定 `x_t` 时 `x_0` 全部概率质量集中在后验均值 `x̂_{0|t}` 处。这是最粗近似——丢了 `p(x_0|x_t)` 所有高阶矩（方差、偏度等），只留一阶矩（均值）。从更深层次看，这一步等价于把"对整条去噪不确定性的平均"塌缩成"对最可能去噪结果的单点信任"——计算上换来巨大便利，代价是丢失不确定性信息。
 
 ### 3.3 Step 3：近似与 Jensen 下界的关系
 
@@ -125,7 +125,7 @@ $$\nabla_{x_t}\log p(y|x_t) \approx \nabla_{x_t}\log p(y|\hat{x}_{0|t})$$
 
 $$\boxed{\nabla_{x_t}\log p(y|\hat{x}_{0|t}) = \left(\nabla_{x_0}\log p(y|x_0)\Big|_{x_0 = \hat{x}_{0|t}}\right)^\top \cdot \nabla_{x_t}\hat{x}_{0|t}}$$
 
-`∇_{x_t}x̂_{0|t} ∈ R^{n×n}` 是 Tweedie 估计关于含噪状态的 Jacobian 矩阵。
+`∇_{x_t}x̂_{0|t} ∈ R^{n×n}` 是 Tweedie 估计关于含噪状态的 Jacobian 矩阵。这个式子把"关于 `x_0` 的似然梯度"经 Jacobian 回传到"关于 `x_t` 的梯度"——问题也从"算测量空间的梯度"变成"算含噪状态空间的梯度"。
 
 ### 4.2 高斯噪声模型下显式表达
 
@@ -300,6 +300,6 @@ $$\underbrace{\nabla\log p(x_t|y) = \nabla\log p(x_t) + \nabla\log p(y|x_t)}_{\t
 | `p(x_0\|x_t) ≈ δ(x_0 - x̂_{0\|t})` | delta函数替代积分 | 忽略后验方差 | 低噪声阶段误差小 |
 | `∇_{x_t}x̂_{0\|t} ≈ ζ·I` | Jacobian省略 | 方向/大小偏差 | `ζ` 补偿量级 |
 
-DPS 简洁性来自这两步近似的大胆简化——用 delta 替代不可解积分，用标量因子替代 Jacobian。这些近似使 DPS 计算极高效（每步仅一次额外前向传播和反传），但也引入理论不严格——这正是 ΠGDM（各向同性高斯近似）和 DOC（精确反传）等改进方法动机。
+DPS 简洁性来自这两步近似的大胆简化——用 delta 替代不可解积分，用标量因子替代 Jacobian。这些近似使 DPS 计算极高效（每步仅一次额外前向传播和反传），但也引入理论不严格——这正是 ΠGDM（各向同性高斯近似）和 DOC（精确反传）等改进方法动机。从更深层次看，这两步近似揭示了一条普适的权衡法则：**任何条件扩散方法，都是在"近似精度"与"计算代价"之间选一个落脚点**，DPS 选择站在高效率、低精度的那一端。
 
 **来源**：Chung et al. (2023) "Diffusion Posterior Sampling for General Noisy Inverse Problems"；Chung et al. (2209.14687) §3.2 公式(31)-(33)；第7章7.2-7.3节VP-SDE/VE-SDE与逆向SDE；第5章5.3节Tweedie等式

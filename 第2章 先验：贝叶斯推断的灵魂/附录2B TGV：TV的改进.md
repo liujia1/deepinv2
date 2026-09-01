@@ -18,27 +18,27 @@ $$x^* = \arg\min_x \frac{1}{2}\|x - y\|_2^2 + \lambda \int_0^1 |x'| \, dt$$
 
 ## TGV 的定义
 
-Bredies, Kunisch 和 Pock（2010）提出的 **TGV**（Total Generalized Variation，广义全变差）是 TV 高阶推广。二阶 TGV 连续定义：
+TGV 要回答的问题可以概括为一句话：如何在保留 $\ell^1$ 型边缘促进机制的同时，把"正则化代价为零"的函数类从分段常数扩大到分段仿射？Bredies、Kunisch 和 Pock（2010）给出的答案是 **TGV**（Total Generalized Variation，广义全变差）——TV 的高阶推广。二阶 TGV 的连续（对偶）定义：
 
 $$\text{TGV}_\alpha^2(x) = \sup\left\{\int_\Omega x \, \text{div}^2 p \, dx \;\Big|\; p \in C_c^\infty(\Omega, \text{Sym}_{2\times2}),\;\|p\|_\infty \leq \alpha_0,\;\|\text{div}\, p\|_\infty \leq \alpha_1\right\}$$
 
 其中 $\alpha = (\alpha_0, \alpha_1)$ 是两个正参数，$\text{Sym}_{2\times2}$ 是 $2\times 2$ 对称矩阵空间，$\text{div}^2$ 是二阶散度算子。
 
-定义较抽象。更直观理解来自 TGV **原始形式**（primal formulation）：
+定义较抽象。更直观的理解来自 TGV 的**原始形式**（primal formulation）：
 
 $$\text{TGV}_\alpha^2(x) = \min_w \;\alpha_1\|\nabla x - w\|_1 + \alpha_0\|\mathcal{E}(w)\|_1$$
 
 其中：
-- $w$ 是辅助向量场（可理解为对梯度 $\nabla x$ 的"仿射分量"逼近）
-- $\mathcal{E}(w) = \frac{1}{2}(\nabla w + \nabla w^\top)$ 是 $w$ 的**对称梯度**（symmetrized gradient），即 $w$ 的二阶导数信息
+- $w$ 是辅助向量场（可理解为对梯度 $\nabla x$ 中"光滑分量"的逼近）
+- $\mathcal{E}(w) = \frac{1}{2}(\nabla w + \nabla w^\top)$ 是 $w$ 的**对称梯度**（symmetrized gradient）——它是 $w$ 的一阶导数，即 $x$ 的二阶导数信息
 
 ### 逐项解读
 
 **第一项** $\alpha_1\|\nabla x - w\|_1$：惩罚图像梯度 $\nabla x$ 与辅助场 $w$ 的偏差。当 $w = 0$ 时，第一项退化为 $\alpha_1\|\nabla x\|_1 = \alpha_1 \text{TV}(x)$——TGV 退化为加权 TV。
 
-**第二项** $\alpha_0\|\mathcal{E}(w)\|_1$：惩罚 $w$ 的对称梯度 $\ell^1$ 范数。$\mathcal{E}(w)$ 度量 $w$ 的"非仿射性"——若 $w$ 本身是仿射场（对应 $x$ 是二次函数），则 $\mathcal{E}(w) = 0$，第二项为零。
+**第二项** $\alpha_0\|\mathcal{E}(w)\|_1$：惩罚 $w$ 的对称梯度 $\ell^1$ 范数。$\mathcal{E}(w)$ 度量 $w$ 的"形变部分"：若 $w$ 为常数场（更一般地，线性部分反对称的仿射场，即无穷小刚体运动），则 $\mathcal{E}(w) = 0$，第二项为零。
 
-**两者协同**：最小化在对 $w$ 取下确界后，TGV 允许图像梯度 $\nabla x$ 与一个"仿射允许"的辅助场 $w$ 偏离，同时惩罚 $w$ 非仿射性。当图像分段仿射（渐变区域 + 边缘），可选取 $w \approx \nabla x$ 使第一项小，且 $w$ 近似仿射使第二项也小——从而 TGV 值低，TGV 正则化不会惩罚分段仿射结构。
+**两者协同**：最小化在对 $w$ 取下确界后，TGV 允许图像梯度 $\nabla x$ 与辅助场 $w$ 偏离，同时只惩罚 $w$ 的形变部分。关键情形是分段仿射图像（渐变区域 + 边缘）：此时 $\nabla x$ 近似分段常数，取 $w \approx \nabla x$ 使第一项小，而分段常数场的对称梯度几乎为零，第二项也小——从而 TGV 值低，TGV 正则化不会惩罚分段仿射结构。这正是"引入二阶信息即可放宽常数假设"这一设计思想的兑现。
 
 ---
 
@@ -46,11 +46,11 @@ $$\text{TGV}_\alpha^2(x) = \min_w \;\alpha_1\|\nabla x - w\|_1 + \alpha_0\|\math
 
 ### TV 是 TGV 的特例
 
-当 $\alpha_0 \to \infty$ 时，第二项 $\alpha_0\|\mathcal{E}(w)\|_1$ 权重趋无穷，迫使 $\mathcal{E}(w) = 0$，即 $w$ 必须是仿射场。若进一步限制 $w = 0$（仿射场最简情形），则 TGV 退化为 TV：
+当 $\alpha_0 \to \infty$ 时，第二项 $\alpha_0\|\mathcal{E}(w)\|_1$ 权重趋于无穷，迫使 $\mathcal{E}(w) = 0$，即 $w$ 只能是无穷小刚体运动（常数场，或线性部分反对称的仿射场）。若在此基础上进一步限制 $w = 0$（最简单的刚体运动），则 TGV 退化为 TV：
 
 $$\text{TGV}_{(\alpha_0 \to \infty, \alpha_1)}^2(x) \to \alpha_1\|\nabla x\|_1 = \alpha_1 \text{TV}(x)$$
 
-因此，**TV 是 TGV 在 $\alpha_0 \to \infty$ 时的特例**。TGV 比 TV 多一个自由度 $\alpha_0$，用于控制对二阶信息的容忍程度。
+因此，**TV 是 TGV 在 $\alpha_0 \to \infty$（并限制 $w=0$）时的特例**。TGV 比 TV 多一个自由度 $\alpha_0$，用于控制对二阶信息的容忍程度。
 
 ### 函数空间差异
 
@@ -69,7 +69,7 @@ $$\text{TGV}_{(\alpha_0 \to \infty, \alpha_1)}^2(x) \to \alpha_1\|\nabla x\|_1 =
 
 ## 离散 TGV 模型
 
-实际计算中需将连续 TGV 离散化。设图像定义在离散网格上，$D$ 为有限差分算子，$E$ 为对称梯度算子。离散 TGV：
+理论定义最终要落到可计算的格式上。实际计算中需将连续 TGV 离散化。设图像定义在离散网格上，$D$ 为有限差分算子，$E$ 为对称梯度算子。离散 TGV：
 
 $$\text{TGV}(x) = \min_w \;\alpha_1\|Dx - w\|_1 + \alpha_0\|Ew\|_1$$
 
@@ -79,7 +79,7 @@ TGV 正则化去噪模型：
 
 $$\min_{x, w} \;\frac{1}{2}\|x - y\|_2^2 + \alpha_1\|Dx - w\|_1 + \alpha_0\|Ew\|_1$$
 
-这是凸优化问题，可用**原始-对偶方法**（primal-dual method）高效求解。与 TV 去噪比，TGV 优化变量增加 $w$，但算法框架相同，只是变量和约束更多。
+这是凸优化问题（目标为凸函数之和，对 $(x,w)$ 联合凸），可用**原始-对偶方法**（primal-dual method）高效求解。与 TV 去噪比，TGV 优化变量增加 $w$，但算法框架相同，只是变量和约束更多。
 
 参数 $(\alpha_0, \alpha_1)$ 选取通常经验调参或 L-曲线法确定。Bredies 等人建议 $\alpha_0 / \alpha_1 \approx 2$ 作为起点。
 
@@ -117,7 +117,7 @@ TGV 在以下场景相比 TV 有显著优势：
 
 ## 实验 2B-1：TGV 缓解阶梯效应——从分段常数到分段仿射
 
-前面理论分析指出，TGV 通过引入二阶导数信息，将 TV 分段常数假设推广为分段仿射假设，从而缓解阶梯效应。但自然的问题是：**TGV 在实际图像上是否真能消除阶梯？辅助向量场 $w$ 如何工作？参数选择对结果有何影响？** 实验 `2.b-1.py` 通过 cameraman 图像去噪任务，系统验证附录 2B 所有核心结论。
+前面理论分析指出，TGV 通过引入二阶导数信息，将 TV 的分段常数假设推广为分段仿射假设，从而缓解阶梯效应。但自然的问题是：**TGV 在实际图像上是否真能消除阶梯？辅助向量场 $w$ 如何工作？参数选择对结果有何影响？** 实验 `2.b-1.py` 通过 cameraman 图像去噪任务，系统验证附录 2B 所有核心结论。
 
 ### 实验场景
 
@@ -222,7 +222,7 @@ TGV 在以下场景相比 TV 有显著优势：
 
 ## 为何本书不展开 TGV
 
-TGV 是 TV 精细化改良，特定应用中确实有效。但它属于**显式先验内部改进**——仍假设某种参数化正则项形式（一阶+二阶导数的 $\ell^1$ 惩罚），只是比 TV 多引入一阶。TGV 没参与"贝叶斯→扩散"主线叙事：
+TGV 是 TV 的精细化改良，特定应用中确实有效。但它属于**显式先验内部改进**——仍假设某种参数化正则项形式（一阶+二阶导数的 $\ell^1$ 惩罚），只是比 TV 多引入一项二阶信息。TGV 没参与"贝叶斯→扩散"主线叙事：
 - TGV 没改变"人为指定先验形式"本质——仍须手工选正则项结构和参数
 - TGV 改进是量变（分段常数到分段仿射），非质变（显式到隐式）
 - TGV 阶梯效应缓解只是延缓问题——分段仿射假设在更高阶渐变（如二次渐变）中仍可能不足
@@ -235,4 +235,4 @@ TGV 是 TV 精细化改良，特定应用中确实有效。但它属于**显式�
 
 Bredies K., Kunisch K., Pock T. "Total Generalized Variation." *SIAM Journal on Imaging Sciences*, 3(3):492-526, 2010.
 
-> **附录2B的要点**：TGV 通过同时惩罚一阶和二阶导数，将 TV 分段常数假设推广为分段仿射假设，有效缓解阶梯效应。TGV 是 TV 推广（$\alpha_0 \to \infty$ 时 TGV 退化为 TV），在渐变区域显著改善重建质量。但 TGV 仍是显式先验精细化改良，不改变"人为指定先验形式"本质——本书主线走向从数据中学先验的隐式路径。
+> **附录2B的要点**：TGV 通过同时惩罚一阶和二阶导数，将 TV 的分段常数假设推广为分段仿射假设，有效缓解阶梯效应。TGV 是 TV 的推广（$\alpha_0 \to \infty$ 且限制 $w=0$ 时 TGV 退化为 TV），在渐变区域显著改善重建质量。但 TGV 仍是显式先验精细化改良，不改变"人为指定先验形式"本质——本书主线走向从数据中学先验的隐式路径。

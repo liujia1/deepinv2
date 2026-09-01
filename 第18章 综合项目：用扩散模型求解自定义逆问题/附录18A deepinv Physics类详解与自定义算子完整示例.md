@@ -1,12 +1,12 @@
 # 附录18A deepinv Physics类详解与自定义算子完整示例
 
-> 定位：18.2 节讲了 Physics 类的设计哲学和"为什么要成对写 $A$ 与 $A^\top$"。这一附录是"工具箱说明书"——把 `LinearPhysics` 的每个方法、每个常用内置类、以及 18.2 里那个多视角下采样算子的**完整可跑代码**摊开给你。想直接 copy 改，看这里。
+> 定位：18.2 节讲了 Physics 类的设计哲学和"为什么要成对写 $A$ 与 $A^\top$"。这一附录是"工具箱说明书"——把 `LinearPhysics` 的每个方法、每个常用内置类、以及 18.2 里那个多视角下采样算子的**完整可跑代码**摊开给你。想直接 copy 改，看这里。换句话说，18.2 说"物理引擎即正向模型"，这一页就是造引擎用的零件手册——手册里的每个零件，都能在 18.4 的管线上对号入座。
 
 > 提示：本附录是 API 参考，公式与代码为主、叙述为辅，可跳过不影响主线。
 
 ## LinearPhysics类的方法详解
 
-`deepinv.physics.LinearPhysics`是定义线性前向算子的基类。以下是其核心方法的详细说明。
+`deepinv.physics.LinearPhysics`是定义线性前向算子的基类。它是 18.2 那句"成对写 $A$ 与 $A^\top$"的直接代码化：$A$ 负责"把世界变成数据"，`A_adjoint` 负责"把数据拉回世界"，两者互为镜像、缺一不可。以下是其核心方法的详细说明。
 
 ### 构造函数
 
@@ -52,14 +52,14 @@ def A_adjoint(self, y, **kwargs):
 #### A_dagger(y) —— 伪逆运算
 
 ```python
-def A_dagger(self, y, solver='lsqr', **kwargs):
+def A_dagger(self, y, solver='CG', **kwargs):
     """计算 x_hat = A^dagger(y)（最小二乘解）
 
     参数:
         y: 测量数据
-        solver: 求解器选择
+        solver: 求解器选择（默认 'CG'）
+            - 'CG': 共轭梯度法
             - 'lsqr': LSQR迭代求解
-            - 'cg': 共轭梯度法
     返回:
         x_hat: 伪逆解
     """
@@ -71,31 +71,33 @@ def A_dagger(self, y, solver='lsqr', **kwargs):
 def adjointness_test(self, x):
     """验证伴随算子的正确性
 
-    测试 <A(x), y> == <x, A_adjoint(y)> 是否成立
+    测试 <v, A(x)> == <A_adjoint(v), x> 是否成立（v 为与 A(x) 同形状的随机向量）
 
     参数:
         x: 测试输入
     返回:
-        相对误差 |<Ax,y> - <x,A^T y>| / |<Ax,y>|
+        两个内积之差——理论应为 0，实际在所选 dtype 的精度量级
     """
 ```
 
 #### compute_norm(x) —— 算子范数
 
 ```python
-def compute_norm(self, x, max_iter=100, tol=1e-6):
+def compute_norm(self, x, max_iter=100, tol=1e-3):
     """计算算子的L2范数 ||A||_2（通过幂迭代法）
 
     参数:
         x: 初始化向量
         max_iter: 最大迭代次数
-        tol: 收敛容差
+        tol: 收敛容差（默认 verbose=True 时会打印迭代信息）
     返回:
         算子范数的估计值
     """
 ```
 
 ## 常用内置Physics类
+
+造自己的算子之前，先看看库里已有哪些"现成引擎"——多数任务改改参数就能直接用，这也正是 deepinv 的设计意图：**把物理写成可组合的对象，而不是一次性脚本**。
 
 ### Denoising —— 去噪（A=I）
 
@@ -109,11 +111,13 @@ physics.set_noise_model(dinv.physics.GaussianNoise(sigma=0.1))
 ```python
 # 高斯模糊
 kernel = dinv.physics.blur.gaussian_blur(sigma=(3.0, 3.0))
-physics = dinv.physics.Blur(img_size=(3, 256, 256), filter=kernel)
+physics = dinv.physics.Blur(filter=kernel)   # img_size 无需传入，首次前向时自动推断
 
-# 运动模糊
-kernel = dinv.physics.blur.motion_blur(length=15, angle=30)
-physics = dinv.physics.Blur(img_size=(3, 256, 256), filter=kernel)
+# 运动模糊：deepinv 未内置 motion_blur 生成器，需自构卷积核后交给 Blur
+# （配套实验脚本中的 create_motion_blur_kernel 就是这种做法：
+#   沿给定角度生成一条归一化的线段核）
+kernel = create_motion_blur_kernel(length=15, angle=30)   # 自定义函数，见配套实验
+physics = dinv.physics.Blur(filter=kernel)
 
 # FFT加速的模糊（大核推荐）
 physics = dinv.physics.BlurFFT(img_size=(3, 256, 256), filter=kernel)
@@ -151,7 +155,7 @@ physics = dinv.physics.Inpainting(img_size=(3, 256, 256), mask=mask)
 ```python
 physics = dinv.physics.Tomography(
     img_width=256,
-    num_angles=30,      # 投影角度数
+    angles=30,          # 投影角度数（整数时在 0°–360° 内均匀采样）
     noise_model=dinv.physics.GaussianNoise(sigma=0.05)
 )
 ```
@@ -298,7 +302,7 @@ x_pinv = physics.A_dagger(y, solver='lsqr')
 
 ## 伴随算子的自动计算
 
-如果手动实现伴随算子困难，可以使用deepinv提供的自动伴随函数：
+如果手动实现伴随算子困难，可以使用deepinv提供的自动伴随函数——这正是 18.2.4 那句"先公证、再上岗"的兜底工具：哪怕你只会写前向，也能拿到数学上正确的伴随。
 
 ```python
 from deepinv.physics import adjoint_function
@@ -309,8 +313,8 @@ def my_forward(x):
     # ... 任意PyTorch运算 ...
     return y
 
-# 创建自动伴随函数
-auto_adjoint = adjoint_function(my_forward, input_shape=(1, 3, 256, 256))
+# 创建自动伴随函数（第二个参数 input_size 是输入 x 的形状）
+auto_adjoint = adjoint_function(my_forward, (1, 3, 256, 256))
 
 # 使用
 z = auto_adjoint(y)  # 等价于 A^T y

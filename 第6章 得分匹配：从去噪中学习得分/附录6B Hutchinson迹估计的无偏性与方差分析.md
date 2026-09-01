@@ -26,7 +26,7 @@ $$\widehat{\mathrm{Tr}}_M(A)=\frac{1}{M}\sum_{j=1}^M v_j^T A v_j.$$
 
 **无偏性**：$\mathbb{E}[\widehat{\mathrm{Tr}}_M]=\mathrm{Tr}(A)$。
 
-**方差**：因独立同分布，$\mathrm{Var}(\widehat{\mathrm{Tr}}_M)=\mathrm{Var}(v^T A v)/M$。$M$ 越大方差越小，但计算量正比于 $M$。
+**方差**：因独立同分布，$\mathrm{Var}(\widehat{\mathrm{Tr}}_M)=\mathrm{Var}(v^T A v)/M$。$M$ 越大方差越小，但计算量正比于 $M$。换言之，这是一个"用更多随机样本换更稳的估计"的经典权衡。
 
 ## 方差分析：不同采样分布
 
@@ -46,7 +46,7 @@ $$\mathrm{Var}(v^T A v)=2\|A\|_F^2-2\sum_{i=1}^d A_{ii}^2=2\big(\|A\|_F^2-\|A\ci
 
 $$\mathrm{Var}_{\text{Rademacher}}-\mathrm{Var}_{\text{Gauss}}=-2\sum_i A_{ii}^2\le0.$$
 
-所以**实践里推荐 Rademacher**——同样 $M$ 下方差更低。
+所以**实践里推荐 Rademacher**——同样 $M$ 下方差更低。这里的直觉是：Rademacher 把分布"squeeze"到 $\pm1$ 两点，在保持二阶矩恒等的同时，避免了高斯分布那种来自长尾的四阶矩波动。
 
 ## 在得分匹配中的应用
 
@@ -63,5 +63,7 @@ SSM 里 $A=\nabla_x s_\theta(x)$ 是得分网络的 Jacobian。要估 $\mathrm{T
 | Hutchinson $M=10$ | $O(10)$ JVP | 无偏，方差中 |
 
 实践中 $M=1$ 就能拿无偏估计（方差大点无所谓），多次平均再降方差。SSM 训练常取 $M=1$，因为训练本身的小批量采样和 SGD 噪声已经能平滑单次估计的方差。
+
+从更深层次看，这一"无偏但略抖、可以靠多次平均补救"的特点，正是随机投射类方法共通的代价与便捷：用可控的方差交换掉高不可攀的精确计算。
 
 **来源**：Hutchinson (1990); Song et al. (2019) Sliced Score Matching
