@@ -1,6 +1,6 @@
 # 附录8A Fenchel共轭与ELBO的优化理论根基
 
-> 定位：为 8.4 节"变分推断与正则化的统一视角"提供 Fenchel 共轭的数学基础，建立 ELBO 与凸分析的联系。读完你会明白：ELBO 不是拍脑袋的下界，它是凸优化里"对偶问题"的自然产物——也是 8.3 节零强迫/零避免 aha 背后"为什么变分推断选逆向 KL 就天然可算"的统一解释框架。
+> 定位：为 8.4 节"变分推断与正则化的统一视角"提供 Fenchel 共轭的数学基础，建立 ELBO 与凸分析的联系。读完你会明白：ELBO 并非随意构造的下界，它是凸优化里"对偶问题"的自然产物——也是 8.3 节零强迫/零避免 aha 背后"为什么变分推断选逆向 KL 就天然可算"的统一解释框架。
 
 ## 凸共轭（Fenchel共轭）定义
 
@@ -9,6 +9,8 @@
 $$f^*(y) = \sup_{x \in \mathbb{R}^n} [\langle y, x \rangle - f(x)]$$
 
 凸共轭 $f^*$ 永远凸（无论 $f$ 是否凸），因为它是仿射函数族 $\langle y, x\rangle - f(x)$ 关于 $y$ 的上确界，而上确界保凸。
+
+先停下来建立直觉：为什么要给一个函数做这种"共轭"操作？因为很多关于函数的问题（求极值、求下界、写对偶），换个视角看同一件事会简单得多。凸共轭就是把一个函数重新包装成"以斜率为自变量"的另一种描述——$\log p(x)$ 与正则化的统一，正是靠这种"换个自变量"的视角翻转才显现出来的。
 
 ### 几何意义
 
@@ -61,9 +63,11 @@ $$\boxed{\log p(x) = F^*[\log p(x,\cdot)] = \sup_q \text{ELBO}(q)}$$
 
 **ELBO 是 $\log p(x)$ 的 Fenchel 对偶表示**——通过凸共轭获得的下界。变分间隙 $\text{KL}(q\|p(z|x))$ 对应 Fenchel-Young 间隙。
 
+到这里，停一下体会这条等式的分量：它把"最大化 ELBO"与"$\log p(x)$ 这个数"之间，安上了一把通用数学语言——对偶。这也正是 8.4 节"统一不是比喻"的真正底气：ELBO 与 $p(x)$ 的关系，和凸优化里原始-对偶的关系，是同一件事。
+
 ### 更直接的视角
 
-ELBO 的 Jensen 推导，本身就是 Fenchel-Young 在凹函数情形的特例：$\log$ 是凹函数，对凹函数 $g$ 的 Jensen 是 $\mathbb{E}[g(X)]\leq g(\mathbb{E}[X])$；对凸函数 $f=-g$ 则是 $\mathbb{E}[f(X)]\geq f(\mathbb{E}[X])$——正是 Fenchel-Young 取极限的样子。所以 **Jensen 推导 ELBO 是 Fenchel-Young 的特例**，都来自凸分析同一根基。
+ELBO 的 Jensen 推导，本身就是 Fenchel-Young 在凹函数情形的特例：$\log$ 是凹函数，对凹函数 $g$ 的 Jensen 是 $\mathbb{E}[g(X)]\leq g(\mathbb{E}[X])$；对凸函数 $f=-g$ 则是 $\mathbb{E}[f(X)]\geq f(\mathbb{E}[X])$——正是 Fenchel-Young 取极限的样子。所以 **Jensen 推导 ELBO 是 Fenchel-Young 的特例**，都来自凸分析同一根基。这一转变意味着，我们在 8.2 节靠 Jensen 得到的结果，并不是孤立的小技巧，而是一条高阶法则（凸对偶）在大分布空间里的投影。
 
 ---
 
@@ -154,6 +158,6 @@ $$\max_p \left[-\frac{1}{2}\|A^*p\|^2 - \frac{1}{2\lambda}\|p - y/\lambda\|^2 + 
 | KL间隙 | 对偶间隙 |
 | $q = p(z\|x)$ 时间隙为零 | 强对偶时间隙为零 |
 
-两者共享同一套凸分析工具——Fenchel 共轭是统一数学语言。这解释了为何 ELBO 与正则化有相同"数据+正则"结构：**它们是同一个凸优化问题的不同表达**。
+两者共享同一套凸分析工具——Fenchel 共轭是统一数学语言。这解释了为何 ELBO 与正则化有相同"数据+正则"结构：**它们是同一个凸优化问题的不同表达**。这一转变意味着，第 2 章的 MAP 正则化作图和本章的 ELBO 变分推断，并不是两条不相干的支流，而是一条凸分析大河的两岸。
 
 **来源**：Benning L2 P23-25; LectureNotes2020_v2 Ch4 (Fenchel conjugate, lines 1832-1979); Rockafellar (1970) Convex Analysis; Borwein & Lewis (2010) Convex Analysis and Nonlinear Optimization

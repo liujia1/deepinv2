@@ -89,8 +89,7 @@ ax.set_title("后验随数据增多：移动并收拢，先验被'洗掉'")
 ax.legend(fontsize=9)
 ax.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '实验1_5_1_硬币贝叶斯更新.png'), dpi=150, bbox_inches='tight')
-plt.show()
+plt.savefig(os.path.join(SAVE_DIR, '实验1_5_1_硬币贝叶斯更新.png'), dpi=150, bbox_inches='tight')  # 仅保存图片，不弹窗
 plt.close()
 
 # ---- 结论 ----

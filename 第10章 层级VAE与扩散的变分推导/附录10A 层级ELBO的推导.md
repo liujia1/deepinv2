@@ -1,6 +1,6 @@
 # 附录 10A 层级 ELBO 的完整推导
 
-> 定位：给 10.1 节"层级 ELBO 推导"补上详细代数。如果你只想用结论，可以跳过本附录——记住那行框起来的公式就够了。本附录只做一件事：把"单层 ELBO 推广到多层"的每一步补齐，并验证 $L=1$ 时退化回标准单层 ELBO。
+> 定位：给 10.1 节"层级 ELBO 推导"补上详细代数。如果你只想用结论，可以跳过本附录——记住那行框起来的公式就够了。本附录只做一件事：把"单层 ELBO 推广到多层"的每一步补齐，并验证 $L=1$ 时退化回标准单层 ELBO。从更深层次看，这份推导正是本书变分路径的承重墙——后面把每个 $z_l$ 换成时间步 $x_t$ 时，10.2 节的三项 VLB 就从这堵墙里自然长出来；把它走一遍，你就理解了为什么扩散的训练目标"从头到尾都是 KL 散度在排队"。
 
 ---
 
@@ -99,5 +99,7 @@ $$\text{ELBO}(\mathbf{x}_0) = \mathbb{E}_{q(\mathbf{x}_1|\mathbf{x}_0)}[\log p_\
 $$\text{ELBO}(\mathbf{x}_0) = \mathbb{E}_{q(\mathbf{x}_1|\mathbf{x}_0)}[\log p_\theta(\mathbf{x}_0|\mathbf{x}_1)] - D_{\text{KL}}(q(\mathbf{x}_T|\mathbf{x}_0) \| p(\mathbf{x}_T)) - \sum_{t=2}^{T} \mathbb{E}_{q(\mathbf{x}_t|\mathbf{x}_0)}\left[D_{\text{KL}}(q(\mathbf{x}_{t-1}|\mathbf{x}_t, \mathbf{x}_0) \| p_\theta(\mathbf{x}_{t-1}|\mathbf{x}_t))\right]$$
 
 这正是 10.2 节 VLB 三项分解的来源。
+
+收个尾，把这条推导放回全章的位置：我们从"单层 ELBO 除以一个 $q/q=1$"出发，一路走到"扩散版的三项 VLB"，中间没有引入任何新的目标函数，只是把同一套变分工具搬到了更长的链条上。这一转变意味着，扩散模型的可训练目标不是另起炉灶的发明，而是贝叶斯变分推断在层级结构下的忠实翻版——只要愿意把链拉长、把分布设为高斯，扩散的损失就会自动从推导中浮现。
 
 **来源**：Tutorial on Diffusion Models for Imaging and Vision Theorem 2.3-2.4; Ho et al. (2020) DDPM Appendix A

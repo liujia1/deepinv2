@@ -8,15 +8,17 @@
 
 14.1 节定义了 Wasserstein 距离 $W_2$，它给概率分布空间 $\mathcal{P}_2(\mathbb{R}^d)$ 赋予了度量结构。一个深刻的问题：这个度量空间有没有更丰富的几何——比如流形上的"切空间""测地线"？答案是肯定的，这就是 **Wasserstein 空间** 的黎曼结构。
 
+这一转变意味着：$W_2$ 不只是"一个距离函数"，而是携带了整套微分几何——分布之间不仅可以比较远近，还可以讨论方向、速度与加速度。一旦分布空间有了几何，"学习一个传输"就变成了"在几何空间里走一条路"，后文三节都建立在这个视角上。
+
 ### Wasserstein 空间的切空间
 
 在黎曼几何里，切空间描述流形上某点的"无穷小邻域"。在 Wasserstein 空间里，分布 $\mu$ 处的"切向量"是一个向量场 $v:\mathbb{R}^d\to\mathbb{R}^d$，描述 $\mu$ 的一个无穷小扰动。
 
-形式化地，设 $\mu_t$ 是 Wasserstein 空间里一条光滑路径，$\mu_0=\mu$。由连续性方程，存在向量场 $v_0$ 使
+形式化地，设 $\mu_t$ 是 Wasserstein 空间里一条光滑路径，$\mu_0=\mu$。由连续性方程（附录14A），存在向量场 $v_0$ 使
 
 $$\frac{\partial \mu_t}{\partial t}\bigg|_{t=0} + \nabla \cdot (\mu\,v_0) = 0$$
 
-这个 $v_0$ 就是 $\mu$ 处沿路径方向的"切向量"。**白话：在分布空间里"挪一小步"，等价于在整个空间里定义一个向量场。**
+这个 $v_0$ 就是 $\mu$ 处沿路径方向的"切向量"。**白话：在分布空间里"挪一小步"，等价于在整个空间里定义一个向量场。**这也正是本章的主旋律在几何层面的显影——向量场不只是网络要学的"目标函数"，它本身就是分布空间里的"方向"这个概念本身。
 
 ### 黎曼度量
 
@@ -24,7 +26,7 @@ Wasserstein 空间上的黎曼度量由切向量的 $L^2$ 内积定义：对切�
 
 $$\langle v_1, v_2 \rangle_\mu = \int \langle v_1(x), v_2(x) \rangle\,d\mu(x)$$
 
-诱导的范数 $\|v\|_\mu^2=\int\|v(x)\|^2d\mu(x)$ **恰好就是传输代价**——Wasserstein 距离的"微分"正是这个范数的积分。这把"搬运距离"和"几何长度"统一了。
+诱导的范数 $\|v\|_\mu^2=\int\|v(x)\|^2d\mu(x)$ **恰是无穷小传输代价**——沿常速测地线把这个速率对时间积分，正好还原出 $W_2$ 距离。这把"搬运代价"和"几何长度"统一了。
 
 ### Otto calculus（白话：在分布空间里做微积分）
 
@@ -32,7 +34,7 @@ Otto (2001) 发展了一套在 Wasserstein 空间上的微分计算，叫 **Otto
 
 $$\text{grad}_W \mathcal{F}(\mu) = \nabla \frac{\delta \mathcal{F}}{\delta \mu}$$
 
-其中 $\frac{\delta\mathcal{F}}{\delta\mu}$ 是泛函 $\mathcal{F}$ 的一阶变分（函数导数）。
+其中 $\frac{\delta\mathcal{F}}{\delta\mu}$ 是泛函 $\mathcal{F}$ 的一阶变分（函数导数）。从更深层次看，Otto calculus 的意义在于把整个变分分析搬到分布空间：一旦"梯度"有了定义，梯度下降就不再只是参数空间里的训练技术，而成为在分布本身上迭代修正信念的机制——这正是本书"信念逐步重建"母题的几何表述。
 
 ### 与 Langevin 动力学的联系（因果：把前面章节串起来）
 
@@ -44,7 +46,7 @@ Wasserstein 梯度流：
 
 $$\frac{\partial \mu_t}{\partial t} = \nabla\cdot(\mu_t\,\text{grad}_W\text{KL}) = \nabla\cdot(\mu_t\nabla\log\mu_t) - \nabla\cdot(\mu_t\nabla\log p) = \Delta\mu_t - \nabla\cdot(\mu_t\nabla\log p)$$
 
-这正是 Fokker-Planck 方程——Langevin SDE $\frac{dx}{dt}=\nabla\log p(x)+\sqrt{2}\,dw$ 的概率密度演化。**含义：Langevin 动力学 = KL 散度在 Wasserstein 空间上的梯度流 + 噪声。** 梯度流部分把分布推向 $p$，噪声部分防止坍缩到众数。这深化了第4-5章的讨论：Langevin 不仅是"得分驱动采样"，更是 Wasserstein 空间里的"梯度下降 + 正则化"。
+这正是 Fokker-Planck 方程——Langevin SDE $dx=\nabla\log p(x)\,dt+\sqrt{2}\,dw$ 的概率密度演化。**含义：Langevin 动力学 = KL 散度在 Wasserstein 空间上的梯度流 + 噪声。** 梯度流部分把分布推向 $p$，噪声部分防止坍缩到众数。这深化了第4-5章的讨论：Langevin 不仅是"得分驱动采样"，更是 Wasserstein 空间里的"梯度下降 + 正则化"。
 
 ### 与 Flow Matching 的联系（因果收束）
 
@@ -53,7 +55,7 @@ $$\frac{\partial \mu_t}{\partial t} = \nabla\cdot(\mu_t\,\text{grad}_W\text{KL})
 - **Rectified Flow + Reflow**：迭代逼近测地线（每轮 Reflow 减少与测地线距离）；
 - **扩散模型**：走非测地线路径（由 SDE 结构决定，弯曲）。
 
-三者都能在 Wasserstein 空间的黎曼框架下统一理解——区别仅在于所走路径是不是测地线。
+三者都能在 Wasserstein 空间的黎曼框架下统一理解——区别仅在于所走路径是不是测地线。从更深层次看，这个框架给整章提供了共同的几何语言：生成建模不再只是"训练一个网络"，而是在分布空间的几何中选一条路——测地线、逼近测地线，或一条更弯但别有用处的路。
 
 ## 参考文献
 

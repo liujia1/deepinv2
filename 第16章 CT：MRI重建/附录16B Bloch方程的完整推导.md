@@ -2,6 +2,8 @@
 
 > 定位：16.3.1 节简述了 Bloch 方程和 MRI 信号生成，本附录提供 Bloch 方程的完整推导和稳态信号的解析解。数学推理保持原样，用口语串起来。
 
+为什么把 Bloch 方程的推导单独放到这里？因为它是"MRI 为何能得到傅里叶变换"的物理基石：方程中的旋转项给出了 Larmor 进动（不同位置质子转得不同，因而能编码空间信息），弛豫项给出了图像的对比度（不同组织 $T_1$、$T_2$ 不同）。把这两块推导都走通，16.3.2 的 k-space 信号公式就不再是凭空掉下来的结果，而是从物理出发一步步"长出来"的。
+
 ## B.1 Bloch方程的矩阵形式
 
 磁化矢量 $\mathbf{m} = (m_x,m_y,m_z)$ 在静磁场 $\mathbf{B}_0 = (0,0,B_0)$ 中的动力学由 Bloch 方程描述：
@@ -63,5 +65,7 @@ $$s(t) = \int m_{xy}(t,\mathbf{r})\, d\mathbf{r} = \int u(\mathbf{r}) \exp\left(
 $$s(\mathbf{k}) = \int u(\mathbf{r}) e^{-2\pi i \mathbf{k}\cdot\mathbf{r}} d\mathbf{r} = \hat{u}(\mathbf{k})$$
 
 这就得到了 16.3.2 节的关键结论：**MRI 信号是图像的傅里叶变换**。$\blacksquare$
+
+走到这一步，"从自旋到 k-space"的链条便完整闭合：磁化矢量在梯度中进动（旋转项）、随时间弛豫（弛豫项），线圈读到的合成信号正好是对有效自旋密度的傅里叶采样。这一转变意味着，MRI 求逆问题的难度并不在于"信号难解"，而在于"我们选择只采一部分频率"——这正是 16.3.3、16.3.4 加速采集及后续学习型、扩散方法的真正切入点。
 
 **来源**：IP_and_Im_Lectures-master magnetic_resonance_imaging.md；Bloch (1946) Nuclear Induction

@@ -2,6 +2,8 @@
 
 > 定位：16.1.3 节给出了 Fourier 切片定理的陈述和证明思路，本附录提供完整严格的证明以及 FBP 公式的推导。数学部分保持原文推理，这里用更口语的语言串起来。
 
+放在正文之外的这段证明，价值不只是"补一个严谨性"：Fourier 切片定理是把"投影"与"频域"两层视图钉在一起的支点，而 FBP 里"先 $|\omega|$ 滤波、再反投影"的两个步骤，恰恰就从这个定理推出来。所以看懂本附录 = 真正看清 CT 重建为何长这个样子。下面照 16.1.3 的直觉，一步步把等号写严。
+
 ## A.1 Radon变换的函数空间性质
 
 **定义**：设 $u \in L^2(\Omega)$，$\Omega = \{x \in \mathbb{R}^2 : |x| \le 1\}$，Radon 变换定义为：
@@ -57,5 +59,7 @@ $$u(x) = \int_0^{\pi} \left[\int_{-\infty}^{\infty} |\omega| \cdot \widehat{\mat
 $$\boxed{u(x) = \int_0^{\pi} \mathcal{F}^{-1}\left[|\omega| \cdot \widehat{\mathcal{R}_\theta u}(\omega)\right](x_1\cos\theta + x_2\sin\theta)\, d\theta = \mathcal{R}^*\, \mathcal{F}^{-1}[|\omega| \cdot \widehat{\mathcal{R}_\theta u}]}$$
 
 这就是 FBP 公式。$\blacksquare$
+
+回顾这个推导全过程：斜坡滤波器 $|\omega|$ 并非凭空出现，而是极坐标 Jacobian 的必然产物——它抵消了"低频被反复扫描"造成的过度加权。这一转变意味着，FBP 的本质是一次"重加权后的反投影"：先用 $|\omega|$ 把径向频域的权重补齐，再反投影回图像空间。这也是 16.1.4 中"先滤波、再反投影"最严格的来源。
 
 **来源**：IP_and_Im_Lectures-master tomography.md；Siltanen Day3A P51；Natterer (1986) The Mathematics of Computerized Tomography
