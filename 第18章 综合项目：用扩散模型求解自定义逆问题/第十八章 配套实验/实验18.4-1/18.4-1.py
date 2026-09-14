@@ -87,6 +87,15 @@ n_diffusion_steps = 100  # 扩散采样步数: 100(快速), 300(平衡), 1000(�
 show_progress = True  # 是否显示扩散采样进度条
 use_cache = True  # ★ 是否启用结果缓存（避免重复计算）
 cache_file = os.path.join(SAVE_DIR, 'experiment_cache.pkl')  # ★ 缓存文件路径
+# ★ 缓存版本号：退化场景定义/求解参数/方法配置变更时必须+1（如 v2: Blur→BlurFFT、mask语义修正；
+#   v3: TV优化器显式传入x_init初值，修复超分场景TV重建全黑问题；
+#   v4: 缓存额外保存真实重建图（CPU张量），可视化不再降级显示；
+#   v5: TV外层迭代 30→150（但该版本params参数名错误，已被v6取代）；
+#   v6: 修正 optim_builder 参数名 params→params_algo（旧名被静默忽略，TV实际跑默认λ=1/step=1），
+#       并按场景分别设置TV的(λ,stepsize)，修复超分TV卡通化且步数越多越差的问题；
+#   v7: Tikhonov的λ由固定0.1改为相对算子范数缩放（λ=0.1·‖A‖²），修复超分场景Tikhonov又暗又糊。
+#   加载时版本不匹配的旧缓存会自动失效，避免复用基于错误代码的旧结果。
+CACHE_VERSION = 7
 
 # 安装deepinv
 try:
@@ -104,7 +113,7 @@ else:
     dinv = deepinv
     print(f"deepinv 版本: {dinv.__version__}")
 
-from deepinv.physics import Downsampling, Blur, Inpainting, GaussianNoise
+from deepinv.physics import Downsampling, BlurFFT, Inpainting, GaussianNoise
 from deepinv.utils import load_example
 
 
@@ -186,13 +195,15 @@ try:
             light_kernel = dinv.physics.blur.gaussian_blur(sigma=(1.5, 1.5))
             heavy_kernel = dinv.physics.blur.gaussian_blur(sigma=(3.0, 3.0))
 
-    # 使用 "circular" padding 确保卷积输出与输入同尺寸
-    # 注意：constant/valid padding 会导致输出尺寸变小，无法与原图比较PSNR
-    light_blur = Blur(filter=light_kernel, padding="circular", device=device)
+    # ★ 修复：使用可分解的 BlurFFT 而非 Blur（对应DPIR等依赖SVD的方法）
+    #   原因：Blur 为非可分解算子（无SVD），DPIR 的数据保真步 prox_l2 需内层迭代求解，收敛差；
+    #   而 BlurFFT 基于 FFT 实现，继承 DecomposablePhysics，prox_l2 有闭式解，性能稳定。
+    #   注：BlurFFT 内部按 circular padding 处理，输出与输入同尺寸，无需额外指定 padding。
+    light_blur = BlurFFT(img_size=(3, 256, 256), filter=light_kernel, device=device)
     light_blur.set_noise_model(GaussianNoise(sigma=0.01))
 
     # 重度模糊
-    heavy_blur = Blur(filter=heavy_kernel, padding="circular", device=device)
+    heavy_blur = BlurFFT(img_size=(3, 256, 256), filter=heavy_kernel, device=device)
     heavy_blur.set_noise_model(GaussianNoise(sigma=0.05))
 
     y_light_blur = light_blur(x_true)
@@ -239,7 +250,10 @@ try:
     inp50 = Inpainting(img_size=(3, 256, 256), mask=0.5, device=device)
     inp50.set_noise_model(GaussianNoise(sigma=0.01))
 
-    inp80 = Inpainting(img_size=(3, 256, 256), mask=0.8, device=device)
+    # ★ 修复：mask 语义为"保留比例"而非"缺失比例"（见 deepinv.physics.Inpainting 文档）
+    #   原代码 mask=0.8 表示保留80%（仅缺失20%），导致80%修复场景比50%还简单、PSNR倒挂。
+    #   修正为 mask=0.2，即保留20%（缺失80%）。
+    inp80 = Inpainting(img_size=(3, 256, 256), mask=0.2, device=device)
     inp80.set_noise_model(GaussianNoise(sigma=0.01))
 
     y_inp50 = inp50(x_true)
@@ -335,6 +349,11 @@ if use_cache and os.path.exists(cache_file):
     try:
         with open(cache_file, 'rb') as f:
             cached_data = pickle.load(f)
+        # ★ 版本校验：旧版本缓存基于错误的场景定义（Blur/mask语义），直接忽略
+        if cached_data.get('cache_version') != CACHE_VERSION:
+            print(f"⚠ 缓存版本不匹配（文件: {cached_data.get('cache_version', '无标记')}，"
+                  f"代码: {CACHE_VERSION}），忽略旧缓存，将重新计算")
+            cached_data = {}
         print(f"✓ 检测到缓存文件: {cache_file}")
 
         # 检查缓存中是否有 Step 2 的结果
@@ -346,11 +365,12 @@ if use_cache and os.path.exists(cache_file):
                 results[scenario_name] = {}
                 for method_name, metrics in methods.items():
                     # ★ 确保所有值都是 Python float 类型
+                    # ★ v4 起缓存保存真实重建图（CPU张量），img 直接恢复用于可视化
                     results[scenario_name][method_name] = {
                         'psnr': float(metrics['psnr']),
                         'ssim': float(metrics.get('ssim', float('nan'))),
                         'time': float(metrics['time']),
-                        'img': None  # 缓存中不保存图像，标记为 None
+                        'img': metrics.get('img')  # 可能为None（异常条目），可视化端有降级处理
                     }
                 skip_step2_scenarios.add(scenario_name)  # ★ 标记已有缓存结果的场景
 
@@ -407,7 +427,9 @@ for scenario_name, scenario_data in scenarios.items():
     try:
         # Tikhonov正则化: min_x ||Ax-y||² + λ||x||²
         # 使用梯度下降迭代求解（deepinv的physics是函数式API，不能直接访问矩阵A）
-        lambda_reg = 0.1  # 正则化参数
+        # ★ v7修复：lambda_reg 改为相对算子范数缩放（见下方 op_norm_sq 计算后的定义）。
+        #   固定 λ=0.1 在4×降采样（‖A‖²≈0.05）下远大于数据项，解退化为 Aᵀy/λ，
+        #   导致超分场景Tikhonov又暗又糊（实测4×仅12.5dB、2×仅19.1dB）。
         n_tik_iter = 100  # 迭代次数
 
         # 自适应步长: 用power iteration估计||A||²，保证收敛 lr < 2/(||A||²+λ)
@@ -418,6 +440,9 @@ for scenario_name, scenario_data in scenarios.items():
             if norm_tmp > 0:
                 x_tmp = x_tmp / norm_tmp
         op_norm_sq = (physics.A(x_tmp)**2).sum() / (x_tmp**2).sum()
+        # λ 取算子范数的10%：保证"正则强度/数据保真强度"之比在各退化场景一致
+        # （模糊/修复场景 ‖A‖²≈1，λ≈0.1 与原值几乎相同；超分场景自动缩小λ）
+        lambda_reg = 0.1 * op_norm_sq.item()
         lr_tik = 1.0 / (op_norm_sq.item() + lambda_reg)
 
         # ★ 自检：验证Tikhonov自适应步长满足收敛条件(避免步长系数被误改后仍能跑)
@@ -460,7 +485,23 @@ for scenario_name, scenario_data in scenarios.items():
         from deepinv.optim import TVPrior, L2 as DataFidelity_L2
 
         # TV: min_x ||Ax-y||² + λ||∇x||_1
-        lambda_tv = 0.05  # TV正则化参数
+        # ★ v5关键修复 + 参数调优（结论来自CPU参数扫描，测试图 astronaut，256×256）：
+        #   1) 【根因修复】optim_builder 的参数名必须是 params_algo——旧代码误用 params，
+        #      参数被静默忽略，实际一直跑默认值 λ=1.0、stepsize=1.0，导致：
+        #      (a) 调 λ 完全无效；(b) 超分TV被过强收缩成"卡通脸"，且步数越多越差（150步 13.8dB < 30步 16.2dB）。
+        #   2) 最优(λ, stepsize)随物理算子不同，统一参数无法兼顾：
+        #      - 去模糊 BlurFFT（‖A‖≈1，良态）：大步长1.0 + 小λ 0.01；
+        #      - 超分 Downsampling（欠定）：step0.5 + 极小λ 0.001，λ稍大即分段常数化；
+        #      - 修复 Inpainting：缺失区域越大越依赖TV先验填充，按实际mask保留率取λ。
+        if isinstance(physics, Downsampling):
+            tv_stepsize, lambda_tv = 0.5, 0.001
+        elif isinstance(physics, Inpainting):
+            keep_ratio = float(physics.mask.mean().item())  # mask为1表示保留，均值即保留比例
+            # 保留率≈0.5（缺失50%）→ λ=0.05；保留率≈0.2（缺失80%）→ λ=0.2（大洞需更强TV）
+            lambda_tv = 0.05 if keep_ratio > 0.35 else 0.2
+            tv_stepsize = 1.0
+        else:  # BlurFFT 去模糊场景
+            tv_stepsize, lambda_tv = 1.0, 0.01
 
         prior_tv = TVPrior(def_crit=1e-3, n_it_max=10)  # 教学参数：减少内层迭代，避免耗时过长
         data_fidelity_tv = DataFidelity_L2()
@@ -475,11 +516,15 @@ for scenario_name, scenario_data in scenarios.items():
                 'PGD',  # Proximal Gradient Descent
                 data_fidelity=data_fidelity_tv,
                 prior=prior_tv,
-                params={'stepsize': 0.1, 'lambda': lambda_tv},
-                max_iter=30  # 减少外层迭代：30次足以收敛到合理结果
+                # ★ 必须用 params_algo（用 params 会被静默忽略）；g_param 是PGD必需键，TV先验不用它故设0
+                params_algo={'stepsize': tv_stepsize, 'lambda': lambda_tv, 'g_param': 0.0},
+                max_iter=150  # v5调优：外层迭代 30→150，给收敛留出余量
             )
-            x_tv = optimizer(y, physics)
-            print("  ✓ 使用 optim_builder (PGD)")
+            x_tv = optimizer(y, physics, init=x_init)
+            # ★ 修复：必须显式传入 init=x_init。deepinv 优化器默认从 A_adjoint(y) 初始化，
+            #   而超分场景的 A_adjoint 是零填充上采样（4×时亮度仅原图1/16，极暗），
+            #   PGD 从极暗初值难以恢复（早期错误参数下表现为4×超分TV全黑）。
+            print(f"  ✓ 使用 optim_builder (PGD), λ={lambda_tv}, stepsize={tv_stepsize}")
         except ImportError:
             # 方案2: 尝试使用 ADMM
             try:
@@ -487,10 +532,10 @@ for scenario_name, scenario_data in scenarios.items():
                 optimizer = ADMM(
                     data_fidelity=data_fidelity_tv,
                     prior=prior_tv,
-                    max_iter=30,
-                    params_algo={'lambda': lambda_tv}
+                    max_iter=150,  # v5调优：与方案1一致 30→150
+                    params_algo={'stepsize': tv_stepsize, 'lambda': lambda_tv, 'g_param': 0.0}
                 )
-                x_tv = optimizer(y, physics)
+                x_tv = optimizer(y, physics, init=x_init)  # ★ 同方案1：显式传入初值
                 print("  ✓ 使用 ADMM 优化器")
             except ImportError:
                 # 方案3: 尝试使用 PGD 类
@@ -499,10 +544,10 @@ for scenario_name, scenario_data in scenarios.items():
                     optimizer = PGD(
                         data_fidelity=data_fidelity_tv,
                         prior=prior_tv,
-                        max_iter=30,
-                        params_algo={'stepsize': 0.1, 'lambda': lambda_tv}
+                        max_iter=150,  # v5调优：与方案1一致 30→150
+                        params_algo={'stepsize': tv_stepsize, 'lambda': lambda_tv, 'g_param': 0.0}
                     )
-                    x_tv = optimizer(y, physics)
+                    x_tv = optimizer(y, physics, init=x_init)  # ★ 同方案1：显式传入初值，避免超分场景从极暗的A_adjoint出发
                     print("  ✓ 使用 PGD 优化器")
                 except ImportError:
                     raise ImportError("新版优化器均不可用")
@@ -600,7 +645,10 @@ for scenario_name, scenario_data in scenarios.items():
                 except Exception:  # ★ 明确捕获异常类型，避免吞掉 KeyboardInterrupt/SystemExit
                     cached_data = {}  # 如果加载失败，从头开始
 
-            # 更新 Step 2 结果（只保存指标，不保存图像张量以减小文件大小）
+            # 更新 Step 2 结果
+            # ★ v4起：缓存额外保存真实重建图（.cpu()转CPU张量），可视化不再降级
+            #   关键：必须 .cpu() 后再 pickle —— Colab(GPU)生成的缓存下载到本地(CPU)加载时，
+            #   若张量仍挂在CUDA设备上会报错 "Attempting to deserialize object on a CUDA device"
             step2_data = {}
             for scenario_name, methods in results.items():
                 step2_data[scenario_name] = {}
@@ -613,10 +661,12 @@ for scenario_name, scenario_data in scenarios.items():
                     step2_data[scenario_name][method_name] = {
                         'psnr': psnr_val,
                         'ssim': ssim_val,
-                        'time': time_val
+                        'time': time_val,
+                        'img': metrics['img'].cpu() if isinstance(metrics.get('img'), torch.Tensor) else None
                     }
 
             cached_data['step2_results'] = step2_data
+            cached_data['cache_version'] = CACHE_VERSION  # ★ 写入版本号供下次校验
 
             with open(cache_file, 'wb') as f:
                 pickle.dump(cached_data, f)
@@ -642,6 +692,10 @@ if use_cache and os.path.exists(cache_file):
     try:
         with open(cache_file, 'rb') as f:
             cached_data = pickle.load(f)
+        # ★ 版本校验：与 Step 2 一致，旧版本缓存直接忽略
+        if cached_data.get('cache_version') != CACHE_VERSION:
+            print("⚠ 缓存版本不匹配，忽略旧缓存，将重新计算")
+            cached_data = {}
         if 'step3_results' in cached_data:
             # 合并 Step 3 的结果到 results
             for scenario_name, methods in cached_data['step3_results'].items():
@@ -652,7 +706,7 @@ if use_cache and os.path.exists(cache_file):
                         'psnr': float(metrics['psnr']),
                         'ssim': float(metrics.get('ssim', float('nan'))),
                         'time': float(metrics['time']),
-                        'img': None  # 缓存中不保存图像
+                        'img': metrics.get('img')  # ★ v4起缓存保存真实重建图，直接恢复
                     }
                 skip_step3_scenarios.add(scenario_name)  # ★ 标记已有缓存结果的场景
             cached_s3 = list(skip_step3_scenarios)
@@ -811,10 +865,12 @@ if has_dpir and not skip_step3:
                         step3_results[scenario_name][method_name] = {
                             'psnr': psnr_val,
                             'ssim': ssim_val,
-                            'time': time_val
+                            'time': time_val,
+                            'img': metrics['img'].cpu() if isinstance(metrics.get('img'), torch.Tensor) else None  # ★ v4起保存真实重建图（CPU张量）
                         }
 
             cached_data['step3_results'] = step3_results
+            cached_data['cache_version'] = CACHE_VERSION  # ★ 写入版本号供下次校验
 
             with open(cache_file, 'wb') as f:
                 pickle.dump(cached_data, f)
@@ -840,6 +896,10 @@ if use_cache and os.path.exists(cache_file):
     try:
         with open(cache_file, 'rb') as f:
             cached_data = pickle.load(f)
+        # ★ 版本校验：与 Step 2 一致，旧版本缓存直接忽略
+        if cached_data.get('cache_version') != CACHE_VERSION:
+            print("⚠ 缓存版本不匹配，忽略旧缓存，将重新计算")
+            cached_data = {}
         if 'step4_results' in cached_data:
             # 合并 Step 4 的结果到 results
             for scenario_name, methods in cached_data['step4_results'].items():
@@ -850,7 +910,7 @@ if use_cache and os.path.exists(cache_file):
                         'psnr': float(metrics['psnr']),
                         'ssim': float(metrics.get('ssim', float('nan'))),
                         'time': float(metrics['time']),
-                        'img': None  # 缓存中不保存图像
+                        'img': metrics.get('img')  # ★ v4起缓存保存真实重建图，直接恢复
                     }
                 skip_step4_scenarios.add(scenario_name)  # ★ 标记已有缓存结果的场景
             cached_s4 = list(skip_step4_scenarios)
@@ -1013,10 +1073,12 @@ if has_diffpir and not skip_step4:
                         step4_results[scenario_name][method_name] = {
                             'psnr': psnr_val,
                             'ssim': ssim_val,
-                            'time': time_val
+                            'time': time_val,
+                            'img': metrics['img'].cpu() if isinstance(metrics.get('img'), torch.Tensor) else None  # ★ v4起保存真实重建图（CPU张量）
                         }
 
             cached_data['step4_results'] = step4_results
+            cached_data['cache_version'] = CACHE_VERSION  # ★ 写入版本号供下次校验
 
             with open(cache_file, 'wb') as f:
                 pickle.dump(cached_data, f)
@@ -1122,11 +1184,13 @@ for scenario_name, scenario_methods in results.items():
         continue
 
     # 动态调整子图数量：真值 + 观测 + 所有方法的结果
+    # ★ 布局改为单行横向排列：方法数量最多7个（真值+观测+5方法），
+    #   两行布局（5+2）会造成行间数量不齐、视线折返；单行并排更利于逐方法对比
     total_subplots = 2 + num_methods
-    ncols = min(total_subplots, 5)
-    nrows = (total_subplots + ncols - 1) // ncols
+    ncols = total_subplots
+    nrows = 1
 
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 4 * nrows))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.2 * ncols, 4.2))
     if total_subplots == 1:
         axes = np.array([[axes]])
     elif nrows == 1 or ncols == 1:
