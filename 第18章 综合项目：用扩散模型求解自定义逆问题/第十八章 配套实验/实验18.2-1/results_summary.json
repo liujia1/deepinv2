@@ -1,0 +1,48 @@
+{
+  "experiment": "实验18.2-1 自定义前向算子与伴随验证",
+  "environment": {
+    "device": "cuda",
+    "torch_version": "2.11.0+cu128",
+    "deepinv_version": "0.4.2"
+  },
+  "scene": {
+    "image_size": [
+      256,
+      256
+    ],
+    "multiview_num_views_J": 16,
+    "multiview_transform": "旋转+平移（scale=1.0，线性部分正交）",
+    "max_rotation_angle_rad": 0.39269908169872414,
+    "max_shift": 0.05,
+    "downsampling_factor": 4,
+    "mri_acceleration": 4,
+    "gaussian_sigma": 0.05,
+    "poisson_gain": 0.1,
+    "poisson_gaussian": {
+      "gain": 0.1,
+      "sigma": 0.05
+    }
+  },
+  "adjoint_relative_error": {
+    "downsampling_factor2": 2.907293731075046e-07,
+    "multiview_manual_mean": 0.011483757559489636,
+    "multiview_manual_std": 0.008255571876078331,
+    "multiview_manual_adjointness_test_raw": 0.9332122802734375,
+    "multiview_autograd": 6.803633840373458e-07,
+    "blur": 1.1481321201101393e-07,
+    "composite_blur_downsample": 1.7830920015881454e-07,
+    "mri": 9.678298161650855e-08
+  },
+  "noise_mae": {
+    "gaussian": 0.03960438445210457,
+    "poisson": 0.12620490789413452,
+    "poisson_gaussian": 0.130599245429039
+  },
+  "output_files": [
+    "step2_multiview_forward.png",
+    "step4_noise_comparison.png",
+    "step4_noise_histogram.png",
+    "step5_custom_operators.png",
+    "results_summary.json"
+  ]
+}

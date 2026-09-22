@@ -339,7 +339,7 @@ for i in range(6):
             spine.set_visible(False)
 
 axes[0, 0].set_ylabel('干净图像 $x$', fontsize=11)
-axes[1, 0].set_ylabel(r'观测 $y=M \odot x$', fontsize=11)
+axes[1, 0].set_ylabel(r'观测 $y=M\odot(x+\sigma\varepsilon)$', fontsize=11)
 axes[2, 0].set_ylabel('朴素MC重建', fontsize=11)
 fig.suptitle(f'Step 1: 零空间问题——仅MC损失无法约束缺失区域 (PSNR={psnr_naive:.1f}dB)', fontsize=13)
 plt.tight_layout()
@@ -415,7 +415,7 @@ def ei_loss(model, mask, f_y, n_transforms=4):
 print("\n  训练EI模型 (MC + EI)...")
 model_ei = SmallUNet().to(device)
 optimizer_ei = optim.Adam(model_ei.parameters(), lr=LR)
-# EI损失权重：通过下方消融实验选定
+# EI损失权重：由Step 2b消融实验选定（各λ在相同训练轮数下公平对比）
 lambda_ei = 0.5
 
 # EI损失函数：MC + EI
@@ -452,37 +452,36 @@ print("Step 2b: lambda_ei 消融实验")
 print("="*70)
 
 lambda_candidates = [0.1, 0.5, 1.0]
+ABLATION_EPOCHS = 20  # 消融统一训练轮数：各λ（含λ=lambda_ei）在同等训练预算下对比
 ablation_results = {}
 print(f"  {'lambda_ei':>10s}  {'PSNR (dB)':>10s}")
 print(f"  {'─'*25}")
 for lam in lambda_candidates:
-    # 若消融值就是当前 lambda_ei，直接复用已训练模型，避免重复训练
-    if abs(lam - lambda_ei) < 1e-9 and abs(lam - 0.5) < 1e-9:
-        model_ab = model_ei
-    else:
-        model_ab = SmallUNet().to(device)
-        optimizer_ab = optim.Adam(model_ab.parameters(), lr=LR)
+    # 各λ均独立训练相同轮数，不复用40轮主模型——否则λ=lambda_ei相当于多训一倍，
+    # "λ=0.5最优"可能只是训练更久的产物，对比不公平
+    model_ab = SmallUNet().to(device)
+    optimizer_ab = optim.Adam(model_ab.parameters(), lr=LR)
 
-        def loss_ab(model, batch_x, y, mask_2d, _lam=lam):
-            f_y = model(y)
-            loss_mc = ((mask_2d * (y - f_y)) ** 2).sum() / mask_2d.sum()
-            loss_ei_val = ei_loss(model, test_mask, f_y=f_y, n_transforms=4)
-            return loss_mc + _lam * loss_ei_val
+    def loss_ab(model, batch_x, y, mask_2d, _lam=lam):
+        f_y = model(y)
+        loss_mc = ((mask_2d * (y - f_y)) ** 2).sum() / mask_2d.sum()
+        loss_ei_val = ei_loss(model, test_mask, f_y=f_y, n_transforms=4)
+        return loss_mc + _lam * loss_ei_val
 
-        model_ab, _ = train_model(
-            model_ab, optimizer_ab,
-            os.path.join(SAVE_DIR, f'ckpt_EI_lam{lam}.pt'),
-            f'EI(λ={lam})', loss_ab, train_loader, test_mask,
-            n_epochs=20, device=device
-        )
+    model_ab, _ = train_model(
+        model_ab, optimizer_ab,
+        os.path.join(SAVE_DIR, f'ckpt_EI_lam{lam}.pt'),
+        f'EI(λ={lam})', loss_ab, train_loader, test_mask,
+        n_epochs=ABLATION_EPOCHS, device=device
+    )
     psnr_ab = evaluate_inpainting(model_ab, test_loader, test_mask)
     ablation_results[lam] = psnr_ab
     marker = ' ◀ 选用' if abs(lam - lambda_ei) < 1e-9 else ''
     print(f"  {lam:10.1f}  {psnr_ab:10.2f}{marker}")
 
 best_lam = max(ablation_results, key=ablation_results.get)
-print(f"\n  消融结论: λ={best_lam} 时PSNR最高 ({ablation_results[best_lam]:.2f} dB)")
-print(f"  当前选用 λ={lambda_ei}，与最优值{'一致' if abs(best_lam - lambda_ei) < 1e-9 else '接近'}。")
+print(f"\n  消融结论: 各λ训练{ABLATION_EPOCHS}轮的同等预算下，λ={best_lam} 时PSNR最高 ({ablation_results[best_lam]:.2f} dB)")
+print(f"  主实验选用 λ={lambda_ei}（训练{N_EPOCHS}轮），与最优值{'一致' if abs(best_lam - lambda_ei) < 1e-9 else '接近'}。")
 
 
 # ========================================================================
@@ -621,7 +620,7 @@ with torch.no_grad():
 
 row_data = [
     ('干净图像 $x$', vis_imgs.cpu()),
-    (r'观测 $y=M \odot x$', y_vis.cpu()),
+    (r'观测 $y=M\odot(x+\sigma\varepsilon)$', y_vis.cpu()),
     (f'监督 ({total_psnrs["监督"]:.1f}dB)', pred_sup.cpu()),
     (f'MC+EI ({total_psnrs["MC+EI"]:.1f}dB)', pred_ei.cpu()),
 ]
@@ -651,7 +650,9 @@ print("\n" + "="*70)
 print("Step 4: 算子-等变性对照实验")
 print("="*70)
 
-def check_equivariance_shift(A_fn, x, n_tests=5):
+def check_equivariance_shift(A_fn, x, n_tests=20):
+    # n_tests=20：平移随机抽样，单次误差波动大（实测0%~41%），
+    # 5次平均时"模糊+平移"读数会在6%~27%间跳动，20次平均可显著压缩波动
     errors = []
     Ax_norms = []
     for _ in range(n_tests):
@@ -745,7 +746,7 @@ print(f"  {'高斯模糊':20s} {'平移':10s} {abs_err:.4f}       {rel_err*100:.
 abs_err, rel_err = check_equivariance_shift(inpainting_A, test_x)
 results[('Inpainting', '平移')] = abs_err
 rel_results[('Inpainting', '平移')] = rel_err
-print(f"  {'Inpainting(随机)':20s} {'平移':10s} {abs_err:.4f}       {rel_err*100:.1f}%")
+print(f"  {'Inpainting(固定随机掩码)':20s} {'平移':10s} {abs_err:.4f}       {rel_err*100:.1f}%")
 
 sampling_modes = ['vertical', 'random', 'cartesian']
 for mode in sampling_modes:
@@ -763,7 +764,7 @@ print(f"  {'高斯模糊':20s} {'旋转90°':10s} {abs_err:.4f}       {rel_err*1
 abs_err, rel_err = check_equivariance_rotate(inpainting_A, test_x, angle=90)
 results[('Inpainting', '旋转')] = abs_err
 rel_results[('Inpainting', '旋转')] = rel_err
-print(f"  {'Inpainting(随机)':20s} {'旋转90°':10s} {abs_err:.4f}       {rel_err*100:.1f}%")
+print(f"  {'Inpainting(固定随机掩码)':20s} {'旋转90°':10s} {abs_err:.4f}       {rel_err*100:.1f}%")
 
 for mode in sampling_modes:
     abs_err, rel_err = check_equivariance_rotate(
@@ -803,15 +804,23 @@ plt.savefig(os.path.join(SAVE_DIR, 'step4_equivariance_check.png'), dpi=150, bbo
 plt.close()
 print("  已保存: step4_equivariance_check.png")
 
+# 结论引用实测数值（rel_results），避免硬编码文字与计算结果不符
+_err_blur_shift = rel_results[('高斯模糊', '平移')] * 100
+_err_inpaint_shift = rel_results[('Inpainting', '平移')] * 100
+_err_inpaint_rot = rel_results[('Inpainting', '旋转')] * 100
+_err_mri_shift_max = max(rel_results[(f'MRI欠采样({m})', '平移')] for m in sampling_modes) * 100
+_err_mri_rot = [rel_results[(f'MRI欠采样({m})', '旋转')] * 100 for m in sampling_modes]
+
 print("\n  结论:")
-print("  - 高斯模糊+平移: 相对误差≈0% → 近似等变(边界效应可忽略) → EI无法利用平移对称性")
-print("    注: conv2d使用zero-padding, torch.roll使用循环边界, 严格不等变但有微小误差")
-print("  - Inpainting(固定掩码)+平移: 相对误差较大 → 非等变 → EI可利用平移对称性")
-print("  - Inpainting(固定掩码)+旋转: 非等变 → EI可利用旋转对称性")
-print("  - MRI+平移: 相对误差极小 → 严格等变（数值误差） → EI无法利用平移对称性")
+print(f"  - 高斯模糊+平移: 相对误差{_err_blur_shift:.1f}% (约为Inpainting的1/{_err_inpaint_shift/_err_blur_shift:.0f}) → 近似等变 → EI难以利用平移对称性")
+print("    注: 误差全部来自边界处理——conv2d用zero-padding而torch.roll用循环边界,")
+print("        两者不匹配; 若改用circular padding卷积, 相对误差为0(严格等变)")
+print(f"  - Inpainting(固定随机掩码)+平移: 相对误差{_err_inpaint_shift:.1f}% → 非等变 → EI可利用平移对称性")
+print(f"  - Inpainting(固定随机掩码)+旋转: 相对误差{_err_inpaint_rot:.1f}% → 非等变 → EI可利用旋转对称性")
+print(f"  - MRI+平移: 三种采样模式相对误差最高{_err_mri_shift_max:.1e}% → 严格等变(数值误差) → EI无法利用平移对称性")
 print("    理论: 频域欠采样是逐元素相乘, 空间循环平移对应频域相位调制, 两者可交换")
-print("  - MRI+旋转: 非等变 → EI可利用旋转对称性(与17.5.6节FastMRI结果一致)")
-print("  注: Inpainting测试使用固定掩码，若使用随机掩码行为会不同")
+print(f"  - MRI+旋转: 相对误差{min(_err_mri_rot):.1f}%~{max(_err_mri_rot):.1f}% → 非等变 → EI可利用旋转对称性(与17.5.6节FastMRI结果一致)")
+print("  注: Inpainting测试使用固定的随机像素掩码(训练与检验同一掩码), 逐次随机掩码行为会不同")
 
 
 # ========================================================================
@@ -882,6 +891,11 @@ results_summary = {
         '各方法观测像素PSNR': obs_psnrs,
         '各方法缺失像素PSNR': miss_psnrs,
     },
+    'lambda消融': {
+        '选用lambda_ei': lambda_ei,
+        '消融训练轮数': ABLATION_EPOCHS,
+        '各lambda整图PSNR': {f'λ={lam}': psnr for lam, psnr in ablation_results.items()},
+    },
     '等变性验证': {
         '绝对误差': {f"{op}_{trans}": val for (op, trans), val in results.items()},
         '相对误差': {f"{op}_{trans}": val for (op, trans), val in rel_results.items()},
@@ -890,6 +904,7 @@ results_summary = {
         '噪声水平': SIGMA,
         '保留像素比例': KEEP_RATIO,
         '平移幅度': MAX_SHIFT,
+        'lambda_ei': lambda_ei,
     }
 }
 

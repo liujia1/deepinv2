@@ -388,7 +388,9 @@ def verify_blind_spot_property(model, x_shape=(1, 1, 32, 32), device=None, sampl
         leak_ratio: 信息泄漏比例 (0=严格盲点, >0=有泄漏)
         max_gradient: 最大梯度值
         mean_gradient: 平均梯度值
-        diagonal_grad_norm: 对角雅可比矩阵的Frobenius范数
+        sum_grad_norm: f(x) 各输出对输入的梯度之和（即 Jᵀ·1 向量）的 L2 范数，
+                       仅作整体敏感度参考（并非雅可比矩阵的 Frobenius 范数，
+                       也不单独反映对角元素）
 
     ★ 性能优化说明：
     ─────────────────────────────────────────
@@ -406,7 +408,10 @@ def verify_blind_spot_property(model, x_shape=(1, 1, 32, 32), device=None, sampl
         device = next(model.parameters()).device
 
     model.eval()
-    x = torch.randn(x_shape, device=device, requires_grad=True)
+    # ★使用固定局部 generator 生成输入：同一函数多次调用（如 Strict vs Approximate 对比）
+    # 时输入完全一致，保证 max_gradient 等连续量比较是确定性的、可复现的
+    gen = torch.Generator(device=device).manual_seed(42)
+    x = torch.randn(x_shape, generator=gen, device=device, requires_grad=True)
 
     y = model(x)
 
@@ -433,9 +438,11 @@ def verify_blind_spot_property(model, x_shape=(1, 1, 32, 32), device=None, sampl
     mean_gradient = sum(leak_values) / len(leak_values)
 
     x.grad = None
+    # 整体敏感度参考指标：Jᵀ·1 的 L2 范数（各输出位置对输入梯度之和），
+    # 注意这不是雅可比矩阵的 Frobenius 范数，也不单独反映对角元素
     y_sum = y.sum()
-    jacobian = torch.autograd.grad(y_sum, x, create_graph=False)[0]
-    jacobian_norm = jacobian.norm().item()
+    sum_grad = torch.autograd.grad(y_sum, x, create_graph=False)[0]
+    sum_grad_norm = sum_grad.norm().item()
 
     if leak_ratio == 0 and max_gradient < 1e-6:
         strictness = "严格盲点"
@@ -448,14 +455,14 @@ def verify_blind_spot_property(model, x_shape=(1, 1, 32, 32), device=None, sampl
     print(f"    信息泄漏比例: {leak_ratio:.4f} (0=严格)")
     print(f"    最大梯度值: {max_gradient:.6f}")
     print(f"    平均梯度值: {mean_gradient:.6f}")
-    print(f"    雅可比矩阵范数: {jacobian_norm:.6f} (整体敏感度指标，含对角+非对角)")
+    print(f"    梯度总和范数(Jᵀ·1): {sum_grad_norm:.6f} (整体敏感度参考)")
     print(f"    抽样像素数: {len(sampled_positions)}/{total_pixels} ({sample_ratio*100:.0f}%)")
 
     return {
         'leak_ratio': leak_ratio,
         'max_gradient': max_gradient,
         'mean_gradient': mean_gradient,
-        'jacobian_norm': jacobian_norm,
+        'sum_grad_norm': sum_grad_norm,
         'strictness': strictness
     }
 
@@ -1321,26 +1328,75 @@ print("  严格盲点网络:")
 strict_results = verify_blind_spot_property(model_bs)
 
 print("\n  对比：验证近似盲点网络...")
-print("  近似盲点网络:")
+print("  近似盲点网络(随机初始化):")
 # ★说明：盲点约束是架构性质（与权重无关），所以用未训练的模型即可验证 ∂f_i/∂y_i 是否被架构强制为 0
 # 这里使用随机初始化的网络纯粹为了演示"架构 vs 训练"的区别——训练只影响模型的去噪能力，不改变盲点约束
+# 固定 seed 使随机权重可复现，保证 Strict/Approximate 的 max_gradient 比较跨运行稳定
+torch.manual_seed(1234)
 model_approx = ApproximateBlindSpotUNet().to(device)
-approx_results = verify_blind_spot_property(model_approx)
+approx_init_results = verify_blind_spot_property(model_approx)
 
-# 盲点网络严格程度对比表格
-# ★说明：以下对比中 ApproximateBlindSpot 使用随机初始化模型（未参与训练），
-# 因为盲点约束是架构性质（与权重无关），仅用于演示"近似"vs"严格"架构的差异。
-print(f"\n  ✅ 盲点网络严格程度对比（ApproximateBlindSpot为随机初始化，仅验证架构约束）:")
-print(f"  ┌──────────────────────┬──────────────┬──────────────┐")
-print(f"  │       网络类型       │   泄漏比例   │   严格程度   │")
-print(f"  ├──────────────────────┼──────────────┼──────────────┤")
-print(f"  │ StrictBlindSpot      │ {strict_results['leak_ratio']:.6f}  │  严格盲点    │")
-print(f"  │ ApproximateBlindSpot │ {approx_results['leak_ratio']:.6f}  │  近似盲点    │")
-print(f"  └──────────────────────┴──────────────┴──────────────")
-if strict_results['leak_ratio'] < approx_results['leak_ratio'] * 0.1:
-    print(f"  结论: StrictBlindSpot泄漏比例显著低于ApproximateBlindSpot ✓")
+# ★公平对照（2×2 设计）：上方 strict_results 是【训练后】的模型，而 approx 是【随机初始化】，
+# 二者状态不同，直接比 leak_ratio 会误导（训练会主动利用泄漏，抬高 leak_ratio）。
+# 这里补测 Strict 的【随机初始化】版本，构成"同状态(随机)公平比较"，
+# 从而分离两个因素：① 架构（Strict vs Approximate）② 训练（随机 vs 训练后）。
+print("\n  公平对照：严格盲点网络(随机初始化, 未训练):")
+torch.manual_seed(1234)  # 与 Approximate 相同 seed，保证两者权重初始化分布一致，比较才公平
+model_strict_init = StrictBlindSpotUNet().to(device)
+strict_init_results = verify_blind_spot_property(model_strict_init)
+
+# 盲点网络严格程度对比表格（2×2：架构 × 训练状态）
+# 实测严格程度标签取自 verify_blind_spot_property 的返回值（非硬编码），
+# 取 split('(')[0] 是因为各标签前4个中文字等宽，可保持表格对齐
+def _label(res):
+    return res['strictness'].split('(')[0]
+
+print(f"\n  ✅ 盲点泄漏 2×2 对照（架构 × 训练状态，均为随机初始化输入下测 ∂f_i/∂y_i）:")
+print(f"  ┌──────────────────────┬────────────────┬────────────────")
+print(f"  │       网络类型       │  随机初始化    │   训练后       │")
+print(f"  ├──────────────────────┼────────────────┼────────────────")
+print(f"  │ StrictBlindSpot      │ 泄漏={strict_init_results['leak_ratio']:.2f} {_label(strict_init_results):<8} │ 泄漏={strict_results['leak_ratio']:.2f} {_label(strict_results):<8} │")
+print(f"  │ ApproximateBlindSpot │ 泄漏={approx_init_results['leak_ratio']:.2f} {_label(approx_init_results):<8} │ (未单独训练)   │")
+print(f"  └──────────────────────┴────────────────┴────────────────")
+print(f"  (完整判定 随机初始化: Strict → {strict_init_results['strictness']}, "
+      f"Approximate → {approx_init_results['strictness']})")
+print(f"  (完整判定 训练后:     Strict → {strict_results['strictness']})")
+
+# 动态结论：分离"架构"与"训练"两个因素对泄漏的影响
+leak_strict_init = strict_init_results['leak_ratio']
+leak_strict_trained = strict_results['leak_ratio']
+leak_approx_init = approx_init_results['leak_ratio']
+print(f"\n  📌 2×2 对照解读:")
+
+# 同状态(随机初始化)公平比较：用 max_gradient（连续量）而非 leak_ratio（阈值判定）
+# 实测表明：随机小权重经12层堆叠衰减后，两架构对角梯度均 <1e-6（leak_ratio 都是 0），
+# 但 Strict 的最短泄漏路径更长（距离≥2 vs Approximate 的距离1），权重乘积衰减更快，
+# 故其 max_gradient 应更小——这才是"架构更严格"的敏感指标
+mg_strict_init = strict_init_results['max_gradient']
+mg_approx_init = approx_init_results['max_gradient']
+if leak_strict_trained > leak_strict_init + 0.1:
+    print(f"  · 训练放大泄漏: Strict 随机初始化泄漏={leak_strict_init:.2f} → 训练后={leak_strict_trained:.2f} "
+          f"(+{leak_strict_trained - leak_strict_init:.2f})")
+    print(f"    → 训练会主动利用多层绕路泄漏（增大 div f 以降低朴素损失），这正是盲点(无mask)掉分的机制")
 else:
-    print(f"  结论: 两种实现的泄漏比例接近，可能需要进一步检查")
+    print(f"  · Strict 训练前后泄漏接近({leak_strict_init:.2f}→{leak_strict_trained:.2f})，"
+          f"说明该模型的泄漏主要由架构(多层堆叠)决定，而非训练放大")
+# 同状态(随机初始化)公平比较：Strict 是否比 Approximate 泄漏更少
+if leak_strict_init < leak_approx_init:
+    print(f"  · 同状态公平比较(均随机初始化): Strict泄漏={leak_strict_init:.2f} < "
+          f"Approximate泄漏={leak_approx_init:.2f} → 单层屏蔽确实更严格 ✓")
+elif mg_strict_init < mg_approx_init:
+    print(f"  · 同状态公平比较(均随机初始化): 两架构 leak_ratio 均为 {leak_strict_init:.2f}"
+          f"（对角梯度均低于1e-6阈值——随机小权重经多层衰减所致），"
+          f"但 Strict 最大对角梯度={mg_strict_init:.2e} < Approximate={mg_approx_init:.2e}")
+    print(f"    → Strict 最短泄漏路径更长(距离≥2 vs 距离1)，随机权重下衰减更快 → 架构确实更严格 ✓；"
+          f"训练会将对角梯度推高到阈值之上（见上表训练后列）")
+else:
+    print(f"  · ⚠️ 同状态比较: Strict最大梯度={mg_strict_init:.2e} ≥ "
+          f"Approximate={mg_approx_init:.2e}，与'单层屏蔽路径更长'预期相反，"
+          f"请检查 StrictBlindSpotConv2d 中心置零是否生效")
+print(f"  · 注意: 上一版表格用 Strict(训练后) vs Approximate(随机) 属跨状态比较，"
+          f"会因训练放大泄漏而显示'Strict更差'的反直觉结果；本 2×2 表已修正为同状态公平比较")
 
 # 验证散度≈0
 model_bs.eval()
@@ -1376,6 +1432,104 @@ plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, 'step4_blindspot_kernels.png'), dpi=150, bbox_inches='tight')
 plt.close()
 print("  已保存: step4_blindspot_kernels.png")
+
+
+# ========================================================================
+# Step 4b: N2V 输入 masking 对照——堵住多层泄漏的"绕路"通道
+# 对应17.4.3节：Noise2Void (Krull et al., 2019) 的 masking 策略
+#
+# ★ 为什么仅有盲点架构还不够？
+# StrictBlindSpotUNet 只保证【单层】内 ∂f_i/∂y_i = 0；多层堆叠后存在
+# "距离≥2"的绕路泄漏（见 StrictBlindSpotConv2d docstring），且 MaxPool
+# 会把 2×2 邻域（含中心像素）混合后提供给后续层的"非中心"位置。
+# 泄漏使端到端 div f ≠ 0，此时朴素损失（在期望意义下）
+#   E‖y-f(y)‖² = R(f) + nσ² - 2σ²·E[div f]
+# 的最优解会向"高散度的恒等映射"偏移（恒等映射 div = n 最大），
+# PSNR 跌向恒等基线 -10·log10(σ²) ≈ 10.5 dB。
+#
+# N2V masking 的堵漏原理：
+# 训练时随机将 p 比例像素替换为【不含中心】的 8 邻域均值，
+# 损失只在被 mask 的像素上计算。被 mask 位置的输入已不含自身噪声，
+# 即使网络通过泄漏路径"绕回"该位置，拿到的也只是邻域均值而非带噪值，
+# 复制中心噪声不再能降低损失 → 抑制恒等映射吸引。
+# ========================================================================
+print("\n  Step 4b: 盲点架构 + N2V 输入 masking 对照...")
+
+def n2v_mask_input(y, p=0.02):
+    """N2V 输入 masking：随机选 p 比例像素，替换为不含中心的 8 邻域均值
+
+    Args:
+        y: 带噪观测 (B, C, H, W)
+        p: 每像素被 mask 的概率
+
+    Returns:
+        y_in: masked 后的输入
+        mask: (B, 1, H, W) bool，True 表示该像素被 mask（参与损失）
+    """
+    mask = torch.rand(y.shape[0], 1, y.shape[2], y.shape[3], device=y.device) < p
+    # 8 邻域均值核（中心置零 → 替换值完全不含中心像素噪声，彻底切断泄漏收益）
+    neigh_kernel = torch.ones(1, 1, 3, 3, device=y.device)
+    neigh_kernel[0, 0, 1, 1] = 0.0
+    neigh_kernel = neigh_kernel / 8.0
+    y_padded = nn.functional.pad(y, (1, 1, 1, 1), mode='replicate')
+    y_neigh_mean = nn.functional.conv2d(y_padded, neigh_kernel)
+    y_in = torch.where(mask, y_neigh_mean, y)
+    return y_in, mask
+
+model_bs_mask = StrictBlindSpotUNet().to(device)
+optimizer_bs_mask = optim.Adam(model_bs_mask.parameters(), lr=LR)
+train_losses_bs_mask = []
+CHECKPOINT_BSMASK = os.path.join(SAVE_DIR, 'ckpt_StrictBlindSpot_N2VMask.pt')
+start_epoch_bsmask, train_losses_bs_mask, is_final_bsmask = load_checkpoint(
+    CHECKPOINT_BSMASK, model_bs_mask, optimizer_bs_mask, device)
+
+# 每像素 mask 概率：32×32 图平均约 20 个像素/图，batch 128 下有效损失像素充足
+N2V_MASK_P = 0.02
+
+if not is_final_bsmask and start_epoch_bsmask < N_EPOCHS:
+    for epoch in range(start_epoch_bsmask, N_EPOCHS):
+        model_bs_mask.train()
+        epoch_loss, n_batch = 0, 0
+        pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{N_EPOCHS}', leave=False, unit='batch')
+        for batch_x, _ in pbar:
+            batch_x = batch_x.to(device)
+            y = add_noise(batch_x, SIGMA)
+            y_in, mask = n2v_mask_input(y, p=N2V_MASK_P)
+            optimizer_bs_mask.zero_grad()
+            pred = model_bs_mask(y_in)
+            # N2V 损失：只在被 mask 的像素上计算（目标仍为带噪观测 y）
+            loss = (((pred - y) ** 2) * mask).sum() / mask.sum()
+            loss.backward()
+            optimizer_bs_mask.step()
+            epoch_loss += loss.item()
+            n_batch += 1
+            pbar.set_postfix(loss=f'{loss.item():.4f}')
+        avg_loss = epoch_loss / n_batch
+        train_losses_bs_mask.append(avg_loss)
+        if (epoch + 1) % 10 == 0:
+            print(f"  [BlindSpot+N2V] Epoch {epoch+1}/{N_EPOCHS}, Loss: {avg_loss:.6f}")
+        if (epoch + 1) % 10 == 0 and (epoch + 1) < N_EPOCHS:
+            save_checkpoint(CHECKPOINT_BSMASK, model_bs_mask, optimizer_bs_mask,
+                          epoch, train_losses_bs_mask, is_final=False,
+                          extra={'loss': avg_loss},
+                          log_path=False)
+            print(f"  [BlindSpot+N2V] ✓ checkpoint已保存 (epoch {epoch+1})")
+    save_checkpoint(CHECKPOINT_BSMASK, model_bs_mask, optimizer_bs_mask,
+                  N_EPOCHS - 1, train_losses_bs_mask, is_final=True,
+                  extra={'loss': train_losses_bs_mask[-1]},
+                  log_path=False)
+    print(f"  [BlindSpot+N2V] ✓ 最终checkpoint已保存")
+
+psnr_bs_mask = evaluate_psnr(model_bs_mask, test_loader, seed=EVAL_SEED)
+ssim_bs_mask = evaluate_ssim(model_bs_mask, test_loader, seed=EVAL_SEED)
+
+# 恒等映射基线：f(y)=y 时 MSE=σ²，对应 PSNR = -10·log10(σ²)
+psnr_identity = -10 * np.log10(SIGMA**2)
+
+print(f"  盲点+N2V masking PSNR = {psnr_bs_mask:.2f} dB, SSIM = {ssim_bs_mask:.4f}")
+print(f"  参考基线: 恒等映射 PSNR ≈ {psnr_identity:.2f} dB")
+print(f"  泄漏对照: 盲点(无mask)={psnr_bs:.2f} dB → 盲点+mask={psnr_bs_mask:.2f} dB "
+      f"(提升{psnr_bs_mask - psnr_bs:+.2f} dB)")
 
 
 # ========================================================================
@@ -1573,7 +1727,9 @@ def verify_tweedie(model, x_clean, sigma, n_samples=50, n_mc_div=5):
         'score_corr': score_corr,
         'div_error': div_error,
         'mc_std': mc_std,
-        'tweedie_score': tweedie_score
+        # 注：不返回 tweedie_score（(8,1,32,32) 大 tensor），
+        # 避免 _to_native 展开后写入 results_summary.json 造成文件膨胀；
+        # 可视化所需 score map 在绘图处独立重算
     }
 
 test_imgs, _ = next(iter(test_loader))
@@ -1714,7 +1870,7 @@ N_QUAL = 4  # 展示的样本数
 qual_test_imgs, _ = next(iter(test_loader))
 qual_test_imgs = qual_test_imgs[:N_QUAL].to(device)
 
-# 5 种方法 + 干净/有噪 = 7 行
+# 6 种方法 + 干净/有噪 = 8 行
 qual_methods = [
     ('干净 x', None),
     ('有噪 y', None),
@@ -1722,6 +1878,7 @@ qual_methods = [
     ('SURE',   model_sure),
     ('R2R',    model_r2r),
     ('盲点',   model_bs),
+    ('盲点+mask', model_bs_mask),
     ('朴素',   model_naive),
 ]
 n_rows = len(qual_methods)
@@ -1762,6 +1919,7 @@ print(f"  监督 ‖x-f(y)‖²         {psnr_sup:.2f}       {ssim_sup:.4f}     
 print(f"  SURE ‖y-f(y)‖²+2σ²div  {psnr_sure:.2f}       {ssim_sure:.4f}      MC/Auto   自由度修正→无偏")
 print(f"  R2R  ‖y_b-f(y_a)‖²     {psnr_r2r:.2f}       {ssim_r2r:.4f}      不需要     避免散度计算")
 print(f"  盲点 ‖y-f(y)‖²(∂f/∂y=0) {psnr_bs:.2f}       {ssim_bs:.4f}      ≈0        受限最优，次优")
+print(f"  盲点+mask(仅masked像素)  {psnr_bs_mask:.2f}       {ssim_bs_mask:.4f}      ≈0        N2V masking抑制泄漏")
 print(f"  朴素 ‖y-f(y)‖²         {psnr_naive:.2f}       {ssim_naive:.4f}     非零       有偏，低估风险")
 print(f"\n  核心结论 (基于实际PSNR动态判断):")
 
@@ -1774,8 +1932,10 @@ if abs(gap_sure_sup) < approx_thr:
     concl1 = f"SURE ≈ 监督（差距{abs(gap_sure_sup):.2f}dB < {approx_thr}dB）→ 自由度修正项2σ²div f消除了朴素MSE的偏差 ✓"
 elif gap_sure_sup > 0:
     concl1 = f"SURE({psnr_sure:.2f}dB) > 监督({psnr_sup:.2f}dB)（差距+{gap_sure_sup:.2f}dB）→ SURE在此数据集上略优于监督（随机波动范围内）"
+elif abs(gap_sure_sup) < 2 * approx_thr:
+    concl1 = f"SURE({psnr_sure:.2f}dB) < 监督({psnr_sup:.2f}dB)（差距{abs(gap_sure_sup):.2f}dB）→ 轻微偏低（{approx_thr}~{2*approx_thr:.1f}dB），主要来自 n_mc=1 的 MC 散度方差与训练轮数限制"
 else:
-    concl1 = f"SURE({psnr_sure:.2f}dB) < 监督({psnr_sup:.2f}dB)（差距{abs(gap_sure_sup):.2f}dB）→ SURE略低于监督，在{approx_thr}dB内可接受"
+    concl1 = f"SURE({psnr_sure:.2f}dB) < 监督({psnr_sup:.2f}dB)（差距{abs(gap_sure_sup):.2f}dB ≥ {2*approx_thr:.1f}dB）→ 偏差偏大：建议增大 n_mc 降低 MC 散度方差，或延长训练轮数"
 
 # 2. R2R vs SURE
 gap_r2r_sure = psnr_r2r - psnr_sure
@@ -1786,17 +1946,24 @@ elif gap_r2r_sure > 0:
 else:
     concl2 = f"R2R({psnr_r2r:.2f}dB) < SURE({psnr_sure:.2f}dB)（差距{abs(gap_r2r_sure):.2f}dB）→ R2R略低，α可能需调优（详见Step 3b α扫描）"
 
-# 3. 盲点 vs SURE
+# 3. 盲点 vs SURE（结合泄漏实测与 N2V masking 对照动态解释）
 gap_bs_sure = psnr_sure - psnr_bs   # 正值表示 SURE 更高
-if gap_bs_sure > approx_thr:
-    concl3 = f"盲点({psnr_bs:.2f}dB) < SURE({psnr_sure:.2f}dB)（差距{gap_bs_sure:.2f}dB）→ 约束div f=0使函数族缩小，受限最优 < 全局最优 ✓"
-elif gap_bs_sure > 0.1:
-    concl3 = f"盲点({psnr_bs:.2f}dB) 略低于 SURE({psnr_sure:.2f}dB)（差距{gap_bs_sure:.2f}dB）→ 符合受限最优 < 全局最优的预期"
-elif gap_bs_sure >= 0:
-    concl3 = f"盲点({psnr_bs:.2f}dB) ≈ SURE({psnr_sure:.2f}dB)（差距{gap_bs_sure:.2f}dB）→ 在MNIST上差距不明显，因任务简单盲点约束未严重限制表达力"
+gain_bsmask = psnr_bs_mask - psnr_bs  # masking 对照带来的提升
+if gap_bs_sure <= approx_thr:
+    concl3 = f"盲点({psnr_bs:.2f}dB) ≈ SURE({psnr_sure:.2f}dB)（差距{gap_bs_sure:.2f}dB）→ 在MNIST上盲点约束未严重限制表达力"
+elif gap_bs_sure <= 3.0:
+    concl3 = f"盲点({psnr_bs:.2f}dB) 略低于 SURE({psnr_sure:.2f}dB)（差距{gap_bs_sure:.2f}dB）→ 符合'受限最优 < 全局最优'的预期"
 else:
-    concl3 = f"⚠️ 盲点({psnr_bs:.2f}dB) > SURE({psnr_sure:.2f}dB)（差距{abs(gap_bs_sure):.2f}dB），与'受限最优 < 全局最优'理论预期相反"
-    concl3 += f" → 建议检查StrictBlindSpotUNet实现（如Pixel-Shuffle+中心置零是否生效）或SURE模型是否充分收敛"
+    concl3 = (f"⚠️ 盲点({psnr_bs:.2f}dB) 远低于 SURE({psnr_sure:.2f}dB)（差距{gap_bs_sure:.2f}dB），"
+              f"接近恒等基线({psnr_identity:.2f}dB) → 该量级并非'函数族缩小'所能解释；"
+              f"主因是多层堆叠泄漏（实测泄漏比例{strict_results['leak_ratio']:.2f}）使端到端 div f≠0，"
+              f"朴素损失 E‖y-f(y)‖² = R(f) + nσ² - 2σ²·div 的最优解被吸向高散度的恒等映射")
+    if gain_bsmask > 2.0:
+        concl3 += f"；配合N2V输入masking后恢复至{psnr_bs_mask:.2f}dB（提升{gain_bsmask:+.2f}dB），验证泄漏是主因 ✓"
+    elif gain_bsmask > 0.5:
+        concl3 += f"；N2V输入masking提升至{psnr_bs_mask:.2f}dB（{gain_bsmask:+.2f}dB），部分验证泄漏影响"
+    else:
+        concl3 += f"；N2V输入masking仅提升{gain_bsmask:+.2f}dB，需进一步排查训练充分性或增大mask比例"
 
 # 4. SURE → Tweedie（复用 Step 5 的判定逻辑）
 score_diff_thr = 0.1
@@ -1828,10 +1995,10 @@ print(f"\n  局限说明: 当前默认n_mc=1（MC单次采样方差较大），�
 # --- 综合对比柱状图 ---
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
-methods = ['监督', 'SURE', 'R2R', '盲点', '朴素']
-psnrs = [psnr_sup, psnr_sure, psnr_r2r, psnr_bs, psnr_naive]
-ssims = [ssim_sup, ssim_sure, ssim_r2r, ssim_bs, ssim_naive]
-colors = ['#2196F3', '#4CAF50', '#9C27B0', '#FF5722', '#FF9800']
+methods = ['监督', 'SURE', 'R2R', '盲点', '盲点+mask', '朴素']
+psnrs = [psnr_sup, psnr_sure, psnr_r2r, psnr_bs, psnr_bs_mask, psnr_naive]
+ssims = [ssim_sup, ssim_sure, ssim_r2r, ssim_bs, ssim_bs_mask, ssim_naive]
+colors = ['#2196F3', '#4CAF50', '#9C27B0', '#FF5722', '#FF7043', '#FF9800']
 
 # PSNR对比
 bars1 = ax1.bar(methods, psnrs, color=colors, width=0.6)
@@ -1855,7 +2022,7 @@ ax2.set_ylim([min(ssims) - 0.05, max(ssims) + 0.05])
 ax2.axhline(y=ssim_sup, color='gray', linestyle='--', alpha=0.5, label='监督基线')
 ax2.grid(True, alpha=0.3, axis='y')
 
-fig.suptitle(r'实验17.4-1 综合对比：五种自监督去噪方法', fontsize=14, fontweight='bold')
+fig.suptitle(r'实验17.4-1 综合对比：六种去噪方法（含N2V masking对照）', fontsize=14, fontweight='bold')
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, 'summary_comparison.png'), dpi=150, bbox_inches='tight')
 plt.close()
@@ -1893,9 +2060,17 @@ results_summary = {
         'SURE': {'PSNR': psnr_sure, 'SSIM': ssim_sure},
         'R2R': {'PSNR': psnr_r2r, 'SSIM': ssim_r2r},
         '盲点': {'PSNR': psnr_bs, 'SSIM': ssim_bs},
+        '盲点+N2Vmask': {'PSNR': psnr_bs_mask, 'SSIM': ssim_bs_mask},
         '朴素': {'PSNR': psnr_naive, 'SSIM': ssim_naive},
     },
     'SURE→Tweedie验证': tweedie_results,
+    '盲点泄漏验证_2x2': {
+        'StrictBlindSpot_随机初始化': strict_init_results,
+        'StrictBlindSpot_训练后': strict_results,
+        'ApproximateBlindSpot_随机初始化': approx_init_results,
+    },
+    'R2R_alpha扫描': alpha_results,
+    '恒等映射基线PSNR': psnr_identity,
     '实验参数': {
         '噪声水平': SIGMA,
         '训练轮数': N_EPOCHS,

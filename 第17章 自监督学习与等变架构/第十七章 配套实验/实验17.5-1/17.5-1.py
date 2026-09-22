@@ -4,8 +4,11 @@
 对应知识点：17.5.2节（多算子成像：MOI）
 
 实验内容：
-Step 1: 单算子基线 (Naive MC + EI) —— 与17.6-1相同的零空间约束策略
-Step 2: MOI多算子 (G=2, 4, 8) —— 用G个不同随机算子覆盖零空间
+Step 1: 单算子基线 (Naive MC + EI) —— 固定单一掩码 + 平移对称性（真正的"单算子"设定，
+        训练/测试用同一算子，与EI原文inpainting实验一致）
+Step 2: MOI多算子 (G=2, 4, 8) —— 固定算子池（MOI论文原始设定）：
+        算子池=[测试掩码]+(G-1)个固定掩码，每样本永久分配其一；
+        (1-p)^G的像素永远无观测，G的作用由此显现
 Step 3: MOI vs EI全面对比 —— 缺失像素恢复能力
 Step 4: 满秩条件验证 —— rank(E[A_gᵀA_g])随G的演化
 
@@ -33,7 +36,7 @@ def print_progress(epoch, n_epochs, iter_idx, n_iters, tag='', **kwargs):
         n_epochs: 总epoch数
         iter_idx: 当前iter（从0开始）
         n_iters: 总iter数
-        tag: 方法标签（如"single_ei"、"moi_G4"）
+        tag: 方法标签（如"single_ei"、"moipool_G4"）
         **kwargs: 其他要显示的指标（如 loss=0.123, mc=0.1, cons=0.05）
     """
     # 进度条可视化（总宽度30字符）
@@ -238,6 +241,10 @@ def create_fixed_test_mask(H, W, keep_ratio, seed=42):
 
 
 test_mask = create_fixed_test_mask(IMG_SIZE, IMG_SIZE, KEEP_RATIO).to(device)
+# ★ 单算子基线（EI）专用固定掩码：与测试掩码相同，训练/测试用同一算子A。
+#   这正是EI原文inpainting实验的设定——固定算子A + 平移对称性群"虚拟"造多算子，
+#   以此与MOI"真实多算子（每样本G个不同掩码）"形成名副其实的单/多算子对比。
+fixed_train_mask = test_mask
 
 
 def add_inpainting_noise(x, mask, sigma=SIGMA):
@@ -321,25 +328,27 @@ def random_shift(x, max_shift=8):
     return torch.roll(x, shifts=(dy, dx), dims=(2, 3))
 
 
-def ei_loss_for_moi(model, y, mask, pred, n_transforms=4, keep_ratio=KEEP_RATIO):
-    """适配MOI网络的EI损失
+def ei_loss_for_moi(model, y, mask, pred, n_transforms=4):
+    """适配MOI网络的EI损失（真正的"单算子 + 对称性"设定）
 
-    ★ 改动说明：原17.6-1的EI假设网络只看y，但MOI网络需要(y, mask)
-       这里对每个变换后的 x̂ 重新随机生成mask A_s，保证(x̂, A_s)配对
+    ★ 设计说明：EI的虚拟多算子来自对称性群，而非真实多掩码。
+      因此这里对每个平移变换后的 x̂ 仍使用**同一个固定掩码**（= 观测算子A），
+      即虚拟算子为 A∘T_g —— 这正是17.5.3节"借对称性虚拟多算子"的实现。
+      若像旧版那样每次重采随机掩码，基线本身就变成了"多算子"，
+      与MOI的对比将失真（评审意见#4）。
 
     Args:
+        mask: 固定观测掩码 (B,1,H,W)，与主重建路径同一算子
         pred: 外层已计算好的 model(y, mask) 输出，直接复用避免重复前向
     """
-    B, C, H, W = y.shape
     x_hat = pred  # ★ 复用外层 train_single_op_ei 中已算好的前向结果
 
     total_loss = 0
     for _ in range(n_transforms):
         x_hat_shifted = random_shift(x_hat.detach())
-        # 给变换后的x_hat生成新掩码（保持 (B,1,H,W) 以匹配网络输入）
-        virtual_mask = create_random_masks_per_sample(B, H, W, keep_ratio, y.device, G=1)
-        y_virtual = x_hat_shifted * virtual_mask
-        f_virtual = model(y_virtual, virtual_mask)
+        # ★ 关键：虚拟算子 = 固定掩码 ∘ 平移，掩码不变（单算子设定）
+        y_virtual = x_hat_shifted * mask
+        f_virtual = model(y_virtual, mask)
         total_loss += ((f_virtual - x_hat_shifted.detach()) ** 2).mean()
     return total_loss / n_transforms
 
@@ -406,9 +415,8 @@ def train_single_op_ei(model, train_loader, n_epochs, device, tag="single_ei"):
         n_iters = len(train_loader)
         for iter_idx, (batch_x, _) in enumerate(train_loader):
             batch_x = batch_x.to(device)
-            # ★ 单算子：每个batch每个样本1个随机掩码（保持 (B,1,H,W)）
-            mask = create_random_masks_per_sample(batch_x.shape[0], IMG_SIZE, IMG_SIZE,
-                                                   KEEP_RATIO, device, G=1)
+            # ★ 单算子：全程使用同一固定掩码（= 测试掩码），虚拟多算子仅由EI平移对称性产生
+            mask = fixed_train_mask.unsqueeze(0).unsqueeze(0).expand_as(batch_x)
             y = add_inpainting_noise(batch_x, mask, SIGMA)
 
             optimizer.zero_grad()
@@ -477,22 +485,29 @@ print("Step 2: MOI多算子训练 (G=2, 4, 8)")
 print("="*70)
 
 
-def moi_loss(model, x, masks, sigma, g, lambda_moi=LAMBDA_MOI):
-    """MOI损失
+def moi_loss(model, x, pool, sigma, g, lambda_moi=LAMBDA_MOI):
+    """MOI损失（固定算子池版，MOI论文原始设定）
+
+    ★ 设定说明：pool是训练前预生成的G个**固定**掩码（数据集的全部观测算子），
+      每个样本永久分配其中一个。这样"永远不被任何算子观测"的像素比例恰为
+      (1-p)^G——这些像素MC损失永远无法直接约束，只能靠交叉一致性+权重共享填补，
+      G对零空间的覆盖作用由此显现。
+      （对比：若每batch重采随机掩码，系综期望E[AᵀA]=p·I在G=1即满秩，
+      多算子的边际价值被"免费算子多样性"淹没，PSNR随G基本持平——旧版实测验证。）
 
     ★ 简化实现说明（两处与MOI原始论文的已知差异）：
     1. 使用 stop-gradient（x_hat.detach()）作为交叉一致性的伪标签，
        避免trivial collapse，是教学简化而非论文精确复现；
     2. 交叉一致性路径的输入 y_s = M_s·x̂ 不带噪声（与主重建路径的带噪y不同），
        这与MOI论文原始做法一致（一致性项作用于模型自身重建结果），但会造成
-       训练时网络同时看到“带噪观测”和“无噪伪观测”两种输入分布。
+       训练时网络同时看到"带噪观测"和"无噪伪观测"两种输入分布。
     核心思想一致：用多个算子覆盖零空间，交叉一致性约束。
 
     Args:
         x: 干净图像 (B, 1, H, W)
-        masks: G个不同掩码 (B, G, H, W)
+        pool: G个固定掩码（算子池）(G, H, W)
         sigma: 噪声水平
-        g: 主算子索引 (B,) 或 int
+        g: 每个样本被分配的算子索引 (B,) 或 int
         lambda_moi: 一致性损失权重
 
     Returns:
@@ -506,9 +521,8 @@ def moi_loss(model, x, masks, sigma, g, lambda_moi=LAMBDA_MOI):
     if isinstance(g, int):
         g = torch.full((B,), g, dtype=torch.long, device=x.device)
 
-    # 收集每个样本的主掩码
-    batch_idx = torch.arange(B, device=x.device)
-    mask_g = masks[batch_idx, g]  # (B, H, W)
+    # ★ 每个样本取自己被分配的固定算子（模拟"样本i由第g_i台设备测量"）
+    mask_g = pool[g]  # (B, H, W) 高级索引
     mask_g_2d = mask_g.unsqueeze(1)  # (B, 1, H, W)
 
     # 观测 y = M_g ⊙ x + noise
@@ -526,9 +540,9 @@ def moi_loss(model, x, masks, sigma, g, lambda_moi=LAMBDA_MOI):
     x_hat_det = x_hat.detach()
     loss_cons = 0.0
     n_cons = 0
-    G = masks.shape[1]
+    G = pool.shape[0]
     for s in range(G):
-        mask_s = masks[:, s, :, :].unsqueeze(1)  # (B, 1, H, W)
+        mask_s = pool[s].unsqueeze(0).unsqueeze(1).expand(B, 1, x.shape[2], x.shape[3])  # (B, 1, H, W)
         y_s = mask_s * x_hat_det  # ★ 无噪声伪观测（与主重建路径的带噪y分布不同）
         #   这是MOI论文的原始做法：一致性项作用于模型自身重建结果，而非重新加噪的物理测量。
         #   会造成训练时网络同时看到"带噪观测"和"无噪伪观测"两种输入分布，属已知简化。
@@ -547,11 +561,27 @@ def moi_loss(model, x, masks, sigma, g, lambda_moi=LAMBDA_MOI):
 
 
 def train_moi(model, train_loader, n_epochs, G, device, tag="moi"):
-    """训练MOI模型，每个样本使用G个不同随机算子
+    """训练MOI模型（固定算子池版）
+
+    ★ 算子池设计：pool = [测试掩码] + (G-1)个固定随机掩码。
+      把测试掩码纳入池中可保证测试时无输入分布偏移，且G越大池的联合覆盖越广；
+      G=1时退化为"纯MC+固定掩码"（连一致性项都没有，n_cons=0），
+      正是MOI要拯救的最困难情形。
+      池生成用固定种子+隔离RNG：保证续训时算子池一致，且不污染全局随机流。
 
     Args:
-        G: 每个样本的算子数
+        G: 算子池大小（每个样本被分配池中1个算子）
     """
+    # ★ 固定算子池：测试掩码 + (G-1)个固定随机掩码
+    pool_parts = [test_mask.unsqueeze(0)]  # (1,H,W)
+    if G > 1:
+        with torch.random.fork_rng(devices=[device] if device.type == 'cuda' else []):
+            torch.manual_seed(1000 + G)
+            extra = create_random_masks_per_sample(1, IMG_SIZE, IMG_SIZE,
+                                                    KEEP_RATIO, device, G=G - 1)
+        pool_parts.append(extra.squeeze(0))  # (G-1,H,W)
+    pool = torch.cat(pool_parts, dim=0)  # (G,H,W)
+
     optimizer = optim.Adam(model.parameters(), lr=LR)
     ckpt_path = os.path.join(SAVE_DIR, f'ckpt_{tag}.pt')
     start_epoch = 0
@@ -616,14 +646,11 @@ def train_moi(model, train_loader, n_epochs, G, device, tag="moi"):
             batch_x = batch_x.to(device)
             B = batch_x.shape[0]
 
-            # ★ MOI核心：每个batch为每个样本生成G个不同随机掩码
-            masks = create_random_masks_per_sample(B, IMG_SIZE, IMG_SIZE,
-                                                    KEEP_RATIO, device, G=G)
-            # 随机选主算子g（每个样本独立选）
+            # ★ 固定算子池：每个样本随机分配池中一个固定算子（数据采集视角）
             g = torch.randint(0, G, (B,), device=device)
 
             optimizer.zero_grad()
-            loss, mc_val, cons_val = moi_loss(model, batch_x, masks, SIGMA, g)
+            loss, mc_val, cons_val = moi_loss(model, batch_x, pool, SIGMA, g)
             loss.backward()
             optimizer.step()
             epoch_loss += loss.item()
@@ -671,12 +698,19 @@ def train_moi(model, train_loader, n_epochs, G, device, tag="moi"):
 
 
 # 训练MOI G=2, 4, 8
+print("  ★ 固定算子池设定（MOI论文原始设定）:")
+print("    算子池 = [测试掩码] + (G-1)个固定随机掩码，每样本永久分配其中1个；")
+print(f"    永远不被任何算子观测的像素比例 = (1-p)^G（G=2:25%, G=4:6.2%, G=8:0.4%），")
+print("    这些像素的MC损失永远无法直接约束——G对零空间的覆盖作用由此显现。")
+print("    （旧版每batch重采随机掩码，系综E[AᵀA]=p·I在G=1即满秩，G失去作用，")
+print("     实测PSNR随G基本持平——两种设定的对比本身就是一个有效知识点。）")
 moi_results = {}  # G -> {psnr, ssim, losses, model}
 for G in [2, 4, 8]:
     print(f"\n  训练MOI G={G}...")
     model_moi = SmallUNetMOI(in_ch=2, out_ch=1, base=24).to(device)
     # ★ 所有G统一使用相同batch_size，保证训练公平性
-    losses = train_moi(model_moi, train_loader, N_EPOCHS, G, device, tag=f"moi_G{G}")
+    # ★ tag用moipool_*避免误加载旧设计（每batch重采）的checkpoint
+    losses = train_moi(model_moi, train_loader, N_EPOCHS, G, device, tag=f"moipool_G{G}")
     psnr_val, obs_val, miss_val, ssim_val = evaluate_combined(
         model_moi, test_loader, test_mask, SIGMA, device, tag=f"MOI G={G}")
     print(f"  MOI G={G} PSNR = {psnr_val:.2f} dB, SSIM = {ssim_val:.4f}")
@@ -901,8 +935,14 @@ for bar, v in zip(bars, gaps):
     ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.2,
              f'{v:.1f}', ha='center', fontsize=10)
 ax2.set_ylabel('PSNR差距 (观测 - 缺失) dB')
-ax2.set_title(r'缺失像素恢复难度差距 (越小→零空间约束越好)')
-ax2.set_ylim(top=max(gaps) + 1.0)
+# ★ 解读修正（评审意见#3）：gap 并非纯粹的"零空间约束质量"指标。
+#   MC损失使观测像素重建继承观测噪声(σ=0.05)，而MNIST缺失像素多为背景(≈0)天然易重建，
+#   因此自监督方法常出现"负gap"（缺失反而比观测准），不能据此判定其零空间约束优于监督。
+#   gap 仅在"同一方法、比较其缺失像素绝对水平"时才反映零空间约束强弱。
+ax2.set_title('观测-缺失 PSNR差距\n⚠ 负gap≠零空间约束更优：观测像素继承σ=0.05噪声，\n缺失像素多为背景(≈0)天然易重建，该指标混入噪声继承效应',
+              fontsize=10)
+ax2.axhline(y=0, color='black', linewidth=0.8, alpha=0.5)
+ax2.set_ylim(bottom=min(min(gaps) - 0.5, -0.5), top=max(gaps) + 1.0)
 ax2.tick_params(axis='x', rotation=20)
 ax2.grid(True, alpha=0.3, axis='y')
 
@@ -1072,11 +1112,25 @@ moi_g8_gap = psnr_sup - region_results['MOI G=8']['total']
 psnr_by_G = [moi_results[G]['psnr'] for G in [2, 4, 8]]
 is_monotonic = all(psnr_by_G[i] <= psnr_by_G[i+1] for i in range(len(psnr_by_G) - 1))
 # 详细版（含数值，用于打印结论）：非单调时给出具体 PSNR 轨迹
-trend_desc = ("单调提升" if is_monotonic
-              else f"整体呈上升趋势但非严格单调 (G=2:{psnr_by_G[0]:.2f}→G=4:{psnr_by_G[1]:.2f}→G=8:{psnr_by_G[2]:.2f}dB，"
-                    f"提示G增大带来的边际收益递减或训练方差影响)")
+# ★ 复核补充：极差过小时应表述为"基本持平"而非"上升"——keep_ratio=0.5 下
+#   G=2 已覆盖75%零空间，G再大的覆盖收益本就应趋近饱和（与Step 4互相印证）
+psnr_range = max(psnr_by_G) - min(psnr_by_G)
+if is_monotonic:
+    trend_desc = "单调提升"
+elif psnr_range < 0.1:
+    trend_desc = (f"基本持平 (G=2:{psnr_by_G[0]:.2f}→G=4:{psnr_by_G[1]:.2f}→G=8:{psnr_by_G[2]:.2f}dB，"
+                  f"极差仅{psnr_range:.2f}dB，在训练方差范围内；与Step 4呼应——keep_ratio=0.5时"
+                  f"G=2已覆盖75%零空间，G再大覆盖收益趋近饱和)")
+else:
+    trend_desc = (f"整体呈上升趋势但非严格单调 (G=2:{psnr_by_G[0]:.2f}→G=4:{psnr_by_G[1]:.2f}→G=8:{psnr_by_G[2]:.2f}dB，"
+                  f"提示G增大带来的边际收益递减或训练方差影响)")
 # 简短版（用于图表标题，避免文字过长导致排版溢出）
-trend_desc_short = "单调提升" if is_monotonic else "非严格单调（边际收益递减）"
+if is_monotonic:
+    trend_desc_short = "单调提升"
+elif psnr_range < 0.1:
+    trend_desc_short = "基本持平（零空间覆盖已近饱和）"
+else:
+    trend_desc_short = "非严格单调（边际收益递减）"
 
 # ★ 动态生成"与监督差距"的定性描述，避免硬编码"接近监督性能"
 # ★ 需处理负值（MOI反超监督）情形——自监督方法用了更多算子/前向时并非不可能
@@ -1089,9 +1143,32 @@ elif moi_g8_gap < 3.0:
 else:
     gap_desc = "MOI在多算子场景下与监督性能仍有明显差距，提示自监督零空间约束的固有局限"
 
+# ★ 动态判定 MOI vs EI 强弱（评审意见#1）：不预设"MOI优于EI"，以实际总PSNR为准。
+#   注意：EI基线已改为固定掩码+平移对称性（真正的单算子设定），与MOI的
+#   "每样本G个真实不同算子"形成名副其实的单/多算子对比。
+moi_best_G = max([2, 4, 8], key=lambda G: moi_results[G]['psnr'])
+moi_best_psnr = moi_results[moi_best_G]['psnr']
+ei_total = region_results['单算子+EI']['total']
+moi_vs_ei_diff = moi_best_psnr - ei_total
+if moi_vs_ei_diff > 0.5:
+    # ★ 差距较小时措辞降级为"略优"，并附计算量未对齐限定（避免过度因果解读）：
+    #   MOI每batch前向次数为1+G次（主重建+G次交叉一致性），EI为1+4=5次，
+    #   未做计算量对齐前，微弱差距不能归因为纯粹的零空间覆盖收益。
+    adv_word = "略优" if moi_vs_ei_diff < 1.5 else "优于"
+    moi_ei_desc = (f"最佳MOI (G={moi_best_G}: {moi_best_psnr:.2f}dB) {adv_word}单算子+EI ({ei_total:.2f}dB，"
+                   f"差{moi_vs_ei_diff:.2f}dB)；但训练计算量未对齐（MOI G={moi_best_G}每batch约{moi_best_G+1}次前向"
+                   f"vs EI 5次），该差距可能部分来自计算量增加，零空间覆盖收益的因果结论需等计算量对齐实验确认")
+elif moi_vs_ei_diff < -0.5:
+    moi_ei_desc = (f"单算子+EI ({ei_total:.2f}dB) 反超最佳MOI (G={moi_best_G}: {moi_best_psnr:.2f}dB)，"
+                   f"与EI原文结论一致：平移对称性较强的MNIST inpainting设定下，"
+                   f"虚拟多算子已能逼近甚至超过真实多算子，且EI训练计算量更省")
+else:
+    moi_ei_desc = (f"最佳MOI (G={moi_best_G}: {moi_best_psnr:.2f}dB) 与单算子+EI ({ei_total:.2f}dB) 性能相当，"
+                   f"印证EI原文'单算子设定下EI逼近MOI'的结论")
+
 print(f"\n  核心结论:")
 print(f"  1. MOI用G个不同算子覆盖零空间，PSNR随G{trend_desc}")
-print(f"  2. 单算子+EI用对称性虚拟多算子，性能受限于对称性强度")
+print(f"  2. {moi_ei_desc}")
 print(f"  3. MOI G=8 与监督差距 = {moi_g8_gap:.2f} dB → {gap_desc}")
 print(f"  4. 满秩条件: rank(E[A_gᵀA_g])随G→∞趋于n，经验覆盖度 ≈ 1-(1-p)^G")
 print(f"  5. 缺失像素的恢复能力是评估零空间约束的关键指标")
@@ -1100,7 +1177,7 @@ print(f"\n  ★ 计算量说明:")
 print(f"  ────────────────────────────────────────────────────────")
 print(f"  MOI的训练计算量随G线性增长：G=2时每batch约3次前向-反向，")
 print(f"  G=8时约9次（1次主重建 + G次交叉一致性）。本实验未做计算量对齐，")
-print(f"  因此'PSNR随G单调提升'的结论可能部分来自训练计算量的增加，")
+print(f"  因此PSNR随G的变化趋势可能部分来自训练计算量的增加，")
 print(f"  而非纯粹源于零空间覆盖增强。如需严格分离该变量，可用等计算量")
 print(f"  对比（如G越大、epoch数越少）进行补充实验。")
 print(f"  ────────────────────────────────────────────────────────")
@@ -1175,6 +1252,7 @@ results_summary = {
     '实验': '17.5-1 MOI多算子成像',
     '分区域PSNR结果': {
         '各方法分区域PSNR': region_results,
+        'MOI_vs_EI判定': moi_ei_desc,
     },
     '满秩条件验证': {
         f"G={G}": {
