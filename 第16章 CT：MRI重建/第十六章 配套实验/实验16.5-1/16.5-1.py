@@ -522,7 +522,7 @@ x_dps = dps_mri(model, y_test, mri_op, test_batch.shape, zeta=0.3)
 print("\n  PSNR对比:")
 for i in range(4):
     gt = test_batch[i, 0].cpu().numpy()
-    zf_p = psnr(gt, x_zf[i, 0].cpu().numpy(), data_range=1.0)
+    zf_p = psnr(gt, x_zf[i, 0].cpu().numpy().clip(0, 1), data_range=1.0)
     diffpir_p = psnr(gt, x_diffpir[i, 0].cpu().numpy().clip(0, 1), data_range=1.0)
     dps_p = psnr(gt, x_dps[i, 0].cpu().numpy().clip(0, 1), data_range=1.0)
     print(f"  样本{i}: 零填充={zf_p:.1f}dB, DiffPIR={diffpir_p:.1f}dB, DPS={dps_p:.1f}dB")
@@ -706,7 +706,7 @@ per_sample_psnr = {}
 for i in range(4):
     gt_i = test_batch[i, 0].cpu().numpy()
     per_sample_psnr[f"样本{i}"] = {
-        "零填充": round(float(psnr(gt_i, x_zf[i, 0].cpu().numpy(), data_range=1.0)), 2),
+        "零填充": round(float(psnr(gt_i, x_zf[i, 0].cpu().numpy().clip(0, 1), data_range=1.0)), 2),
         "DiffPIR": round(float(psnr(gt_i, x_diffpir[i, 0].cpu().numpy().clip(0, 1), data_range=1.0)), 2),
         "DPS": round(float(psnr(gt_i, x_dps[i, 0].cpu().numpy().clip(0, 1), data_range=1.0)), 2),
     }
