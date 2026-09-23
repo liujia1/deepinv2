@@ -16,6 +16,15 @@ Step 4: Neighbor2Neighbor空间配对 —— 利用邻域结构近似配对
 
 素材来源：MiniProject_Self_Supervised中N2N思路、deepinv.loss API
 运行前提：需GPU（Colab T4即可）
+
+★v2修订（修复v1结果与理论预期不符的问题）：
+1. 噪声管线去掉clamp：N2N理论要求E[y'|x]=x，v1的clamp(0,1)在σ=0.3下使背景
+   产生≈σ/√(2π)≈0.12的系统性正偏差，导致N2N(≈18.3dB)与监督(≈26.5dB)相差
+   约8dB，掩盖了"N2N≈监督"的核心教学结论。v2起训练/评估均不clamp。
+2. checkpoint文件名统一加_v2后缀：旧权重基于clamp管线训练，与新管线评估
+   不匹配，通过后缀自动隔离，避免resume误加载。
+3. N2B全分辨率版的identity诊断改为对齐训练目标y[sub2]：v1误测f(y)[sub1]
+   与y[sub1]的相关性，漏检了"直接抄目标像素"的identity shortcut。
 """
 
 import numpy as np
@@ -141,7 +150,12 @@ IMG_SIZE = 32  # 上采样到32×32以便UNet下采样
 SIGMA = 0.3    # 噪声标准差
 BATCH_SIZE = 128
 N_EPOCHS = 30
+QUICK_EPOCHS = 5  # Step1快速对比的训练轮数
 LR = 1e-3
+# ★checkpoint版本后缀：v2起噪声管线去掉clamp（见add_noise说明），
+# 旧v1权重基于clamp噪声训练，与新管线的训练/评估不匹配，
+# 通过版本后缀自动隔离，避免resume逻辑误加载旧权重导致结果混杂
+CKPT_VER = 'v2'
 
 transform = transforms.Compose([
     transforms.Resize(IMG_SIZE),
@@ -159,20 +173,18 @@ test_loader = DataLoader(mnist_test, batch_size=BATCH_SIZE, shuffle=False, num_w
 
 
 def add_noise(x, sigma=SIGMA):
-    """给干净图像添加高斯噪声并 clamp 到 [0,1]
+    """给干净图像添加高斯噪声（★v2起不clamp）
 
-    ★ 关于 clamp 对 N2N 理论假设的影响（重要说明）：
-    - N2N 的理论保证依赖于 E[y'|x] = x，即噪声是零均值的
-    - clamp 操作会在边界处（接近 0 或 1 的像素）引入截断偏差，
-      使得 E[clamp(x+ε)|x] ≠ x，破坏了严格的零均值假设
-    - 当 σ=0.3 时，MNIST 中接近 0 的背景区域受截断影响较大
-    - 本实验选择 clamp 的原因：
-      1. 保持训练/评估分布一致（PSNR 要求 data_range=1.0）
-      2. 避免负值或超 1 的像素导致可视化异常
-      3. 教学实验中，clamp 带来的偏差对定性结论影响有限
-    - 严谨的论文实验中应讨论此偏差，或使用更小的 σ 减小截断影响
+    ★ 为什么必须去掉clamp（v1的核心缺陷）：
+    - N2N 的理论保证依赖于 E[y'|x] = x，即噪声零均值且无截断
+    - v1在加噪后clamp到[0,1]，背景像素(x=0)处 E[clamp(ε)] = σ/√(2π) ≈ 0.12，
+      相当于给N2N的训练目标注入了系统性正偏差
+    - 后果（v1实测）：N2N把背景学成"灰雾"，PSNR被压到≈18.4dB的理论上限，
+      与监督(≈26.5dB)相差约8dB，完全掩盖了"N2N≈监督"的教学结论
+    - v2起训练与评估均不clamp；可视化时matplotlib按vmin/vmax自动截断显示，
+      PSNR评估对模型输出pred.clip(0,1)仅影响指标计算，不涉及训练假设
     """
-    return (x + sigma * torch.randn_like(x)).clamp(0, 1)
+    return x + sigma * torch.randn_like(x)
 
 
 def evaluate_psnr(model, test_loader, sigma=SIGMA, noise_seed=12345):
@@ -199,7 +211,7 @@ def evaluate_psnr(model, test_loader, sigma=SIGMA, noise_seed=12345):
             batch_x = batch_x.to(device)
             # 使用固定种子生成噪声，确保跨模型评估一致性
             noise = torch.randn(batch_x.shape, generator=noise_rng, device=device)
-            y = (batch_x + sigma * noise).clamp(0, 1)
+            y = batch_x + sigma * noise  # ★v2：不clamp，与训练管线一致
             pred = model(y)
             pred_np = pred.cpu().numpy().clip(0, 1)
             x_np = batch_x.cpu().numpy()
@@ -267,12 +279,12 @@ print("  说明: 设定1-3需要干净数据x，设定4仅需要噪声观测y—
 # - Step1：快速训练（5 epochs），用于四种设定的定性对比，了解各设定的相对性能
 # - Step2：完整训练（30 epochs），用于N2N原理的定量验证
 # 虽然loss函数相同，但训练目的不同，Step1侧重"哪种设定可行"，Step2侧重"N2N是否等价于监督"
-print("\n  快速训练对比四种设定的性能差异（各训练5个epoch）...")
+print(f"\n  快速训练对比四种设定的性能差异（各训练{QUICK_EPOCHS}个epoch）...")
 
-def quick_train(model, loss_fn, n_epochs=5, tag=""):
+def quick_train(model, loss_fn, n_epochs=QUICK_EPOCHS, tag=""):
     """快速训练用于对比（支持resume，兼容新旧checkpoint格式）"""
     optimizer = optim.Adam(model.parameters(), lr=LR)
-    ckpt_path = os.path.join(SAVE_DIR, f'ckpt_quick_{tag}.pt') if tag else None
+    ckpt_path = os.path.join(SAVE_DIR, f'ckpt_quick_{tag}_{CKPT_VER}.pt') if tag else None
     start_epoch = 0
     is_final = False
     train_losses = []
@@ -355,9 +367,9 @@ psnr_s1, ssim_s1 = quick_train(model_s1, lambda p, x, y: nn.MSELoss()(p, x), tag
 # 训练算法本质上就是N2N损失‖y'-f(y)‖²，与Step 2的model_n2n是同一件事。
 # 区别仅在于：Step 1的设定2用5 epoch快速验证可行性，Step 2的N2N用30 epoch完整训练。
 # 不要把"设定2"和"Step 2的N2N"误解为两种不同方法。
-def train_synthetic_pair(model, n_epochs=5):
+def train_synthetic_pair(model, n_epochs=QUICK_EPOCHS):
     optimizer = optim.Adam(model.parameters(), lr=LR)
-    ckpt_path = os.path.join(SAVE_DIR, 'ckpt_quick_S2-synthetic-pair.pt')
+    ckpt_path = os.path.join(SAVE_DIR, f'ckpt_quick_S2-synthetic-pair_{CKPT_VER}.pt')
     start_epoch = 0
     is_final = False
     train_losses = []
@@ -469,7 +481,7 @@ for ax, (title, img, color) in zip(axes, methods):
     ax.set_title(title, fontsize=10, color=color if '不可行' not in title else 'gray')
     ax.axis('off')
 
-fig.suptitle(f'Step 1b: 四种学习设定的性能对比 ($\\sigma$={SIGMA:.1f}, 5 epochs)', fontsize=13)
+fig.suptitle(f'Step 1b: 四种学习设定的性能对比 ($\\sigma$={SIGMA:.1f}, {QUICK_EPOCHS} epochs)', fontsize=13)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, 'step1b_four_settings_comparison.png'), dpi=150, bbox_inches='tight')
 plt.close()
@@ -492,7 +504,7 @@ print("="*70)
 def train_model(model, loss_fn, train_loader, n_epochs=N_EPOCHS, tag=""):
     """通用训练循环（支持断点续训，兼容新旧checkpoint格式）"""
     optimizer = optim.Adam(model.parameters(), lr=LR)
-    ckpt_path = os.path.join(SAVE_DIR, f'ckpt_{tag}.pt') if tag else None
+    ckpt_path = os.path.join(SAVE_DIR, f'ckpt_{tag}_{CKPT_VER}.pt') if tag else None
     start_epoch = 0
     is_final = False
     train_losses = []
@@ -587,7 +599,7 @@ print("\n  训练Noise2Noise...")
 def train_n2n_model(model, train_loader, n_epochs=N_EPOCHS, tag="N2N"):
     """N2N专用训练循环：对每个batch独立采样两次噪声"""
     optimizer = optim.Adam(model.parameters(), lr=LR)
-    ckpt_path = os.path.join(SAVE_DIR, f'ckpt_{tag}.pt')
+    ckpt_path = os.path.join(SAVE_DIR, f'ckpt_{tag}_{CKPT_VER}.pt')
     start_epoch = 0
     is_final = False
     train_losses = []
@@ -796,7 +808,9 @@ test_batch, _ = next(iter(test_loader))
 div_noise_rng = torch.Generator(device=device)
 div_noise_rng.manual_seed(12345)  # 与evaluate_psnr的noise_seed一致
 test_batch_noise = torch.randn(test_batch[:16].shape, generator=div_noise_rng, device=device)
-test_batch_y = (test_batch[:16].to(device) + SIGMA * test_batch_noise).clamp(0, 1)
+# ★v2：主口径不clamp（与训练/评估管线一致，保证Stein恒等式的零均值前提成立）
+test_batch_y = test_batch[:16].to(device) + SIGMA * test_batch_noise
+test_batch_y_clamped = test_batch_y.clamp(0, 1)  # 仅用于clamp对照实验
 div_naive = compute_divergence_mc(model_naive, test_batch_y)
 model_sup.eval()
 div_sup = compute_divergence_mc(model_sup, test_batch_y)
@@ -829,27 +843,21 @@ else:
     print(f"    这在小图像上是常见现象——更大的图像或更低σ会使偏差项更稳定为正。")
 
 # --- ★★★ clamp影响的定量对照实验 ★★★ ---
-# Stein引理要求 E[y'|x]=x（无偏），而clamp到[0,1]会破坏这个假设。
-# 以下量化clamp对散度估计的影响。
-print(f"\n  ★★★ clamp对散度估计影响的定量对照 ★★★")
-print("  Stein引理要求E[y'|x]=x（无偏噪声），但add_noise后clamp到[0,1]会破坏这个假设。")
-print("  以下对比'clamp'与'不clamp'下的散度估计值，量化clamp的影响：")
-# 不clamp的噪声数据
-test_batch_y_noclamps = (test_batch[:16].to(device) + SIGMA * torch.randn_like(test_batch[:16].to(device)))
-# clamp到[-0.5, 1.5]（避免完全clamp但保持范围合理）
-test_batch_y_softclamp = test_batch_y_noclamps.clamp(-0.5, 1.5)
+# ★v2说明：主口径（div_naive/bias_term）已不clamp，Stein引理前提E[y|x]=x严格成立。
+# 本对照用同一份噪声量化"若clamp到[0,1]"会使散度估计偏离多少（教学参考）。
+print(f"\n  ★★★ clamp对散度估计影响的定量对照（v2主口径已不clamp） ★★★")
+print("  Stein引理要求E[y'|x]=x（无偏噪声）。v2管线已不clamp，该前提严格成立；")
+print("  以下用同一份噪声对比'clamp到[0,1]'与'不clamp'输入下的散度估计差异：")
+div_naive_clamped = compute_divergence_mc(model_naive, test_batch_y_clamped)
 
-div_naive_noclamp = compute_divergence_mc(model_naive, test_batch_y_noclamps)
-div_naive_softclamp = compute_divergence_mc(model_naive, test_batch_y_softclamp)
-
-print(f"    严格clamp [0,1]:     div_naive ≈ {div_naive:.2f}")
-print(f"    软clamp [-0.5,1.5]: div_naive ≈ {div_naive_softclamp:.2f}")
-print(f"    不clamp (理论值):    div_naive ≈ {div_naive_noclamp:.2f}")
-print(f"    ★相对变化: clamp版 vs 不clamp版 = {(div_naive - div_naive_noclamp) / (abs(div_naive_noclamp) + 1e-6) * 100:+.1f}%")
-if abs(div_naive - div_naive_noclamp) / (abs(div_naive_noclamp) + 1e-6) < 0.1:
-    print(f"    结论：clamp对散度估计影响<10%，Stein恒等式近似成立")
+print(f"    不clamp（v2主口径，Stein前提成立）: div_naive ≈ {div_naive:.2f}")
+print(f"    clamp [0,1]（v1旧管线的做法）:      div_naive ≈ {div_naive_clamped:.2f}")
+print(f"    ★相对变化: clamp版 vs 不clamp版 = {(div_naive_clamped - div_naive) / (abs(div_naive) + 1e-6) * 100:+.1f}%")
+if abs(div_naive_clamped - div_naive) / (abs(div_naive) + 1e-6) < 0.1:
+    print(f"    结论：clamp对散度估计影响<10%，散度分析对输入截断不敏感")
+    print(f"    （注：clamp的主要危害在于N2N训练目标E[y2|x]≠x，见add_noise的说明）")
 else:
-    print(f"    结论：clamp对散度估计影响显著（>10%），定量分析需考虑此偏差")
+    print(f"    结论：clamp对散度估计影响显著（>10%），散度定量分析需避免输入截断")
 
 # --- ★alpha敏感性检查（定量验证有限差分步长选择） ---
 print(f"\n  ★ alpha敏感性检查（验证alpha=1e-3的选择是否稳健）：")
@@ -1021,7 +1029,7 @@ print("\n  训练Neighbor2Neighbor...")
 
 model_n2nb = SmallUNet().to(device)
 optimizer_n2nb = optim.Adam(model_n2nb.parameters(), lr=LR)
-n2nb_ckpt_path = os.path.join(SAVE_DIR, 'ckpt_N2B.pt')
+n2nb_ckpt_path = os.path.join(SAVE_DIR, f'ckpt_N2B_{CKPT_VER}.pt')
 n2nb_start = 0
 is_n2nb_final = False
 losses_n2nb = []
@@ -1108,7 +1116,7 @@ with torch.no_grad():
     for batch_x, _ in tqdm(test_loader, desc='评估N2B PSNR', leave=False):
         batch_x = batch_x.to(device)
         noise = torch.randn(batch_x.shape, generator=n2b_noise_rng, device=device)
-        y = (batch_x + SIGMA * noise).clamp(0, 1)
+        y = batch_x + SIGMA * noise
         # 用子图去噪后合并
         sub1, sub2 = neighbor_split(y)
         pred_sub1 = model_n2nb(sub1).clip(0, 1)
@@ -1128,8 +1136,8 @@ ssim_n2nb = np.mean(ssim_n2nb_vals)
 # ★命名说明：n2nb = N2B下采样版（neighbor_split/merge），n2b_fullres = N2B全分辨率版
 print(f"  Neighbor2Neighbor PSNR = {psnr_n2nb:.2f} dB, SSIM = {ssim_n2nb:.4f}")
 
-# --- Step 4b: 改进版N2B（保持分辨率）---
-print("\n  训练改进版N2B（保持分辨率，消除合并误差）...")
+# --- Step 4b: 保持分辨率版N2B（消除合并误差，但需警惕identity shortcut）---
+print("\n  训练保持分辨率版N2B（消除合并误差；identity shortcut风险见后续诊断）...")
 
 def get_subgrid_indices(H, W, device):
     """获取棋盘格子图位置的索引
@@ -1211,7 +1219,7 @@ def train_n2b_fullres(model, train_loader, n_epochs=N_EPOCHS, tag="N2B_FullRes")
     参考: Laine et al. (2019) "High-Quality Self-Supervised Deep Image Denoising"
     """
     optimizer = optim.Adam(model.parameters(), lr=LR)
-    ckpt_path = os.path.join(SAVE_DIR, f'ckpt_{tag}.pt')
+    ckpt_path = os.path.join(SAVE_DIR, f'ckpt_{tag}_{CKPT_VER}.pt')
     start_epoch = 0
     is_final = False
     train_losses = []
@@ -1313,7 +1321,7 @@ with torch.no_grad():
     for batch_x, _ in tqdm(test_loader, desc='评估N2B FullRes PSNR', leave=False):
         batch_x = batch_x.to(device)
         noise = torch.randn(batch_x.shape, generator=fullres_noise_rng, device=device)
-        y = (batch_x + SIGMA * noise).clamp(0, 1)
+        y = batch_x + SIGMA * noise
         pred = model_n2b_fullres(y).clip(0, 1)
         pred_np = pred.cpu().numpy()
         x_np = batch_x.cpu().numpy()
@@ -1323,7 +1331,7 @@ with torch.no_grad():
 
 psnr_n2b_fullres = np.mean(psnr_n2b_fullres_vals)
 ssim_n2b_fullres = np.mean(ssim_n2b_fullres_vals)
-print(f"  改进版N2B PSNR = {psnr_n2b_fullres:.2f} dB, SSIM = {ssim_n2b_fullres:.4f}")
+print(f"  保持分辨率版N2B PSNR = {psnr_n2b_fullres:.2f} dB, SSIM = {ssim_n2b_fullres:.4f}")
 
 # --- ★公平评估：仅在idx_sub1位置计算PSNR/SSNR ---
 # 目的：让下采样版（仅在sub1位置有真实预测）和全分辨率版使用相同评估口径
@@ -1339,7 +1347,7 @@ with torch.no_grad():
     for batch_x, _ in tqdm(test_loader, desc='公平评估N2B FullRes', leave=False):
         batch_x = batch_x.to(device)
         noise = torch.randn(batch_x.shape, generator=fair_noise_rng, device=device)
-        y = (batch_x + SIGMA * noise).clamp(0, 1)
+        y = batch_x + SIGMA * noise
         pred = model_n2b_fullres(y).clip(0, 1)
         B, C, H, W = pred.shape
         pred_flat = pred.view(B, C, -1)
@@ -1385,7 +1393,7 @@ with torch.no_grad():
     for batch_x, _ in tqdm(test_loader, desc='偶/奇行PSNR评估', leave=False):
         batch_x = batch_x.to(device)
         noise = torch.randn(batch_x.shape, generator=evenodd_noise_rng, device=device)
-        y = (batch_x + SIGMA * noise).clamp(0, 1)
+        y = batch_x + SIGMA * noise
         pred = model_n2b_fullres(y).clip(0, 1)
         B, C, H, W = pred.shape
         pred_flat = pred.view(B, C, -1)
@@ -1416,15 +1424,23 @@ print(f"  （注：此差距可作为'感受野泄漏'的辅助证据）")
 
 # --- ★诊断实验：验证identity shortcut是否发生 ---
 print(f"\n  ★★ 感受野泄漏诊断（教学要点）★★")
-print(f"  全分辨率版可能存在identity shortcut问题，以下进行定量诊断：")
-print(f"  ★同时计算model_sup、model_n2n作为对照组，验证0.9阈值是否合理")
+print(f"  全分辨率版的损失是‖f(y)[sub1] - y[sub2]‖²，identity shortcut的表现是")
+print(f"  f(y)[sub1] ≈ y[sub2]（直接抄目标位置的相邻像素），因此诊断必须对齐y[sub2]。")
+print(f"  ★v2修正：v1误测f(y)[sub1]与y[sub1]（输入自身位置）的相关性，导致泄漏漏检")
 model_n2b_fullres.eval()
 # ★获取子图索引（与训练时一致）
 idx_sub1_diag, idx_sub2_diag = get_subgrid_indices(IMG_SIZE, IMG_SIZE, device)
 
-# ★定义一个函数计算f(y)与y在idx_sub1位置的相关系数（移到with块外面，更清晰）
-def compute_identity_correlation(model, y, idx_sub1):
-    """计算模型输出f(y)与输入y在指定位置的相关系数"""
+# ★计算f(y)[sub1]与训练目标y[sub2]的相关系数和MSE
+def compute_target_correlation(model, y, idx_sub1, idx_sub2):
+    """计算f(y)[sub1]与训练目标y[sub2]的相关系数与MSE
+
+    ★为什么必须对齐训练目标：
+    - 全分辨率版N2B用y[sub2]作target，若发生identity shortcut，
+      f(y)[sub1]会逼近y[sub2]而非y[sub1]
+    - 判据：corr→1 且 MSE≪σ²（纯复制时MSE→0；真去噪模型输出≈E[x|y]，
+      与单次噪声实现y[sub2]的固有差异为σ²，故基线MSE≈σ²）
+    """
     model.eval()
     with torch.no_grad():
         pred = model(y)
@@ -1432,58 +1448,46 @@ def compute_identity_correlation(model, y, idx_sub1):
         pred_flat = pred.view(B, C, -1)
         y_flat = y.view(B, C, -1)
         pred_sub1 = pred_flat[:, :, idx_sub1].flatten()
-        y_sub1 = y_flat[:, :, idx_sub1].flatten()
-        correlation = np.corrcoef(y_sub1.cpu().numpy(), pred_sub1.cpu().numpy())[0, 1]
-        return correlation
+        y_target = y_flat[:, :, idx_sub2].flatten()
+        correlation = np.corrcoef(y_target.cpu().numpy(), pred_sub1.cpu().numpy())[0, 1]
+        mse_to_target = ((pred_sub1 - y_target) ** 2).mean().item()
+        return correlation, mse_to_target
 
-with torch.no_grad():
-    test_diag, _ = next(iter(test_loader))
-    test_diag_y = add_noise(test_diag[:64].to(device), SIGMA)
-    pred_diag = model_n2b_fullres(test_diag_y)
+test_diag, _ = next(iter(test_loader))
+test_diag_y = add_noise(test_diag[:64].to(device), SIGMA)
 
-    # ★只在被监督的idx_sub1位置计算相关性（与训练监督范围一致）
-    B, C, H, W = pred_diag.shape
-    pred_flat = pred_diag.view(B, C, -1)
-    y_flat = test_diag_y.view(B, C, -1)
+# ★对照组：model_sup/model_n2n不以y[sub2]为target，代表"正常去噪模型"的基线
+correlation, mse_to_target = compute_target_correlation(model_n2b_fullres, test_diag_y, idx_sub1_diag, idx_sub2_diag)
+corr_sup, mse_sup_target = compute_target_correlation(model_sup, test_diag_y, idx_sub1_diag, idx_sub2_diag)
+corr_n2n, mse_n2n_target = compute_target_correlation(model_n2n, test_diag_y, idx_sub1_diag, idx_sub2_diag)
 
-    pred_sub1_diag = pred_flat[:, :, idx_sub1_diag].flatten()
-    y_sub1_diag = y_flat[:, :, idx_sub1_diag].flatten()
-
-    correlation = np.corrcoef(y_sub1_diag.cpu().numpy(), pred_sub1_diag.cpu().numpy())[0, 1]
-    mse_identity = ((pred_sub1_diag - y_sub1_diag) ** 2).mean().item()
-
-    # ★计算对照组：model_sup和model_n2n在相同位置的相关系数
-    # 这两个模型不是blind-spot网络，相关系数代表"正常基线"
-    corr_sup = compute_identity_correlation(model_sup, test_diag_y, idx_sub1_diag)
-    corr_n2n = compute_identity_correlation(model_n2n, test_diag_y, idx_sub1_diag)
-
-    print(f"    f(y)[sub1]与y[sub1]的相关系数 (对照组与待诊断模型):")
-    print(f"      model_sup (正常基线):       {corr_sup:.4f}")
-    print(f"      model_n2n (正常基线):        {corr_n2n:.4f}")
-    print(f"      model_n2b_fullres (待诊断): {correlation:.4f}")
-    print(f"    f(y)[sub1]与y[sub1]的MSE (待诊断): {mse_identity:.6f}")
-    print(f"  （仅在训练时被监督的idx_sub1位置计算，更准确反映identity shortcut风险）")
-    # ★动态校验：使用相对阈值（待诊断-正常基线）
-    # 注意：0.1和0.05是教学经验值，非统计显著性检验阈值
-    # 实际判断应结合具体场景和领域知识
-    baseline = (corr_sup + corr_n2n) / 2  # 正常基线均值
-    excess = correlation - baseline
-    print(f"    正常基线均值: {baseline:.4f}, 待诊断模型超出量: {excess:+.4f}")
-    if excess > 0.1:  # 经验阈值，仅供参考
-        print(f"    ⚠️  警告：超出正常基线{excess:.3f}，存在identity shortcut风险")
-    elif excess > 0.05:  # 经验阈值，仅供参考
-        print(f"    相关系数略高于正常基线，需关注但风险有限")
-    else:
-        print(f"    相关系数与正常基线相当，identity shortcut风险较低")
-    print(f"  （注：理想的blind-spot实现应确保目标像素不在感受野内）")
+print(f"    f(y)[sub1]与训练目标y[sub2]的相关系数:")
+print(f"      model_sup (正常基线):       {corr_sup:.4f} (MSE={mse_sup_target:.4f})")
+print(f"      model_n2n (正常基线):        {corr_n2n:.4f} (MSE={mse_n2n_target:.4f})")
+print(f"      model_n2b_fullres (待诊断): {correlation:.4f} (MSE={mse_to_target:.6f})")
+print(f"    ★判据参考: σ²={SIGMA**2:.4f}；若待诊断模型MSE≪σ²而基线MSE≈σ²，")
+print(f"      说明其输出几乎逐像素复制了y[sub2]，而非真正去噪")
+# ★动态校验：使用相对阈值（待诊断-正常基线）
+# 注意：0.1和0.05是教学经验值，非统计显著性检验阈值
+# 实际判断应结合具体场景和领域知识
+baseline = (corr_sup + corr_n2n) / 2  # 正常基线均值
+excess = correlation - baseline
+print(f"    正常基线均值: {baseline:.4f}, 待诊断模型超出量: {excess:+.4f}")
+if excess > 0.1:  # 经验阈值，仅供参考
+    print(f"    ⚠️  警告：超出正常基线{excess:.3f}，存在identity shortcut（抄目标像素）风险")
+elif excess > 0.05:  # 经验阈值，仅供参考
+    print(f"    相关系数略高于正常基线，需关注但风险有限")
+else:
+    print(f"    相关系数与正常基线相当，identity shortcut风险较低")
+print(f"  （注：理想的blind-spot实现应确保目标像素不在感受野内）")
 
 print(f"\n  ★ N2B两种实现对比：")
 print(f"    下采样+合并版：PSNR = {psnr_n2nb:.2f} dB, SSIM = {ssim_n2nb:.4f}")
 print(f"    保持分辨率版：  PSNR = {psnr_n2b_fullres:.2f} dB, SSIM = {ssim_n2b_fullres:.4f}")
 if psnr_n2b_fullres > psnr_n2nb:
-    print(f"    改进版提升：    +{psnr_n2b_fullres - psnr_n2nb:.2f} dB")
+    print(f"    保持分辨率版更高：+{psnr_n2b_fullres - psnr_n2nb:.2f} dB（需结合下方泄漏诊断判断可信度）")
 else:
-    print(f"    性能差异：      {psnr_n2b_fullres - psnr_n2nb:.2f} dB")
+    print(f"    下采样版更高：    {psnr_n2b_fullres - psnr_n2nb:+.2f} dB（保持分辨率版可能因identity shortcut退化）")
 
 # --- 可视化六种方法对比 ---
 vis_imgs, _ = next(test_iter)  # ★使用共享test_iter，与前两步不同batch
@@ -1590,8 +1594,12 @@ print(f"  ├───────────────┼──────�
 print(f"  │ PSNR评估      │  ⚠️ 系统性偏低       │  可能虚高(若泄漏)    │")
 print(f"  └───────────────┴──────────────────────┴──────────────────────┘")
 print(f"  性能差异：{psnr_n2b_fullres - psnr_n2nb:+.2f} dB（保持分辨率版）")
-# ★动态校验：根据诊断结果给出风险评估
-if correlation > 0.9:
+# ★动态校验：根据诊断结果给出风险评估（对齐训练目标y[sub2]的口径）
+if correlation > 0.9 and mse_to_target < SIGMA**2 / 10:
+    print(f"  ★诊断：f(y)[sub1]与目标y[sub2]的相关系数{correlation:.2f}>0.9，")
+    print(f"  且MSE({mse_to_target:.2e})≪σ²({SIGMA**2:.4f})——输出几乎逐像素复制目标位置，")
+    print(f"  identity shortcut确凿，保持分辨率版的PSNR反映的是'抄像素'而非去噪能力")
+elif correlation > 0.9:
     print(f"  ★诊断：相关系数{correlation:.2f}>0.9，identity shortcut风险明显")
     print(f"  建议：全分辨率版PSNR可能虚高，下采样版更可靠")
 else:
@@ -1627,7 +1635,7 @@ final_loss_sup = losses_sup[-1] if losses_sup else 0
 final_loss_n2n = losses_n2n[-1] if losses_n2n else 0
 final_loss_n2b = losses_n2b_fullres[-1] if losses_n2b_fullres else 0
 print(f"     - 本次最终损失：监督={final_loss_sup:.4f}, N2N={final_loss_n2n:.4f}, N2B={final_loss_n2b:.4f}")
-print(f"     - 可尝试增加EPOCHS观察不同方法的最终收敛性能")
+print(f"     - 可尝试增加训练轮数(N_EPOCHS)观察不同方法的最终收敛性能")
 print(f"     - 朴素方法的损失下降最快但PSNR最低——这是有偏估计的典型特征")
 
 print(f"\n{'='*70}")
@@ -1678,7 +1686,7 @@ results_summary = {
         '监督': {'PSNR': psnr_sup, 'SSIM': ssim_sup},
         'Noise2Noise': {'PSNR': psnr_n2n, 'SSIM': ssim_n2n},
         '朴素自监督': {'PSNR': psnr_naive, 'SSIM': ssim_naive},
-        '改进版N2B': {'PSNR': psnr_n2b_fullres, 'SSIM': ssim_n2b_fullres},
+        '保持分辨率版N2B': {'PSNR': psnr_n2b_fullres, 'SSIM': ssim_n2b_fullres},
     },
     '偏差分析': {
         '朴素散度': div_naive,
@@ -1686,12 +1694,13 @@ results_summary = {
         '偏差项': bias_term,
     },
     'N2B盲点性验证': {
-        '相关系数': correlation,
+        '相关系数(f[sub1] vs 目标y[sub2])': correlation,
+        'MSE(f[sub1] vs 目标y[sub2])': mse_to_target,
     },
     '实验参数': {
         '噪声水平': SIGMA,
-        '训练轮数快速验证': EPOCHS,
-        '训练轮数完整训练': EPOCHS_FULL,
+        '训练轮数快速验证': QUICK_EPOCHS,
+        '训练轮数完整训练': N_EPOCHS,
     }
 }
 
