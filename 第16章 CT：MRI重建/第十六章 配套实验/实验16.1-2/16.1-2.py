@@ -7,7 +7,9 @@
           避免inverse crime：数据生成使用512x512高分辨率，反演使用256x256低分辨率
 
 素材来源：基于astra_operators_example.ipynb
-运行前提：ASTRA仅支持Linux+CUDA；非Linux+CUDA环境自动回退到skimage版本
+运行前提：ASTRA的扇形束FBP仅有CUDA实现（CPU版FBP仅支持平行束几何），
+          因此需Linux+CUDA或Windows+CUDA环境；Colab下自动pip安装CUDA版astra-toolbox，
+          其他无CUDA环境回退到skimage版本
 """
 
 import torch
@@ -63,44 +65,94 @@ try:
 except ImportError:
     print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
 
-# ASTRA可用性检测
-try:
-    import astra
-    ASTRA_AVAILABLE = True
-except ImportError:
-    ASTRA_AVAILABLE = False
-    print("ASTRA工具箱未安装，将使用skimage回退版本")
+# ASTRA可用性检测（Colab下自动pip安装CUDA版，而非静默降级）
+def _import_astra():
+    try:
+        import astra
+        return astra
+    except ImportError:
+        return None
+
+
+astra = _import_astra()
+
+if _IN_COLAB and (astra is None or not astra.use_cuda()):
+    # PyPI的astra-toolbox wheel为CUDA构建（conda-forge默认可能是CPU-only构建），
+    # Colab自带T4 GPU，应自动安装而非降级到skimage。
+    import subprocess
+    if astra is None:
+        print("ASTRA未安装，正在通过pip自动安装CUDA版...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "astra-toolbox"], check=False)
+    else:
+        print("检测到CPU-only的ASTRA（conda-forge构建），强制重装为PyPI CUDA版...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-cache-dir",
+                        "--force-reinstall", "astra-toolbox"], check=False)
+    import importlib
+    importlib.invalidate_caches()
+    astra = _import_astra()  # 全新安装后同进程首次import即可加载CUDA扩展
+    if astra is not None and not astra.use_cuda():
+        # 已import过CPU-only版的情况：C扩展已加载，同进程reload不可靠
+        print("警告: ASTRA CUDA版已安装但当前进程仍为CPU版，请重启Colab运行时后重新运行本脚本。")
+
+# ★回退条件按"功能可用性"而非"import成功"判断：
+#   ASTRA的扇形束FBP仅有CUDA实现（CPU版FBP只支持parallel几何），
+#   Windows/CPU版astra若仅凭import成功就走ASTRA分支，会在
+#   algorithm.create(fanflat FBP)处崩溃。故以astra.use_cuda()为准。
+ASTRA_AVAILABLE = astra is not None and astra.use_cuda()
+if not ASTRA_AVAILABLE:
+    print("ASTRA不可用（无CUDA），整体回退skimage版本")
 
 np.random.seed(42)
+torch.manual_seed(42)  # random_ellipses用torch.rand采样椭圆强度，必须播种才能复现
 
 
 # ========================================================================
 # 工具函数
 # ========================================================================
 
-def random_ellipses(num_of_ellipses, size):
-    """生成随机椭圆幻影
+def random_ellipse_params(num_of_ellipses):
+    """在归一化坐标[-1,1]下采样椭圆参数（位置/半轴/强度）
+
+    参数与光栅化分辨率解耦：512与256两个网格光栅化出的是"同一物体"的
+    不同离散化，双分辨率IC-free才有意义。
+    （旧实现在像素坐标下采样，512网格与256网格生成的是完全不同的随机
+    物体——实测相关系数仅0.06——PSNR对比的是错误真值，名不符实。）
+    """
+    params = []
+    for k in range(num_of_ellipses):
+        x0 = np.random.uniform(-0.8, 0.8)
+        y0 = np.random.uniform(-0.8, 0.8)
+        a = np.random.uniform(0.05, 0.4)
+        b = np.random.uniform(0.05, 0.4)
+        amp = float(torch.rand(1))
+        params.append((x0, y0, a, b, amp))
+    return params
+
+
+def rasterize_ellipses(params, size):
+    """按给定分辨率光栅化椭圆幻影
 
     参数:
-        num_of_ellipses: 椭圆数量
+        params: random_ellipse_params返回的归一化坐标椭圆参数
         size: (H, W) 图像尺寸
     返回:
         归一化的numpy数组, 值域[0, 1]
+
+    裁剪到重建圆内：radon/iradon的circle=True要求圆外为零，
+    否则圆外像素被错误折叠进重建（实测满方phantom同模型FBP仅约13 dB，
+    裁剪后可达约32 dB）。
     """
-    ellipses = torch.zeros((num_of_ellipses, size[0], size[1]))
-    x = torch.linspace(-size[0], size[1], size[1])
-    y = torch.linspace(-size[0], size[1], size[0])[:, None]
-
-    for k in range(num_of_ellipses):
-        x0 = np.random.randint(-size[0], size[0])
-        y0 = np.random.randint(-size[1], size[1])
-        a = np.random.choice([i for i in range(-size[0], size[0]) if i != 0])
-        b = np.random.choice([i for i in range(-size[1], size[1]) if i != 0])
-        ellipses[k] = ((x - x0) / a) ** 2 + ((y - y0) / b) ** 2 <= 1
-        ellipses[k][ellipses[k] == 1] = torch.rand(1)
-
-    ellipses = torch.sum(ellipses, dim=0)
-    return (ellipses / torch.max(ellipses)).numpy()
+    H, W = size
+    x = torch.linspace(-1, 1, W)
+    y = torch.linspace(-1, 1, H)[:, None]
+    img = torch.zeros((H, W), dtype=torch.float64)
+    for (x0, y0, a, b, amp) in params:
+        mask = ((x - x0) / a) ** 2 + ((y - y0) / b) ** 2 <= 1
+        img += mask.double() * amp
+    yy, xx = np.ogrid[:H, :W]
+    r2 = (xx - (W - 1) / 2) ** 2 + (yy - (H - 1) / 2) ** 2
+    img *= torch.from_numpy((r2 <= ((min(H, W) - 1) / 2) ** 2).astype(np.float64))
+    return (img / img.max()).numpy()
 
 
 def compute_psnr(img1, img2, data_range=1.0):
@@ -125,7 +177,9 @@ size = (256, 256)
 # 避免inverse crime：数据生成使用高分辨率模型，反演使用低分辨率模型
 n_data = (512, 512)  # 数据生成分辨率（2倍）
 amount_of_ellipses = 50
-ellipses = random_ellipses(amount_of_ellipses, size)
+# 先采样与分辨率解耦的椭圆参数，再分别在重建/数据分辨率下光栅化
+ellipse_params = random_ellipse_params(amount_of_ellipses)
+ellipses = rasterize_ellipses(ellipse_params, size)
 
 # Shepp-Logan幻影作为对比
 shepp = shepp_logan_phantom()
@@ -152,8 +206,8 @@ print(f"  随机椭圆幻影尺寸: {ellipses.shape}")
 print(f"  像素值范围: [{ellipses.min():.3f}, {ellipses.max():.3f}]")
 
 # ---- 避免inverse crime的工具函数 ----
-# 高分辨率phantom（用于数据生成）
-phantom_fine = random_ellipses(amount_of_ellipses, n_data)
+# 高分辨率phantom（用于数据生成）：与ellipses是同一物体的不同离散化
+phantom_fine = rasterize_ellipses(ellipse_params, n_data)
 # 重建分辨率phantom已生成（ellipses, 256x256）
 
 def generate_sinogram_ic_free_skimage(phantom_fine, theta, n_recon_size, noise_sigma=0.0):
@@ -167,6 +221,10 @@ def generate_sinogram_ic_free_skimage(phantom_fine, theta, n_recon_size, noise_s
     target_det = n_recon_size[0]
     from skimage.transform import resize as sk_resize
     sinogram_recon = sk_resize(sinogram_fine, (target_det, len(theta)), order=1, preserve_range=True, anti_aliasing=True)
+    # ★探测器尺度归一化：radon线积分以像素为单位，512网格的线积分长度是
+    #   256网格的2倍，resize只做平均不改变量纲，须乘 n/n_data 才能与重建
+    #   网格的sinogram同尺度（实测支撑区比值≈2.02，漏掉此项重建值整体2×）。
+    sinogram_recon = sinogram_recon * (target_det / phantom_fine.shape[0])
     return sinogram_recon
 
 
@@ -508,12 +566,12 @@ print("  - 仅支持平行束")
 print("  - 无GPU加速")
 print("  - 探测器数量固定")
 print()
-print("ASTRA（需Linux+CUDA）:")
+print("ASTRA（扇形束FBP需CUDA；CPU版可跨平台但仅支持平行束FBP）:")
 print("  + 支持扇形束/锥形束几何")
 print("  + GPU加速（50-100倍提速）")
 print("  + 自定义探测器数量")
 print("  + 多种重建算法（FBP/SIRT/SART/CGLS）")
-print("  - 仅Linux+CUDA")
+print("  - 扇形束FBP仅CUDA实现")
 print("  - 需手动内存管理")
 
 # ===== 保存数值结果 =====

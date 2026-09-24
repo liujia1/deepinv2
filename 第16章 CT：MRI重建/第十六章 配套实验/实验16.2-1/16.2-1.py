@@ -82,17 +82,22 @@ phantom_fine = phantom_fine / phantom_fine.max()
 phantom = resize(phantom_fine, (n, n), order=1, preserve_range=True, anti_aliasing=True)
 phantom = phantom / phantom.max()
 
-def generate_sinogram_ic_free(theta, noise_sigma=0.0):
+def generate_sinogram_ic_free(theta, noise_level=0.0):
     """避免inverse crime的sinogram生成：
-    在n_data=256高分辨率下用radon正向投影，添加噪声后
-    resize到n=128低分辨率探测器尺寸。
-    这样数据生成的离散化模型与反演时使用的forward_radon不同，
-    避免了"用同一矩阵既造数据又反演"的inverse crime问题。"""
+    在n_data=256高分辨率下用radon正向投影，再resize到n=128低分辨率探测器尺寸，
+    模拟真实CT中"物体连续、探测器binning离散"的模型失配
+    （数据生成的离散化算子与反演用的forward_radon不是同一矩阵）。
+    ★探测器尺度归一化：radon返回的线积分以像素为单位，同一物体在256网格上
+    跨越的像素数是128网格的2倍，故细网格线积分是粗网格的n_data/n倍；
+    resize只做插值平均不改变数值尺度，因此必须乘n/n_data，
+    否则sinogram整体偏大2倍，重建值也整体偏大2倍（PSNR被强度误差主导）。"""
     sinogram_fine = radon(phantom_fine, theta=theta, circle=True)
-    if noise_sigma > 0:
-        sinogram_fine = sinogram_fine + noise_sigma * np.random.randn(*sinogram_fine.shape)
-    # circle=True时探测器尺寸=图像尺寸，从256 resize到128
+    # circle=True时探测器尺寸=图像尺寸，从256 resize到128，并归一化到粗网格像素单位
     sinogram_recon = resize(sinogram_fine, (n, len(theta)), order=1, preserve_range=True, anti_aliasing=True)
+    sinogram_recon = sinogram_recon * (n / n_data)
+    if noise_level > 0:
+        # 相对噪声：以sinogram峰值为基准的百分比（绝对sigma对量级O(30)的sinogram毫无作用）
+        sinogram_recon = sinogram_recon + noise_level * sinogram_recon.max() * np.random.randn(*sinogram_recon.shape)
     return sinogram_recon
 
 # 先做全角FBP作为参考（使用IC-free sinogram）
@@ -100,7 +105,7 @@ theta_full = np.linspace(0, 180, 180, endpoint=False)
 sinogram_full = generate_sinogram_ic_free(theta_full)
 recon_fbp_full = iradon(sinogram_full, theta=theta_full, circle=True, filter_name='ramp')
 psnr_fbp_full = psnr(phantom, recon_fbp_full, data_range=1.0)
-noise_sigma = 0.05
+noise_level = 0.05  # 相对噪声水平（占sinogram峰值的5%）
 
 
 # ========================================================================
@@ -151,7 +156,7 @@ axes[1, 1].set_title(f'FBP 稀疏30角度\nPSNR={p_sparse:.1f}dB, SSIM={s_sparse
 axes[1, 1].axis('off')
 
 axes[1, 2].imshow(recon_limited, cmap='gray')
-axes[1, 2].set_title(f'FBP 有限角0{_deg}-120{_deg}\nPSNR={p_limited:.1f}dB, SSIM={s_limited:.3f}\n条纹伪影+不可见边缘丢失')
+axes[1, 2].set_title(f'FBP 有限角0{_deg}-120{_deg}\nPSNR={p_limited:.1f}dB, SSIM={s_limited:.3f}\n条纹伪影+边缘模糊丢失')
 axes[1, 2].axis('off')
 
 plt.suptitle('步骤1：稀疏角度 vs 有限角度——两种不同的不适定性', fontsize=13)
@@ -181,11 +186,14 @@ def backward_radon(sino, theta):
 
 def gradient_descent_recon(y, theta, n_iter=100, lam=0.1, reg_type='tikhonov'):
     """
-    迭代正则化重建 (Landweber迭代 + 正则化)
+    迭代正则化重建 (梯度下降 + 正则化，即带正则的Landweber迭代)
     x_{k+1} = x_k - alpha * (A^T(Ax_k - y) + lambda * R'(x_k))
 
-    reg_type: 'tikhonov' -> R'(x) = x
-              'tv'       -> R'(x) = -div(grad(x) / |grad(x)|)
+    reg_type: 'tikhonov' -> R(x) = (1/2)||x||^2, R'(x) = x
+              'tv'       -> R(x) = |||grad x|||_1 (各向同性),
+                            R'(x) = -div(grad(x) / |grad(x)|)
+    注：n_iter=100为经验停止点——实测TV在50-100次迭代进入平台期（PSNR峰值），
+    Tikhonov约50次达峰后缓降（半收敛：继续迭代开始拟合噪声）。
     """
     x = iradon(y, theta=theta, circle=True, filter_name='shepp-logan')
     alpha = 0.01  # 小步长，避免发散
@@ -214,7 +222,7 @@ def gradient_descent_recon(y, theta, n_iter=100, lam=0.1, reg_type='tikhonov'):
 
     return x
 
-sino_sparse_noisy = generate_sinogram_ic_free(theta_sparse30, noise_sigma=noise_sigma)
+sino_sparse_noisy = generate_sinogram_ic_free(theta_sparse30, noise_level=noise_level)
 
 print("  正在执行Tikhonov正则化重建...")
 recon_tikh = gradient_descent_recon(sino_sparse_noisy, theta_sparse30, n_iter=100, lam=0.1, reg_type='tikhonov')
@@ -226,6 +234,9 @@ recon_sparse_noisy = iradon(sino_sparse_noisy, theta=theta_sparse30, circle=True
 p_fbp = psnr(phantom, recon_sparse_noisy, data_range=1.0)
 p_tikh = psnr(phantom, recon_tikh, data_range=1.0)
 p_tv = psnr(phantom, recon_tv, data_range=1.0)
+s_fbp = ssim(phantom, recon_sparse_noisy, data_range=1.0)
+s_tikh = ssim(phantom, recon_tikh, data_range=1.0)
+s_tv = ssim(phantom, recon_tv, data_range=1.0)
 
 fig, axes = plt.subplots(1, 4, figsize=(18, 4.5))
 
@@ -250,9 +261,9 @@ plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤2_正则化对比.png'), dpi=150, bbox_inches='tight')
 plt.show()
 
-print(f"  FBP(稀疏含噪):   PSNR={p_fbp:.1f}dB")
-print(f"  Tikhonov(λ=0.1): PSNR={p_tikh:.1f}dB")
-print(f"  TV(λ=0.1):       PSNR={p_tv:.1f}dB")
+print(f"  FBP(稀疏含噪):   PSNR={p_fbp:.1f}dB, SSIM={s_fbp:.3f}")
+print(f"  Tikhonov(λ=0.1): PSNR={p_tikh:.1f}dB, SSIM={s_tikh:.3f}")
+print(f"  TV(λ=0.1):       PSNR={p_tv:.1f}dB, SSIM={s_tv:.3f}")
 
 
 # ========================================================================
@@ -273,14 +284,15 @@ for na in tqdm(n_angles_list, desc='  稀疏角度扫描'):
     recon = iradon(sino, theta=theta, circle=True, filter_name='ramp')
     psnr_clean.append(psnr(phantom, recon, data_range=1.0))
 
-    sino_n = generate_sinogram_ic_free(theta, noise_sigma=noise_sigma)
-    recon_n = iradon(sino_n, theta=theta, circle=True, filter_name='shepp-logan')
+    sino_n = generate_sinogram_ic_free(theta, noise_level=noise_level)
+    # 与无噪曲线使用同一ramp滤波器，保证两条曲线唯一变量是噪声
+    recon_n = iradon(sino_n, theta=theta, circle=True, filter_name='ramp')
     psnr_noisy_curve.append(psnr(phantom, recon_n, data_range=1.0))
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
 ax1.plot(n_angles_list, psnr_clean, 'bo-', label='FBP (无噪声)')
-ax1.plot(n_angles_list, psnr_noisy_curve, 'rs-', label=f'FBP+Shepp-Logan滤波 ($\\sigma$={noise_sigma})')
+ax1.plot(n_angles_list, psnr_noisy_curve, 'rs-', label=f'FBP (含相对噪声{noise_level*100:.0f}%)')
 ax1.set_xlabel('投影角度数')
 ax1.set_ylabel('PSNR (dB)')
 ax1.set_title('重建质量 vs 投影角度数\n角度越少→信息越少→不适定性越严重')
@@ -326,7 +338,8 @@ def _to_native(obj):
 
 results_summary = {
     "experiment": "实验16.2-1 CT不适定性与正则化重建",
-    "噪声sigma": noise_sigma,
+    "相对噪声水平": noise_level,
+    "噪声说明": "占sinogram峰值的比例（相对噪声）",
     "步骤1_稀疏vs有限角": {
         "全角FBP_PSNR_dB": round(psnr_fbp_full, 2),
         "稀疏30角度": {"PSNR_dB": round(p_sparse, 2), "SSIM": round(s_sparse, 4)},
@@ -334,8 +347,11 @@ results_summary = {
     },
     "步骤2_正则化对比": {
         "FBP_PSNR_dB": round(p_fbp, 2),
+        "FBP_SSIM": round(s_fbp, 4),
         "Tikhonov_PSNR_dB": round(p_tikh, 2),
+        "Tikhonov_SSIM": round(s_tikh, 4),
         "TV_PSNR_dB": round(p_tv, 2),
+        "TV_SSIM": round(s_tv, 4),
     },
     "步骤3_稀疏角度扫描": {
         "角度数": n_angles_list,

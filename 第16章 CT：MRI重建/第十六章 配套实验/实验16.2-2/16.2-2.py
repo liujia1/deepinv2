@@ -64,12 +64,17 @@ except ImportError:
 
 try:
     import astra
-    ASTRA_AVAILABLE = True
+    # ASTRA的CPU版FBP只支持平行束几何（fanflat仅有FBP_CUDA实现），
+    # Windows上import astra会成功但FBP阶段必然报错，故必须以use_cuda()作为分支条件
+    ASTRA_AVAILABLE = astra.use_cuda()
+    if not ASTRA_AVAILABLE:
+        print("检测到astra但CUDA不可用（扇形束FBP仅有FBP_CUDA实现），回退到skimage版本")
 except ImportError:
     ASTRA_AVAILABLE = False
     print("ASTRA工具箱未安装，将使用skimage回退版本")
 
 np.random.seed(42)
+torch.manual_seed(42)  # random_ellipses用torch.rand生成椭圆灰度，未播种则ASTRA路径不可复现
 
 
 # ========================================================================
@@ -133,8 +138,10 @@ def astra_fanbeam_reconstruct(phantom, angles, vol_geom, num_of_lines=512,
     """
     proj_geom = astra.create_proj_geom('fanflat', 1.0, num_of_lines, angles, SOD, SDD - SOD)
 
-    device = 'cuda' if torch.cuda.is_available() else 'line_fanflat'
-    FBP_type = 'FBP_CUDA' if device == 'cuda' else 'FBP'
+    # 分支可达性已由 astra.use_cuda() 保证（无CUDA时主流程回退skimage），
+    # CPU版FBP不支持fanflat几何，故此处直接使用CUDA投影器与FBP_CUDA算法
+    device = 'cuda'
+    FBP_type = 'FBP_CUDA'
 
     proj_id = astra.create_projector(device, proj_geom, vol_geom)
     sinogram_id, sinogram = astra.create_sino(phantom, proj_id)
@@ -191,7 +198,7 @@ def skimage_parallel_reconstruct(phantom, theta_deg, filter_name='ramp', sinogra
 print(f"\n{'=' * 60}")
 print(f"实验16.2-2: ASTRA工具箱——CT不适定性演示")
 print(f"{'=' * 60}")
-print(f"运行模式: {'ASTRA扇形束 (CUDA)' if ASTRA_AVAILABLE and torch.cuda.is_available() else 'ASTRA扇形束 (CPU)' if ASTRA_AVAILABLE else 'skimage平行束 (回退)'}")
+print(f"运行模式: {'ASTRA扇形束 (CUDA)' if ASTRA_AVAILABLE else 'skimage平行束 (回退)'}")
 
 
 # ========================================================================
@@ -238,13 +245,11 @@ else:
     phantom_fine = sk_resize(phantom, n_data, order=1, preserve_range=True, anti_aliasing=True)
     phantom_fine = phantom_fine / phantom_fine.max()
 
-def generate_sinogram_ic_free(phantom_fine, theta, n_recon_size, noise_sigma=0.0):
+def generate_sinogram_ic_free(phantom_fine, theta, n_recon_size):
     """避免inverse crime的sinogram生成（skimage路径）：
-    在n_data高分辨率下用radon正向投影，添加噪声后
-    resize到n_recon对应的探测器尺寸。"""
+    在n_data高分辨率下radon正向投影（与反演用的低分辨率radon不是同一离散算子），
+    再resize到n_recon对应的探测器尺寸供低分辨率模型反演。"""
     sinogram_fine = radon(phantom_fine, theta=theta, circle=True)
-    if noise_sigma > 0:
-        sinogram_fine = sinogram_fine + noise_sigma * np.random.randn(*sinogram_fine.shape)
     # circle=True时探测器尺寸=图像尺寸
     target_det = n_recon_size[0]
     from skimage.transform import resize as sk_resize
@@ -457,7 +462,7 @@ for row, name in enumerate(['稀疏角度CT', '有限角度CT']):
 
 plt.suptitle(
     '步骤3：差异图分析\n'
-    '稀疏角度：全局条纹伪影（混叠，$\\sigma$均匀分布）\n'
+    '稀疏角度：全局条纹伪影（混叠，误差散布全图）\n'
     '有限角度：特定方向边缘丢失（信息缺失不可恢复）',
     fontsize=12
 )

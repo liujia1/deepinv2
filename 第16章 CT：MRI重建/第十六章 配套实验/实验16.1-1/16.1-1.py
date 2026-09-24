@@ -81,17 +81,23 @@ phantom_fine = phantom_fine / phantom_fine.max()
 phantom = resize(phantom_fine, (n, n), order=1, preserve_range=True, anti_aliasing=True)
 phantom = phantom / phantom.max()
 
-def generate_sinogram_ic_free(theta, noise_sigma=0.0):
+def generate_sinogram_ic_free(theta, noise_frac=0.0):
     """避免inverse crime的sinogram生成：
-    在n_data=256高分辨率下用radon正向投影，添加噪声后
-    resize到n=128低分辨率探测器尺寸。
+    在n_data=256高分辨率下用radon正向投影，resize到n=128低分辨率探测器尺寸。
     这样数据生成的离散化模型与反演时使用的iradon不同，
-    避免了"用同一矩阵既造数据又反演"的inverse crime问题。"""
+    避免了"用同一矩阵既造数据又反演"的inverse crime问题。
+
+    ★探测器尺度归一化：radon线积分以像素为单位，256网格的投影值是128网格的2倍，
+    resize只做平均不除尺度，必须乘n/n_data归一化，否则重建值整体2×、
+    PSNR被强度误差主导（那不是模型失配，是bug）。
+    ★噪声用相对水平（占sinogram峰值的比例）：sinogram量级为O(30)，
+    绝对σ噪声（如0.05）相对峰值<0.2%，等于没加。"""
     sinogram_fine = radon(phantom_fine, theta=theta, circle=True)
-    if noise_sigma > 0:
-        sinogram_fine = sinogram_fine + noise_sigma * np.random.randn(*sinogram_fine.shape)
-    # circle=True时探测器尺寸=图像尺寸，从256 resize到128
+    # circle=True时探测器尺寸=图像尺寸，从256 resize到128，并做尺度归一化
     sinogram_recon = resize(sinogram_fine, (n, len(theta)), order=1, preserve_range=True, anti_aliasing=True)
+    sinogram_recon = sinogram_recon * (n / n_data)
+    if noise_frac > 0:
+        sinogram_recon = sinogram_recon + noise_frac * sinogram_recon.max() * np.random.randn(*sinogram_recon.shape)
     return sinogram_recon
 
 
@@ -181,9 +187,9 @@ print("\n" + "=" * 60)
 print("步骤3：FBP滤波器选择——分辨率与噪声的权衡（16.1.4节）")
 print("=" * 60)
 
-noise_sigma = 0.05
-# IC-free：在高分辨率n_data=256下生成sinogram并添加噪声，再resize到n=128
-sinogram_noisy = generate_sinogram_ic_free(theta_full, noise_sigma=noise_sigma)
+noise_frac = 0.05  # 相对噪声水平：占sinogram峰值的5%
+# IC-free：高分辨率生成sinogram，resize+尺度归一化后添加相对噪声
+sinogram_noisy = generate_sinogram_ic_free(theta_full, noise_frac=noise_frac)
 
 filter_names = ['ramp', 'shepp-logan', 'cosine', 'hann']
 filter_labels = ['Ramp $|\\omega|$', 'Shepp-Logan $|\\omega|\\mathrm{sinc}$',
@@ -191,18 +197,21 @@ filter_labels = ['Ramp $|\\omega|$', 'Shepp-Logan $|\\omega|\\mathrm{sinc}$',
 
 fig, axes = plt.subplots(2, 4, figsize=(16, 8))
 
+filter_results = {}
 for i, (fname, flabel) in enumerate(zip(filter_names, filter_labels)):
     recon_clean = iradon(sinogram_full, theta=theta_full, circle=True, filter_name=fname)
     p_clean = psnr(phantom, recon_clean, data_range=1.0)
     recon_noisy = iradon(sinogram_noisy, theta=theta_full, circle=True, filter_name=fname)
     p_noisy = psnr(phantom, recon_noisy, data_range=1.0)
+    filter_results[fname] = {"无噪_PSNR_dB": round(p_clean, 2), "含噪_PSNR_dB": round(p_noisy, 2)}
+    print(f"  {fname:12s} 无噪={p_clean:.2f}dB, 含噪={p_noisy:.2f}dB")
 
     axes[0, i].imshow(recon_clean, cmap='gray')
     axes[0, i].set_title(f'{flabel}\n无噪声 PSNR={p_clean:.1f}dB')
     axes[0, i].axis('off')
 
     axes[1, i].imshow(recon_noisy, cmap='gray')
-    axes[1, i].set_title(f'含噪($\\sigma$={noise_sigma})\nPSNR={p_noisy:.1f}dB')
+    axes[1, i].set_title(f'含噪(峰值{noise_frac*100:.0f}%)\nPSNR={p_noisy:.1f}dB')
     axes[1, i].axis('off')
 
 plt.suptitle('步骤3：FBP滤波器选择——Ramp高频放大噪声，Hann更平滑但分辨率低', fontsize=12)
@@ -233,7 +242,8 @@ results_summary = {
         "反投影": {"PSNR_dB": round(psnr_bp, 2), "SSIM": round(ssim_bp, 4)},
         "FBP": {"PSNR_dB": round(psnr_fbp, 2), "SSIM": round(ssim_fbp, 4)},
     },
-    "步骤3_滤波器对比_噪声sigma": noise_sigma,
+    "步骤3_滤波器对比_相对噪声水平": f"{noise_frac*100:.0f}%峰值",
+    "步骤3_滤波器对比": filter_results,
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
