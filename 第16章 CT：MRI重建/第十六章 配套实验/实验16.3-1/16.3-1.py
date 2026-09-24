@@ -131,9 +131,8 @@ print("步骤2：欠采样掩码设计（16.3.3节）")
 print("=" * 60)
 
 R = 4
-n_lines = n // R
 
-def mask_equispaced(n, R, seed=42):
+def mask_equispaced(n, R):
     """等间距欠采样：沿相位编码方向每隔R行采样1行"""
     mask = torch.zeros(n)
     mask[::R] = 1
@@ -141,7 +140,7 @@ def mask_equispaced(n, R, seed=42):
     return mask
 
 def mask_random(n, R, seed=42):
-    """随机欠采样：随机选择n/R行"""
+    """随机欠采样：随机选择n/R行，并强制包含中心k-space线"""
     torch.manual_seed(seed)
     n_sample = max(n // R, 1)
     indices = torch.randperm(n)[:n_sample]
@@ -150,27 +149,27 @@ def mask_random(n, R, seed=42):
     mask[n//2] = 1
     return mask
 
-def mask_variable_density_topk(n, R, seed=None):
-    """可变密度Top-K采样：按概率密度选择前K个位置（中心密集，外围稀疏）
+def mask_variable_density(n, R, seed=42):
+    """可变密度随机欠采样：按概率密度随机采样（中心密集，外围稀疏）
 
-    注：此实现为确定性Top-K选择（按概率密度贪心选取），非真随机采样。
-    seed参数保留用于接口兼容，但不影响输出结果。
+    采样概率 p(i) ∝ (1-dist²)^1.5 + 0.02，dist为归一化距k-space中心的距离；
+    外围0.02的保底概率保证高频位置仍有机会被采样，
+    随机性带来不相干混叠（CS重建的前提），固定seed保证结果可复现。
     """
+    torch.manual_seed(seed)
     n_sample = max(n // R, 1)
-    prob = torch.zeros(n)
-    for i in range(n):
-        dist = abs(i - n//2) / (n//2)
-        prob[i] = (1 - dist**2) ** 1.5 + 0.02
-    prob = prob / prob.sum() * n_sample
+    i = torch.arange(n, dtype=torch.float32)
+    dist = (i - n//2).abs() / (n//2)
+    prob = (1 - dist**2) ** 1.5 + 0.02
+    indices = torch.multinomial(prob / prob.sum(), n_sample, replacement=False)
     mask = torch.zeros(n)
-    sorted_indices = torch.argsort(prob, descending=True)
-    mask[sorted_indices[:n_sample]] = 1
+    mask[indices] = 1
     mask[n//2] = 1
     return mask
 
 mask_eq = mask_equispaced(n, R)
 mask_rand = mask_random(n, R)
-mask_vd = mask_variable_density_topk(n, R)
+mask_vd = mask_variable_density(n, R)
 
 fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
@@ -271,7 +270,7 @@ print("\n" + "=" * 60)
 print("步骤4：压缩感知MRI——ISTA算法（16.3.4节）")
 print("=" * 60)
 
-def cs_mri_ista(y, mask, n_iter=50, lam=0.01):
+def cs_mri_ista(y, mask, n_iter=50, lam=0.01, psnr_ref=None):
     """
     CS-MRI迭代重建（数据一致性+TV正则化梯度下降）
     min_x ||M_Ω * F * x - y||^2 + lambda * TV(x)
@@ -280,9 +279,12 @@ def cs_mri_ista(y, mask, n_iter=50, lam=0.01):
     - 已采样k-space位置：用测量值替换
     - 未采样k-space位置：保持当前预测
     然后施加TV正则化作为投影/梯度步骤
+
+    psnr_ref: 给定参考图像时，逐迭代记录PSNR（供收敛曲线使用）
     """
     mask_2d = mask.unsqueeze(1).expand(-1, y.shape[-1])  # 沿行(k_y)方向欠采样
     x = torch.abs(torch.fft.ifft2(torch.fft.ifftshift(y * mask_2d, dim=(-2, -1))))
+    psnr_curve = []
 
     for k in tqdm(range(n_iter), desc='  CS-MRI ISTA', leave=False):
         kspace_x = torch.fft.fftshift(torch.fft.fft2(x), dim=(-2, -1))
@@ -299,34 +301,19 @@ def cs_mri_ista(y, mask, n_iter=50, lam=0.01):
 
         x = x_dc - lam * tv_grad
         x = torch.clamp(x, 0, None)
+        if psnr_ref is not None:
+            psnr_curve.append(psnr(psnr_ref, x.numpy(), data_range=1.0))
 
+    if psnr_ref is not None:
+        return x, psnr_curve
     return x
 
 y_vd = mri_forward(x_true, mask_vd)
-y_vd_noisy = y_vd + 0.01 * torch.randn_like(y_vd)
+lam_cs = 0.01  # TV正则化权重（图题中的λ与此处保持一致）
 
 print("  正在执行CS-MRI ISTA重建...")
-recon_cs = cs_mri_ista(y_vd, mask_vd, n_iter=50, lam=0.01)
+recon_cs, psnr_curve = cs_mri_ista(y_vd, mask_vd, n_iter=50, lam=lam_cs, psnr_ref=phantom)
 p_cs = psnr(phantom, recon_cs.numpy(), data_range=1.0)
-
-# 收敛曲线
-psnr_curve = []
-mask_2d = mask_vd.unsqueeze(1).expand(-1, n)  # 沿行(k_y)方向欠采样
-x_ista = torch.abs(torch.fft.ifft2(torch.fft.ifftshift(y_vd * mask_2d, dim=(-2, -1))))
-for k in tqdm(range(50), desc='  收敛曲线', leave=False):
-    kspace_x = torch.fft.fftshift(torch.fft.fft2(x_ista), dim=(-2, -1))
-    kspace_dc = mask_2d * y_vd + (1 - mask_2d) * kspace_x
-    x_dc = torch.abs(torch.fft.ifft2(torch.fft.ifftshift(kspace_dc, dim=(-2, -1))))
-    eps = 1e-8
-    dx_i = torch.diff(x_dc, dim=1, prepend=x_dc[:, :1])
-    dy_i = torch.diff(x_dc, dim=0, prepend=x_dc[:1, :])
-    mag = torch.sqrt(dx_i**2 + dy_i**2 + eps)
-    div_x = torch.diff(dx_i / mag, dim=1, append=(dx_i / mag)[:, -1:])
-    div_y = torch.diff(dy_i / mag, dim=0, append=(dy_i / mag)[-1:, :])
-    tv_grad = -(div_x + div_y)
-    x_ista = x_dc - 0.01 * tv_grad
-    x_ista = torch.clamp(x_ista, 0, None)
-    psnr_curve.append(psnr(phantom, x_ista.numpy(), data_range=1.0))
 
 fig, axes = plt.subplots(1, 4, figsize=(18, 4.5))
 
@@ -339,7 +326,7 @@ axes[1].set_title(f'零填充重建 (R={R})\nPSNR={p_vd:.1f}dB')
 axes[1].axis('off')
 
 axes[2].imshow(recon_cs.numpy(), cmap='gray')
-axes[2].set_title(f'CS-MRI ISTA (R={R}, $\\lambda$=0.005)\nPSNR={p_cs:.1f}dB\nTV稀疏性抑制伪影')
+axes[2].set_title(f'CS-MRI ISTA (R={R}, $\\lambda$={lam_cs})\nPSNR={p_cs:.1f}dB\nTV稀疏性抑制伪影')
 axes[2].axis('off')
 
 axes[3].plot(range(len(psnr_curve)), psnr_curve, 'bo-')
@@ -369,7 +356,7 @@ results_zf = []
 results_cs = []
 
 for R_val in tqdm(R_list, desc='  加速因子扫描'):
-    mask_vd_R = mask_variable_density_topk(n, R_val)
+    mask_vd_R = mask_variable_density(n, R_val)
     y_R = mri_forward(x_true, mask_vd_R)
 
     recon_zf = zero_filled_recon(x_true, mask_vd_R)
