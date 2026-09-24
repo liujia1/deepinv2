@@ -219,8 +219,8 @@ class LGDBlock(nn.Module):
     def __init__(self, in_ch=1, ch=64):
         super().__init__()
         self.alpha = nn.Parameter(torch.tensor(0.5))  # 可学习步长
-        # 增大LGD block容量(ch=64)，使K步LGD总参数量≈K×UNet
-        # 与章节"LGD参数量是UNet的K倍"描述一致
+        # LGD block容量(ch=64)：单块参数量≈0.6×UNet，K=5步总计≈2.9×UNet
+        # （实测：UNet 131,953 vs LGD每块 75,650 vs LGD总计 378,250）
         self.grad_net = nn.Sequential(
             nn.Conv2d(in_ch * 2, ch, 3, padding=1),  # 输入: [x, data_grad]拼接
             nn.SiLU(),
@@ -307,7 +307,9 @@ else:
     for epoch in range(start_epoch_unet, n_epochs_unet):
         epoch_loss = 0
         n_batches = 0
-        pbar = tqdm(loader, desc=f'UNet Epoch {epoch+1}/{n_epochs_unet}', ncols=100, leave=True)
+        # leave=False: 每轮结束后进度条原地清除，只在同一行刷新，避免刷屏
+        # ascii: 用 '>' 和空格画进度条，规避终端不支持Unicode块字符显示成方块
+        pbar = tqdm(loader, desc=f'UNet Epoch {epoch+1}/{n_epochs_unet}', ncols=100, leave=False, ascii=' >')
         for batch_x, _ in pbar:
             batch_x = batch_x.to(device)  # (B, 1, 28, 28)
 
@@ -374,7 +376,8 @@ else:
     for epoch in range(start_epoch_lgd, n_epochs_lgd):
         epoch_loss = 0
         n_batches = 0
-        pbar = tqdm(loader, desc=f'LGD Epoch {epoch+1}/{n_epochs_lgd}', ncols=100, leave=True)
+        # leave=False + ascii: 同UNet循环，单行原地刷新且避免方块乱码
+        pbar = tqdm(loader, desc=f'LGD Epoch {epoch+1}/{n_epochs_lgd}', ncols=100, leave=False, ascii=' >')
         for batch_x, _ in pbar:
             batch_x = batch_x.to(device)
 
@@ -413,7 +416,7 @@ else:
 for i, block in enumerate(lgd.blocks):
     print(f"  LGD Block {i}: α={block.alpha.item():.4f}")
 
-# 参数量对比（验证"LGD参数量≈K×UNet"的描述）
+# 参数量对比（实测值，供文档核对；勿硬编码结论）
 n_params_unet = sum(p.numel() for p in unet.parameters())
 n_params_lgd = sum(p.numel() for p in lgd.parameters())
 n_params_lgd_per_block = sum(p.numel() for p in lgd.blocks[0].parameters())
@@ -421,7 +424,7 @@ print(f"\n  参数量对比:")
 print(f"  UNet后处理: {n_params_unet:,}")
 print(f"  LGD每块:   {n_params_lgd_per_block:,}")
 print(f"  LGD总计(K=5): {n_params_lgd:,}")
-print(f"  LGD总计 / UNet = {n_params_lgd / n_params_unet:.1f}x (≈K=5×)")
+print(f"  LGD总计 / UNet = {n_params_lgd / n_params_unet:.1f}x")
 
 
 # ========================================================================
@@ -474,13 +477,18 @@ methods = [(x_zf_test, '零填充', psnr_zf),
            (x_lgd_test, '★LGD算法展开', psnr_lgd)]
 
 for row, (recon, name, psnr_list) in enumerate(methods):
+    mean_psnr = float(np.mean(psnr_list))
     for col in range(n_show):
         img = recon[col, 0].cpu().numpy().clip(0, 1)
         axes[row, col].imshow(img, cmap='gray')
         if col == 0:
-            axes[row, col].set_ylabel(name, fontsize=11)
-        if row == 0:
-            axes[0, col].set_title(f'PSNR\n{psnr_list[col]:.1f}', fontsize=9)
+            # 行标签附带全测试集均值PSNR，使方法排序可直接从图中读出
+            # 注意：axis('off')会隐藏ylabel，故用ax.text绘制（不受轴显隐影响）
+            axes[row, col].text(-0.08, 0.5, f'{name}\n均值 {mean_psnr:.1f} dB',
+                                transform=axes[row, col].transAxes,
+                                ha='right', va='center', fontsize=10)
+        # 每行都标注该样本PSNR，便于逐样本核对 LGD ≥ UNet ≥ 零填充 的排序
+        axes[row, col].set_title(f'{psnr_list[col]:.1f}', fontsize=8)
         axes[row, col].axis('off')
 
 plt.suptitle('步骤3：MRI重建方法对比——零填充 vs UNet后处理 vs LGD算法展开', fontsize=13)

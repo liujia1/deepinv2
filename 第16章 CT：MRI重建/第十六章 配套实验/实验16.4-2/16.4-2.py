@@ -568,7 +568,9 @@ def train_one_model(model, train_loader, test_loader, device, ckpt_path,
             if avg_psnr > best_psnr:
                 best_psnr = avg_psnr
                 best_epoch = epoch + 1
-                best_state = model.state_dict()
+                # state_dict 返回的是参数张量的引用，optimizer 就地更新会同步改写这些张量，
+                # 必须逐张量克隆快照，否则最终保存的"最佳权重"实际是最后一个 epoch 的权重
+                best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
 
         # ---- 每个 epoch 保存 checkpoint（含 optimizer，用于 resume）----
         torch.save({
@@ -583,6 +585,9 @@ def train_one_model(model, train_loader, test_loader, device, ckpt_path,
     # ---- 最终 checkpoint（不含 optimizer_state）----
     # 保存最佳 epoch 的权重（而非最后一个 epoch），与 best_psnr 一致
     final_state = best_state if best_state is not None else model.state_dict()
+    if best_state is not None:
+        # 将最佳 epoch 权重回 load 到模型，保证后续评估/可视化用的权重与 checkpoint 中保存的一致
+        model.load_state_dict(best_state)
     final_ckpt = {
         'epoch': n_epochs - 1,
         'model_state': final_state,
@@ -740,9 +745,13 @@ def main():
         results['training'] = {'unet_mse_losses': [], 'vdsr_mse_losses': [], 'unet_mae_losses': []}
         results['images'] = {}
         json_path = os.path.join(OUTPUT_DIR, 'results_16_4_2.json')
-        with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-        print(f"[结果] JSON 已保存: {json_path}")
+        if os.path.exists(json_path):
+            # 已有结果文件（如 Colab 训练产出的真实数据）时不覆盖，防止本地误运行清掉有效结果
+            print(f"[结果] 检测到已有结果文件，跳过覆盖: {json_path}")
+        else:
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+            print(f"[结果] JSON 已保存: {json_path}")
         return
 
     unet.to(device).eval()
@@ -853,13 +862,13 @@ def main():
         ax.axis('off')
 
     titles_row2 = [
-        (pred_vdsr_i, _title_or_na('VDSR (MSE)', pred_vdsr_i, gt_i, vdsr_ready)),
-        (pred_unet_mae_i, _title_or_na('UNet (MAE)', pred_unet_mae_i, gt_i, unet_mae_ready)),
+        (pred_vdsr_i, _title_or_na('VDSR (MSE)', pred_vdsr_i, gt_i, vdsr_ready), 'gray'),
+        (pred_unet_mae_i, _title_or_na('UNet (MAE)', pred_unet_mae_i, gt_i, unet_mae_ready), 'gray'),
         (np.abs(pred_unet_i - gt_i) * 5 if unet_ready else np.zeros_like(gt_i),
-         r'|UNet$_\mathrm{MSE}$ - $x$| $\times$5' if unet_ready else 'Error Map (N/A)'),
+         r'|UNet$_\mathrm{MSE}$ - $x$| $\times$5' if unet_ready else 'Error Map (N/A)',
+         'hot'),   # 误差图固定用 hot，避免靠标题字符串判断 cmap（原标题不含 "Error" 会误判成 gray）
     ]
-    for ax, (img, title) in zip(axes[1], titles_row2):
-        cmap = 'gray' if 'Error' not in title else 'hot'
+    for ax, (img, title, cmap) in zip(axes[1], titles_row2):
         ax.imshow(img, cmap=cmap, vmin=0, vmax=1)
         ax.set_title(title, fontsize=10)
         ax.axis('off')
