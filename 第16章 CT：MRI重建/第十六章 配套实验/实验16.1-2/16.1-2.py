@@ -86,7 +86,7 @@ if _IN_COLAB and (astra is None or not astra.use_cuda()):
     else:
         print("检测到CPU-only的ASTRA（conda-forge构建），强制重装为PyPI CUDA版...")
         subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-cache-dir",
-                        "--force-reinstall", "astra-toolbox"], check=False)
+                        "--force-reinstall", "--no-deps", "astra-toolbox"], check=False)
     import importlib
     importlib.invalidate_caches()
     astra = _import_astra()  # 全新安装后同进程首次import即可加载CUDA扩展
@@ -243,7 +243,10 @@ if ASTRA_AVAILABLE:
     angles = np.linspace(0, np.pi, amount_of_angles)
 
     proj_geom = astra.create_proj_geom('parallel', 1.0, num_of_lines, angles)
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # 设备判定与回退门槛保持同一口径（astra.use_cuda()）：
+    # 若用torch.cuda.is_available()，当torch为CPU版而astra为CUDA版时两处
+    # 判定可能相反，导致CPU FBP撞上fanflat几何而崩溃
+    device = 'cuda' if astra.use_cuda() else 'cpu'
     projector_type = 'cuda' if device == 'cuda' else 'line'
     FBP_type = 'FBP_CUDA' if device == 'cuda' else 'FBP'
     print(f"  ASTRA设备: {device}, FBP类型: {FBP_type}")
@@ -347,7 +350,8 @@ if ASTRA_AVAILABLE:
 
     proj_geom = astra.create_proj_geom('fanflat', 1.0, num_of_lines, angles, SOD, SDD - SOD)
     # 扇形束几何需要使用'line_fanflat'投影器类型（平行束用'line'，这里必须区分）
-    fan_projector_type = 'cuda' if torch.cuda.is_available() else 'line_fanflat'
+    # 设备判定与回退门槛同口径（astra.use_cuda()），见步骤2说明
+    fan_projector_type = 'cuda' if astra.use_cuda() else 'line_fanflat'
     proj_id_full = astra.create_projector(fan_projector_type, proj_geom, vol_geom)
 
     full_sinogram_id, full_sinogram = astra.create_sino(ellipses, proj_id_full)
@@ -397,7 +401,7 @@ if ASTRA_AVAILABLE:
 
 else:
     # ---- skimage回退版本：概念讲解 + 角度采样对比 ----
-    print("  扇形束投影需要ASTRA工具箱（Linux+CUDA环境）。")
+    print("  扇形束投影需要ASTRA工具箱（扇形束FBP仅有CUDA实现）。")
     print("  关键参数:")
     print("    SOD = 250  # 源到物体中心距离 (Source-Object Distance)")
     print("    SDD = 260  # 源到探测器距离 (Source-Detector Distance)")
@@ -456,8 +460,8 @@ if ASTRA_AVAILABLE:
     SDD = 260
 
     proj_geom = astra.create_proj_geom('fanflat', 1.0, num_of_lines, angles, SOD, SDD - SOD)
-    # 扇形束几何需要使用'line_fanflat'投影器类型
-    fan_projector_type = 'cuda' if torch.cuda.is_available() else 'line_fanflat'
+    # 扇形束几何需要使用'line_fanflat'投影器类型；设备判定与回退门槛同口径
+    fan_projector_type = 'cuda' if astra.use_cuda() else 'line_fanflat'
     proj_id = astra.create_projector(fan_projector_type, proj_geom, vol_geom)
     sino_id, sino = astra.create_sino(ellipses, proj_id)
     astra.data2d.delete(proj_id)
