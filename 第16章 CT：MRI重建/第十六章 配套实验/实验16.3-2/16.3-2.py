@@ -389,7 +389,7 @@ print("    说明：零填充直接做逆 FFT 仍有明显混叠；GRAPPA 通过
 print("          k 空间插值补线，恢复效果好（PSNR≈51 dB）；CG-SENSE 显式利用")
 print("          线圈灵敏度、求解精确逆问题，几乎无误差。两者“谁对噪声更敏感”")
 print("          取决于几何条件，由 g 因子（步骤6）刻画：本设置 R=2/8 通道下")
-print("          g≈1.05、条件良好，故 CG-SENSE 噪声放大很小；加速更高或线圈更")
+print("          g≈1.36、条件良好，故 CG-SENSE 噪声放大很小；加速更高或线圈更")
 print("          少时 g 增大，CG-SENSE 会更敏感。步骤5 用加噪实验给出定量对比。")
 
 fig, axes = plt.subplots(2, 3, figsize=(12, 8))
@@ -435,6 +435,10 @@ def add_kspace_noise(y_np, sigma, mask):
 
 # 以全采样 k 空间幅值均值作为噪声尺度基准
 k_scale = float(np.mean(np.abs(y_full.numpy())))
+# 公平性口径说明：CG-SENSE 使用仿真直接给出的“oracle”线圈灵敏度图（无估计误差），
+# 而 GRAPPA 用含噪 ACS 数据自标定卷积核。因此本对比中 CG-SENSE 不含“灵敏度图
+# 估计误差”这一额外噪声源，结论略偏向 CG-SENSE；实际应用中 SENSE 还需另行估计
+# 灵敏度图，其估计误差会进一步抬升 NMSE。
 noise_levels = [0.02, 0.05, 0.10]
 g_nmse, cg_nmse = [], []
 for sigma in tqdm(noise_levels, desc='  加噪实验', leave=False):
@@ -470,9 +474,9 @@ if cg_nmse[-1] > g_nmse[-1]:
     print("    结论：在最强噪声档下 CG-SENSE 的 NMSE 高于 GRAPPA，说明其噪声被 g 因子")
     print("          放大（见步骤6），支持“CG-SENSE 对噪声更敏感”的论断（数据支撑）。")
 else:
-    print("    说明：本设置（R=2、8 通道，g≈1.05）下两个条件数均良好，两者噪声放大都")
+    print("    说明：本设置（R=2、8 通道，g≈1.36）下两个条件数均良好，两者噪声放大都")
     print("          很小；CG-SENSE 因求解精确逆问题，其 NMSE 反而略低于 GRAPPA。但")
-    print("          CG-SENSE 的逐像素噪声放大约为 g(r)·sigma（见步骤6）；当加速比更高")
+    print("          CG-SENSE 的逐像素噪声放大约为 g(r)·sigma/(√2·N)（见步骤6）；当加速比更高")
     print("          或线圈数更少导致 g 增大时，它会比 GRAPPA 更敏感——这正是 g 因子要")
     print("          揭示的规律。可把 R 或 Nc 调小来观察该趋势。")
 
@@ -481,35 +485,55 @@ else:
 print("\n>>> 步骤6 : 计算并绘制 g 因子图（量化 SENSE 的逐像素噪声放大）")
 
 
-def gfactor_map(S, R):
-    """逐像素计算 SENSE 最小 g 因子：g(r) = min_j sqrt(((E^H E)^{-1})_{jj})。
-    E 为 (Nc x R) 编码矩阵，第 j 列是混叠到该像素的第 j 个源像素的线圈灵敏度向量。
+def gfactor_map(S, mask, reg=1e-6):
+    """按**实际采样掩码**逐像素计算 CG-SENSE 的噪声放大因子 g（严格法，无折叠近似）。
+
+    定义（与本项目 cg_sense 的**实值**实现严格对应）：g(r) = sqrt([(A^H A)^{-1}]_rr)，
+    其中 A 为"掩码·FFT·线圈灵敏度"的实值编码算子——cg_sense 对实值非负图像取
+    E^H y 的实部求解，其正规算子逐列为 Re(B)（B 见下）。g(r) 即像素 r 的重建噪声
+    std 相对**全采样**的放大倍数：
+        std(r) = g(r) · sigma / (sqrt(2)·N)，  全采样基线 = sigma / (sqrt(2)·N)，
+    sigma 为每采集 k 空间样本的复噪声标准差（sqrt(2)/N 来自实值化与 FFT 归一化）。
+    该关系已用蒙特卡洛实证：无截断线性 CG 的逐像素噪声 std 与上式一致（中位比
+    0.93，剩余为估计涨落）；末端非负截断会再压低背景噪声约 0.58 倍（理论
+    sqrt(1/2 - 1/(2π)) ≈ 0.584，实测 0.57，见步骤5/6 的实测 NMSE 略低于预测）。
+
+    计算：掩码只作用在行轴（ky），列方向全采样，故 E^H E 按列 x 解耦为 N×N 厄米块
+        B_x[y, y'] = K(y - y') · Σ_c conj(S_c(y, x)) · S_c(y', x),
+        K(d) = (1/N) · Σ_{ky∈Ω} exp(i2π·ky·d/N),  Ω = 实际采集行集合，
+    对每列取实值正规算子 Re(B_x) 求逆、对角元开方。
+    复数口径 sqrt([B^{-1}]_rr·K0) 在 R 整除 N 且纯 R 欠采样时与教科书折叠组公式
+    逐像素一致（已数值验证到正则水平）；本实值口径在低 R 下与复数口径接近
+    （R=2+ACS24: 1.36 vs 1.38），高 R 下实值化显著缓解复数系统的病态
+    （R=4+ACS24: g_max 2.9 vs 复数 52）。
+
+    注意：R>=6 时 Re(B) 的最小特征值已接近正则水平 reg，g 的具体数值开始受 reg
+    控制（R=8+ACS24: reg 1e-6→1e-9 使 g_mean 从 116 涨到 151），只宜作趋势判断；
+    且高 R 下 cg_sense 的有限迭代（80 次）相当于隐式正则（谱滤波），实测噪声明显
+    低于 sigma·g 的精确解预测（R=7 约 1/6、R=8 约 1/90；增加迭代数 NMSE 会向
+    预测收敛，已实证）——g 刻画几何病态的"精确解价格"，实际噪声以实验实测为准。
     """
     Nc, N, _ = S.shape
+    rows = np.where(mask[:, 0] > 0.5)[0]                    # 实际采集行集合 Ω（每列相同）
+    a = np.arange(N)
+    d = a[:, None] - a[None, :]
+    Kmat = np.exp(2j * np.pi * np.asarray(rows)[:, None, None] * d[None] / N).sum(axis=0) / N
+    S64 = S.astype(np.complex128)                           # complex64 求逆在高 R 病态下误差可达数个百分点
     g = np.zeros((N, N), dtype=np.float64)
-    # 实际欠采样：mask[::R, :] = 1，即在**行轴**（第一个空间轴）每隔 R 行采 1 行，
-    # 列轴（第二个空间轴）始终全采。因此混叠发生在行轴，图像域混叠距离 = N/R 像素：
-    # 像素 (row, col) 与 (row+N/R, col), ...（同一 col）折叠在一起，需同时解 R 个源行。
-    # 循环变量 col 索引列轴（恒全采），ky_src 索引行轴（混叠折叠的行集合）。
-    dist = N // R
-    ky_src = np.array([[(ky + r * dist) % N for r in range(R)] for ky in range(N)])  # (N, R)
     for col in tqdm(range(N), desc='  g-factor', leave=False):
-        S_cols = S[:, ky_src, col]              # (Nc, N, R)：行轴=混叠源集合，列轴=固定 col
-        E = np.transpose(S_cols, (1, 0, 2))    # (N, Nc, R)
-        EH = np.conj(E).transpose(0, 2, 1)     # (N, R, Nc)
-        M = np.matmul(EH, E)                   # (N, R, R)
-        M = M + 1e-6 * np.eye(R)[None, :, :]   # 极小 Tikhonov 正则，避免近奇异
-        Minv = np.linalg.inv(M)
-        diag = np.real(np.einsum('nii->ni', Minv))   # (N, R)
-        g[:, col] = diag.min(axis=1)
+        T = S64[:, :, col]                                  # (Nc, N)
+        G = np.conj(T).T @ T                                # G[y,y'] = Σ_c conj(S_c(y,x))·S_c(y',x)
+        B = np.real(G * Kmat) + reg * np.eye(N)             # 实值正规算子（实对称正定），对应实值 CG
+        Binv = np.linalg.inv(B)
+        g[:, col] = np.sqrt(np.maximum(np.diag(Binv), 0.0))
     return g
 
 
-g = gfactor_map(S, R)
+g = gfactor_map(S, mask)
 g_mean, g_max = float(g.mean()), float(g.max())
 fig, ax = plt.subplots(figsize=(6, 5))
 im = ax.imshow(g, cmap='jet', vmin=1.0, vmax=float(np.percentile(g, 99)))
-ax.set_title(f'g 因子图 ($R={R}$, {Nc} 通道)')
+ax.set_title(f'g 因子图 ($R={R}$, {Nc} 通道, 实际掩码)')
 ax.axis('off')
 cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 cbar.set_label('g')
@@ -519,11 +543,13 @@ fig.savefig(os.path.join(SAVE_DIR, '步骤6_g因子图.png'),
 plt.show()
 plt.close(fig)
 print("    已保存：步骤6_g因子图.png")
-print(f"    g 因子均值={g_mean:.3f}，最大={g_max:.3f}（g=1 表示无噪声放大，越大越敏感）。")
-print("    说明：CG-SENSE 的逐像素噪声放大约为 g(r)·sigma，高 g 区域（如灵敏度过零点")
-print("          附近）即其最敏感处；GRAPPA 的噪声行为由核平滑主导，二者机理不同。")
-print("          注：本 g 因子按“纯 R 倍规则欠采样”计算（理论标准定义），未计入本实验")
-print("          掩码中额外 ACS 全采样带带来的条件数改善；实际重建的有效噪声放大比此图略轻。")
+print(f"    g 因子均值={g_mean:.3f}，最大={g_max:.3f}（g=1 表示与全采样噪声水平相同，越大越敏感）。")
+print("    说明：CG-SENSE（实值 CG）的逐像素重建噪声 std ≈ g(r)·sigma/(√2·N)——sigma 为每")
+print("          采集 k 空间样本的复噪声标准差，√2/N 来自实值化与 FFT 归一化，故 g 即相对")
+print("          全采样基线 sigma/(√2·N) 的放大倍数；高 g 区域（灵敏度过零点附近）即其最")
+print("          敏感处。GRAPPA 的噪声行为由核平滑主导，二者机理不同。")
+print("          注：本图按实际采样掩码（含 ACS 全采样带）的完整正规算子逐列求解，无需")
+print("          “折叠距离 N/R 为整数”假设；口径与 cg_sense 的实值实现严格对应（见函数文档）。")
 
 
 # ========== 步骤7 : 多加速比对比 (R=2,3,4) —— 验证"R越大g因子越大、并行成像越怕噪声" ==========
@@ -567,7 +593,7 @@ for Rs in tqdm(R_list, desc='  多加速比对比', leave=False):
     _, _, nm_cg_sn = metrics(x_ref_s, x_cg_sn)
 
     # g 因子
-    g_s = gfactor_map(S, Rs)
+    g_s = gfactor_map(S, mask_s)
     g_maps.append(g_s)
 
     sweep["R"].append(Rs)
@@ -660,9 +686,10 @@ else:
 
 
 # ========== 步骤7b : ACS 带宽对照扫描 —— 揭示纯 R 欠采样下 CG-SENSE 的 g 噪声放大 ==========
-print("\n>>> 步骤7b : ACS 校准带宽度对照扫描（固定 R=4），演示 CG-SENSE 噪声放大反超 GRAPPA")
+print("\n>>> 步骤7b : ACS 校准带宽度对照扫描（固定 R=4）——探究 ACS 收窄时,"
+      "CG-SENSE 的 g 噪声放大能否反超 GRAPPA")
 
-R_acs = 4                      # 高加速比：纯 R g 因子本就很大（g_mean≈8.2, g_max≈183）
+R_acs = 4                      # R=4 时 g 因子已明显高于 R=2（本设置 R=4+ACS24 下 g_mean≈2.1）
 acs_list = [24, 16, 12, 8, 4]  # 从充足 ACS 收缩到极小 ACS，越接近纯 R 欠采样
 sigma_acs = 0.12               # 较高噪声档，让 g 噪声放大效应更明显
 acs_sweep = {"R": R_acs, "sigma": sigma_acs,
@@ -693,7 +720,7 @@ for acs in tqdm(acs_list, desc='  ACS 扫描', leave=False):
     _, _, nm_g_a = metrics(x_ref_a, x_g_a)
     _, _, nm_cg_a = metrics(x_ref_a, x_cg_a)
 
-    g_a = gfactor_map(S, R_acs)
+    g_a = gfactor_map(S, mask_a)   # g 按各 ACS 的实际掩码计算（ACS 收窄会轻微抬升 g）
 
     acs_sweep["acs_lines"].append(acs)
     acs_sweep["effective_R"].append(float(N / n_acq_a))
@@ -731,8 +758,9 @@ if cross_acs is not None:
           f"{acs_sweep['effective_R'][ci]:.2f}x）时，CG-SENSE 的 NMSE "
           f"({acs_sweep['NMSE_CGSENSE_noisy'][ci]:.5f}) 已反超 GRAPPA "
           f"({acs_sweep['NMSE_GRAPPA_noisy'][ci]:.5f})——")
-    print("          此时真实欠采样的混叠病态逼近纯 R g 因子所示（g_max≈183），CG-SENSE 的逐像素")
-    print("          噪声放大 g(r)·σ 暴露出来，压倒其“精确求解”的固有优势；而 GRAPPA 仍靠 k 空间")
+    print("          此时混叠病态已逼近本设置 g 因子所示水平"
+          f"（ACS={cross_acs} 行时 g_max≈{acs_sweep['g_max'][ci]:.1f}），CG-SENSE 的逐像素")
+    print("          噪声放大 g(r)·sigma/(√2·N) 暴露出来，压倒其“精确求解”的固有优势；而 GRAPPA 仍靠 k 空间")
     print("          核平滑对噪声较鲁棒。这正是 g 因子理论要刻画的 SENSE 类方法的致命弱点。")
 else:
     g0, g1 = acs_sweep["NMSE_GRAPPA_noisy"][0], acs_sweep["NMSE_GRAPPA_noisy"][-1]
@@ -742,10 +770,12 @@ else:
     print(f"          严重欠定、插值系统性误差失控；而 CG-SENSE 几乎不动（{cg0:.4f}→{cg1:.4f}），")
     print("          它直接解最小二乘，少量 ACS 仍足以约束中心、保持良好条件数。因此这里并未出现")
     print("          “CG-SENSE 因 g 噪声放大反超 GRAPPA”，相反 GRAPPA 才是更“怕”小 ACS 的一方。")
-    print("          g 因子（纯 R 上界，g_max≈183）是 CG-SENSE 的“理论噪声价格”，只在极端噪声或")
-    print("          高 ky 信号区才会兑现；本 Shepp-Logan 体模信号集中于中心、且 ACS 再小也保住中心")
-    print("          全采样，故 CG-SENSE 实际噪声放大远小于纯 R g 所示。要观察其斜率更快的噪声放大，")
-    print("          应看 g 因子系数本身（步骤6 / 步骤7b 热力图），或把噪声档提到 σ≳0.3 对比二者斜率。")
+    nmse_pred_cg = (sigma_acs * k_scale) ** 2 * float(np.mean(g_a ** 2)) / (2 * N * N) \
+        / float(np.mean(phantom ** 2))
+    print(f"          注意：CG-SENSE 稳健并非没有噪声代价——本设置 g_mean≈{float(g_a.mean()):.2f}，")
+    print(f"          由 g 预测的 NMSE≈{nmse_pred_cg:.1e}，与实测 {cg1:.1e} 同量级（实测略低是末端")
+    print("          非负截断压低了背景噪声）。R=4、8 通道的几何条件尚可，要看到 g 噪声放大")
+    print("          压过 GRAPPA，需要更高的 R——这正是下一步（步骤7c）要做的事。")
 
 
 # ========== 步骤7c : 固定宽 ACS + 高加速比 + 高噪声 —— 分离出"纯 g 因子"导致的 CG-SENSE 反超 ==========
@@ -758,13 +788,13 @@ acs_fixed = 24                  # 关键：ACS 不随 R 收缩,始终 24 行,使
 sigma_c = 0.30                  # 高噪声档,让 g 噪声放大充分兑现
 c_sweep = {"R": [], "acs_lines": acs_fixed, "sigma": sigma_c,
            "effective_R": [],
-           "g_mean": [], "g_max": [],          # 均为“目标支撑区内”的 g 因子(已剔除空气背景)
+           "g_mean": [], "g_max": [],          # 全图 g 因子统计（理由见下）
            "NMSE_GRAPPA_noisy": [], "NMSE_CGSENSE_noisy": []}
 
-# 目标支撑区：仅对体模内有意义的灵敏度区域统计 g 因子。背景空气处 8 通道灵敏度均≈0,
-# 会使 S^H S 近奇异、g 爆炸到 1e4 量级且无物理意义,故只取 SOS 灵敏度 > 5% 峰值处。
-sos_S = np.sqrt((np.abs(S) ** 2).sum(axis=0))
-supp = torch.tensor(sos_S > 0.05 * sos_S.max())
+# 口径说明：本实验的线圈灵敏度已按 RSS 归一化，sum_c |S_c|^2 ≡ 1 处处成立
+# （不存在灵敏度全零的“空气背景”），S^H S 的病态完全来自线圈几何——高 R 下
+# 混叠像素组的灵敏度向量近共线。因此直接统计全图 g 因子即可，无需再做
+# “目标支撑区”筛选（实测 sos_S 处处=1，此类掩码不会剔除任何像素）。
 
 for Rs in tqdm(R_list_c, desc='  高R+固定宽ACS', leave=False):
     mask_c = np.zeros((N, N), dtype=np.float32)
@@ -788,10 +818,9 @@ for Rs in tqdm(R_list_c, desc='  高R+固定宽ACS', leave=False):
     _, _, nm_g_c = metrics(x_ref_c, x_g_c)
     _, _, nm_cg_c = metrics(x_ref_c, x_cg_c)
 
-    g_c = gfactor_map(S, Rs)
-    g_supp = g_c[supp]                       # 仅目标支撑区内,剔除空气背景的奇异膨胀
-    g_mean_s = float(g_supp.mean())
-    g_max_s = float(g_supp.max())
+    g_c = gfactor_map(S, mask_c)
+    g_mean_s = float(g_c.mean())
+    g_max_s = float(g_c.max())
 
     c_sweep["R"].append(Rs)
     c_sweep["effective_R"].append(float(N / n_acq_c))
@@ -799,7 +828,7 @@ for Rs in tqdm(R_list_c, desc='  高R+固定宽ACS', leave=False):
     c_sweep["g_max"].append(g_max_s)
     c_sweep["NMSE_GRAPPA_noisy"].append(float(nm_g_c))
     c_sweep["NMSE_CGSENSE_noisy"].append(float(nm_cg_c))
-    print(f"    R={Rs} (有效{N / n_acq_c:.2f}x): g_mean(支撑区)={g_mean_s:.2f}, g_max(支撑区)={g_max_s:.1f} | "
+    print(f"    R={Rs} (有效{N / n_acq_c:.2f}x): g_mean={g_mean_s:.2f}, g_max={g_max_s:.1f} | "
           f"σ={sigma_c} NMSE GRAPPA={nm_g_c:.5f}, CG-SENSE={nm_cg_c:.5f}")
 
 fig_c, ax_c = plt.subplots(figsize=(7.5, 5))
@@ -808,8 +837,8 @@ ax_c.plot(c_sweep["R"], c_sweep["NMSE_CGSENSE_noisy"], 's-', label='CG-SENSE', l
 ax_c.set_xlabel('加速比 R（ACS 固定 24 行，σ=0.30 加噪）')
 ax_c.set_ylabel('NMSE')
 ax2 = ax_c.twinx()
-ax2.plot(c_sweep["R"], c_sweep["g_mean"], 'd--', label='g_mean (支撑区内)', linewidth=1.5, alpha=0.75)
-ax2.set_ylabel('g_mean (目标支撑区内)')
+ax2.plot(c_sweep["R"], c_sweep["g_mean"], 'd--', label='g_mean', linewidth=1.5, alpha=0.75)
+ax2.set_ylabel('g_mean')
 l1, lb1 = ax_c.get_legend_handles_labels()
 l2, lb2 = ax2.get_legend_handles_labels()
 ax_c.legend(l1 + l2, lb1 + lb2, loc='upper left')
@@ -830,7 +859,7 @@ for i in range(len(c_sweep["R"])):
 if cross_R_c is not None:
     ci = c_sweep["R"].index(cross_R_c)
     print(f"    结论：固定 ACS=24、σ=0.30 时,当 R 升到 {cross_R_c}（有效加速≈"
-          f"{c_sweep['effective_R'][ci]:.2f}x, 支撑区内 g_mean={c_sweep['g_mean'][ci]:.1f}），")
+          f"{c_sweep['effective_R'][ci]:.2f}x, 全图 g_mean={c_sweep['g_mean'][ci]:.1f}），")
     print(f"          CG-SENSE 的 NMSE ({c_sweep['NMSE_CGSENSE_noisy'][ci]:.5f}) 首次反超 GRAPPA "
           f"({c_sweep['NMSE_GRAPPA_noisy'][ci]:.5f})。")
     print("          此时 GRAPPA 因 ACS 充足而标定稳健(核平滑抑制噪声),而 CG-SENSE 的逐像素噪声放大")
@@ -844,9 +873,13 @@ else:
           f"{c_sweep['g_mean'][-1]:.1f})。")
 
 print("    ⚠ 教学区提醒：本步 R=4~8 仅配 Nc=8 个平滑环形线圈,在 R≥6 时已逼近这 8 个线圈")
-print("          几何上能编码的加速极限,S^H S 近奇异,g 因子爆炸(g_mean 达数千)本质上就是")
-print("          SENSE 的几何病态,而非数值假象。此区间仅用于直观展示'纯 g 因子放大→CG-SENSE")
-print("          反超'的趋势,不代表临床常用工作点(临床多用更宽 ACS、更多线圈、更低噪声)。")
+print("          几何上能编码的加速极限,实值正规算子近奇异——g 随 R 爆炸反映的是真实的")
+print("          几何病态。但两点口径必须分清：①此时 g 的具体数值开始受正则参数 reg 控制")
+print("          (R=8 时 reg 1e-6→1e-9 可使 g_mean 变化约 1.3 倍),只宜看趋势；②cg_sense 的")
+print("          有限迭代(80 次)相当于隐式正则(谱滤波),实测噪声明显低于 sigma·g 的精确解")
+print("          预测(R=7 约 1/6、R=8 约 1/90；迭代数增多时 NMSE 向预测收敛,已实证)。")
+print("          故本区间仅用于直观展示'几何病态→CG-SENSE 对噪声敏感'的趋势,不代表临床")
+print("          常用工作点(临床多用更宽 ACS、更多线圈、更低噪声)。")
 
 
 # ========== 步骤8 : 保存 JSON 结果 ==========

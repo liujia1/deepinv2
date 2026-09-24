@@ -499,8 +499,10 @@ def moi_loss(model, x, pool, sigma, g, lambda_moi=LAMBDA_MOI):
     1. 使用 stop-gradient（x_hat.detach()）作为交叉一致性的伪标签，
        避免trivial collapse，是教学简化而非论文精确复现；
     2. 交叉一致性路径的输入 y_s = M_s·x̂ 不带噪声（与主重建路径的带噪y不同），
-       这与MOI论文原始做法一致（一致性项作用于模型自身重建结果），但会造成
-       训练时网络同时看到"带噪观测"和"无噪伪观测"两种输入分布。
+       这会造成训练时网络同时看到"带噪观测"和"无噪伪观测"两种输入分布。
+       注意：这是本实验的简化选择，并非与参考实现一致——deepinv 官方 MOILoss
+       默认 apply_noise=True，即对伪观测 A_s x̂ 重新施加物理噪声后再送入模型。
+       若要严格对齐官方行为，把 y_s 改为 mask_s*x_hat_det 后再加 sigma*randn 即可。
     核心思想一致：用多个算子覆盖零空间，交叉一致性约束。
 
     Args:
