@@ -156,13 +156,11 @@ print(f"    活度体模尺寸 {N}x{N}，含 4 个高摄取热区，已归一化
 # ========== 步骤1 : 射线追踪正演 + 泊松噪声 ==========
 print("\n>>> 步骤1 : 射线追踪正演（Radon）+ 投影域泊松噪声")
 
-# 正演 A 与伴随 A^T（Radon / 无滤波反投影）
+# 正演 A：Radon 线积分（活度沿射线求和）。
+# 伴随 A^T 用无滤波 iradon 实现（iradon(..., filter_name=None)），
+# 在 osem_recon 内按子集角度调用。
 def A(x):
     return radon(x, theta=theta)
-
-
-def AT(sino):
-    return iradon(sino, theta=theta, filter_name=None, output_size=N)
 
 
 proj_true = A(x_true)                     # 真值线积分（活度沿射线求和）
@@ -204,17 +202,27 @@ print("    已保存：步骤1_正演与泊松噪声.png")
 
 # ========== 步骤2 : OSEM 重建（MLE）==========
 print("\n>>> 步骤2 : OSEM 重建（参考 SIRF user_osmaposl.py 的 OSMAPOSL 更新公式）")
-print("    教学提醒：本实验受限于 skimage.radon 只能整幅计算、无法只算部分角度，")
-print("        子集按‘探测器 bin’（第 0 轴，跨全部 180 角度）而非‘投影角度’划分。")
-print("        真实 OSEM 的子集是按投影角度分组的——每个角度子集本身已是对全物体")
-print("        的一次有代表性观测，可用子集梯度近似全梯度、实现类似 SGD 的加速收敛；")
-print("        而按 bin 切分不具备这种‘子集≈全局’的统计代表性，只能演示 EM 迭代结构，")
-print("        并不能反映真实 OSEM 相对普通 EM 的加速收敛优势，请勿把它当作标准做法。")
+print("    子集按‘投影角度’划分（标准 OSEM）：radon/iradon 的 theta 参数接受任意角度")
+print("    数组，每个子迭代只正/反投影该子集的角度（约 1/S 计算量），一轮 S 次子迭代")
+print("    总计算量≈一次全角度 MLEM、却完成 S 次参数更新——这正是 OSEM 相对 MLEM")
+print("    的加速来源。注意子集不能按探测器 bin 划分：中心像素对所有角度都投影到")
+print("    同一个中心 bin、只属于某一个 bin 子集，对其余子集，子集灵敏度 A_s^T 1 与")
+print("    子集梯度 A_s^T(y/(A_s x+b)) 在该处同时为 0，乘法更新 x<-x·0 会把中心区域")
+print("    从第 1 次子迭代起永久归零（实测 FOV 内 85 个像素被湮灭、半径达 8 px，")
+print("    真值中心 ≈0.85 的热区在重建图上成为黑洞）——初版实现踩过的坑。")
 
 
 def osem_recon(y_counts, scale, background, num_subsets=10, n_subiter=20,
-               prior_beta=0.0, denom_floor_frac=0.5, ratio_clip=3.0):
+               prior_beta=0.0):
     """有序子集期望最大化（OSEM），可选 OSL 二次先验。
+
+    子集按“投影角度”划分（标准 OSEM 的做法）：第 s 个子集使用角度
+    s, s+num_subsets, ... 下的全部探测器 bin。radon / iradon 的 theta
+    参数接受任意角度数组，因此每个子迭代只需正/反投影该子集的角度
+    （约 1/num_subsets 计算量）；iradon 的内部归一化（×π/(2·角度数)）
+    同时作用于分子 grad 与分母 sens，子集规模差异在 grad/denom 中自动
+    约掉。一轮 num_subsets 次子迭代的总计算量约等于一次全角度 MLEM，
+    却完成了 num_subsets 次参数更新——这正是 OSEM 相对 MLEM 的加速来源。
 
     每次子集更新（参考 user_osmaposl.py）：
         grad = A_s^T ( y_s / (A_s x + b) )
@@ -226,78 +234,66 @@ def osem_recon(y_counts, scale, background, num_subsets=10, n_subiter=20,
         x <- x * A_full^T(y/(A_full x+b)) / A_full^T(1)
     把 A_full = scale*A 代入后，分子分母的 scale 代数上完全约掉，
         = x * A^T(y/(scale*Ax+b)) / A^T(1)
-    因此代码里 grad 用 AT(...)（不含 scale）、denom 用 sens_s（不含 scale）
-    是自洽且正确的，并非漏乘 scale。
+    因此代码里 grad 用 iradon(...)（不含 scale）、denom 用 sens_s
+    （不含 scale）是自洽且正确的，并非漏乘 scale。
 
-    关于 OSL 稳定性（实测排查记录，非纯理论提醒）：
-    OSL 是 one-step-late 近似，不是严格的凸优化，denom 中的离散拉普拉斯 lap
-    在 FOV 圆外（np.roll 造成的循环边界人为不连续处）可能出现很大的负值。
-    早期版本用绝对下限 denom=max(denom,1e-6) 兜底——但 sens_s 的正常量级在
-    0.1~0.5 左右，1e-6 比这小 5 个数量级，一旦 denom 被夹到该下限、而 grad
-    在同一像素并不同样小，grad/denom 就会产生天文数字级的单步增益；由于更新
-    是乘法形式（x <- x*step），会在后续子迭代里指数级级联放大。实测 beta=0.5
-    时到第 4 次子迭代 x.max() 已达数千，20 次子迭代后发散到 ~1e6，此时打印的
-    PSNR/SSIM 会被动态 data_range 一起“冲高”，看起来反而比不发散的结果更好，
-    极具误导性。
-    现改为两层稳定化（仅在 prior_beta>0 时生效，纯 OSEM(MLE) 不受影响——它的
-    denom 恒为 sens_s>0，从未表现出发散，不需要也不应该被限幅），已用真实数据
-    验证 beta 扫到 2.0 仍收敛到有限解、不再失控发散；但 std/max 并不随 beta
-    单调：OSL 为 one-step-late，热点区 lap<0 会压低 denom、配合单步限幅反而
-    放大峰值（实测 β=0.5 时 x.max()≈1.93 高于 β=0 的≈1.83，PSNR 也更高），只有
-    beta 足够大（如 2.0）才转为过度平滑；稳定化保证的是收敛到有限解、而非单调平滑：
-      (1) denom 下限改为与该像素自身 sens_s 成比例（denom_floor_frac*sens_s），
-          而不是脱离物理尺度的绝对常数，避免上述量级失配（此式对 beta=0 恒等，
-          max(sens_s,0.5*sens_s)=sens_s，不改变纯 OSEM 行为）；
-      (2) 仅当 prior_beta>0 时，单步更新比例 grad/denom 才显式限幅到
-          [1/ratio_clip, ratio_clip]。早期实现曾对 beta=0 也无差别限幅，
-          实测会让纯 OSEM 结果失真（PSNR 25.44→25.09 dB，约 6.8 万个
-          像素-子迭代被限幅命中），现已收窄为仅 OSL 分支生效。
+    角度子集的一个好性质：FOV 内每个像素被子集内全部角度投到，子集
+    灵敏度 A_s^T 1 在 FOV 内恒等于 π/2 ≈ 1.5708（实测 10 个子集逐位
+    相同），不存在 bin 子集那种“某些像素灵敏度为零”的退化。
+
+    教学警告：子集必须按角度划分，不能按探测器 bin 划分。中心像素对
+    所有角度都投影到同一个中心 bin（实测点脉冲在全部 180 个角度下的
+    峰值 bin 恒为 55），它只属于某一个 bin 子集：对其余子集，子集
+    灵敏度 A_s^T 1 与子集梯度 A_s^T(y/(A_s x+b)) 在该处同时为 0，乘法
+    更新 x <- x·0 会把中心区域从第 1 次子迭代起永久归零。实测（bin
+    子集初版）：FOV 内 85 个像素被湮灭、半径达 8 px，真值中心 ≈0.85
+    的热区在重建图上成为黑洞、周围出现约 ×1.8 的过恢复亮环；被湮灭
+    区域沿射线的正演低估又使洞边界像素的比值 y/(Ax+b) 爆炸，进而诱发
+    下文所述的 OSL 失控发散——bin 子集是这一连串问题的共同根因。
+
+    关于 OSL 稳定性（历史教训，本版本已无需任何稳定化）：
+    OSL 是 one-step-late 近似，denom = sens + β·lap/num_subsets 中的
+    离散拉普拉斯 lap 在“冷-热交界”处为负，理论上可能把个别像素的
+    denom 压小甚至压负。bin 子集时代（灵敏度大面积退化、FOV 外 sens
+    被夹到 1e-6）实测 beta=0.5 时第 4 次子迭代 x.max 已达数千、20 次
+    子迭代后发散到 ~1e6，且发散解的 PSNR/SSIM 被动态 data_range 一并
+    “冲高”到约 40 dB / 0.99，看起来反而比正常解更好，极具误导性。
+    当时为救它加过“denom 相对下限 + 单步幅度限幅”两层稳定化，但实测
+    表明：角度子集管线下裸 OSL（无任何稳定化）beta 扫到 2.0 全程稳定
+    （x.max 单调 1.18→1.00，无发散）；而限幅反而在实质性塑形结果——
+    它主要在裁剪 FOV 外 sens≈1e-6 像素的步长，实测使 β=0.05 的 PSNR
+    从 25.44 被压到 25.29 dB、偏离教材 OSMAPOSL 公式。因此本版本
+    删除两层稳定化，直接实现教材公式；若未来把 FOV 外像素纳入更新或
+    改用 bin 子集，需重新审视发散风险。
     """
-    n_bins = y_counts.shape[0]                    # 探测器 bin 数（≈157），注意不是角度数（180）
+    n_angles = theta.size                         # 投影角度数（180）
     x = np.ones((N, N), dtype=np.float64)         # 初值：均匀活度
-    rows_list = [np.arange(s, n_bins, num_subsets) for s in range(num_subsets)]
+    ang_subsets = [np.arange(s, n_angles, num_subsets) for s in range(num_subsets)]
+    # 各角度子集的灵敏度图 A_s^T 1：对固定子集恒定，预先各算一次
+    # （FOV 内恒为 π/2；FOV 外趋零，1e-6 下限仅为防除零）
+    sens_list = [np.maximum(
+        iradon(np.ones((y_counts.shape[0], a.size)), theta=theta[a],
+               filter_name=None, output_size=N), 1e-6)
+        for a in ang_subsets]
 
     for it in tqdm(range(1, n_subiter + 1), desc='  OSEM/OSL', leave=False):
-        subset = (it - 1) % num_subsets
-        rows = rows_list[subset]
-        # 正演（仅取当前子集所用的探测器 bin 行）。
-        # 注意：本 sinogram 第 0 轴是探测器 bin（≈157），第 1 轴才是角度（180），
-        # 这里的子集是按 bin 索引 rows 划分的（每个 bin 在整轮 10 个子集里恰好用一次）。
-        # skimage 的 radon 始终返回“全部 bin × 全部角度”的整幅投影，无法只算子集角度，
-        # 因此这里对整幅正演 A(x) 做 bin 行切片；本例 N=111 计算量很小，无需进一步优化。
-        full = np.zeros_like(y_counts)
-        full[rows] = (scale * A(x))[rows]
-        ratio = y_counts[rows] / (full[rows] + background)
-        # 伴随：把子集投影填回整幅 sinogram 再反投影（零行不贡献）
-        tmp = np.zeros_like(y_counts)
-        tmp[rows] = ratio
-        grad = AT(tmp)
-        # 子集灵敏度图 A_s^T 1（OSEM 每子集用各自灵敏度，保证无偏）
-        ones_s = np.zeros_like(y_counts)
-        ones_s[rows] = 1.0
-        sens_s = np.maximum(AT(ones_s), 1e-6)
+        s = (it - 1) % num_subsets
+        a = ang_subsets[s]
+        # 正演（只算该子集的角度，约 1/num_subsets 计算量）
+        Ax_s = radon(x, theta=theta[a])
+        ratio = y_counts[:, a] / (scale * Ax_s + background)
+        # 伴随：子集梯度与子集灵敏度用同一 iradon 归一化，scale 自动约掉
+        grad = iradon(ratio, theta=theta[a], filter_name=None, output_size=N)
+        sens_s = sens_list[s]
         if prior_beta > 0:
+            # OSL 二次先验（QuadraticPrior）：denom 加分母 = 先验梯度
+            # β·lap(x)/num_subsets，one-step-late 用上一轮 x 的 lap
             lap = (4 * x - np.roll(x, 1, 0) - np.roll(x, -1, 0)
                    - np.roll(x, 1, 1) - np.roll(x, -1, 1))
             denom = sens_s + (prior_beta * lap) / num_subsets
         else:
             denom = sens_s
-        # 相对下限：与 sens_s 自身量级成比例（而非固定绝对小数），
-        # 避免 denom 在 FOV 边界附近被夹到远小于 sens_s 正常量级的值。
-        # 注：prior_beta=0 时 denom=sens_s，此式恒等于原值（max(sens_s,0.5*sens_s)=sens_s），
-        # 不影响纯 OSEM(MLE) 的行为。
-        denom = np.maximum(denom, denom_floor_frac * sens_s)
-        raw_step = grad / denom
-        if prior_beta > 0:
-            # 单步更新幅度限幅：仅在叠加先验（OSL）时才需要，因为发散的根源是
-            # 先验项 lap 把 denom 拉负、被下限夹住后 grad/denom 产生的失控增益。
-            # 纯 OSEM(MLE) 从未表现出这种发散（denom 恒为正的 sens_s），不应对它
-            # 施加这层限幅——早期实现曾无差别限幅，实测会让纯 OSEM 结果失真
-            # （PSNR 25.44→25.09 dB，约 6.8 万个像素-子迭代被限幅命中），故收窄范围。
-            step = np.clip(raw_step, 1.0 / ratio_clip, ratio_clip)
-        else:
-            step = raw_step
-        x = x * step
+        x = x * (grad / denom)
         x = np.clip(x, 0, None)
     return x
 
@@ -313,9 +309,9 @@ print("\n>>> 步骤3 : OSL 重建（参考 SIRF osl_reconstruction.py 的 Quadra
 x_osl = osem_recon(y_counts, scale, background,
                    num_subsets=10, n_subiter=20, prior_beta=0.05)
 print("    OSL 完成（叠加二次先验 beta=0.05，抑制噪声但轻微平滑）")
-print("    注：OSL 为 one-step-late 近似，不保证目标函数单调下降；")
-print("        denom 已改用相对下限 + 单步幅度限幅两层稳定化（见函数注释），")
-print("        beta 过大时表现为过度平滑而非失控发散，见步骤5 稳定性实验。")
+print("    注：OSL 为 one-step-late 近似，不保证目标函数单调下降；角度子集")
+print("        管线下 beta 扫到 2.0 实测全程稳定（无需额外稳定化，见函数注释），")
+print("        beta 增大表现为逐渐过度平滑（热点峰值被压平），见步骤5 稳定性实验。")
 
 
 # ========== 步骤4 : 指标对比与可视化 ==========
@@ -359,33 +355,39 @@ print("    已保存：步骤4_OSEM与OSL对比.png")
 
 # ========== 步骤5 : OSL 对先验强度 beta 的稳定性（拓展实验）==========
 print("\n>>> 步骤5 : OSL 对先验强度 beta 的稳定性（拓展实验）")
-print("    说明：OSL 是 one-step-late 近似，不是严格凸优化；")
-print("          denom = sens_s + beta*lap/num_subsets 中的离散拉普拉斯 lap")
-print("          在 FOV 边界附近可能为负且量级较大。早期版本用绝对下限")
-print("          denom=max(denom,1e-6) 兜底，因 1e-6 远小于 sens_s 正常量级")
-print("          （约0.1~0.5），beta 稍大就会在个别像素触发指数级级联发散，")
-print("          且发散后算出的 PSNR/SSIM 反而因动态 data_range 被推高、极具")
-print("          误导性。现改为 denom 相对下限（∝sens_s）+ 单步幅度限幅两层")
-print("          稳定化，保证 beta 扫到 2.0 仍收敛到有限解、不再失控发散；")
-print("          但需注意：OSL 为 one-step-late，中等 beta 在热点区（lap<0）反而可能放大峰值")
-print("          （实测 β=0.5 峰值≈1.93 > β=0 的≈1.83、PSNR 也更高），并非'beta 越大越平滑'，")
-print("          只有 beta 足够大（如 2.0）才表现为过度平滑（细节丢失、对比度下降）。")
+print("    说明：OSL 是 one-step-late 近似，不是严格凸优化；denom 中的先验")
+print("          梯度项 lap 在冷-热交界处为负，理论上可能把个别像素的分母压小")
+print("          甚至压负（角度子集 FOV 内 sens 恒为 π/2≈1.57）。历史版本")
+print("          （bin 子集 + 绝对下限 1e-6）曾实测 beta=0.5 第 4 次子迭代")
+print("          x.max 即达数千、20 次子迭代后发散到 ~1e6，且发散解的 PSNR/SSIM")
+print("          被动态 data_range 冲高到约 40 dB / 0.99、反而‘看起来更好’，")
+print("          极具误导性。改按角度子集划分后（FOV 内灵敏度不再退化），裸 OSL")
+print("          beta 扫到 2.0 实测全程稳定；beta 的作用是单调平滑：PSNR 缓降、")
+print("          热点峰值被压平，NMSE 在 beta≈1 最优，beta=2 表现为过度平滑")
+print("          （细节丢失、对比度下降）。")
 
 beta_sweep = [0.0, 0.05, 0.2, 0.5, 1.0, 2.0]
-psnr_beta, ssim_beta = [], []
+psnr_beta, ssim_beta, nmse_beta, xmax_beta = [], [], [], []
 for beta in beta_sweep:
     xb = osem_recon(y_counts, scale, background,
                    num_subsets=10, n_subiter=20, prior_beta=beta)
     pb, sb, nmb = metrics(x_true, xb)
     psnr_beta.append(pb)
     ssim_beta.append(sb)
-    print(f"    beta={beta:4.2f} : PSNR={pb:6.2f} dB, SSIM={sb:.4f}")
+    nmse_beta.append(nmb)
+    xmax_beta.append(float(xb.max()))
+    print(f"    beta={beta:4.2f} : PSNR={pb:6.2f} dB, SSIM={sb:.4f}, NMSE={nmb:.4f}, x.max={xb.max():.3f}")
 
-fig, ax = plt.subplots(figsize=(6, 4))
-ax.plot(beta_sweep, psnr_beta, 'o-', label='PSNR')
+fig, ax = plt.subplots(figsize=(6.5, 4.5))
+ln1 = ax.plot(beta_sweep, psnr_beta, 'o-', label='PSNR (左轴)')
 ax.set_xlabel(r'先验强度 $\beta$')
 ax.set_ylabel('PSNR (dB)')
-ax.set_title('OSL：稳定化后 beta 扫到 2.0 不发散，但非单调平滑（甜点处峰值反升）')
+ax2 = ax.twinx()
+ln2 = ax2.plot(beta_sweep, nmse_beta, 's--', color='tab:orange', label='NMSE (右轴)')
+ax2.set_ylabel('NMSE')
+lines = ln1 + ln2
+ax.legend(lines, [l.get_label() for l in lines], loc='upper right')
+ax.set_title('OSL：β 越大越平滑——PSNR 单调缓降，NMSE 在 β≈1 最优，β=2 过度平滑')
 ax.grid(True, alpha=0.3)
 fig.tight_layout()
 fig.savefig(os.path.join(SAVE_DIR, '步骤5_OSL_beta稳定性.png'),
@@ -414,19 +416,31 @@ for f in bg_factors:
     psnr_bg_osem.append(pbo); ssim_bg_osem.append(sbo)
     psnr_bg_osl.append(pbl);  ssim_bg_osl.append(sbl)
     print(f"    bg×{f:4.2f} : OSEM PSNR={pbo:6.2f} dB, OSL PSNR={pbl:6.2f} dB")
-print("    注：本仿真 background 仅约为投影均值的 5%，故 ±20% 量级的误差")
-print("         只相当于约 1% 信号误差、对重建几乎无影响；这里把误差放大到")
-print("         ±50%/×2 以让灵敏度可见。真实 PET 的 randoms/scatter 占比常达")
-print("         10%~30%，此时背景估计误差对定量结果影响显著，正是 PET 校正的经典难点。")
+print("    注：本仿真 background 仅约为计数均值的 5%，×0.5/×2 的估计误差对 PSNR")
+print("         的影响也只有 +0.04/−0.29 dB（OSEM 与 OSL 几乎相同）——本底占比低时")
+print("         背景校正误差天然不敏感，本实验如实展示的正是这种‘不敏感’。但注意")
+print("         SSIM 随背景高估反而略升（过度扣除本底相当于轻度正则、图像更平滑），")
+print("         代价是平均活度被系统性低估约 3.8%（bg×2 实测）——‘看着更好’不等于")
+print("         ‘定量更准’。真实 PET 的 randoms/scatter 占比常达 10%~30%，背景误差")
+print("         的影响将随占比显著放大（调低 total_counts 或调高本底占比即可复现），")
+print("         是 PET 定量校正的经典难点。")
 
 xpos = np.arange(len(bg_factors))
+# 以完美校正（bg×1）为基准画 ΔPSNR：绝对 PSNR 柱状图零基线下 ~0.3 dB 的
+# 敏感度差异完全不可见，Δ 柱状图的零基线语义正确（0 = 无影响）。
+d_psnr_osem = np.array(psnr_bg_osem) - psnr_bg_osem[1]
+d_psnr_osl = np.array(psnr_bg_osl) - psnr_bg_osl[1]
 fig, ax = plt.subplots(figsize=(6, 4))
-ax.bar(xpos - 0.2, psnr_bg_osem, width=0.4, label='OSEM')
-ax.bar(xpos + 0.2, psnr_bg_osl, width=0.4, label='OSL')
+b1 = ax.bar(xpos - 0.2, d_psnr_osem, width=0.4, label='OSEM')
+b2 = ax.bar(xpos + 0.2, d_psnr_osl, width=0.4, label='OSL')
+for bars in (b1, b2):
+    ax.bar_label(bars, fmt='%+.2f', fontsize=9, padding=1)
+ax.axhline(0, color='gray', lw=0.8)
 ax.set_xticks(xpos)
-ax.set_xticklabels([f'bg×{f:g}' for f in bg_factors])
-ax.set_ylabel('PSNR (dB)')
-ax.set_title('背景估计误差敏感度')
+ax.set_xticklabels([f'bg×{f:g}\n(基准)' if f == 1.0 else f'bg×{f:g}' for f in bg_factors])
+ax.set_ylabel('ΔPSNR (dB, 相对 bg×1 基准)')
+ax.set_ylim(min(d_psnr_osem.min(), d_psnr_osl.min()) - 0.15, 0.15)
+ax.set_title('背景估计误差敏感度（本底占比仅 5% 时影响很小）')
 ax.legend()
 ax.grid(True, axis='y', alpha=0.3)
 fig.tight_layout()
@@ -460,6 +474,8 @@ results = {
             "betas": beta_sweep,
             "psnr_db": psnr_beta,
             "ssim": ssim_beta,
+            "nmse": nmse_beta,
+            "x_max": xmax_beta,
         },
         "background_error_sensitivity": {
             "factors": bg_factors,

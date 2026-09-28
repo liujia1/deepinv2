@@ -504,12 +504,12 @@ if not is_final_unet:
         is_final_unet = True
     else:
         t_start = time.time()
-        for epoch in range(start_epoch_unet, num_epochs):
+        epoch_bar = tqdm(range(start_epoch_unet, num_epochs), desc="UNet 训练", unit="epoch")
+        n_batches = len(train_loader)
+        for epoch in epoch_bar:
             unet.train()
             total_loss = 0
-            batch_iter = tqdm(train_loader, desc=f"UNet Epoch {epoch+1}/{num_epochs}",
-                               unit="batch", leave=False)
-            for x, _ in batch_iter:
+            for i, (x, _) in enumerate(train_loader):
                 x = x.to(device)
                 batch = x.shape[0]
                 t = torch.randint(0, T, (batch,), device=device)
@@ -521,10 +521,10 @@ if not is_final_unet:
                 loss.backward()
                 optimizer_unet.step()
                 total_loss += loss.item() * batch
-                batch_iter.set_postfix(loss=f"{loss.item():.6f}")
+                epoch_bar.set_postfix(epoch=f"{epoch+1}/{num_epochs}", batch=f"{i+1}/{n_batches}", loss=f"{loss.item():.4f}")
             avg_loss = total_loss / len(train_dataset)
             unet_losses.append(avg_loss)
-            print(f"  Epoch {epoch+1} 完成, 平均损失: {avg_loss:.6f}")
+            epoch_bar.set_postfix(epoch=f"{epoch+1}/{num_epochs}", avg_loss=f"{avg_loss:.6f}")
             save_train_state(CKPT_UNET, unet, optimizer_unet, epoch, avg_loss, unet_losses, is_final=(epoch==num_epochs-1))
         t_elapsed = time.time() - t_start
         print(f"  UNet 训练完成, 最终损失: {unet_losses[-1]:.6f}, 耗时: {t_elapsed:.1f} 秒")
@@ -543,12 +543,12 @@ if not is_final_dit:
         is_final_dit = True
     else:
         t_start = time.time()
-        for epoch in range(start_epoch_dit, num_epochs):
+        epoch_bar = tqdm(range(start_epoch_dit, num_epochs), desc="DiT 训练", unit="epoch")
+        n_batches = len(train_loader)
+        for epoch in epoch_bar:
             dit.train()
             total_loss = 0
-            batch_iter = tqdm(train_loader, desc=f"DiT Epoch {epoch+1}/{num_epochs}",
-                               unit="batch", leave=False)
-            for x, _ in batch_iter:
+            for i, (x, _) in enumerate(train_loader):
                 x = x.to(device)
                 batch = x.shape[0]
                 t = torch.randint(0, T, (batch,), device=device)
@@ -560,10 +560,10 @@ if not is_final_dit:
                 loss.backward()
                 optimizer_dit.step()
                 total_loss += loss.item() * batch
-                batch_iter.set_postfix(loss=f"{loss.item():.6f}")
+                epoch_bar.set_postfix(epoch=f"{epoch+1}/{num_epochs}", batch=f"{i+1}/{n_batches}", loss=f"{loss.item():.4f}")
             avg_loss = total_loss / len(train_dataset)
             dit_losses.append(avg_loss)
-            print(f"  Epoch {epoch+1} 完成, 平均损失: {avg_loss:.6f}")
+            epoch_bar.set_postfix(epoch=f"{epoch+1}/{num_epochs}", avg_loss=f"{avg_loss:.6f}")
             save_train_state(CKPT_DIT, dit, optimizer_dit, epoch, avg_loss, dit_losses, is_final=(epoch==num_epochs-1))
         t_elapsed = time.time() - t_start
         print(f"  DiT 训练完成, 最终损失: {dit_losses[-1]:.6f}, 耗时: {t_elapsed:.1f} 秒")
@@ -647,12 +647,12 @@ if not is_final_zero:
         is_final_zero = True
     else:
         t_start = time.time()
-        for epoch in range(start_epoch_zero, num_epochs_step3):
+        epoch_bar = tqdm(range(start_epoch_zero, num_epochs_step3), desc="adaLN-Zero 训练", unit="epoch")
+        n_batches = len(train_loader)
+        for epoch in epoch_bar:
             dit_zero.train()
             total_loss = 0
-            batch_iter = tqdm(train_loader, desc=f"adaLN-Zero Epoch {epoch+1}/{num_epochs_step3}",
-                               unit="batch", leave=False)
-            for x, _ in batch_iter:
+            for i, (x, _) in enumerate(train_loader):
                 x = x.to(device)
                 batch = x.shape[0]
                 t = torch.randint(0, T, (batch,), device=device)
@@ -664,10 +664,10 @@ if not is_final_zero:
                 loss.backward()
                 opt_zero.step()
                 total_loss += loss.item() * batch
-                batch_iter.set_postfix(loss=f"{loss.item():.6f}")
+                epoch_bar.set_postfix(epoch=f"{epoch+1}/{num_epochs_step3}", batch=f"{i+1}/{n_batches}", loss=f"{loss.item():.4f}")
             avg_loss = total_loss / len(train_dataset)
             zero_losses.append(avg_loss)
-            print(f"  Epoch {epoch+1} 完成, 平均损失: {avg_loss:.6f}")
+            epoch_bar.set_postfix(epoch=f"{epoch+1}/{num_epochs_step3}", avg_loss=f"{avg_loss:.6f}")
             save_train_state(CKPT_DIT_ZERO, dit_zero, opt_zero, epoch, avg_loss, zero_losses, is_final=(epoch==num_epochs_step3-1))
         t_elapsed = time.time() - t_start
         print(f"  Zero 训练完成, 最终损失: {zero_losses[-1]:.6f}, 耗时: {t_elapsed:.1f} 秒")
@@ -685,12 +685,12 @@ if not is_final_nozero:
         is_final_nozero = True
     else:
         t_start = time.time()
-        for epoch in range(start_epoch_nozero, num_epochs_step3):
+        epoch_bar = tqdm(range(start_epoch_nozero, num_epochs_step3), desc="无Zero初始化 训练", unit="epoch")
+        n_batches = len(train_loader)
+        for epoch in epoch_bar:
             dit_no_zero.train()
             total_loss = 0
-            batch_iter = tqdm(train_loader, desc=f"无Zero初始化 Epoch {epoch+1}/{num_epochs_step3}",
-                               unit="batch", leave=False)
-            for x, _ in batch_iter:
+            for i, (x, _) in enumerate(train_loader):
                 x = x.to(device)
                 batch = x.shape[0]
                 t = torch.randint(0, T, (batch,), device=device)
@@ -702,10 +702,10 @@ if not is_final_nozero:
                 loss.backward()
                 opt_no_zero.step()
                 total_loss += loss.item() * batch
-                batch_iter.set_postfix(loss=f"{loss.item():.6f}")
+                epoch_bar.set_postfix(epoch=f"{epoch+1}/{num_epochs_step3}", batch=f"{i+1}/{n_batches}", loss=f"{loss.item():.4f}")
             avg_loss = total_loss / len(train_dataset)
             no_zero_losses.append(avg_loss)
-            print(f"  Epoch {epoch+1} 完成, 平均损失: {avg_loss:.6f}")
+            epoch_bar.set_postfix(epoch=f"{epoch+1}/{num_epochs_step3}", avg_loss=f"{avg_loss:.6f}")
             save_train_state(CKPT_DIT_NOZERO, dit_no_zero, opt_no_zero, epoch, avg_loss, no_zero_losses, is_final=(epoch==num_epochs_step3-1))
         t_elapsed = time.time() - t_start
         print(f"  NoZero 训练完成, 最终损失: {no_zero_losses[-1]:.6f}, 耗时: {t_elapsed:.1f} 秒")
@@ -742,12 +742,16 @@ print(f"""
     同步覆盖 final_adaLN[-1] 的 weight 和 bias 为 Xavier/Normal 初始化，
     确保对照组完全不含 Zero 初始化，自变量控制干净。
 
-  核心结论:
-    1. Zero初始化 → gate=0, shift=0, scale=0 → 每个 DiTBlock 初始为恒等映射
-       → 梯度平滑传播，Loss 曲线光滑稳定
-    2. 随机初始化 → gate/scale/shift 非零 → 残差路径被扰动
-       → Loss 振荡明显，收敛缓慢
-    3. 修复后 block级 + final_adaLN 全部覆盖，消融对照严格
+  核心结论（基于实际 checkpoint 数据）:
+    1. 机制上: Zero初始化 → gate=0, shift=0, scale=0 → 每个 DiTBlock 初始为恒等映射
+       → 理论上梯度传播更平滑（深层网络收益明显，见15.2.3节）
+    2. 本实验实测: depth=4 的小型 DiT 上, Zero 与随机初始化的 Loss 曲线几乎重合
+       (末轮约 0.0582 vs 0.0592, 差异属随机波动), 未观察到"随机初始化明显振荡、收敛更慢"
+    3. ★ 诚实说明: 本实验无法验证 DiT 论文的 adaLN-Zero 优势——
+       论文优势体现在生成质量 FID 上, 而此处判据是训练 MSE(弱代理);
+       且模型太浅(depth=4)、训练偏短(20 epoch), 该设定先天不具备检验能力。
+       这是"无法证伪也无法证实"的中性结果, 不应包装成对论文结论的验证。
+    4. 修复后 block级 + final_adaLN 全部覆盖, 消融对照自变量控制严格
 
   ★ 配套验证实验: 验证实验15.4-1_Zero初始化消融_收敛对比.py
     包含 UNet vs DiT-Zero vs DiT-NoZero 三方对比 + 早期振荡分析
@@ -842,11 +846,14 @@ print(f"""
 3. adaLN-Zero消融（15.2.3/15.3.3节）★ 原创设计
    - Zero初始化:   Loss={zero_losses[-1]:.6f}
    - 随机初始化:   Loss={no_zero_losses[-1]:.6f}
-   - 验证 DiT 论文: Zero初始化训练更稳定
+   - 两条曲线几乎重合(末轮差异属随机波动), 未观察到明显振荡差异
+   - ★ 本设定(MSE判据+depth=4+20epoch)无法验证 DiT 论文的 adaLN-Zero(FID)优势
 
 4. 去噪行为对比（15.4.1节）★ 原创设计
+   - 注: t=5 为低噪声(高SNR), t=100 为较高噪声(低SNR)
    - UNet: 局部感受野, 逐步修正
    - DiT: 全局注意力, 一步全局信息
+   - ★ 本实验图3中两架构去噪输出肉眼无显著差异, 上述为理论推断而非已验证结论
 """)
 
 print(f"\n{'='*60}")

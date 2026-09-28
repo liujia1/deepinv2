@@ -13,8 +13,8 @@
   步骤1: ConvNext块架构解析（参数量、输入/输出形状）
   步骤2: 注意力机制复杂度对比（Full vs Linear）
   步骤3: PreNorm模式演示
-  步骤4: 完整UNet（D9）训练（MNIST, 5 epoch）
-  步骤5: 各组件消融贡献总结
+  步骤4: 完整UNet（D9）训练（MNIST, 30 epochs）
+  步骤5: 各组件设计分析（定性，非定量消融）
 
 素材来源:
   - 15.3.py（参考实验，深扩散UNet）
@@ -168,11 +168,15 @@ class Attention(nn.Module):
 
     def forward(self, x):
         b, c, h, w = x.shape
-        # ★ 数值稳定性保护: 空特征图（h=0或w=0）直接返回零张量
+        # 特征图尺寸为0说明下采样深度超过输入分辨率所能承受的范围,
+        # 属于架构配置错误——fail-fast 报错而非静默返回零张量
+        # (静默返回会让训练全程输出零噪声预测且无任何报警)
         if h == 0 or w == 0:
-            import warnings
-            warnings.warn(f"Attention收到空特征图: shape={x.shape}, 返回零张量")
-            return torch.zeros_like(x)
+            raise ValueError(
+                f"Attention收到空特征图: shape={x.shape}。"
+                f"输入分辨率对下采样深度(dim_mults长度)而言过小, "
+                f"请增大输入分辨率或减少下采样级数。"
+            )
 
         qkv = self.to_qkv(x).chunk(3, dim=1)
         q, k, v = map(
@@ -269,7 +273,6 @@ class DiffusionUNet(nn.Module):
         dim_mults=(1, 2, 4, 8),
         channels=3,
         with_time_emb=True,
-        use_convnext=True,
         convnext_mult=2,
     ):
         super().__init__()
@@ -280,7 +283,7 @@ class DiffusionUNet(nn.Module):
         dims = [init_dim, *[dim * m for m in dim_mults]]
         in_out = list(zip(dims[:-1], dims[1:]))
 
-        block_klass = partial(ConvNextBlock, mult=convnext_mult) if use_convnext else None
+        block_klass = partial(ConvNextBlock, mult=convnext_mult)
 
         if with_time_emb:
             time_dim = dim * 4
@@ -402,9 +405,14 @@ for size in [16, 32, 64]:
     print(f"  特征图 {size}×{size} (N={N}):")
     print(f"    Full Attn  复杂度: O(N^2)    = O({N**2:,})")
     print(f"    Linear Attn 复杂度: O(N·d^2) = O({N * d_head**2:,})")
-    if N > d_head:
+    # 注意: 仅当 N > d² 时 Full 的 N×N 注意力矩阵才大于 Linear 的 N×d² 上下文矩阵
+    if N > d_head ** 2:
         ratio = (N**2) / (N * d_head**2)
-        print(f"    节省比: {ratio:.1f}×")
+        print(f"    节省比: {ratio:.1f}× (Linear更省)")
+    else:
+        ratio = (N * d_head**2) / (N**2)
+        tag = "Full更省" if ratio > 1 else "两者持平"
+        print(f"    {tag}: {max(ratio, 1/ratio):.1f}× (N≤d²时Full不劣于Linear)")
 
 
 # ============================================================
@@ -665,23 +673,26 @@ print(f"  图表已保存: 步骤4+1_采样结果.png")
 
 
 # ============================================================
-# 步骤5: 各组件消融贡献总结
+# 步骤5: 各组件设计分析（定性）
 # ============================================================
 print(f"\n{'='*60}")
-print("步骤5: 各组件消融贡献总结")
+print("步骤5: 各组件设计分析（定性）")
 print(f"{'='*60}")
 print("""
-[各组件对扩散去噪的贡献分析]
+[各组件设计分析]
 
   完整UNet (ConvNext + Attention + PreNorm): 基线架构
 
   当前配置:
-    - dim=32, dim_mults=(1,2,4): 通道数32→64→128→256
-    - T=500: 采样步数（相比T=1000减少误差累积）
+    - dim=32, dim_mults=(1,2,4): 通道数20→32→64→128
+      (init_dim=dim//3*2=20, mid_dim=128)
+    - T=1000: 标准DDPM线性噪声调度步数
     - num_epochs=30: 小模型需要多看几遍数据以充分收敛
 
-  设计考量:
-    - Attention: 实践中通常观察到其对生成质量影响较大，移除后细节捕获能力明显下降
+  设计考量（文献经验+架构分析，非本实验消融结论）:
+    - FullAttention: 仅部署在mid块(16×16)提供全局信息，该分辨率下
+      N=256<d²=1024，Full反而比Linear更省——"高分辨率用Linear、
+      低分辨率用Full"是标准扩散UNet的混合策略
     - PreNorm: 通过在残差前归一化稳定深层训练，是现代UNet/Transformer的事实标准
     - ConvNext深度可分离卷积: 提供7×7大感受野，兼顾参数效率与空间建模能力
 
@@ -710,13 +721,13 @@ print("""
 
 4. 完整UNet训练（步骤4）
    - MNIST数据集（torchvision自动下载）
-   - 配置: dim=32, dim_mults=(1,2,4), 通道数32→64→128→256
-   - DDPM线性噪声调度, T=500（减少采样误差累积）
+   - 配置: dim=32, dim_mults=(1,2,4), 通道数20→32→64→128
+   - DDPM线性噪声调度, T=1000
    - 训练轮数: 30 epochs（小模型需要更多迭代以充分收敛）
    - 支持resume + 最终权重自动跳过训练
 
 5. 架构分析（步骤5）
-   - Attention对生成质量影响显著（定性分析）
+   - FullAttention部署在mid块提供全局信息（定性分析）
    - PreNorm稳定深层训练，现代架构标配
    - ConvNext深度可分离卷积兼顾效率与空间建模
 """)

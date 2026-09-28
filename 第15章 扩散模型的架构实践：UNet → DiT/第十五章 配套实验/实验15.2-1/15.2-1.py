@@ -176,15 +176,17 @@ def load_train_state(checkpoint_path, model, optimizer, num_epochs_total, allow_
 
 
 def save_train_state(checkpoint_path, model, optimizer, epoch, loss, loss_history, is_final):
-    """保存checkpoint"""
-    torch.save({
+    """保存checkpoint（约定: 最终checkpoint只存模型权重+元数据, 不存optimizer; 中间checkpoint保留optimizer供断点续训）"""
+    state = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict() if optimizer is not None else None,
         'loss': loss,
         'loss_history': loss_history,
         'is_final': is_final,
-    }, checkpoint_path)
+    }
+    if not is_final:
+        state['optimizer_state_dict'] = optimizer.state_dict() if optimizer is not None else None
+    torch.save(state, checkpoint_path)
 
 
 # ============================================================
@@ -369,6 +371,9 @@ transform = transforms.Compose([
 ])
 train_dataset = datasets.MNIST(data_dir, train=True, download=True, transform=transform)
 train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
+# 测试集: 用于步骤3(b)的预测质量评估（避免用训练数据自评）
+test_dataset = datasets.MNIST(data_dir, train=False, download=True, transform=transform)
+test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
 print(f"  训练集大小: {len(train_dataset)}")
 print(f"  数据范围: [-1, 1] (匹配标准高斯噪声先验)")
 
@@ -465,11 +470,13 @@ if not is_final_unet:
 else:
     print(f"\n使用已训练完成的 UNet 模型, 跳过训练过程")
 
-# 可视化对比
+# 可视化对比（固定可视化随机流使图可复现, 与训练路径无关）
+torch.manual_seed(42)
 fig, axes = plt.subplots(3, 6, figsize=(15, 8))
 test_imgs = next(iter(train_loader))[0][:6].to(device)  # 范围 [-1, 1]
 
 # 高斯去噪（DnCNN）
+dncnn.eval()  # BN切换到推理模式, 使用训练期间累积的滑动统计量
 with torch.no_grad():
     noise_gauss = torch.randn_like(test_imgs) * sigma_fixed
     noisy_gauss = test_imgs + noise_gauss
@@ -497,12 +504,37 @@ axes[0, 0].set_ylabel(r'含噪 ($\sigma$=' + f'{sigma_fixed})', fontsize=11, rot
 axes[1, 0].set_ylabel(r'DnCNN去噪' + '\n' + r'(固定$\sigma$, 15.1.1)', fontsize=11, rotation=0, labelpad=70)
 axes[2, 0].set_ylabel('原始图像', fontsize=11, rotation=0, labelpad=60)
 
-plt.suptitle('步骤1: DnCNN vs UNet（15.1.1/15.1.2节）', fontsize=14, y=1.01)
+plt.suptitle(r'步骤1: DnCNN固定$\sigma$去噪（15.1.1节; UNet时间步条件去噪见步骤4）', fontsize=14, y=1.01)
 plt.tight_layout()
 fig_path1 = os.path.join(SAVE_DIR, '步骤1_DnCNN_vs_UNet.png')
 plt.savefig(fig_path1, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"\n图1已保存: {fig_path1}")
+
+# ★ 复核: DnCNN 在偏离训练σ时的实际表现——给"固定噪声水平"一个实测边界
+# 指标用衰减比（去噪后MSE / 含噪MSE）, 跨σ可比; 训练σ=sigma_fixed
+# 独立播种 + 多样本平均: 单次128图噪声采样的衰减比方差大（跨平台漂移~5%,
+# 且σ=0.3/0.5端差异会被淹没）, 用N_SWEEP_TRIALS个独立噪声样本平均压制方差
+# （同平台逐位可复现; CPU与CUDA的randn序列不同, 平均后跨平台差异仅~1%量级）
+torch.manual_seed(7)
+N_SWEEP_TRIALS = 5
+dncnn_sigma_sweep = {}
+for s_val in [0.1, 0.3, 0.5]:
+    mse_noisy_sum = 0.0
+    mse_denoised_sum = 0.0
+    with torch.no_grad():
+        for trial in range(N_SWEEP_TRIALS):
+            x_s = test_imgs + torch.randn_like(test_imgs) * s_val
+            mse_noisy_sum += F.mse_loss(x_s, test_imgs).item()
+            mse_denoised_sum += F.mse_loss(dncnn(x_s), test_imgs).item()
+    mse_noisy = mse_noisy_sum / N_SWEEP_TRIALS
+    mse_denoised = mse_denoised_sum / N_SWEEP_TRIALS
+    dncnn_sigma_sweep[str(s_val)] = {
+        'mse_noisy': round(mse_noisy, 6),
+        'mse_denoised': round(mse_denoised, 6),
+        'attenuation_ratio': round(mse_denoised / mse_noisy, 4),
+    }
+    print(f"  DnCNN σ={s_val}（{N_SWEEP_TRIALS}样本均值）: 含噪MSE={mse_noisy:.4f} → 去噪后MSE={mse_denoised:.4f} (衰减比 {mse_denoised/mse_noisy:.3f})")
 
 
 # ============================================================
@@ -541,8 +573,13 @@ plt.colorbar(im, ax=ax, shrink=0.8)
 # (b) 不同维度的波形
 ax = axes[1]
 dims_to_plot = [0, 4, 16, 32, 60]
+half_dim_pe = dim // 2
 for d_idx in dims_to_plot:
-    label = f'维度{d_idx} ({"低频" if d_idx < 16 else "高频"})'
+    # 输出向量 = [sin段(0..half-1), cos段(half..dim-1)], 两半各覆盖同一组"从高到低"的频率
+    # 频率位置越靠后频率越低: 维度0与维度32都是各自半段的起点=最高频, 维度60接近最低频
+    freq_pos = d_idx % half_dim_pe
+    band = '高频' if freq_pos < 8 else ('中频' if freq_pos < 24 else '低频')
+    label = f'维度{d_idx} ({band})'
     ax.plot(t_range.numpy(), embeddings[:, d_idx], label=label, alpha=0.8)
 ax.set_xlabel(r'时间步 $t$', fontsize=12)
 ax.set_ylabel('编码值', fontsize=12)
@@ -595,6 +632,8 @@ num_epochs_step3 = 30
 
 for inj in injections:
     print(f"\n  训练 {injection_labels[inj]} UNet (共 {num_epochs_step3} 轮)...")
+    # 统一三种注入方式的随机流（相同的初始化与数据打乱顺序）, 保证横向对比公平
+    torch.manual_seed(1000)
     model = SmallUNet(injection=inj).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
 
@@ -645,19 +684,32 @@ for inj in injections:
 ax.set_xlabel('Epoch', fontsize=12)
 ax.set_ylabel('训练Loss', fontsize=12)
 ax.set_title('(a) 训练收敛曲线', fontsize=12)
-ax.legend(fontsize=10)
+ax.legend(fontsize=10, loc='upper right')
 ax.grid(alpha=0.3)
 
-# (b) 不同时间步的去噪MSE
+# ★ 早期放大子图: 三种注入方式唯一的显著差异 = adaLN-Zero的Zero初始化起步更高
+# （Block初期为恒等映射, 调制路径"先学什么都不做、再学调多少", 属设计预期, 见DiT论文）
+axins = ax.inset_axes([0.55, 0.14, 0.42, 0.42])
+n_early = 5
+for inj in injections:
+    axins.plot(range(1, n_early+1), histories[inj][:n_early], '-o', markersize=4,
+               label=injection_labels[inj])
+axins.set_title(f'前{n_early}轮放大', fontsize=9)
+axins.set_xlabel('Epoch', fontsize=8)
+axins.tick_params(labelsize=8)
+axins.grid(alpha=0.3)
+
+# (b) 不同时间步的去噪MSE（测试集前32张, shuffle=False保证可复现）
 ax = axes[1]
-test_batch = next(iter(train_loader))[0][:32].to(device)  # 范围 [-1, 1]
+test_batch = next(iter(test_loader))[0][:32].to(device)  # 范围 [-1, 1]
 noise_test = torch.randn_like(test_batch)
+mse_curves = {}  # 记录每种注入方式的MSE曲线, 供JSON存档
 
 for inj in injections:
     models[inj].eval()
     mses = []
-    t_indices = [10, 30, 50, 80, 100, 130, 150, 180]
-    for t_idx in t_indices:
+    t_indices_mse = [10, 30, 50, 80, 100, 130, 150, 180]
+    for t_idx in t_indices_mse:
         with torch.no_grad():
             t = torch.full((32,), t_idx, device=device, dtype=torch.long)
             x_t = sqrt_alpha_bars[t_idx] * test_batch + sqrt_one_minus_alpha_bars[t_idx] * noise_test
@@ -665,7 +717,8 @@ for inj in injections:
             # 计算噪声预测MSE（相对指标，用于横向对比三种注入方式）
             mse = F.mse_loss(pred, noise_test).item()
             mses.append(mse)
-    ax.plot(t_indices, mses, '-o', markersize=5, label=injection_labels[inj])
+    mse_curves[inj] = [round(m, 6) for m in mses]
+    ax.plot(t_indices_mse, mses, '-o', markersize=5, label=injection_labels[inj])
 
 ax.set_xlabel(r'时间步 $t$', fontsize=12)
 ax.set_ylabel('噪声预测MSE', fontsize=12)
@@ -673,7 +726,7 @@ ax.set_title('(b) 不同时间步的预测质量', fontsize=12)
 ax.legend(fontsize=10)
 ax.grid(alpha=0.3)
 
-plt.suptitle('★ 步骤3: 三种条件注入方式对比（15.2.3节）', fontsize=14, y=1.01)
+plt.suptitle(r'$\star$ 步骤3: 三种条件注入方式对比（15.2.3节）', fontsize=14, y=1.01)
 plt.tight_layout()
 fig_path3 = os.path.join(SAVE_DIR, '步骤3_条件注入对比.png')
 plt.savefig(fig_path3, dpi=150, bbox_inches='tight')
@@ -697,16 +750,19 @@ print("""
 ★ 原创设计: 可视化 UNet 在不同 t 下去噪输出的行为差异
 """)
 
-# 使用 FiLM 模型（最佳注入方式）
+# 使用 FiLM 模型展示去噪行为（三种注入方式收敛水平相当, 任选其一即可）
 best_model = models['film']
 best_model.eval()
 
 fig, axes = plt.subplots(4, 6, figsize=(15, 10))
-t_indices = [5, 50, 100, 180]
+t_indices_vis = [5, 50, 100, 180]
 noise_vis = torch.randn(6, 1, 28, 28, device=device)
 test_vis = next(iter(train_loader))[0][:6].to(device)  # 范围 [-1, 1]
+snr_by_t = {}  # 记录各时间步的实测SNR, 供JSON存档
 
-for row, t_idx in enumerate(t_indices):
+for row, t_idx in enumerate(t_indices_vis):
+    snr = sqrt_alpha_bars[t_idx].item() / (sqrt_one_minus_alpha_bars[t_idx].item() + 1e-10)
+    snr_by_t[str(t_idx)] = round(snr, 3)
     with torch.no_grad():
         t = torch.full((6,), t_idx, device=device, dtype=torch.long)
         x_t = sqrt_alpha_bars[t_idx] * test_vis + sqrt_one_minus_alpha_bars[t_idx] * noise_vis
@@ -720,10 +776,9 @@ for row, t_idx in enumerate(t_indices):
         axes[row, col].imshow(x0_hat_vis[col, 0].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
         axes[row, col].axis('off')
         if col == 0:
-            snr = sqrt_alpha_bars[t_idx].item() / (sqrt_one_minus_alpha_bars[t_idx].item() + 1e-10)
             axes[row, col].set_ylabel(r'$t$=' + f'{t_idx}\nSNR={snr:.2f}', fontsize=10, rotation=0, labelpad=50)
 
-plt.suptitle('★ 不同噪声水平下的去噪行为（15.2.1节）', fontsize=14, y=1.01)
+plt.suptitle(r'$\star$ 不同噪声水平下的去噪行为（15.2.1节）', fontsize=14, y=1.01)
 plt.tight_layout()
 fig_path4 = os.path.join(SAVE_DIR, '步骤4_去噪行为.png')
 plt.savefig(fig_path4, dpi=150, bbox_inches='tight')
@@ -742,18 +797,19 @@ print(f"""
 1. DnCNN vs UNet（15.1.1/15.1.2节）
    - DnCNN: 单尺度, 无时间步条件, 只能处理固定噪声水平
    - UNet: 多尺度+跳跃连接+时间步嵌入, 处理任意噪声水平
-   - DnCNN 训练损失: {dncnn_losses[-1]:.6f}
-   - UNet 训练损失: {unet_losses[-1]:.6f}
+   - DnCNN 训练损失: {dncnn_losses[-1]:.6f} (x空间MSE, 固定σ={sigma_fixed})
+   - UNet 训练损失: {unet_losses[-1]:.6f} (ε空间MSE, 随机t)
+   - 注: 两者损失分属不同空间, 数值不可直接比较
 
 2. 正弦位置编码（15.2.2节）
-   - 多尺度频率: 低维度=低频(慢变化), 高维度=高频(快变化)
+   - 多尺度频率: 低维度=高频(快变化, 区分相邻时间步), 高维度=低频(慢变化, 捕获大范围趋势)
    - 形成时间步"指纹", 不同t有不同的编码模式
 
 3. 条件注入方式（15.2.3节）★ 原创设计
-   - 加法: 弱调制, 收敛最慢 (Loss={histories['add'][-1]:.6f})
-   - FiLM: 中等调制, 收敛较快 (Loss={histories['film'][-1]:.6f})
-   - adaLN: 强调制+Zero初始化, 训练最稳定 (Loss={histories['adaln'][-1]:.6f})
-   - 验证 DiT 论文发现: adaLN-Zero 优于其他方式
+   - 最终Loss: 加法={histories['add'][-1]:.6f}, FiLM={histories['film'][-1]:.6f}, adaLN={histories['adaln'][-1]:.6f}
+   - 三者差距<2%: 本实验规模(MNIST/30轮/小模型)下收敛速度与质量无显著差异
+   - adaLN-Zero 起步Loss={histories['adaln'][0]:.3f} 明显更高: Zero初始化使Block初期为恒等映射, 属设计预期而非不稳定
+   - DiT论文中adaLN-Zero的优势需大规模训练+FID评估才能显现, 本实验不足以验证该结论
 
 4. 去噪行为（15.2.1节）★ 原创设计
    - 高噪声(t大): 去噪输出模糊, 类似低通滤波
@@ -789,6 +845,13 @@ results_summary = {
         inj: round(float(histories[inj][-1]), 6) if histories.get(inj) else None
         for inj in ['add', 'film', 'adaln']
     },
+    'injection_first_epoch_loss': {
+        inj: round(float(histories[inj][0]), 6) if histories.get(inj) else None
+        for inj in ['add', 'film', 'adaln']
+    },
+    'dncnn_sigma_sweep': dncnn_sigma_sweep,
+    'injection_mse_by_t': mse_curves,
+    'step4_snr_by_t': snr_by_t,
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

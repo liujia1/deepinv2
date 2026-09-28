@@ -4,7 +4,7 @@
 
 第14章是全书叙事从"经典框架"向"前沿发展"的跃迁——前13章完成了从逆问题到扩散模型的完整理论构建（贝叶斯→采样→得分→扩散→统一→条件生成），本章引入Flow Matching这一全新生成框架，打破了扩散模型对随机微分方程和得分函数的依赖，开辟了"学向量场"的新路径。核心论点是：**Flow Matching是扩散模型的范式升级——从学习得分函数到学习向量场，从SDE采样到ODE传输，从曲线路径到直线路径**。最优传输（OT）为向量场的学习提供了最优的耦合策略，使得Flow Matching不仅理论上更简洁，实践上也更高效（更少步数即可生成高质量样本）。
 
-**核心论点**：Flow Matching通过回归向量场而非得分函数来训练生成模型，条件Flow Matching定理保证了无需模拟ODE即可训练，最优传输耦合提供了更直的传输路径。Rectified Flow将直线插值与Reflow过程结合，实现了从多步到少步甚至单步生成的蒸馏。SD3/Flux证明了Flow Matching + DiT的组合在工业级生成任务中的SOTA性能。
+**核心论点**：Flow Matching通过回归向量场而非得分函数来训练生成模型，条件Flow Matching定理保证了无需模拟ODE即可训练，最优传输耦合提供了更直的传输路径。Rectified Flow将直线插值与Reflow过程结合，实现了从多步到少步甚至单步生成的蒸馏。SD3/Flux证明了Flow Matching + DiT的组合在工业级生成任务中的SOTA性能。14.6进一步把这套配方推进离散状态空间（文本、DNA），证明"条件化拆解+免仿真"是与数据模态无关的普适原理。
 
 **与前章衔接**：第7章建立了扩散模型的SDE框架，概率流ODE（PF-ODE）是Flow Matching的直接前身——Flow Matching可以看作"跳过SDE，直接学ODE"的思路。第12章证明了Score ≡ ELBO，统一了得分路径和变分路径；本章引入第三条路径——向量场回归路径，三条路径在ODE层面汇合。第13章的条件扩散采样框架在Flow Matching中同样成立，只需将得分函数替换为向量场。
 
@@ -17,10 +17,10 @@
 ```
 最优传输基础（为何OT？）→ 连续归一化流（CNF的困境）→
 Flow Matching（突破：学向量场）→ Rectified Flow（直线路径+Reflow）→
-前沿组合（SD3/Flux）
+前沿组合（SD3/Flux）→ 离散扩散（MDLM：向量场→速率矩阵，配方跨世界照搬）
 ```
 
-理解动机→建立基础→核心突破→工程优化→实践落地
+理解动机→建立基础→核心突破→工程优化→实践落地→普适性验证（离散世界）
 
 ---
 
@@ -33,7 +33,7 @@ Flow Matching（突破：学向量场）→ Rectified Flow（直线路径+Reflow
 - 全书生成路径回顾：得分路径（第5-7章）、变分路径（第8-12章），两者在Score ≡ ELBO统一
 - 第三条路径的直觉：与其先定义加噪过程再学逆向，不如直接学一个"传输"过程——从噪声到数据的ODE
 - Flow Matching的核心优势：无需模拟ODE即可训练（仿真自由）、路径更直（更少步数）、框架更统一（OT自然融入）
-- 章节导航：OT基础→CNF困境→Flow Matching→Rectified Flow→前沿组合
+- 章节导航：OT基础→CNF困境→Flow Matching→Rectified Flow→前沿组合→离散扩散与MDLM
 
 **来源**：全书叙事；book_plan.md 核心论点
 
@@ -283,6 +283,8 @@ CNF的架构自由度是优势，但训练时的仿真代价是致命瓶颈。�
   $$v_t(x|x_1) = \frac{\sigma_t'(x_1)}{\sigma_t(x_1)}(x - \mu_t(x_1)) + \mu_t'(x_1)$$
   - 这是生成高斯路径 $p_t(x|x_1)$ 的唯一向量场
   - 当 $\sigma_t \to 0$（确定性路径）时，条件向量场退化为直线速度 $v_t = x_1 - x_0$
+- **三角转换：得分/速度/去噪器——一个量三种记法（正文 14.3.4 框）**：三者互为线性重参数化（$v = a_t s + b_t x$、$D = (\beta_t v - \dot\beta_t x)/(\dot\alpha_t \beta_t - \alpha_t \dot\beta_t)$、$s = (\alpha_t D - x)/\beta_t^2$ 即 Tweedie）——学一个 $v_\theta$ 免费换算另外两个
+- **配套实验14.3-4**（`实验14.3-4/14.3-4.py`）：2D 两高斯混合（解析真值全闭式，解析得分另用有限差分独立复核）上验证三角三条边——闭环 $v_\theta \to D_\theta \to s_\theta \to v'_\theta$ 误差浮点级、三对象与解析真值同水平吻合
 
 #### 14.3.5 OT-CFM：最优传输条件流
 
@@ -325,6 +327,12 @@ CNF的架构自由度是优势，但训练时的仿真代价是致命瓶颈。�
 Flow Matching通过OT耦合获得了更直的路径，但实践中OT耦合的精确计算代价高昂。Rectified Flow从另一个角度解决路径弯曲问题：通过直线插值+Reflow迭代，逐步拉直路径，无需显式计算OT耦合。
 
 **来源**：Lipman et al. (2023) "Flow Matching for Generative Modeling"; Nakkiran et al. (2024) "Step-by-Step Diffusion" §4; Pooladian et al. (2023) "Multisample Flow Matching"; Tong et al. (2024) "Conditional Flow Matching"
+
+#### 14.3.7 SDE 扩展技巧：训练完 ODE，还能免费获得随机性（正文已新增）
+
+- **任意 $\sigma_t$ 的 SDE 边际不变**：$\mathrm{d}X_t = [v_t + (\sigma_t^2/2)\nabla\log p_t]\,\mathrm{d}t + \sigma_t\,\mathrm{d}W_t$ 对任意 $\sigma_t \ge 0$ 保持边际 $p_t$（Fokker-Planck 论证）；得分由三角转换免费换算——$\sigma_t$ 是训练之后的自由旋钮
+- **经验规律**：少步采样偏 ODE（$\sigma_t = 0$ 路径短、离散化误差最小）；需要多样性时适度加随机性；换 $\sigma_t$ 无需重训——部署期唯一"零成本"的采样器调参维度
+- **配套实验14.3-4（步骤3）**（`实验14.3-4/14.3-4.py`）：同一 $v_\theta$ 配 $\sigma \in \{0, 0.5, 1, 2, 4\}$ 五档 × 步数 $\{100, 5\}$ 的欧拉-马里亚马采样，切片 W2 对照解析真值——多步下各 $\sigma$ 边际不变（同量级）、少步最优档由实测给出
 
 ---
 
@@ -432,6 +440,8 @@ Rectified Flow通过直线化和Reflow实现了高效的少步生成，但在工
   - UNet：CNN架构，局部感受野，归纳偏置强
   - DiT/MMDiT：Transformer架构，全局感受野，缩放性好
   - SD3结论：DiT在参数量增大时遵循可预测的缩放规律，验证损失下降与生成质量提升正相关
+- **CFG 的向量场形式（正文已扩）**：CFG = 把"隐式分类器"贡献放大 $w$ 倍的向量场版，线性组合对任意概率路径成立；丢标签训练 + 推理每步两次前向
+- **配套实验**（第 13 章）：CFG 的完整训练—推理闭环见 **13.4-3**（Diffusers 的 CFG 采样）与 **13.6-4**（显式 CFG 权重拼接），本章不重复展开
 
 #### 14.5.3 Flux与后续发展
 
@@ -456,6 +466,46 @@ Rectified Flow通过直线化和Reflow实现了高效的少步生成，但在工
 - **与第15章的衔接**：14.5节涉及的DiT/MMDiT架构，将在第15章详细剖析其设计原理和缩放规律
 
 **来源**：Esser et al. (2024) "Scaling Rectified Flow Transformers for High-Resolution Image Synthesis"; Peebles & Xie (2023) "Scalable Diffusion Models with Transformers"; Black Forest Labs (2024) Flux
+
+---
+
+### 14.6 离散扩散与掩码语言模型：从向量场到速率矩阵
+
+**核心观点**：离散数据（文本、DNA）上 SDE/ODE 不存在——token 之间没有"之间"。但 14.3 的"条件化拆解 + 边际化 + 免仿真"配方逐字照搬仍成立：向量场换成速率矩阵 $Q_t$，Fokker-Planck 换成 Kolmogorov Forward 方程，回归（MSE）换成分类（交叉熵）。因子化混合路径 + 离散边际化技巧把边际速率矩阵化成"逐位置去噪分类器"的重参数化（DFM），选 [MASK] 当噪声即得掩码扩散语言模型（MDLM）。
+
+#### 14.6.1 CTMC：离散世界的"SDE"
+
+- 状态空间 $\mathcal{S}=\mathcal{V}^d$（$|\mathcal{S}|=V^d$ 指数爆炸）；CTMC 无记忆性
+- 速率矩阵 $Q_t(y|x)$ 两条约束（离席速率非负、对角=负离开总率）；CTMC 存在唯一性定理
+- 两状态翻转链闭式转移概率；欧拉模拟 $\tilde{p} = \mathbb{1}_{y=x} + hQ_t(y|x)$——两条约束恰好保证小步长下是合法分布
+- 因子化模型（单 token 跳变）输出 $d \times V$；Kolmogorov Forward 方程 ↔ Fokker-Planck；连续↔离散对照表
+
+#### 14.6.2 条件路径与离散边际化
+
+- 条件路径两端固定 $p_0 = p_{\text{init}}$、$p_1 = \delta_{x_0}$；因子化混合路径（调度 $\kappa_t$，逐位置 Bernoulli 保留/替换）
+- 本质差异：高斯路径"搬运"概率质量 vs 混合路径"淡入淡出"（无位移、无方向）
+- 条件速率矩阵定义；离散边际化技巧：边际速率矩阵 = 条件速率矩阵的后验加权平均（与 14.3.2 边际流同构）
+
+#### 14.6.3 离散 Flow Matching（DFM）：免仿真训练
+
+- 条件速率矩阵闭式解：一旦跳变只能跳向干净答案；分母 $1-\kappa_t$ 在 $t \to 1$ 的发散是风险率（保证 $t=1$ 前跳完）
+- 边际速率矩阵 = $\frac{\dot\kappa_t}{1-\kappa_t}\bigl(p_{1|t}(x_{0,j}=v_i \mid x_t) - \delta_{x_{t,j}}(v_i)\bigr)$——逐位置去噪分类器的重参数化；softmax 参数化自动满足两条速率约束
+- DFM 损失 = 逐位置交叉熵（最优解 = 真后验，吉布斯不等式）；"连续 FM = 回归、离散 FM = 分类"对偶
+- 训练算法（单步采样、无仿真）；采样 = 逐位置并行欧拉分类步（多 token 同步更新概率 $O(h^2)$）
+
+#### 14.6.4 MDLM：把 [MASK] 当噪声
+
+- 词表加 [MASK]，$p_{\text{init}} = \delta_{[\text{MASK}]^d}$；揭示轨迹示例（全 [MASK] → 逐步揭示 → 完整句子）
+- 学习信号集中在掩码位置；与 BERT MLM 目标形式同构但用途不同（本书评注）
+- 均匀噪声 vs [MASK] 对比表（D3PM 风格 vs MDLM 风格）
+- **配套实验14.6-1**（`实验14.6-1/14.6-1.py`）：玩具级 MDLM——6 个 6 词模板句、15 词小词表、2 层微型 Transformer（CPU 几分钟）；同一 DFM 损失训练 [MASK] 版 vs 均匀噪声版，揭示轨迹 vs 改写轨迹可视化、模板命中率/改写率定量对比、步数扫描；softmax 速率约束（违反量为 0）与线性调度下欧拉步 $h \cdot h_t \le 1$ 恰好成立的数值验证
+
+#### 14.6.5 全书视角
+
+- 驱动力谱系：得分（第 5-7 章）→ 向量场（14.3）→ 速率矩阵（14.6）；DSM → CFM → DFM 三次同构
+- Generator Matching：向量场/速率矩阵都是马尔可夫过程生成元的特例（流形、混合模态、跳过程）
+
+**来源**：2406.08929v2 §7；Campbell et al. (2022)；Austin et al. (2021) D3PM；Gat et al. (2024) Discrete Flow Matching；Sahoo et al. (2024) MDLM；Lou et al. (2024) SEDD；Holderrieth et al. (2024) Generator Matching
 
 ---
 
@@ -517,6 +567,11 @@ Rectified Flow通过直线化和Reflow实现了高效的少步生成，但在工
 | 14.5.2 | Esser et al. (2024); Peebles & Xie (2023) DiT | — |
 | 14.5.3 | Black Forest Labs (2024) Flux | — |
 | 14.5.4 | 全章综合 | — |
+| 14.6.1 | 2406.08929v2 §7.1 | Campbell et al. (2022) |
+| 14.6.2 | 2406.08929v2 §7.2.1-7.2.2 | — |
+| 14.6.3 | 2406.08929v2 §7.2.3 | Gat et al. (2024) |
+| 14.6.4 | 2406.08929v2 §7 Example 39 | Sahoo et al. (2024); Austin et al. (2021) |
+| 14.6.5 | 2406.08929v2 §7 Remark 40 | Holderrieth et al. (2024) |
 
 ---
 
@@ -540,13 +595,17 @@ Rectified Flow通过直线化和Reflow实现了高效的少步生成，但在工
       │ "算法就绪，架构如何配合？"
       ▼
 14.5 SD3/Flux = Rectified Flow + DiT（工业级验证与SOTA）
+      │
+      │ "配方是连续空间的巧合，还是普适原理？"
+      ▼
+14.6 离散扩散与 MDLM（向量场→速率矩阵，回归→分类：配方跨世界照搬）
 ```
 
 ---
 
 ## 缺失素材清单
 
-> 说明：本章配套实验 **14.1-1 ~ 14.5-1** 已生成并嵌入正文大量示意图，下表已同步标记「✅ 已由实验生成」。目前真正缺失的仅剩 4 项（标注 ❌）。
+> 说明：本章配套实验 **14.1-1 ~ 14.5-1** 已生成并嵌入正文大量示意图；**14.3-4、14.6-1** 为本轮新增，代码已就绪并通过静态检查，**尚未运行出图**（待在 Colab 运行后嵌入正文，下表标 🕐）。目前真正缺失的素材仍为 4 项（标注 ❌）。
 
 | 素材 | 用途 | 紧急程度 | 状态 |
 |---|---|---|---|
@@ -560,3 +619,5 @@ Rectified Flow通过直线化和Reflow实现了高效的少步生成，但在工
 | SD3/MMDiT架构图 | 14.5.2 架构说明 | ⭐⭐ 中 | ❌ 待补充 |
 | Logit-Normal采样 vs 均匀采样FID对比数据 | 14.5.1 时间采样效果 | ⭐ 低 | ✅ 实验14.5-1（步骤1_时间采样分布 / 步骤4_量化指标对比） |
 | Rectified Flow CIFAR-10定量结果（FID/IS） | 14.4 实验验证 | ⭐ 低 | ❌ 待补充（需外部数据） |
+| 离散扩散揭示轨迹示意图（全[MASK]→逐步揭示→完整句子） | 14.6.4 MDLM 直觉 | ⭐ 低 | 🕐 实验14.6-1 代码就绪（静态检查通过），待在 Colab 运行出图后嵌入正文 |
+| 得分-速度-去噪器三角验证图 + SDE σ扫描图（闭环误差/三对象对照/SW2-σ曲线） | 14.3.4 三角转换 / 14.3.7 SDE扩展 | ⭐⭐ 中 | 🕐 实验14.3-4 代码就绪（静态检查通过），待在 Colab 运行出图后嵌入正文 |
