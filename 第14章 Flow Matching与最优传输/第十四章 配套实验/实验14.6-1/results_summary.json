@@ -24,19 +24,83 @@
   },
   "reveal_trajectory": [
     "[MASK] [MASK] [MASK] [MASK] [MASK] [MASK]",
-    "[MASK] [MASK] [MASK] [MASK] [MASK] [MASK]",
-    "[MASK] [MASK] [MASK] [MASK] [MASK] [MASK]",
-    "[MASK] [MASK] [MASK] [MASK] [MASK] [MASK]",
-    "[MASK] [MASK] [MASK] [MASK] [MASK] [MASK]",
-    "[MASK] [MASK] [MASK] [MASK] [MASK] [MASK]",
-    "[MASK] [MASK] [MASK] [MASK] [MASK] [MASK]",
+    "[MASK] [MASK] [MASK] [MASK] [MASK] rug",
+    "[MASK] [MASK] [MASK] [MASK] [MASK] rug",
+    "[MASK] [MASK] [MASK] [MASK] [MASK] rug",
+    "[MASK] dog [MASK] [MASK] [MASK] rug",
+    "[MASK] dog [MASK] [MASK] [MASK] rug",
+    "[MASK] dog sat [MASK] [MASK] rug",
     "the dog sat on the rug"
+  ],
+  "reveal_details": [
+    {
+      "pos": 1,
+      "token": "the",
+      "t_reveal": 0.6875,
+      "conf_at_reveal": 0.9993
+    },
+    {
+      "pos": 2,
+      "token": "dog",
+      "t_reveal": 0.2188,
+      "conf_at_reveal": 0.9809
+    },
+    {
+      "pos": 3,
+      "token": "sat",
+      "t_reveal": 0.4375,
+      "conf_at_reveal": 0.9951
+    },
+    {
+      "pos": 4,
+      "token": "on",
+      "t_reveal": 0.9062,
+      "conf_at_reveal": 0.9959
+    },
+    {
+      "pos": 5,
+      "token": "the",
+      "t_reveal": 0.9688,
+      "conf_at_reveal": 0.9995
+    },
+    {
+      "pos": 6,
+      "token": "rug",
+      "t_reveal": 0.0,
+      "conf_at_reveal": 0.1615
+    }
   ],
   "comparison_N32": {
     "template_hit_mlm": 0.9375,
     "template_hit_unif": 0.9766,
     "rewrite_rate_mlm": 0.000888,
     "rewrite_rate_unif": 0.030192
+  },
+  "template_coverage": {
+    "templates": [
+      "the cat sat on the mat",
+      "the dog sat on the rug",
+      "the cat ate the red fish",
+      "the dog ate the big fish",
+      "a big cat sat on it",
+      "a big dog ate it up"
+    ],
+    "count_mlm": [
+      39,
+      47,
+      29,
+      31,
+      44,
+      50
+    ],
+    "count_unif": [
+      27,
+      35,
+      47,
+      65,
+      37,
+      39
+    ]
   },
   "steps_sweep": {
     "n_steps_list": [

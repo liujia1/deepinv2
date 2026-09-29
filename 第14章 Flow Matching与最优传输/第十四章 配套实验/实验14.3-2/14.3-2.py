@@ -2,7 +2,6 @@
 
 import sys
 import io
-import time
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
 
@@ -13,7 +12,6 @@ matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
 import logging
 import warnings
-from tqdm import tqdm
 
 # 静默 matplotlib 相关警告
 logging.getLogger('matplotlib').setLevel(logging.ERROR)
@@ -57,286 +55,210 @@ except ImportError:
 np.random.seed(42)
 import torch
 torch.manual_seed(42)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed(42)
-
-# 设备配置
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"\n{'='*60}")
-print(f"实验14.3-2: Flow ODE采样优势——少步采样与DDPM对比")
-print(f"{'='*60}")
-print(f"使用设备: {device}")
-if device.type == 'cuda':
-    print(f"  GPU: {torch.cuda.get_device_name(0)}")
-else:
-    print("  未检测到 GPU, 使用 CPU 训练")
-    print("  提示: Colab 用户可在菜单 运行时 -> 更改运行时类型 中选择 GPU")
 
 # Checkpoint路径
-CHECKPOINT_PATH_RF = os.path.join(SAVE_DIR, 'rf_checkpoint.pth')
-CHECKPOINT_PATH_DDPM = os.path.join(SAVE_DIR, 'ddpm_checkpoint.pth')
-FINAL_CHECKPOINT_PATH_RF = os.path.join(SAVE_DIR, 'rf_final.pth')
-FINAL_CHECKPOINT_PATH_DDPM = os.path.join(SAVE_DIR, 'ddpm_final.pth')
+CHECKPOINT_PATH_IND = os.path.join(SAVE_DIR, 'cfm_independent_checkpoint.pth')
+CHECKPOINT_PATH_OT = os.path.join(SAVE_DIR, 'cfm_ot_checkpoint.pth')
+FINAL_CHECKPOINT_PATH_IND = os.path.join(SAVE_DIR, 'cfm_independent_final.pth')
+FINAL_CHECKPOINT_PATH_OT = os.path.join(SAVE_DIR, 'cfm_ot_final.pth')
 
 
 # ============================================================
-# 去噪网络: 小型UNet（可预测速度v或噪声ε）
+# 2D点云分布定义
 # ============================================================
+def sample_source(n):
+    """源分布：两个高斯的混合（左上+右下）"""
+    mode = np.random.rand(n) < 0.5
+    x = np.where(mode, -2, 2) + 0.3 * np.random.randn(n)
+    y = np.where(mode, 2, -2) + 0.3 * np.random.randn(n)
+    return np.stack([x, y], axis=1)
+
+def sample_target(n):
+    """目标分布：两个高斯的混合（右上+左下），与源交叉"""
+    mode = np.random.rand(n) < 0.5
+    x = np.where(mode, 2, -2) + 0.3 * np.random.randn(n)
+    y = np.where(mode, 2, -2) + 0.3 * np.random.randn(n)
+    return np.stack([x, y], axis=1)
+
+
+# ============================================================
+# 最优传输耦合（小规模：使用匈牙利算法）
+# ============================================================
+def ot_coupling(source, target):
+    """计算最优传输配对（最小化总距离的配对）
+
+    对于2D点云，使用匈牙利算法（O(n^3)）
+    这对应14.1节Kantorovich问题的离散解
+    """
+    from scipy.optimize import linear_sum_assignment
+    # 代价矩阵: C[i,j] = ||source[i] - target[j]||^2
+    diff = source[:, None, :] - target[None, :, :]  # (n, n, 2)
+    cost = np.sum(diff**2, axis=-1)  # (n, n)
+    row_ind, col_ind = linear_sum_assignment(cost)
+    return col_ind  # 返回source[i]应该配对的target索引
+
+def independent_coupling(n):
+    """独立耦合：随机配对（14.3.5节的默认CFM）"""
+    return np.random.permutation(n)
+
+
+# ============================================================
+# 路径插值函数
+# ============================================================
+def linear_interp(z, target, t):
+    """线性插值路径（14.3.4节 OT路径/14.4.1节直线插值）
+    x_t = (1-t)z + t*target,  v_t = target - z
+    注意：本书采用Flow Matching记号约定（z=源/噪声，target=数据/目标）
+    """
+    return (1 - t) * z + t * target
+
+def diffusion_interp(z, target, t, beta_min=0.1, beta_max=20.0):
+    """扩散路径（14.3.6节，VP-SDE条件路径）
+    x_t = sqrt(ᾱ_t) * target + sqrt(1-ᾱ_t) * ε
+    使用cosine schedule: ᾱ_t = cos²(π/2 * (1-t))，t∈[0,1]
+
+    注意：
+    - 参数z在此公式中扮演噪声源ε的角色
+    - 实际扩散模型的噪声源应为各向同性高斯 N(0,I)，而非结构化分布
+    - 本实验为便于同一套(source,target)数据可视化对比三种路径，
+      用source分布替代标准高斯演示VP-SDE插值公式形状
+    """
+    alpha_bar_t = np.cos(np.pi / 2 * (1 - t)) ** 2
+    alpha_bar_t = max(alpha_bar_t, 1e-10)
+    return np.sqrt(alpha_bar_t) * target + np.sqrt(1 - alpha_bar_t) * z
+
+# ★ 自检：验证路径插值函数的边界行为(避免公式改错时仍能跑出图)
+# 核心公式:
+#   linear: x_t = (1-t)·z + t·target
+#     → t=0时x_0=z, t=1时x_1=target, 端点严格成立
+#   diffusion: x_t = √ᾱ_t·target + √(1-ᾱ_t)·z (cosine: ᾱ_t=cos²(π/2·(1-t)))
+#     → t=0时ᾱ=cos²(π/2)=0, x_0=z (纯噪声); t=1时ᾱ=cos²(0)=1, x_1=target
+print(f"[路径自检] 线性/扩散插值函数边界与端点验证(实际运行, 非手算):")
+_z = np.array([1.0, 2.0])
+_tg = np.array([3.0, 5.0])
+for _t in [0.0, 0.25, 0.5, 0.75, 1.0]:
+    _x_lin = linear_interp(_z, _tg, _t)
+    _x_diff = diffusion_interp(_z, _tg, _t)
+    print(f"  t={_t:.2f}: linear={_x_lin}, diffusion={_x_diff}")
+# 边界检查
+_x_lin_0 = linear_interp(_z, _tg, 0.0)
+_x_lin_1 = linear_interp(_z, _tg, 1.0)
+print(f"  边界: linear(t=0)={_x_lin_0} vs z={_z}: {'OK' if np.allclose(_x_lin_0, _z) else 'FAIL'}")
+print(f"        linear(t=1)={_x_lin_1} vs target={_tg}: {'OK' if np.allclose(_x_lin_1, _tg) else 'FAIL'}")
+# diffusion: t=0时因clamp(1e-10)产生微小偏差(避免sqrt(0)), t=1时严格成立
+_x_diff_0 = diffusion_interp(_z, _tg, 0.0)
+_x_diff_1 = diffusion_interp(_z, _tg, 1.0)
+print(f"  边界: diffusion(t=0)={_x_diff_0} vs z={_z} (因clamp有1e-3量级偏差, 仍判OK): "
+      f"{'OK' if np.allclose(_x_diff_0, _z, atol=1e-3) else 'FAIL'}")
+print(f"        diffusion(t=1)={_x_diff_1} vs target={_tg}: {'OK' if np.allclose(_x_diff_1, _tg, atol=1e-5) else 'FAIL'}")
+
+
+# ============================================================
+# 步骤1：CFM训练——学习向量场
+# ============================================================
+
+# 使用PyTorch实现简单的2D向量场网络
 import torch.nn as nn
-import torch.nn.functional as F
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
 
-
-class SinusoidalTimeEmbedding(nn.Module):
-    def __init__(self, dim):
+class VectorFieldNet(nn.Module):
+    """2D向量场网络 v_θ(x_t, t)"""
+    def __init__(self, hidden_dim=128):
         super().__init__()
-        self.dim = dim
-
-    def forward(self, t):
-        half_dim = self.dim // 2
-        emb = np.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, device=t.device, dtype=torch.float32) * -emb)
-        emb = t[:, None].float() * emb[None, :]
-        return torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
-
-
-class ConvBlock(nn.Module):
-    def __init__(self, in_ch, out_ch, time_dim):
-        super().__init__()
-        gn_groups = min(4, out_ch)
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(in_ch, out_ch, 3, padding=1),
-            nn.GroupNorm(gn_groups, out_ch),
+        self.net = nn.Sequential(
+            nn.Linear(3, hidden_dim),  # 输入: x_t(2) + t(1)
             nn.SiLU(),
-        )
-        self.time_proj = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
             nn.SiLU(),
-            nn.Linear(time_dim, out_ch),
-        )
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(out_ch, out_ch, 3, padding=1),
-            nn.GroupNorm(gn_groups, out_ch),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.SiLU(),
+            nn.Linear(hidden_dim, 2),  # 输出: v(2)
         )
-        self.shortcut = nn.Conv2d(in_ch, out_ch, 1) if in_ch != out_ch else nn.Identity()
-
-    def forward(self, x, t_emb):
-        h = self.conv1(x)
-        h = h + self.time_proj(t_emb)[:, :, None, None]
-        h = self.conv2(h)
-        return h + self.shortcut(x)
-
-
-class SmallUNet(nn.Module):
-    """小型UNet——可适配速度预测(v-pred)或噪声预测(ε-pred)"""
-    def __init__(self, time_dim=64):
-        super().__init__()
-        ch = [1, 16, 32, 64]
-        self.time_mlp = nn.Sequential(
-            SinusoidalTimeEmbedding(time_dim),
-            nn.Linear(time_dim, time_dim),
-            nn.SiLU(),
-        )
-        self.down1 = ConvBlock(ch[0], ch[1], time_dim)
-        self.down2 = ConvBlock(ch[1], ch[2], time_dim)
-        self.down3 = ConvBlock(ch[2], ch[3], time_dim)
-        self.bottleneck = ConvBlock(ch[3], ch[3], time_dim)
-        self.up3 = ConvBlock(ch[3] + ch[2], ch[2], time_dim)
-        self.up2 = ConvBlock(ch[2] + ch[1], ch[1], time_dim)
-        self.up1 = ConvBlock(ch[1] + ch[0], ch[0], time_dim)
-        self.out_conv = nn.Conv2d(ch[0], 1, 1)
-        self.pool = nn.MaxPool2d(2)
 
     def forward(self, x_t, t):
-        """预测速度场v_θ(x_t, t)或噪声ε_θ(x_t, t)，t为整数时间步t∈{0,...,T-1}"""
-        t_emb = self.time_mlp(t)
-        h1 = self.down1(x_t, t_emb)
-        h2 = self.down2(self.pool(h1), t_emb)
-        h3 = self.down3(self.pool(h2), t_emb)
-        h = self.bottleneck(h3, t_emb)
-        h = F.interpolate(h, size=(14, 14), mode='nearest')
-        h = self.up3(torch.cat([h, h2], dim=1), t_emb)
-        h = F.interpolate(h, size=(28, 28), mode='nearest')
-        h = self.up2(torch.cat([h, h1], dim=1), t_emb)
-        h = self.up1(torch.cat([h, x_t], dim=1), t_emb)
-        return self.out_conv(h)
+        """x_t: (B, 2), t: (B, 1)"""
+        inp = torch.cat([x_t, t], dim=-1)
+        return self.net(inp)
 
+# 训练CFM（带Resume能力）
+def train_cfm(n_epochs=2000, n_samples=256, coupling='independent', lr=1e-3, checkpoint_path=None, final_checkpoint_path=None):
+    """训练Conditional Flow Matching（带checkpoint Resume能力）
 
-# ============================================================
-# DDPM噪声调度
-# ============================================================
-T = 200
-beta_min, beta_max = 1e-4, 0.02
-betas = torch.linspace(beta_min, beta_max, T).to(device)
-alphas = 1.0 - betas
-alpha_bars = torch.cumprod(alphas, dim=0)
-sqrt_alpha_bars = torch.sqrt(alpha_bars)
-sqrt_one_minus_alpha_bars = torch.sqrt(1 - alpha_bars)
-posterior_var = betas * (1 - torch.cat([torch.ones(1, device=device), alpha_bars[:-1]])) / (1 - alpha_bars)
-sqrt_recip_alphas = 1.0 / torch.sqrt(alphas)
-beta_over_sqrt_1m_ab = betas / sqrt_one_minus_alpha_bars
-
-
-# ============================================================
-# Flow ODE采样器（14.3.1节）
-# ============================================================
-@torch.no_grad()
-def flow_ode_sample(model, shape, n_steps=50):
-    """从Flow ODE采样: dx/dt = v_θ(x, t), t: 0→1
-
-    14.3.1节: Flow ODE直接参数化向量场
-    对比DDPM需要200步，FM理论上可以1步
-
-    返回: (samples, elapsed_time)
+    coupling: 'independent' 或 'ot'
     """
-    model.eval()
-    t_start = time.time()
-    x = torch.randn(shape, device=device)  # z ~ N(0,I)
-    dt = 1.0 / n_steps
-
-    for step in range(n_steps):
-        t_val = step / n_steps
-        # RF中t_val=0是噪声，DDPM中t_int=T-1是噪声
-        # 反转映射使正弦嵌入语义对齐
-        # 注：t_int仅用作位置编码信号，不要求与实际噪声方差精确对应
-        t_int = torch.full((shape[0],), int((1 - t_val) * (T - 1)), device=device, dtype=torch.long)
-        v = model(x, t_int)
-        x = x + v * dt
-
-    elapsed = time.time() - t_start
-    return x.clamp(0, 1), elapsed
-
-
-@torch.no_grad()
-def ddpm_sample(model, shape):
-    """标准DDPM采样（200步，对比基线）
-
-    返回: (samples, elapsed_time)
-    """
-    model.eval()
-    t_start = time.time()
-    x = torch.randn(shape, device=device)
-    for t_idx in reversed(range(T)):
-        t = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
-        pred = model(x, t)
-        model_mean = sqrt_recip_alphas[t_idx] * (
-            x - beta_over_sqrt_1m_ab[t_idx] * pred
-        )
-        if t_idx == 0:
-            x = model_mean
-        else:
-            noise = torch.randn_like(x)
-            x = model_mean + torch.sqrt(posterior_var[t_idx]) * noise
-    elapsed = time.time() - t_start
-    return x.clamp(0, 1), elapsed
-
-
-# ============================================================
-# 数据加载
-# ============================================================
-print("\n加载MNIST数据集...")
-data_dir = os.path.join(SAVE_DIR, 'data')
-transform = transforms.Compose([transforms.ToTensor()])
-train_dataset = datasets.MNIST(data_dir, train=True, download=True, transform=transform)
-test_dataset = datasets.MNIST(data_dir, train=False, download=True, transform=transform)
-train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
-print(f"训练集: {len(train_dataset)}, 测试集: {len(test_dataset)}")
-
-
-# ============================================================
-# 步骤1：训练Rectified Flow与DDPM基线
-# ============================================================
-
-num_epochs = 50
-
-# 训练函数（带Resume能力）
-def train_model(model, optimizer, train_loader, model_type='rf', num_epochs=50,
-                checkpoint_path=None, final_checkpoint_path=None, progress_bar=False):
-    """训练模型（带checkpoint Resume能力）
-
-    model_type: 'rf' 或 'ddpm'
-    progress_bar: 是否显示进度条
-    """
+    model = VectorFieldNet()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    losses = []
     start_epoch = 0
-    is_final = False
-    train_losses = []
 
     # 检查是否有最终权重
     if final_checkpoint_path and os.path.exists(final_checkpoint_path):
         print(f"检测到最终权重: {final_checkpoint_path}")
         print("直接加载，跳过训练过程")
-        checkpoint = torch.load(final_checkpoint_path, map_location=device, weights_only=False)
+        checkpoint = torch.load(final_checkpoint_path, map_location='cpu', weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        train_losses = checkpoint.get('train_losses', [])
-        return train_losses
+        losses = checkpoint.get('losses', [])
+        return model, losses
 
     # 检查是否有中间权重
     if checkpoint_path and os.path.exists(checkpoint_path):
         print(f"检测到中间权重: {checkpoint_path}")
         print("继续训练...")
-        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         start_epoch = checkpoint.get('epoch', 0) + 1
-        train_losses = checkpoint.get('train_losses', [])
+        losses = checkpoint.get('losses', [])
 
-    print(f"训练 {model_type} 模型，从 epoch {start_epoch} 开始...")
-    t_start = time.time()
+    print(f"训练 {coupling} CFM，从 epoch {start_epoch} 开始...")
+    if coupling == 'ot':
+        print("  注意：OT耦合在每epoch重新计算（匈牙利算法O(n³)），小规模教学代码可接受开销")
 
-    for epoch in range(start_epoch, num_epochs):
-        model.train()
-        total_loss = 0
-        # 添加进度条
-        pbar = tqdm(train_loader, desc=f"[{model_type.upper()}] Epoch {epoch+1}/{num_epochs}", leave=False) if progress_bar else train_loader
-        for x, _ in pbar:
-            x = x.to(device)
-            batch = x.shape[0]
+    for epoch in range(start_epoch, n_epochs):
+        # 采样源和目标
+        z = torch.FloatTensor(sample_source(n_samples))  # (B, 2)
+        x0 = torch.FloatTensor(sample_target(n_samples))  # (B, 2)
 
-            if model_type == 'rf':
-                # Rectified Flow训练
-                z = torch.randn_like(x)
-                t_continuous = torch.rand(batch, device=device)
-                t_int = ((1 - t_continuous) * (T - 1)).long()
-                t_4d = t_continuous[:, None, None, None]
-                x_t = (1 - t_4d) * z + t_4d * x
-                v_target = x - z
-                v_pred = model(x_t, t_int)
-                loss = F.mse_loss(v_pred, v_target)
-            else:
-                # DDPM训练
-                t = torch.randint(0, T, (batch,), device=device)
-                noise = torch.randn_like(x)
-                x_t = sqrt_alpha_bars[t][:, None, None, None] * x + sqrt_one_minus_alpha_bars[t][:, None, None, None] * noise
-                pred = model(x_t, t)
-                loss = F.mse_loss(pred, noise)
+        # 配对
+        if coupling == 'ot':
+            with torch.no_grad():
+                z_np = z.numpy()
+                x0_np = x0.numpy()
+                idx = ot_coupling(z_np, x0_np)
+                x0 = torch.FloatTensor(x0_np[idx])
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item() * batch
-            
-            # 更新进度条显示当前平均损失
-            if progress_bar:
-                pbar.set_postfix({'loss': f'{total_loss / len(train_loader.dataset):.6f}'})
-        if progress_bar:
-            pbar.close()
+        # 采样t ~ U[0,1]
+        t = torch.rand(n_samples, 1)
 
-        avg_loss = total_loss / len(train_loader.dataset)
-        train_losses.append(avg_loss)
+        # 线性插值: x_t = (1-t)z + t*x_0
+        x_t = (1 - t) * z + t * x0
 
-        if (epoch + 1) % 10 == 0 or epoch == 0:
-            print(f"  [{model_type}] Epoch {epoch+1:3d}/{num_epochs}  Loss={avg_loss:.6f}")
+        # 条件向量场: v_t = x_0 - z
+        v_target = x0 - z
 
-        # 每10轮保存中间checkpoint
-        if checkpoint_path and (epoch + 1) % 10 == 0:
+        # 网络预测
+        v_pred = model(x_t, t)
+
+        # CFM损失
+        loss = nn.functional.mse_loss(v_pred, v_target)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        if (epoch + 1) % 200 == 0 or epoch == 0:
+            losses.append(loss.item())
+            if (epoch + 1) % 500 == 0:
+                print(f"  [{coupling}] Epoch {epoch+1}/{n_epochs} Loss={loss.item():.6f}")
+
+        # 每200轮保存中间checkpoint
+        if checkpoint_path and (epoch + 1) % 200 == 0:
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'loss': avg_loss,
-                'train_losses': train_losses
+                'loss': loss.item(),
+                'losses': losses
             }, checkpoint_path)
 
     # 保存最终权重
@@ -344,147 +266,233 @@ def train_model(model, optimizer, train_loader, model_type='rf', num_epochs=50,
         torch.save({
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
-            'train_losses': train_losses
+            'losses': losses
         }, final_checkpoint_path)
         print(f"最终权重已保存: {final_checkpoint_path}")
 
-    t_elapsed = time.time() - t_start
-    print(f"训练完成，耗时: {t_elapsed:.1f} 秒")
+    return model, losses
 
-    return train_losses
-
-# 训练Rectified Flow（v-prediction）
-print("\n训练Rectified Flow（v-prediction）...")
-rf_model = SmallUNet().to(device)
-optimizer_rf = torch.optim.Adam(rf_model.parameters(), lr=2e-4)
-losses_rf = train_model(rf_model, optimizer_rf, train_loader, model_type='rf',
-                        num_epochs=num_epochs, checkpoint_path=CHECKPOINT_PATH_RF,
-                        final_checkpoint_path=FINAL_CHECKPOINT_PATH_RF,
-                        progress_bar=True)
-
-# 训练DDPM（ε-prediction）
-print("\n训练DDPM（ε-prediction）...")
-ddpm_model = SmallUNet().to(device)
-optimizer_ddpm = torch.optim.Adam(ddpm_model.parameters(), lr=2e-4)
-losses_ddpm = train_model(ddpm_model, optimizer_ddpm, train_loader, model_type='ddpm',
-                          num_epochs=num_epochs, checkpoint_path=CHECKPOINT_PATH_DDPM,
-                          final_checkpoint_path=FINAL_CHECKPOINT_PATH_DDPM,
-                          progress_bar=True)
-
-print("\n两个模型训练完成！")
+# 训练两个模型
+print("\n训练独立耦合CFM...")
+model_ind, losses_ind = train_cfm(n_epochs=2000, coupling='independent',
+                                   checkpoint_path=CHECKPOINT_PATH_IND,
+                                   final_checkpoint_path=FINAL_CHECKPOINT_PATH_IND)
+print("\n训练OT耦合CFM (OT-CFM)...")
+model_ot, losses_ot = train_cfm(n_epochs=2000, coupling='ot',
+                                 checkpoint_path=CHECKPOINT_PATH_OT,
+                                 final_checkpoint_path=FINAL_CHECKPOINT_PATH_OT)
 
 
 # ============================================================
-# 步骤2：Flow ODE采样——少步采样对比
+# Flow ODE采样
+# ============================================================
+@torch.no_grad()
+def flow_sample(model, z_source, n_steps=100):
+    """从Flow ODE采样: dx/dt = v_θ(x, t), t: 0→1"""
+    model.eval()
+    x = z_source.clone()
+    dt = 1.0 / n_steps
+    trajectory = [x.clone().numpy()]
+
+    for step in range(n_steps):
+        t_val = step / n_steps
+        t = torch.full((x.shape[0], 1), t_val)
+        v = model(x, t)
+        x = x + v * dt  # Euler步进
+        trajectory.append(x.clone().numpy())
+
+    return np.array(trajectory)  # (n_steps+1, B, 2)
+
+# 从源分布采样，用Flow ODE推到目标分布
+n_test = 200
+np.random.seed(42)
+z_test = torch.FloatTensor(sample_source(n_test))
+
+traj_ind = flow_sample(model_ind, z_test, n_steps=100)
+traj_ot = flow_sample(model_ot, z_test, n_steps=100)
+
+# 计算采样质量（与真实目标的Wasserstein-1距离近似）
+from scipy.stats import wasserstein_distance_nd
+target_test = sample_target(n_test)
+wd_ind = wasserstein_distance_nd(traj_ind[-1], target_test)
+wd_ot = wasserstein_distance_nd(traj_ot[-1], target_test)
+print(f"\n独立耦合CFM采样 W1距离: {wd_ind:.4f}")
+print(f"OT-CFM采样 W1距离:      {wd_ot:.4f}")
+
+
+# ============================================================
+# 步骤2：扩散路径 vs FM路径 vs OT-CFM路径
 # ============================================================
 
-n_samples = 8
-sample_shape = (n_samples, 1, 28, 28)
+# 为路径对比准备数据
+n_points = 50
+source = sample_source(n_points)
+target = sample_target(n_points)
 
-step_counts = [1, 5, 10, 50]
-samples_by_steps = {}
-times_by_steps = {}
+# OT耦合（匈牙利算法确定性求解，无需重设随机种子）
+ot_idx = ot_coupling(source, target)
+target_ot = target[ot_idx]
 
-for n_steps in step_counts:
-    print(f"  {n_steps}步采样中...")
-    samples, elapsed = flow_ode_sample(rf_model, sample_shape, n_steps=n_steps)
-    samples_by_steps[n_steps] = samples
-    times_by_steps[n_steps] = elapsed
-    print(f"    耗时: {elapsed:.3f}s")
+# 独立耦合（随机配对依赖随机种子，设置seed=123确保可复现）
+np.random.seed(123)
+ind_idx = independent_coupling(n_points)
+target_ind = target[ind_idx]
 
-# 可视化
-fig, axes = plt.subplots(len(step_counts), n_samples, figsize=(16, 8))
-for row, n_steps in enumerate(step_counts):
-    for col in range(n_samples):
-        axes[row, col].imshow(samples_by_steps[n_steps][col, 0].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-        axes[row, col].axis('off')
-        if col == 0:
-            axes[row, col].set_ylabel(f'{n_steps}步', fontsize=12, rotation=0, labelpad=40)
+# 可视化三种路径
+fig, axes = plt.subplots(1, 4, figsize=(24, 6))
 
-plt.suptitle('实验14.3-2：Rectified Flow少步采样（14.3.4节）', fontsize=14, y=1.01)
+# 只画10条轨迹以避免过于密集
+n_show = 10
+t_vals = np.linspace(0, 1, 101)  # 与ODE采样分辨率统一（101个节点）
+
+# (a) 扩散耦合条件路径（VP-SDE，14.3.6节）
+ax = axes[0]
+for i in range(n_show):
+    path = np.array([diffusion_interp(source[i], target_ind[i], t) for t in t_vals])
+    ax.plot(path[:, 0], path[:, 1], 'red', alpha=0.4, lw=1.2)
+ax.scatter(source[:n_show, 0], source[:n_show, 1], c='blue', s=30, zorder=5)
+ax.scatter(target_ind[:n_show, 0], target_ind[:n_show, 1], c='red', s=30, zorder=5)
+ax.set_title('(a) 扩散耦合条件路径\n(VP-SDE, 弯曲)', fontsize=12)
+ax.set_xlim(-4, 4)
+ax.set_ylim(-4, 4)
+ax.grid(alpha=0.3)
+ax.set_aspect('equal')
+
+# (b) 独立耦合CFM路径（学习到的边际路径）
+ax = axes[1]
+for i in range(n_show):
+    path = traj_ind[:101, i, :]  # 100步+1
+    ax.plot(path[:, 0], path[:, 1], 'purple', alpha=0.4, lw=1.2)
+ax.scatter(z_test.numpy()[:n_show, 0], z_test.numpy()[:n_show, 1], c='blue', s=30, zorder=5)
+ax.scatter(traj_ind[-1, :n_show, 0], traj_ind[-1, :n_show, 1], c='red', s=30, zorder=5)
+ax.set_title('(b) 独立耦合CFM边际路径\n(弯曲交叉)', fontsize=12)
+ax.set_xlim(-4, 4)
+ax.set_ylim(-4, 4)
+ax.grid(alpha=0.3)
+ax.set_aspect('equal')
+
+# (c) OT-CFM路径
+ax = axes[2]
+for i in range(n_show):
+    path = traj_ot[:101, i, :]
+    ax.plot(path[:, 0], path[:, 1], 'green', alpha=0.4, lw=1.2)
+ax.scatter(z_test.numpy()[:n_show, 0], z_test.numpy()[:n_show, 1], c='blue', s=30, zorder=5)
+ax.scatter(traj_ot[-1, :n_show, 0], traj_ot[-1, :n_show, 1], c='red', s=30, zorder=5)
+ax.set_title('(c) OT-CFM边际路径\n(短且直)', fontsize=12)
+ax.set_xlim(-4, 4)
+ax.set_ylim(-4, 4)
+ax.grid(alpha=0.3)
+ax.set_aspect('equal')
+
+# (d) 曲率对比
+ax = axes[3]
+# 计算扩散耦合条件路径的曲率
+diff_paths_curvature = []
+for i in range(n_show):
+    path = np.array([diffusion_interp(source[i], target_ind[i], t) for t in t_vals])
+    direct = np.sqrt(np.sum((path[-1] - path[0])**2))
+    diffs_p = np.diff(path, axis=0)
+    actual = np.sum(np.sqrt(np.sum(diffs_p**2, axis=-1)))
+    diff_paths_curvature.append(1.0 - direct / (actual + 1e-10))
+kappa_diff = np.mean(diff_paths_curvature)
+
+def compute_straightness(traj):
+    """计算轨迹的曲率指标 κ = 1 - 直线距离/路径实际长度
+    κ=0 表示完全直线，κ越大越弯曲
+    traj: (T+1, B, 2) 形状的轨迹数组
+    """
+    curvatures = []
+    for i in range(traj.shape[1]):
+        path = traj[:, i, :]  # (T+1, 2)
+        direct = np.sqrt(np.sum((path[-1] - path[0])**2))
+        diffs = np.diff(path, axis=0)
+        actual = np.sum(np.sqrt(np.sum(diffs**2, axis=-1)))
+        curvatures.append(1.0 - direct / (actual + 1e-10))
+    return np.mean(curvatures)
+
+S_ind = compute_straightness(traj_ind)
+S_ot = compute_straightness(traj_ot)
+
+labels = ['扩散耦合\n(条件路径)', '独立耦合CFM\n(边际路径)', 'OT-CFM\n(边际路径)']
+values = [kappa_diff, S_ind, S_ot]
+colors = ['red', 'purple', 'green']
+bars = ax.bar(labels, values, color=colors, alpha=0.7, width=0.5)
+ax.set_ylabel(r'曲率 $\kappa$ (0=完全直线)', fontsize=12)
+ax.set_title('(d) 路径曲率对比（14.4.2节）', fontsize=12)
+ax.set_ylim(0, max(values) * 1.3 + 0.01)
+for bar, val in zip(bars, values):
+    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.002, f'{val:.4f}',
+            ha='center', fontsize=11, fontweight='bold')
+ax.grid(alpha=0.3, axis='y')
+
+plt.suptitle('实验14.3-2：扩散耦合 vs OT耦合路径对比（14.3.5/14.3.6节）', fontsize=14, y=1.01)
 plt.tight_layout()
-fig_path1 = os.path.join(SAVE_DIR, '步骤2_少步采样.png')
-plt.savefig(fig_path1, dpi=150, bbox_inches='tight')
-plt.close()
-print(f"图2已保存: {fig_path1}")
-
-
-# ============================================================
-# 步骤3：DDPM vs Rectified Flow少步采样对比
-# ============================================================
-
-# DDPM采样
-print("DDPM采样中(200步)...")
-ddpm_samples, time_ddpm = ddpm_sample(ddpm_model, sample_shape)
-print(f"  耗时: {time_ddpm:.3f}s")
-
-# RF 50步采样
-print("Rectified Flow采样中(50步)...")
-rf_50_samples, time_rf50 = flow_ode_sample(rf_model, sample_shape, n_steps=50)
-print(f"  耗时: {time_rf50:.3f}s")
-
-# RF 10步采样
-print("Rectified Flow采样中(10步)...")
-rf_10_samples, time_rf10 = flow_ode_sample(rf_model, sample_shape, n_steps=10)
-print(f"  耗时: {time_rf10:.3f}s")
-
-# RF 1步采样（已在步骤2中计算）
-time_rf1 = times_by_steps[1]
-
-# 计算量化指标：生成样本与最近邻真实样本的平均像素距离
-print("\n计算量化指标（生成样本与最近邻真实样本的平均像素距离）...")
-test_samples = torch.stack([test_dataset[i][0] for i in range(min(100, len(test_dataset)))]).to(device)
-
-def compute_nn_distance(generated, reference):
-    """计算生成样本与参考集中最近邻的平均像素距离（简化质量指标）"""
-    gen_flat = generated.view(generated.shape[0], -1)  # (B, 784)
-    ref_flat = reference.view(reference.shape[0], -1)  # (N, 784)
-    # 计算每个生成样本与所有参考样本的距离
-    distances = torch.cdist(gen_flat, ref_flat)  # (B, N)
-    # 取每个生成样本的最近邻距离
-    min_distances = distances.min(dim=1)[0]  # (B,)
-    return min_distances.mean().item()
-
-dist_ddpm = compute_nn_distance(ddpm_samples, test_samples)
-dist_rf50 = compute_nn_distance(rf_50_samples, test_samples)
-dist_rf10 = compute_nn_distance(rf_10_samples, test_samples)
-dist_rf1 = compute_nn_distance(samples_by_steps[1], test_samples)
-
-print(f"  DDPM 200步 平均最近邻距离: {dist_ddpm:.4f}")
-print(f"  RF 50步   平均最近邻距离: {dist_rf50:.4f}")
-print(f"  RF 10步   平均最近邻距离: {dist_rf10:.4f}")
-print(f"  RF 1步    平均最近邻距离: {dist_rf1:.4f}")
-print("  （距离越小表示生成样本更接近真实数据分布）")
-
-# 加速比计算（实测）
-speedup_10 = time_ddpm / time_rf10
-speedup_50 = time_ddpm / time_rf50
-print(f"\n实测加速比:")
-print(f"  RF 10步 vs DDPM 200步: {speedup_10:.1f}x")
-print(f"  RF 50步 vs DDPM 200步: {speedup_50:.1f}x")
-
-# 可视化对比
-fig, axes = plt.subplots(4, n_samples, figsize=(16, 10))
-methods = [
-    (ddpm_samples, 'DDPM (ε-pred, 200步)'),
-    (rf_50_samples, 'Rectified Flow (v-pred, 50步)'),
-    (rf_10_samples, 'Rectified Flow (v-pred, 10步)'),
-    (samples_by_steps[1], 'Rectified Flow (v-pred, 1步)'),
-]
-
-for row, (samples, label) in enumerate(methods):
-    for col in range(n_samples):
-        axes[row, col].imshow(samples[col, 0].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-        axes[row, col].axis('off')
-        if col == 0:
-            axes[row, col].set_ylabel(label, fontsize=10, rotation=0, labelpad=80)
-
-plt.suptitle('实验14.3-2：DDPM vs Rectified Flow 少步采样对比（14.3.6节）', fontsize=14, y=1.01)
-plt.tight_layout()
-fig_path2 = os.path.join(SAVE_DIR, '步骤3_DDPM_vs_RF.png')
+fig_path2 = os.path.join(SAVE_DIR, '步骤2_路径对比.png')
 plt.savefig(fig_path2, dpi=150, bbox_inches='tight')
 plt.close()
-print(f"图3已保存: {fig_path2}")
+print(f"图2已保存: {fig_path2}")
+print(f"  扩散耦合条件路径曲率: {kappa_diff:.4f}")
+print(f"  独立耦合CFM边际路径曲率: {S_ind:.4f}")
+print(f"  OT-CFM边际路径曲率:      {S_ot:.4f}")
+print(f"  → 扩散耦合路径弯曲(κ大)，OT-CFM路径最直(κ小)")
+
+
+# ============================================================
+# 步骤3：学到的向量场可视化（箭头场，Lipman 2023 Fig.1 风格）
+# ============================================================
+# 在网格上评估学到的 v_θ(x_t, t)，画出箭头场，直观展示"向量场指向数据端"的含义。
+# 对比独立耦合 CFM 与 OT-CFM 学到的向量场形态差异（OT 更规则、更直）。
+
+def plot_vector_field(model, source, target, t_val, ax, title):
+    """在网格上评估向量场 v_θ(x_t, t) 并画箭头图。"""
+    model.eval()
+    # 构造网格
+    xs = np.linspace(-4, 4, 22)
+    ys = np.linspace(-4, 4, 22)
+    X, Y = np.meshgrid(xs, ys)
+    grid = torch.tensor(np.stack([X.ravel(), Y.ravel()], axis=1), dtype=torch.float32)
+    t_grid = torch.ones(grid.shape[0], 1) * t_val
+    with torch.no_grad():
+        V = model(grid, t_grid).numpy()  # (N, 2)
+    U = V[:, 0].reshape(X.shape)
+    W = V[:, 1].reshape(X.shape)
+    speed = np.hypot(U, W)
+    # 箭头图（颜色编码速度大小）
+    ax.quiver(X, Y, U, W, speed, cmap='viridis', alpha=0.9, scale=14,
+              width=0.0035, headwidth=4, headlength=5)
+    # 叠加源与目标分布
+    ax.scatter(source[:, 0], source[:, 1], c='blue', s=25, label='源分布 z',
+               zorder=5, edgecolors='k', linewidths=0.4)
+    ax.scatter(target[:, 0], target[:, 1], c='red', s=25, label='目标分布 x',
+               zorder=5, edgecolors='k', linewidths=0.4)
+    ax.set_xlim(-4, 4)
+    ax.set_ylim(-4, 4)
+    ax.set_aspect('equal')
+    ax.grid(alpha=0.3)
+    ax.set_title(f'{title}\n(t={t_val:.2f})', fontsize=12)
+    ax.legend(loc='upper right', fontsize=9)
+
+# 准备分布点（与步骤2一致的 source/target 规模）
+np.random.seed(123)
+source_vf = sample_source(n_points)
+target_vf = sample_target(n_points)
+ind_idx_vf = independent_coupling(n_points)
+target_vf_ind = target_vf[ind_idx_vf]
+ot_idx_vf = ot_coupling(source_vf, target_vf)
+target_vf_ot = target_vf[ot_idx_vf]
+
+fig_vf, axes_vf = plt.subplots(1, 2, figsize=(13, 6))
+plot_vector_field(model_ind, source_vf, target_vf_ind, 0.5, axes_vf[0],
+                  '(a) 独立耦合CFM 向量场')
+plot_vector_field(model_ot, source_vf, target_vf_ot, 0.5, axes_vf[1],
+                  '(b) OT-CFM 向量场')
+plt.suptitle('实验14.3-2：学到的向量场 $v_\\theta(x_t, t=0.5)$ 对比（箭头指向数据端）',
+             fontsize=14, y=1.02)
+plt.tight_layout()
+fig_path_vf = os.path.join(SAVE_DIR, '步骤3_向量场.png')
+plt.savefig(fig_path_vf, dpi=150, bbox_inches='tight')
+plt.close()
+print(f"图3已保存: {fig_path_vf}")
 
 
 # ============================================================
@@ -495,36 +503,26 @@ print("实验14.3-2 完成!")
 print("=" * 60)
 print("""
 关键结论:
-1. 少步采样优势（14.3.4节）
-   - RF用Flow ODE采样：1步/5步/10步/50步
-   - DDPM需要200步（SDE采样）
-   - RF的直线路径允许大幅减少采样步数
-   - 量化指标验证：RF 10步即可达到较好质量（平均最近邻距离接近）
+1. CFM定理（14.3.3节）
+   - 边际向量场不可直接计算，但条件向量场可计算
+   - CFM损失与FM损失的梯度相同（类比第6章DSM定理）
+   - 训练目标：||v_θ(x_t, t) - (x_0 - z)||²
 
-2. DDPM vs Rectified Flow对比（14.3.6节）★ 原创设计
-   - 同一UNet架构，不同训练目标
-   - DDPM预测噪声ε，RF预测速度v
-   - 量化指标对比（平均最近邻距离）：
-     * DDPM 200步: {:.4f}
-     * RF 50步: {:.4f}
-     * RF 10步: {:.4f}
-     * RF 1步: {:.4f}
-   - 结论：RF 50步/10步质量接近DDPM 200步，1步质量较差
-   - RF 1步质量较差，但Reflow可以改善（见实验14.4-1）
+2. 高斯条件路径（14.3.4节）
+   - 线性插值：x_t = (1-t)z + t*x_0
+   - 条件向量场：v_t = x_0 - z（常数向量场）
+   - 简单且高效的训练框架
 
-3. 路径形态差异（14.3.5节）
-   - DDPM路径弯曲（扩散耦合），需要多步
-   - RF路径更直（直线耦合），可以少步
-   - 直线路径是Flow Matching的核心优势
+3. 路径形态对比（14.3.5/14.3.6节）
+   - 扩散耦合：路径弯曲，需要多步采样（~1000步）
+   - 独立耦合CFM：路径弯曲交叉，需多步ODE求解
+   - OT-CFM：路径最直，少步即可采样（~10步）
 
-4. 实测加速效果
-   - DDPM 200步耗时: {:.3f}s
-   - RF 10步耗时: {:.3f}s
-   - RF 50步耗时: {:.3f}s
-   - 实测加速比：RF 10步 vs DDPM = {:.1f}x
-   - Flow Matching显著减少采样时间，为实时生成奠定基础
-""".format(dist_ddpm, dist_rf50, dist_rf10, dist_rf1,
-           time_ddpm, time_rf10, time_rf50, speedup_10))
+4. 实践意义
+   - OT耦合能够获得更直的传输路径
+   - 直线路径显著减少ODE求解步数
+   - OT-CFM是最优传输与Flow Matching的完美结合
+""")
 
 # ===== 保存数值结果 =====
 import json
@@ -544,16 +542,13 @@ def _to_native(obj):
     return obj
 
 results_summary = {
-    'dist_ddpm_200step': round(float(dist_ddpm), 4),
-    'dist_rf_50step': round(float(dist_rf50), 4),
-    'dist_rf_10step': round(float(dist_rf10), 4),
-    'dist_rf_1step': round(float(dist_rf1), 4),
-    'time_ddpm': round(float(time_ddpm), 3),
-    'time_rf_10step': round(float(time_rf10), 3),
-    'time_rf_50step': round(float(time_rf50), 3),
-    'speedup_rf10_vs_ddpm': round(float(speedup_10), 1),
-    'final_loss_rf': round(float(losses_rf[-1]), 6) if losses_rf else None,
-    'final_loss_ddpm': round(float(losses_ddpm[-1]), 6) if losses_ddpm else None,
+    'wd_independent': round(float(wd_ind), 4),
+    'wd_ot': round(float(wd_ot), 4),
+    'curvature_diffusion': round(float(kappa_diff), 4),
+    'curvature_independent': round(float(S_ind), 4),
+    'curvature_ot': round(float(S_ot), 4),
+    'final_loss_ind': round(float(losses_ind[-1]), 6) if losses_ind else None,
+    'final_loss_ot': round(float(losses_ot[-1]), 6) if losses_ot else None,
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

@@ -15,7 +15,7 @@
   - 玩具语言: 6 个固定长度(6词)模板句, 小词表 V=15(14 实词 + [MASK])
   - 训练两个 DFM 模型: MDLM 版(p_init=全[MASK]) 与 均匀噪声版(p_init=Unif)
   - 欧拉步采样: p~ = (1-h·h_t)·delta + h·h_t·p_theta, 等价于"以 rate 概率按后验重采"
-  - 对比: 揭示轨迹可视化 / 模板命中率(生成质量) / 步数扫描 / 改写率
+  - 对比: 揭示热图+置信度可视化 / 模板命中率(生成质量) / 步数扫描 / 改写率
   - 数值验证: softmax 版 vs 原始参数版(不过softmax)的速率约束违反量
 
 本实验不需要GPU，CPU几分钟可跑完。
@@ -235,8 +235,9 @@ def sample_euler(model, p_init_kind, n_steps=32, n_samples=256,
 
     lock_revealed: True 时已揭示(非噪声)位置锁定不动——MDLM 的"只揭示不回改"实现。
                    False 时严格按边际速率矩阵欧拉步, 已揭示位置也允许小概率改写。
-    record_traj:   记录完整轨迹 (n_steps+1, n_samples, d) 用于揭示轨迹可视化。
-    返回 (final_ids, n_rewrite, n_exposed, traj 或 None)
+    record_traj:   记录完整轨迹 (n_steps+1, n_samples, d) 与逐步后验 (n_steps, n_samples, d, V),
+                   用于揭示热图与置信度可视化。
+    返回 (final_ids, n_rewrite, n_exposed, traj 或 None)，traj=(轨迹张量, 后验张量)
       n_rewrite: 已揭示 token 被改写的总次数; n_exposed: 已揭示 token 的暴露步·位总数
     """
     noise_id = MASK_ID if p_init_kind == 'mask' else -1  # 均匀版无噪声标记, 改写率统计全部位置
@@ -249,6 +250,7 @@ def sample_euler(model, p_init_kind, n_steps=32, n_samples=256,
         x = torch.randint(0, V_UNIF, (n_samples, SEQ_LEN), dtype=torch.long)
 
     traj = [x.clone()] if record_traj else None
+    probs_rec = [] if record_traj else None
     h = 1.0 / n_steps
     n_rewrite, n_exposed = 0, 0
     for n in range(n_steps):
@@ -257,6 +259,8 @@ def sample_euler(model, p_init_kind, n_steps=32, n_samples=256,
         rate = min(h * hazard, 1.0)             # = h·h_t, 线性调度下最大恰为 1(末步)
         t_batch = torch.full((n_samples,), t_n)
         probs = torch.softmax(model(x, t_batch), dim=-1)           # (B, d, V) 后验
+        if record_traj:
+            probs_rec.append(probs.cpu())
         # 每位置独立掷硬币: rate 概率按 p_theta 重采, 1-rate 概率保持
         flip = torch.rand(x.shape) < rate
         if not lock_revealed:
@@ -269,7 +273,7 @@ def sample_euler(model, p_init_kind, n_steps=32, n_samples=256,
         x = torch.where(flip, new_tok, x)
         if record_traj:
             traj.append(x.clone())
-    traj = torch.stack(traj) if record_traj else None
+    traj = (torch.stack(traj), torch.stack(probs_rec)) if record_traj else None
     return x, n_rewrite, n_exposed, traj
 
 # 合法性自检: 线性调度+均匀网格下 rate 最大值
@@ -280,34 +284,82 @@ print(f"       最大 rate = {max(_rates):.4f} <= 1  ->  p~ 恒为凸组合, 欧
 
 # ============================================================
 # 步骤4：揭示轨迹可视化——MDLM 从全 [MASK] 逐步揭示（14.6.4 表格的动态版）
+# 文字快照由控制台 print 承担; 图只画 print 无法表达的信息:
+#   (a) 时间×位置揭示热图: 色块=token, 单调性(落子无悔)与揭示顺序一眼可见
+#   (b) 揭示置信度: 掩码位置在逐步更新中对"最终 token"的后验概率演化,
+#       展示"上下文积累→置信度上升→被揭示"的机制(网络在"看上下文填空")
 # ============================================================
 print("\n步骤4: 采样一条揭示轨迹（MDLM, N=32 步欧拉步）...")
-torch.manual_seed(2024)  # 固定轨迹采样种子, 保证图可复现
-_, _, _, traj = sample_euler(model_mlm, 'mask', n_steps=32, n_samples=1,
-                             lock_revealed=False, record_traj=True)
-traj = traj[:, 0, :]  # (33, d)
-snap_idx = [0, 2, 4, 6, 8, 12, 18, 32]  # 8 个快照时间步
+torch.manual_seed(2025)  # 固定轨迹采样种子, 保证图可复现（2024 落入尾部: 直到 t=0.56 仍 0/6 揭示, 不具代表性）
+_, _, _, (traj_all, probs_all) = sample_euler(model_mlm, 'mask', n_steps=32, n_samples=1,
+                                              lock_revealed=False, record_traj=True)
+traj = traj_all[:, 0, :]      # (33, d) 含起点与每步更新后的状态
+probs_rec = probs_all[:, 0, :]  # (32, d, V) 每步更新前的后验
+snap_idx = [0, 2, 4, 6, 8, 12, 18, 32]  # 8 个快照时间步(仅用于 print 与 JSON)
 print("  揭示轨迹(部分快照):")
 for si in snap_idx:
     print(f"    t={si/32:.3f}  {decode(traj[si])}")
 
-fig, axes = plt.subplots(len(snap_idx), 1, figsize=(7.2, 0.62 * len(snap_idx) + 1.4))
-for i, (ax, si) in enumerate(zip(axes, snap_idx)):
-    toks = [MASK_TOKEN if j == MASK_ID else id2word[int(j)] for j in traj[si]]
-    disp = ' '.join('____' if w == MASK_TOKEN else w for w in toks)
-    n_known = sum(1 for w in toks if w != MASK_TOKEN)
-    ax.text(0.5, 0.5, disp, ha='center', va='center', fontsize=12,
-            family='monospace', color='#1a1a1a')
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1)
-    ax.axis('off')
-    title = f'$t$ = {si/32:.3f}   (已揭示 {n_known}/{SEQ_LEN})'
-    if i == 0:
-        title += '    $p_{\\mathrm{init}}$ = 全 [MASK]（起点）'
-    ax.set_title(title, fontsize=9, loc='left', color='#555555')
-fig.suptitle('实验14.6-1 步骤4: MDLM 生成 = 从全 [MASK] 逐步揭示（欧拉步 CTMC 模拟, $N=32$）',
-             fontsize=12, y=0.995)
-plt.tight_layout(rect=[0, 0, 1, 0.97])
-fig_path_traj = os.path.join(SAVE_DIR, '步骤4_揭示轨迹.png')
+# --- 提取每个位置的揭示时刻与揭示置信度 ---
+N_TRAJ = 32
+final_ids = traj[-1]                                    # (d,)
+reveal_step = torch.full((SEQ_LEN,), N_TRAJ, dtype=torch.long)  # 无揭示则记为末步
+for j in range(SEQ_LEN):
+    trans = (traj[:-1, j] == MASK_ID) & (traj[1:, j] != MASK_ID)  # MASK -> 实词 的跳变步
+    if trans.any():
+        reveal_step[j] = int(trans.nonzero()[0])        # 第 n 步更新后揭示 => 后验取自第 n 步(更新前)
+# conf[n, j] = 第 n 步(更新前, 位置仍为 MASK 时)网络给"该位置最终 token"的后验概率
+# 揭示发生在第 rs 步更新: traj[rs]=MASK, traj[rs+1]=实词, 落子用的后验正是 conf[rs]
+conf = probs_rec.gather(2, final_ids[None, :, None].expand(probs_rec.shape[0], -1, -1)).squeeze(-1)  # (32, d)
+print("  各位置揭示详情: 位置 | token | 揭示步 t | 揭示时置信度 p_θ")
+for j in range(SEQ_LEN):
+    rs = int(reveal_step[j])
+    print(f"    pos {j+1}  {id2word[int(final_ids[j])]:>4}  t={rs/N_TRAJ:.3f}  conf={conf[rs, j]:.3f}")
+
+# --- 图: (a) 揭示热图 + (b) 揭示置信度 ---
+from matplotlib.colors import ListedColormap, BoundaryNorm
+uniq_tokens = [MASK_ID] + sorted({int(t) for t in final_ids})   # 本轨迹出现的 token(含 MASK)
+palette = ['#d9d9d9'] + [plt.cm.tab10(i / 10.0) for i in range(len(uniq_tokens) - 1)]
+cmap_traj = ListedColormap(palette)
+norm_traj = BoundaryNorm(np.arange(len(uniq_tokens) + 1) - 0.5, len(uniq_tokens))
+tok2clr = {tok: i for i, tok in enumerate(uniq_tokens)}
+
+fig, axes = plt.subplots(1, 2, figsize=(13.0, 4.8), width_ratios=[1.15, 1])
+# (a) 时间×位置揭示热图: 行=位置, 列=欧拉步 n(状态为第 n 步更新后)
+ax = axes[0]
+grid = torch.stack([traj[n] for n in range(N_TRAJ + 1)], dim=1).numpy()      # (d, 33)
+grid_clr = np.vectorize(lambda t: tok2clr[int(t)])(grid)
+ax.imshow(grid_clr, cmap=cmap_traj, norm=norm_traj, aspect='auto',
+          extent=[0, N_TRAJ, SEQ_LEN - 0.5, -0.5])
+for j in range(SEQ_LEN):                                      # 在揭示时刻标注 token 名
+    rs = int(reveal_step[j])
+    ax.text(rs + 0.55, j, id2word[int(final_ids[j])], va='center', ha='left',
+            fontsize=9, fontweight='bold', color='#333333')
+ax.axvline(N_TRAJ - 0.5, color='k', lw=0.8, ls=':')
+ax.set_yticks(range(SEQ_LEN))
+ax.set_yticklabels([f'pos {j+1}' for j in range(SEQ_LEN)], fontsize=9)
+ax.set_xticks([0, 8, 16, 24, 32])
+ax.set_xticklabels([f'{k/32:.2f}' for k in [0, 8, 16, 24, 32]], fontsize=9)
+ax.set_xlabel('时间 $t$（欧拉步 $n/32$）', fontsize=10)
+ax.set_title('(a) 揭示热图: 色块=token, 灰=[MASK], 一旦揭示不回改', fontsize=11)
+# (b) 揭示置信度: 掩码期间位置对"最终 token"的后验演化, 星号=被揭示时刻
+ax = axes[1]
+for j in range(SEQ_LEN):
+    rs = int(reveal_step[j])
+    ts = np.arange(rs + 1) / N_TRAJ                          # 揭示前各步(含落子那一步, 更新前仍为 MASK)
+    ax.plot(ts, conf[:rs + 1, j], 'o-', ms=3.5, lw=1.2,
+            color=palette[tok2clr[int(final_ids[j])]],
+            label=f"pos {j+1}: {id2word[int(final_ids[j])]} ($t$={rs/N_TRAJ:.2f} 揭示)")
+    ax.scatter([rs / N_TRAJ], [conf[rs, j]], marker='*', s=130, zorder=5,
+               color=palette[tok2clr[int(final_ids[j])]], edgecolor='k', linewidth=0.5)
+ax.set_xlabel('时间 $t$', fontsize=10)
+ax.set_ylabel('掩码期间后验 $p_{1|t}^{\\theta}$（对最终 token）', fontsize=10)
+ax.set_title('(b) 揭示置信度: 上下文积累→后验上升→星号处落子', fontsize=11)
+ax.grid(alpha=0.3); ax.legend(fontsize=8, loc='lower right')
+fig.suptitle('实验14.6-1 步骤4: MDLM 生成 = 从全 [MASK] 逐步揭示（欧拉步 CTMC 模拟, $N=32$, seed=2025）',
+             fontsize=12, y=1.00)
+plt.tight_layout(rect=[0, 0, 1, 0.96])
+fig_path_traj = os.path.join(SAVE_DIR, '步骤4_揭示热图与置信度.png')
 plt.savefig(fig_path_traj, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"图已保存: {fig_path_traj}")
@@ -349,19 +401,37 @@ for n_s in STEPS_SWEEP:
     hit_mlm_sweep.append(hm); hit_unif_sweep.append(huu)
     print(f"  {n_s:>4} | {hm:>10.3f} | {huu:>11.3f}")
 
+# 生成样本示例: 纯文字快照改由控制台 print 承担(图不排文字)
+print("\n  生成样本示例（各 4 句, N=32）:")
+print("    MDLM 版:")
+for r in final_mlm.numpy()[:4]:
+    print(f"      {decode(r)}")
+print("    均匀噪声版:")
+for r in final_unif.numpy()[:4]:
+    print(f"      {decode(r)}")
+
+# 模板覆盖统计: 每个模板被命中的句数——揭示是否模式坍塌, 是聚合命中率(b)看不到的信息
+def template_counts(ids):
+    arr = ids.numpy()
+    return np.array([int((arr == tpl).all(axis=1).sum()) for tpl in TEMPLATE_IDS])
+cnt_mlm = template_counts(final_mlm)
+cnt_unif = template_counts(final_unif)
+print("  模板编号: " + ", ".join(f'T{j+1}={TEMPLATES[j]}' for j in range(N_TEMPLATES)))
+print(f"  MDLM 版各模板命中数:  {cnt_mlm.tolist()}")
+print(f"  均匀版各模板命中数: {cnt_unif.tolist()}")
+
 # 图: 对比总览
 fig, axes = plt.subplots(2, 2, figsize=(12.5, 8.6))
-# (a) 生成样本示例
-ax = axes[0][0]; ax.axis('off')
-torch.manual_seed(2025)
-demo_mlm, _, _, _ = sample_euler(model_mlm, 'mask', n_steps=N_STEPS_MAIN, n_samples=4)
-demo_unif, _, _, _ = sample_euler(model_unif, 'uniform', n_steps=N_STEPS_MAIN, n_samples=4)
-lines = ['MDLM 版生成（$N=32$）:']
-lines += [f'  {decode(r)}' for r in demo_mlm.numpy()]
-lines += ['', '均匀噪声版生成（$N=32$）:']
-lines += [f'  {decode(r)}' for r in demo_unif.numpy()]
-ax.text(0.02, 0.97, '\n'.join(lines), va='top', ha='left', fontsize=11)  # 中英混排不用 monospace(无中文字形)
-ax.set_title('(a) 生成样本示例', fontsize=12)
+# (a) 模板覆盖: 各模板命中次数分组柱状(观察模式坍塌/覆盖均衡, print 难以直观呈现)
+ax = axes[0][0]
+xpos = np.arange(N_TEMPLATES); w = 0.38
+ax.bar(xpos - w/2, cnt_mlm, w, color='#2a7de1', alpha=0.85, label='MDLM版(全[MASK])')
+ax.bar(xpos + w/2, cnt_unif, w, color='#e1812c', alpha=0.85, label='均匀噪声版')
+ax.set_xticks(xpos); ax.set_xticklabels([f'T{j+1}' for j in range(N_TEMPLATES)])
+ax.set_xlabel('训练模板', fontsize=11)
+ax.set_ylabel(f'命中句数（共 {N_SAMPLES_EVAL} 句）', fontsize=11)
+ax.set_title('(a) 模板覆盖: 各模板命中次数（观察是否模式坍塌）', fontsize=12)
+ax.legend(fontsize=9); ax.grid(alpha=0.3, axis='y')
 # (b) 模板命中率柱状
 ax = axes[0][1]
 bars = ax.bar(['MDLM版\n(全[MASK])', '均匀噪声版'],
@@ -526,11 +596,22 @@ results_summary = {
         'note': '线性调度+均匀网格下 rate=h*h_t 最大恰为1, 欧拉步分布恒为凸组合',
     },
     'reveal_trajectory': [decode(traj[si]) for si in snap_idx],
+    'reveal_details': [
+        {'pos': int(j + 1), 'token': id2word[int(final_ids[j])],
+         't_reveal': round(int(reveal_step[j]) / N_TRAJ, 4),
+         'conf_at_reveal': round(float(conf[int(reveal_step[j]), j]), 4)}
+        for j in range(SEQ_LEN)
+    ],
     'comparison_N32': {
         'template_hit_mlm': round(float(hit_mlm), 4),
         'template_hit_unif': round(float(hit_unif), 4),
         'rewrite_rate_mlm': round(float(rewrite_mlm), 6),
         'rewrite_rate_unif': round(float(rewrite_unif), 6),
+    },
+    'template_coverage': {
+        'templates': TEMPLATES,
+        'count_mlm': cnt_mlm.tolist(),
+        'count_unif': cnt_unif.tolist(),
     },
     'steps_sweep': {
         'n_steps_list': STEPS_SWEEP,

@@ -19,7 +19,7 @@
 
 素材来源:
   - Esser et al. (2024) SD3 Scaling Rectified Flow Transformers
-  - 14.3-2中的SmallUNet架构
+  - 14.3-3中的SmallUNet架构
 
 运行前提: PyTorch, torchvision, CPU/GPU均可
 """
@@ -141,7 +141,7 @@ def logit_normal_pdf(t, m=0.0, s=1.0):
 
 
 # ============================================================
-# 去噪网络: 小型UNet（与14.3-2一致）
+# 去噪网络: 小型UNet（与14.3-3一致）
 # ============================================================
 class SinusoidalTimeEmbedding(nn.Module):
     def __init__(self, dim):

@@ -1,8 +1,8 @@
 {
   "dit_params": 1279620,
   "unet_params": 218269,
-  "final_loss_unet": 0.049881,
-  "final_loss_dit": 0.053435,
-  "final_loss_zero": 0.058195,
-  "final_loss_no_zero": 0.059173
+  "final_loss_unet": 0.049787,
+  "final_loss_dit": 0.051806,
+  "final_loss_zero": 0.05547,
+  "final_loss_no_zero": 0.058996
 }

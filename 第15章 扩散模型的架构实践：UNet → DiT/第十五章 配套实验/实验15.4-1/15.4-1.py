@@ -742,15 +742,16 @@ print(f"""
     同步覆盖 final_adaLN[-1] 的 weight 和 bias 为 Xavier/Normal 初始化，
     确保对照组完全不含 Zero 初始化，自变量控制干净。
 
-  核心结论（基于实际 checkpoint 数据）:
+  核心结论（数字实时取自本轮训练日志）:
     1. 机制上: Zero初始化 → gate=0, shift=0, scale=0 → 每个 DiTBlock 初始为恒等映射
-       → 理论上梯度传播更平滑（深层网络收益明显，见15.2.3节）
-    2. 本实验实测: depth=4 的小型 DiT 上, Zero 与随机初始化的 Loss 曲线几乎重合
-       (末轮约 0.0582 vs 0.0592, 差异属随机波动), 未观察到"随机初始化明显振荡、收敛更慢"
+       → 理论上梯度传播更平滑（深层网络收益明显, 见15.2.3节）
+    2. 本实验实测: 末轮 Zero {zero_losses[-1]:.4f} vs 随机初始化 {no_zero_losses[-1]:.4f},
+       差 {abs(zero_losses[-1]-no_zero_losses[-1]):.4f}; 注意同配置跨run种子噪声约0.002量级
+       (步骤2的DiT与步骤3的Zero组同配置不同run), 单次运行不足以定论, 需多种子重复
     3. ★ 诚实说明: 本实验无法验证 DiT 论文的 adaLN-Zero 优势——
        论文优势体现在生成质量 FID 上, 而此处判据是训练 MSE(弱代理);
        且模型太浅(depth=4)、训练偏短(20 epoch), 该设定先天不具备检验能力。
-       这是"无法证伪也无法证实"的中性结果, 不应包装成对论文结论的验证。
+       曲线分叉/重合随种子漂移, 既不能证实也不能证伪论文结论。
     4. 修复后 block级 + final_adaLN 全部覆盖, 消融对照自变量控制严格
 
   ★ 配套验证实验: 验证实验15.4-1_Zero初始化消融_收敛对比.py
@@ -777,6 +778,8 @@ print("""
 unet.eval()
 dit_zero.eval()
 
+# ★ 固定种子: 使图3完全可复现——同时锁定 train_loader 的shuffle取样的样本 与 randn_like 的噪声
+torch.manual_seed(42)
 test_batch = next(iter(train_loader))[0][:8].to(device)  # 范围 [-1, 1]
 noise_vis = torch.randn_like(test_batch)
 
@@ -792,7 +795,8 @@ test_batch_vis = to_vis_range(test_batch)
 for col in range(8):
     axes[0, col].imshow(test_batch_vis[col, 0].cpu(), cmap='gray', vmin=0, vmax=1)
     axes[0, col].axis('off')
-    if col == 0: axes[0, col].set_ylabel('原始', fontsize=10, rotation=0, labelpad=40)
+    # axis('off')后 set_ylabel 不会渲染, 改用 text 定位到子图左侧
+    if col == 0: axes[0, col].text(-0.12, 0.5, '原始', fontsize=10, rotation=0, ha='right', va='center', transform=axes[0, col].transAxes, clip_on=False)
 
 # 行1-2: UNet t=5, t=100
 # 行3-4: DiT t=5, t=100
@@ -812,9 +816,9 @@ for model_idx, (model, name) in enumerate([(unet, 'UNet'), (dit_zero, 'DiT')]):
             axes[row, col].axis('off')
             if col == 0:
                 snr = sqrt_alpha_bars[t_idx].item() / (sqrt_one_minus_alpha_bars[t_idx].item() + 1e-10)
-                # matplotlib 中数学符号使用 LaTeX 格式
+                # matplotlib 中数学符号使用 LaTeX 格式; axis('off')后 set_ylabel 不渲染, 改用 text
                 ylabel_str = f'{name}\n' + r'$t$=' + f'{t_idx} (SNR={snr:.1f})'
-                axes[row, col].set_ylabel(ylabel_str, fontsize=9, rotation=0, labelpad=65)
+                axes[row, col].text(-0.12, 0.5, ylabel_str, fontsize=9, rotation=0, ha='right', va='center', transform=axes[row, col].transAxes, clip_on=False)
 
 plt.suptitle('★ UNet vs DiT去噪行为对比（15.4.1节）', fontsize=14, y=1.01)
 plt.tight_layout()
