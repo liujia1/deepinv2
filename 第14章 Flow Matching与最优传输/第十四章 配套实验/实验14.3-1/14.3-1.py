@@ -155,7 +155,7 @@ print("\n  本实验采用Log域稳定化Sinkhorn算法（Cuturi 2013, POT库标
 print("  Log域迭代避免小ε时的数值下溢，是工业级OT近似的推荐做法")
 
 
-def sinkhorn_log_stabilized(cost_matrix, reg=0.1, max_iter=20000, tol=1e-5):
+def sinkhorn_log_stabilized(cost_matrix, reg=0.1, max_iter=20000, tol=1e-5, check_every=10):
     """Log域稳定化Sinkhorn算法（参考POT库实现）
 
     通过在log域进行迭代，避免小ε时的数值下溢问题。
@@ -165,10 +165,12 @@ def sinkhorn_log_stabilized(cost_matrix, reg=0.1, max_iter=20000, tol=1e-5):
       reg: 熵正则化参数ε，越小越接近精确OT（熵偏差越小），但收敛越慢
       max_iter: 最大迭代次数
       tol: 收敛容差（边际误差判据，POT库 stopCrit='marginal' 同款思路）
+      check_every: 每多少次迭代重建P并做一次边际误差检查（对齐POT默认每10次检查；
+        若每次迭代都重建P，每迭代常数会被额外开销放大2~3倍）
 
     返回:
       transport_plan: (n, m) 传输计划
-      n_iter: 实际迭代次数
+      n_iter: 实际迭代次数（按检查粒度计，较真实收敛点最多偏大check_every-1次）
       cost_current: 传输代价 <C, P>
       converged: 是否达到tol（False表示被max_iter截断）
 
@@ -191,18 +193,20 @@ def sinkhorn_log_stabilized(cost_matrix, reg=0.1, max_iter=20000, tol=1e-5):
 
     iteration = 0
     P = None
+    marg_err = np.inf
     for iteration in range(1, max_iter + 1):
         log_u = log_a - logsumexp(log_K + log_v[None, :], axis=1)
         log_v = log_b - logsumexp(log_K + log_u[:, None], axis=0)
 
-        # 重建P并检查边际误差（POT库 stopCrit='marginal' 判据）
-        log_P = log_u[:, None] + log_v[None, :] + log_K
-        P = np.exp(log_P - log_P.max())
-        P /= P.sum()
-        marg_err = max(np.max(np.abs(P.sum(axis=1) - a)),
-                       np.max(np.abs(P.sum(axis=0) - b)))
-        if marg_err < tol:
-            break
+        # 每 check_every 次迭代重建P并检查边际误差（POT库 stopCrit='marginal' 判据）
+        if iteration % check_every == 0 or iteration == max_iter:
+            log_P = log_u[:, None] + log_v[None, :] + log_K
+            P = np.exp(log_P - log_P.max())
+            P /= P.sum()
+            marg_err = max(np.max(np.abs(P.sum(axis=1) - a)),
+                           np.max(np.abs(P.sum(axis=0) - b)))
+            if marg_err < tol:
+                break
 
     cost_final = np.sum(cost_matrix * P)
     converged = marg_err < tol
@@ -245,7 +249,7 @@ for i in range(n_small):
     j = col_ind[i]
     ax.plot([source_small[i, 0], target_small[j, 0]],
             [source_small[i, 1], target_small[j, 1]],
-            'gray', alpha=0.2, lw=0.5)
+            'gray', alpha=0.4, lw=0.7)
 ax.scatter(source_small[:, 0], source_small[:, 1], c='blue', alpha=0.6, s=15, label=r'源分布 $p_0$')
 ax.scatter(target_small[:, 0], target_small[:, 1], c='red', alpha=0.6, s=15, label=r'目标分布 $p_1$')
 ax.set_title(r'(a) 匈牙利算法（精确OT）', fontsize=12)
@@ -298,11 +302,12 @@ print("\n" + "="*60)
 print("步骤3: 扩展性测试——运行时间与熵偏差随样本量的变化（对应图2）")
 print("="*60)
 print("14.3.5节: Minibatch OT的实践意义")
-print("  匈牙利算法总时间O(n^3)且不可微；Sinkhorn每迭代O(n^2)、可GPU批量并行")
-print("  本测试用固定收敛判据（边际误差tol=1e-5），如实报告迭代数与是否收敛")
+print("  匈牙利算法总时间渐近O(n^3)且不可微；Sinkhorn每迭代渐近O(n^2)、可GPU批量并行")
+print("  本测试用固定收敛判据（边际误差tol=1e-5，每10次迭代检查一次，对齐POT默认），")
+print("  如实报告迭代数与是否收敛")
 
 # 扩展性测试：不同样本量下的运行时间
-# 上限300：纯numpy教学实现的墙钟时间限制（n=300时ε=0.1单次求解已达数十秒），
+# 上限300：纯numpy教学实现的墙钟时间限制（n=300时ε=0.1单次求解达十秒级），
 # 与内存无关（n=500的float64代价矩阵仅2MB）
 sample_sizes = [50, 100, 200, 300]
 n_trials = 4  # 1次预热 + 3次计时，取中位数
@@ -376,8 +381,8 @@ ax = axes[0]
 n_ref = np.array(sample_sizes, dtype=float)
 t_h = np.array(results_scalability['hungarian']) * 1e6  # μs
 ax.plot(sample_sizes, t_h, 'o-', label=r'匈牙利算法（总时间）', color='red', lw=2, markersize=6)
-ax.plot(n_ref, t_h[0] * (n_ref / n_ref[0]) ** 3, ':',
-        color='red', lw=1, alpha=0.6, label=r'参考斜率 $O(n^3)$')
+ax.plot(n_ref, t_h[-1] * (n_ref / n_ref[-1]) ** 3, ':',
+        color='red', lw=1, alpha=0.6, label=r'渐近斜率 $O(n^3)$（锚定末端）')
 first_p_i = None
 for reg, color, marker in [(0.1, 'green', '^'), (1.0, 'blue', 'd')]:
     t_s = np.array(results_scalability[f'sinkhorn_{reg}']) * 1e6
@@ -387,11 +392,11 @@ for reg, color, marker in [(0.1, 'green', '^'), (1.0, 'blue', 'd')]:
     ax.plot(sample_sizes, p_i, marker + ':',
             color=color, lw=1, alpha=0.8,
             label=rf'ε={reg} 每迭代时间')
-    if first_p_i is None:
-        first_p_i = p_i[0]
+    if reg == 0.1:
+        first_p_i = p_i
 if first_p_i is not None:
-    ax.plot(n_ref, first_p_i * (n_ref / n_ref[0]) ** 2, 'k:', lw=1, alpha=0.5,
-            label=r'参考斜率 $O(n^2)$（锚定ε=0.1首点）')
+    ax.plot(n_ref, first_p_i[-1] * (n_ref / n_ref[-1]) ** 2, 'k:', lw=1, alpha=0.5,
+            label=r'渐近斜率 $O(n^2)$（锚定ε=0.1末端）')
 ax.set_xlabel(r'样本数 $n$', fontsize=12)
 ax.set_ylabel(r'运行时间 ($\mu$s)', fontsize=12)
 ax.set_title(r'(a) 运行时间 vs 样本数（log-log）', fontsize=13)
@@ -414,8 +419,9 @@ ax.legend(fontsize=10)
 ax.grid(alpha=0.3)
 
 plt.suptitle(r'实验14.3-1：Sinkhorn算法精度-效率权衡（14.3.5节）'
-             '\n（固定边际误差判据tol=$10^{-5}$；每迭代时间按$O(n^2)$增长；'
-             r'熵偏差随$n$增大而上升——同一$\varepsilon$在不同规模下精度不同）',
+             '\n（固定边际误差判据tol=$10^{-5}$，每10次迭代检查一次；'
+             r'每迭代时间渐近$O(n^2)$，小$n$受固定开销主导；'
+             r'熵偏差总体随$n$上升、存在规模间波动——同一$\varepsilon$在不同规模下精度不同）',
              fontsize=12, y=1.06)
 plt.tight_layout()
 fig_path2 = os.path.join(SAVE_DIR, '步骤2_精度效率权衡.png')
@@ -504,21 +510,25 @@ print("=" * 60)
 print(f"""
 关键结论:
 1. 匈牙利算法 vs Sinkhorn（14.3.5节）
-   - 匈牙利: 精确解，总时间O(n^3)，不可微（scipy C实现常数极小，n=300实测见步骤3打印，含机器负载差异）
-   - Sinkhorn: 熵正则近似，每迭代O(n^2)，可微、可GPU批量并行
+   - 匈牙利: 精确解，总时间渐近O(n^3)，不可微（scipy C实现常数极小，n=300实测见步骤3打印，含机器负载差异）
+   - Sinkhorn: 熵正则近似，每迭代渐近O(n^2)（小n受固定开销主导，实测增长慢于锚定末端的O(n^2)参考线），
+     可微、可GPU批量并行；收敛检查每10次迭代一次（对齐POT默认），避免每迭代重建P的额外常数
    - 本实验的纯NumPy教学实现常数开销大，总墙钟时间反而远慢于C实现的匈牙利算法；
-     Sinkhorn的可扩展性优势要在GPU批量并行下才能体现（POT库生产环境实测远快于精确解）
+     Sinkhorn的可扩展性优势要在GPU批量并行下才能体现（POT库/GPU生产环境下远快于精确解，本实验未测）
 
 2. Log域稳定化Sinkhorn的收敛特性
    - 直接在log域迭代避免K=exp(-C/ε)的数值下溢
    - 收敛所需迭代次数由ε主导（ε越小对偶缩放越病态、迭代越多），
      对样本量n的增长并不剧烈（本实验实测：不随n^2增长）
+   - 迭代数同时对数据尺度敏感：步骤2用std=0.3（ε=0.01需约万次迭代），
+     步骤4用std=0.2（同ε约两千次）——σ越大簇内代价动态范围e^(ΔC/ε)越宽，小ε收敛越慢，
+     跨步骤的迭代数/偏差数字不可直接比较
    - 未收敛时重建的P不是有效耦合，其<C,P>可能低于真实OT代价——
      报告迭代数时必须同时标注是否收敛
 
 3. 精度-效率权衡的真实图景
-   - 熵偏差 |<C,P_ε>-OT| 随ε单调增大，且在固定ε下随样本量n增大而上升
-     （实测ε=0.1: n=50约9~14% → n=300约17%；ε=1.0: n=50约54~61% → n=300约70%）
+   - 熵偏差 |<C,P_ε>-OT| 随ε单调增大；固定ε下随样本量n总体上升、存在规模间波动
+     （实测std=0.2，n=50/100/200/300: ε=0.1依次约{results_scalability['bias'][0.1][0]:.1f}/{results_scalability['bias'][0.1][1]:.1f}/{results_scalability['bias'][0.1][2]:.1f}/{results_scalability['bias'][0.1][3]:.1f}%（n=100处凹陷）；ε=1.0依次约{results_scalability['bias'][1.0][0]:.1f}/{results_scalability['bias'][1.0][1]:.1f}/{results_scalability['bias'][1.0][2]:.1f}/{results_scalability['bias'][1.0][3]:.1f}%——每个规模仅3个随机实例，实例噪声与趋势同量级）
    - 因此ε不是绝对常数：同一ε在不同batch规模/数据分布下精度不同，
      实际使用时应在目标规模上标定ε（这是Minibatch OT调参的真实注意点）
    - 小ε(≤0.01)在固定tol下迭代数急剧上升，实践中常早停换取速度

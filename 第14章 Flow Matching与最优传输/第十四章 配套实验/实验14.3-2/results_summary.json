@@ -1,6 +1,7 @@
 {
   "wd_independent": 0.3598,
   "wd_ot": 0.3649,
+  "wd_noise_floor": 0.2273,
   "curvature_diffusion": 0.1141,
   "curvature_independent": 0.0225,
   "curvature_ot": 0.0025,

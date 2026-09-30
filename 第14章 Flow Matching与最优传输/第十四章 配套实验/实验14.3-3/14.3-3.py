@@ -259,7 +259,6 @@ def train_model(model, optimizer, train_loader, model_type='rf', num_epochs=50,
     progress_bar: 是否显示进度条
     """
     start_epoch = 0
-    is_final = False
     train_losses = []
 
     # 检查是否有最终权重
@@ -454,7 +453,29 @@ print(f"  DDPM 200步 平均最近邻距离: {dist_ddpm:.4f}")
 print(f"  RF 50步   平均最近邻距离: {dist_rf50:.4f}")
 print(f"  RF 10步   平均最近邻距离: {dist_rf10:.4f}")
 print(f"  RF 1步    平均最近邻距离: {dist_rf1:.4f}")
-print("  （距离越小表示生成样本更接近真实数据分布）")
+
+def compute_batch_diversity(generated):
+    """批内平均两两L2距离（多样性指标：模式塌缩时趋近0）"""
+    g = generated.view(generated.shape[0], -1)
+    d = torch.cdist(g, g)
+    iu = torch.triu_indices(g.shape[0], g.shape[0], offset=1)
+    return d[iu[0], iu[1]].mean().item()
+
+# 真实样本基线：取未出现在参考集(前100张)中的 test[100:108]，作为指标的"参照上界"
+real_samples = torch.stack([test_dataset[i][0] for i in range(100, 100 + n_samples)]).to(device)
+dist_real = compute_nn_distance(real_samples, test_samples)
+
+div_ddpm = compute_batch_diversity(ddpm_samples)
+div_rf50 = compute_batch_diversity(rf_50_samples)
+div_rf10 = compute_batch_diversity(rf_10_samples)
+div_rf1 = compute_batch_diversity(samples_by_steps[1])
+div_real = compute_batch_diversity(real_samples)
+
+print(f"  真实样本基线 平均最近邻距离: {dist_real:.4f}")
+print("\n批内多样性（平均两两L2距离，越高越多样）:")
+print(f"  DDPM 200步: {div_ddpm:.2f} | RF 50步: {div_rf50:.2f} | RF 10步: {div_rf10:.2f} | RF 1步: {div_rf1:.2f} | 真实样本: {div_real:.2f}")
+print("  注: 最近邻距离只是粗糙代理指标——模糊的低能量样本(如RF 1步)会取得虚高的分数，")
+print("      它无法单独判定质量；须结合视觉检查与批内多样性(1步多样性塌缩是模式塌缩的有力迹象)")
 
 # 加速比计算（实测）
 speedup_10 = time_ddpm / time_rf10
@@ -499,7 +520,7 @@ print("""
    - RF用Flow ODE采样：1步/5步/10步/50步
    - DDPM需要200步（SDE采样）
    - RF的直线路径允许大幅减少采样步数
-   - 量化指标验证：RF 10步即可达到较好质量（平均最近邻距离接近）
+   - 量化指标：RF 10步/50步最近邻距离与DDPM 200步同量级；质量判定须结合视觉与多样性
 
 2. DDPM vs Rectified Flow对比（14.3.6节）★ 原创设计
    - 同一UNet架构，不同训练目标
@@ -509,8 +530,12 @@ print("""
      * RF 50步: {:.4f}
      * RF 10步: {:.4f}
      * RF 1步: {:.4f}
+     * 真实样本基线: {:.4f}
    - 结论：RF 50步/10步质量接近DDPM 200步，1步质量较差
-   - RF 1步质量较差，但Reflow可以改善（见实验14.4-1）
+   - RF 1步质量较差的有力迹象是多样性塌缩（批内多样性 {:.2f} vs 真实 {:.2f}）：
+     单步Euler只能输出≈条件均值的模糊图像；最近邻距离反而最小({:.1f}左右)，
+     恰好暴露该指标对模糊样本的偏袒，不能单独作为质量判据
+   - Reflow可以改善1步质量（见实验14.4-1）
 
 3. 路径形态差异（14.3.5节）
    - DDPM路径弯曲（扩散耦合），需要多步
@@ -523,8 +548,8 @@ print("""
    - RF 50步耗时: {:.3f}s
    - 实测加速比：RF 10步 vs DDPM = {:.1f}x
    - Flow Matching显著减少采样时间，为实时生成奠定基础
-""".format(dist_ddpm, dist_rf50, dist_rf10, dist_rf1,
-           time_ddpm, time_rf10, time_rf50, speedup_10))
+""".format(dist_ddpm, dist_rf50, dist_rf10, dist_rf1, dist_real, div_rf1, div_real,
+           dist_rf1, time_ddpm, time_rf10, time_rf50, speedup_10))
 
 # ===== 保存数值结果 =====
 import json
@@ -548,6 +573,12 @@ results_summary = {
     'dist_rf_50step': round(float(dist_rf50), 4),
     'dist_rf_10step': round(float(dist_rf10), 4),
     'dist_rf_1step': round(float(dist_rf1), 4),
+    'dist_real_baseline': round(float(dist_real), 4),
+    'diversity_ddpm_200step': round(float(div_ddpm), 2),
+    'diversity_rf_50step': round(float(div_rf50), 2),
+    'diversity_rf_10step': round(float(div_rf10), 2),
+    'diversity_rf_1step': round(float(div_rf1), 2),
+    'diversity_real': round(float(div_real), 2),
     'time_ddpm': round(float(time_ddpm), 3),
     'time_rf_10step': round(float(time_rf10), 3),
     'time_rf_50step': round(float(time_rf50), 3),

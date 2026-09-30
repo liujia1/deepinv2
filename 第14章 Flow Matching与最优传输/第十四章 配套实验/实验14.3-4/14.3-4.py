@@ -17,9 +17,12 @@
   - 调度 α_t=t, β_t=1−t(直线插值), 独立耦合 CFM 训练 v_θ
   - 三角验证三重: ①闭环 v_θ→D_θ→s_θ→v'_θ 误差(浮点级) ②三对象 vs 解析真值
     ③解析 score* 用有限差分独立验证(抓住推导错误的最后一道防线)
-  - σ 扫描 {0, 0.5, 1, 2, 4} × 步数 {100, 5}: 切片W2 验证"多步边际不变; 少步最优 σ 由实测给出"
+  - σ 扫描 {0,0.5,1,2,4} × 步数 {100,5} × 5 采样种子: 切片W2 均值±std——检验"多步对 σ 鲁棒"
+    与"少步中间 σ 红利"（14.3.7 的边际不变仅对精确 score 成立, 模型 score 误差会被 σ²/2 放大）
+  - 解析对照: 精确 v*/s* 跑同款采样器, 分离"粗步离散化效应"（对照中仍在的红利）
+    与"模型误差放大"（模型版多出的劣化）——结论写在输出里, 证据也在代码里
 
-本实验不需要GPU，CPU几十秒可跑完。
+本实验不需要GPU，CPU 约 1~2 分钟可跑完。
 """
 
 import sys
@@ -220,14 +223,26 @@ class VectorFieldNet(nn.Module):
 N_PARAMS = sum(p.numel() for p in VectorFieldNet().parameters())
 print(f"\n[模型] v_θ 向量场网络: 参数量 {N_PARAMS:,}")
 
-def train_cfm(n_epochs=2000, batch_size=256, lr=1e-3):
+def train_cfm(n_epochs=2000, batch_size=256, lr=1e-3, eval_every=25, eval_n=4096):
     """条件 Flow Matching 训练（直线插值 x_t=(1−t)z+t·x0, 条件场 v=x0−z）
 
     训练/网络内部用 float32 提速; 解析量比较时统一升回 float64。
+    收敛曲线用固定评估 batch（4096 样本, 独立生成器, 不扰动训练的随机数流）每 25 epoch
+    评估一次——单 batch 训练损失的锯齿只是蒙特卡洛噪声, 不反映真实收敛。
     """
     model = VectorFieldNet().float()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    losses = []
+    # 固定评估 batch（显式生成器 -> 全局随机数流不变, 训练结果与不评估时逐位一致）
+    g_eval = torch.Generator().manual_seed(123)
+    comp_e = torch.multinomial(torch.tensor(WEIGHTS, dtype=torch.float32),
+                               eval_n, replacement=True, generator=g_eval)
+    z_e = torch.randn(eval_n, 2, generator=g_eval)
+    x0_e = torch.tensor(MUS, dtype=torch.float32)[comp_e] \
+        + torch.randn(eval_n, 2, generator=g_eval) \
+        * torch.tensor(SIGS, dtype=torch.float32)[comp_e].sqrt()
+    t_e = torch.rand(eval_n, 1, generator=g_eval)
+    v_e = x0_e - z_e
+    eval_curve = []
     model.train()
     for epoch in range(1, n_epochs + 1):
         # 1. 采噪声 z~N(0,I) 与数据 x0~p_data（独立耦合, 14.3.3 默认配置）
@@ -247,11 +262,16 @@ def train_cfm(n_epochs=2000, batch_size=256, lr=1e-3):
         v_pred = model(x_t, t)
         loss = nn.functional.mse_loss(v_pred, v_target)
         optimizer.zero_grad(); loss.backward(); optimizer.step()
-        if epoch % 250 == 0 or epoch == 1:
-            losses.append((epoch, loss.item()))
+        if epoch % eval_every == 0 or epoch == 1:
+            model.eval()
+            with torch.no_grad():
+                eval_loss = nn.functional.mse_loss(
+                    model((1 - t_e) * z_e + t_e * x0_e, t_e), v_e).item()
+            model.train()
+            eval_curve.append((epoch, eval_loss))
         if epoch % 500 == 0:
-            print(f"  epoch {epoch}/{n_epochs}  CFM loss = {loss.item():.6f}")
-    return model, losses
+            print(f"  epoch {epoch}/{n_epochs}  评估 loss = {eval_curve[-1][1]:.6f}")
+    return model, eval_curve
 
 print("\n训练 CFM（直线插值, 独立耦合）...")
 model_v, losses_v = train_cfm()
@@ -293,7 +313,7 @@ print(f"  闭环误差 v→D→s→v':    max {loop_err.max():.2e}  （浮点级
 print(f"  网络速度 vs 解析 v*:   mean {err_v.mean():.4f} / max {err_v.max():.4f}")
 print(f"  换算去噪器 vs 解析 D*: mean {err_D.mean():.4f} / max {err_D.max():.4f}")
 print(f"  换算得分   vs 解析 s*: mean {err_s.mean():.4f} / max {err_s.max():.4f}")
-print("  -> 学一个 v_θ, 三角公式免费得到 D_θ 与 s_θ, 三者与解析真值同水平吻合")
+print("  -> 学一个 v_θ, 三角公式免费得到 D_θ 与 s_θ; 三者误差按三角系数精确线性缩放(代数恒等), 不必同量级")
 
 per_t_err = {tp: {'v': float(err_v[probe_t == tp].mean()),
                   'D': float(err_D[probe_t == tp].mean()),
@@ -332,6 +352,8 @@ print(f"图已保存: {os.path.join(SAVE_DIR, '步骤2_三角验证.png')}")
 def sliced_w2(samples_a, samples_b, n_proj=32, seed=42):
     """切片 W2 距离（随机投影近似, 教学标准做法）:
     W2²(a,b) ≈ E_u[W2²(u·a, u·b)], 1D W2 用排序后的逐点差分计算"""
+    if not (np.isfinite(samples_a).all() and np.isfinite(samples_b).all()):
+        return float('nan')   # 采样发散（如解析对照 5步σ=4）——如实记 NaN
     g = torch.Generator().manual_seed(seed)
     a = torch.tensor(samples_a, dtype=torch.float64)
     b = torch.tensor(samples_b, dtype=torch.float64)
@@ -359,6 +381,23 @@ def sample_sde_sigma(model, sigma, n_steps, n_samples, seed):
             x = torch.tensor(x.numpy() + h * drift + noise)
     return x.numpy()
 
+def sample_sde_analytic(sigma, n_steps, n_samples, seed):
+    """解析对照采样器: 用精确 v* 与 s* 替换网络, 其余与 sample_sde_sigma 完全同款。
+
+    用途: 把 σ 扫描的总误差分解为"粗步离散化效应"（解析对照中仍存在的部分）
+    与"模型 score 误差被 σ²/2 放大"（模型版超出解析对照的部分）。
+    """
+    rng0 = np.random.default_rng(seed)
+    x = rng0.standard_normal((n_samples, 2))
+    h = 1.0 / n_steps
+    with np.errstate(all='ignore'):   # σ 大+步少时会数值发散, 如实让它溢出为 NaN
+        for n in range(n_steps):
+            t_n = n / n_steps
+            drift = mixture_velocity(x, t_n) + 0.5 * sigma ** 2 * mixture_score(x, t_n)
+            noise = np.sqrt(h) * sigma * np.random.default_rng(seed * 1000 + n).standard_normal(x.shape)
+            x = x + h * drift + noise
+    return x
+
 # 真值参考样本: 直接从解析混合高斯采
 def sample_reference(n_samples, seed):
     rng = np.random.default_rng(seed)
@@ -372,28 +411,63 @@ def sample_reference(n_samples, seed):
 N_SAMPLES_EVAL = 2000
 SIGMA_SWEEP = [0.0, 0.5, 1.0, 2.0, 4.0]
 STEPS_LIST = [100, 5]
+N_SEEDS_SWEEP = 5
+
+def sweep_seeds(n_steps):
+    """每个步数档的采样种子列表; 首种子与旧版单种子一致(2028+n_steps)"""
+    return [2028 + n_steps + 1000 * s for s in range(N_SEEDS_SWEEP)]
+
 ref_samples = sample_reference(N_SAMPLES_EVAL, seed=42)
-sw2_table = {}
-print(f"\n步骤3: σ 扫描（每配置 {N_SAMPLES_EVAL} 样本, 切片W2 对比解析真值样本）")
-print(f"  {'σ':>4} | {'SW2(100步)':>11} | {'SW2(5步)':>10}   <- 14.3.7: 多步边际不变; 少步最优 σ 看实测")
-for n_steps in STEPS_LIST:
-    row = []
-    for sigma in SIGMA_SWEEP:
-        xs = sample_sde_sigma(model_v, sigma, n_steps, N_SAMPLES_EVAL, seed=2028 + n_steps)
-        sw2 = sliced_w2(xs, ref_samples)
-        row.append(float(sw2))
-    sw2_table[n_steps] = row
+
+def run_sweep(sampler):
+    """对 SIGMA_SWEEP × STEPS_LIST × N_SEEDS_SWEEP 跑采样器, 返回 {步数: (均值, std, 原始矩阵)}"""
+    out = {}
+    for n_steps in STEPS_LIST:
+        mat = np.array([[sliced_w2(sampler(sigma, n_steps, s), ref_samples)
+                         for sigma in SIGMA_SWEEP] for s in range(N_SEEDS_SWEEP)])
+        out[n_steps] = (mat.mean(0), mat.std(0), mat)
+    return out
+
+print(f"\n步骤3: σ 扫描（每配置 {N_SAMPLES_EVAL} 样本 × {N_SEEDS_SWEEP} 采样种子, 切片W2 对比解析真值样本）")
+print(f"  {'σ':>4} | {'SW2 100步(均值±std)':>20} | {'SW2 5步(均值±std)':>18}   <- 14.3.7 边际不变仅对精确 score 成立")
+sw2_model = run_sweep(lambda sigma, n_steps, s:
+                      sample_sde_sigma(model_v, sigma, n_steps, N_SAMPLES_EVAL, sweep_seeds(n_steps)[s]))
 for i, sigma in enumerate(SIGMA_SWEEP):
-    print(f"  {sigma:>4.1f} | {sw2_table[100][i]:>11.4f} | {sw2_table[5][i]:>10.4f}")
-best_5 = SIGMA_SWEEP[int(np.argmin(sw2_table[5]))]
-best_100 = SIGMA_SWEEP[int(np.argmin(sw2_table[100]))]
-print(f"  -> 少步(5步)最优 σ = {best_5}（由实测决定; 14.3.7 经验规律: 少步通常偏 ODE/小 σ, 但最优值依赖模型误差）")
-print(f"  -> 多步(100步): SW2 范围 {min(sw2_table[100]):.4f}~{max(sw2_table[100]):.4f}（同量级 -> 边际保持验证）")
+    m100, m5 = sw2_model[100], sw2_model[5]
+    print(f"  {sigma:>4.1f} | {m100[0][i]:>10.4f}±{m100[1][i]:<8.4f} | {m5[0][i]:>8.4f}±{m5[1][i]:<8.4f}")
+
+mean5, mean100 = sw2_model[5][0], sw2_model[100][0]
+best_5 = SIGMA_SWEEP[int(np.argmin(mean5))]
+best_100 = SIGMA_SWEEP[int(np.argmin(mean100))]
+second_5 = SIGMA_SWEEP[int(np.argsort(mean5)[1])]
+best_per_seed = [SIGMA_SWEEP[int(np.argmin(row))] for row in sw2_model[5][2]]
+n_gain = int(sum(min(row[1:]) < row[0] for row in sw2_model[5][2]))  # 任一 σ>0 胜过 σ=0 的种子数
+print(f"  -> 少步(5步): {n_gain}/{N_SEEDS_SWEEP} 个种子存在中间 σ 红利(最优σ>0); 逐种子最优 σ={best_per_seed}")
+print(f"     种子平均最优 σ={best_5}（次优 {second_5}）-> 结论取'中间 σ∈[0.5,1] 有红利', 单点最优随种子浮动")
+print(f"  -> 多步(100步): SW2 自 σ=0 的 {mean100[0]:.3f} 升至 σ=4 的 {mean100[-1]:.3f}"
+      f"（对 σ 的鲁棒性远高于 5 步; 劣化来源由下方解析对照分离）")
+
+print(f"\n  解析对照（精确 v*/s* 替换网络, 同款采样器——分离粗步离散化效应与模型误差）:")
+sw2_ana = run_sweep(lambda sigma, n_steps, s:
+                    sample_sde_analytic(sigma, n_steps, N_SAMPLES_EVAL, sweep_seeds(n_steps)[s]))
+for i, sigma in enumerate(SIGMA_SWEEP):
+    a100, a5 = sw2_ana[100], sw2_ana[5]
+    f100 = "发散" if not np.isfinite(a100[0][i]) else f"{a100[0][i]:.4f}±{a100[1][i]:.4f}"
+    f5 = "发散" if not np.isfinite(a5[0][i]) else f"{a5[0][i]:.4f}±{a5[1][i]:.4f}"
+    print(f"  {sigma:>4.1f} | {f100:>18} | {f5:>16}")
+ana_best_5 = SIGMA_SWEEP[int(np.nanargmin(sw2_ana[5][0]))]
+ana_best_100 = SIGMA_SWEEP[int(np.nanargmin(sw2_ana[100][0]))]
+print(f"  -> 解析 5 步: 中间 σ 仍占优（最优 σ={ana_best_5}: SW2={np.nanmin(sw2_ana[5][0]):.3f} vs σ=0 的 {sw2_ana[5][0][0]:.3f}）"
+      f"-> 少步中间 σ 红利来自粗步离散化本身; 模型误差只是叠加（精确 score 下红利更大: "
+      f"{np.nanmin(sw2_ana[5][0]):.3f} vs 模型 {mean5.min():.3f}）")
+print(f"  -> 解析 100 步: SW2 不随 σ 劣化（最优 σ={ana_best_100}, σ=4 仍 {sw2_ana[100][0][-1]:.3f}）"
+      f"-> 模型版 100 步的劣化并非离散化假象, 而是模型 score 误差被 σ²/2 放大"
+      f"（14.3.7 的'边际不变'前提是精确 score）")
 
 # 图2: (a) 少步散点对比 (b) SW2 vs σ 曲线
 fig, axes = plt.subplots(1, 4, figsize=(16.5, 4.4))
 demo_steps = 5
-torch.manual_seed(2028); np.random.seed(2028)
+# 注: sample_sde_sigma/sliced_w2 内部自带生成器种子, 无需(也不应)设全局种子
 for ax, sigma, tag in zip(axes[:3], [0.0, 1.0, 4.0], ['a', 'b', 'c']):
     xs = sample_sde_sigma(model_v, sigma, demo_steps, 800, seed=2029)
     ax.scatter(ref_samples[:800, 0], ref_samples[:800, 1], s=5, c='gray', alpha=0.25, label='解析真值样本')
@@ -401,16 +475,26 @@ for ax, sigma, tag in zip(axes[:3], [0.0, 1.0, 4.0], ['a', 'b', 'c']):
     ax.set_xlim(-5, 5); ax.set_ylim(-5, 5); ax.set_aspect('equal')
     ax.grid(alpha=0.3); ax.legend(fontsize=8, loc='upper left')
     sw2_demo = sliced_w2(xs, ref_samples[:800])
-    ax.set_title(f'({tag}) {demo_steps}步, $\\sigma$={sigma}: SW2={sw2_demo:.3f}', fontsize=11)
+    ax.set_title(f'({tag}) {demo_steps}步, $\\sigma$={sigma}: SW2={sw2_demo:.3f}\n(800 样本演示组)', fontsize=11)
 ax = axes[3]
-for n_steps, style in zip(STEPS_LIST, ['o-', 's--']):
-    ax.plot(SIGMA_SWEEP, sw2_table[n_steps], style, label=f'{n_steps}步')
+for n_steps, mk, color in zip(STEPS_LIST, ['o', 's'], ['#2a7de1', '#d1495b']):
+    m, sd, _ = sw2_model[n_steps]
+    ax.errorbar(SIGMA_SWEEP, m, yerr=sd, fmt=mk + '-', color=color, capsize=3, lw=1.5,
+                label=f'{n_steps}步·模型({N_SEEDS_SWEEP}种子)')
+for n_steps, mk, color in zip(STEPS_LIST, ['o', 's'], ['#3a9d23', '#8c564b']):
+    m, sd, _ = sw2_ana[n_steps]
+    ax.errorbar(SIGMA_SWEEP, m, yerr=sd, fmt=mk + '--', color=color, capsize=3, lw=1.2, alpha=0.85,
+                label=f'{n_steps}步·解析对照')
+if not np.isfinite(sw2_ana[5][0][-1]):
+    ax.text(0.98, 0.72, '解析对照 5步 σ=4 发散(NaN, 未画出)', transform=ax.transAxes,
+            ha='right', fontsize=8, color='#3a9d23')
 ax.set_xlabel('噪声强度 $\\sigma$（常数调度）', fontsize=11)
 ax.set_ylabel('切片 $W_2$ 距离（vs 解析真值）', fontsize=11)
-ax.set_yscale('log'); ax.grid(alpha=0.3, which='both'); ax.legend(fontsize=10)
-ax.set_title('(d) 同一 $v_\\theta$ 的 $\\sigma$ 扫描', fontsize=11)
-plt.suptitle('实验14.3-4 步骤3: SDE 扩展——训练后任意 $\\sigma$ 边际不变; 少步采样下确定性 ODE($\\sigma$=0) 最稳',
-             fontsize=12.5, y=1.02)
+ax.set_yscale('log'); ax.grid(alpha=0.3, which='both'); ax.legend(fontsize=8, loc='upper left')
+ax.set_title('(d) $\\sigma$ 扫描: 模型 vs 解析对照（均值±std）', fontsize=11)
+plt.suptitle('实验14.3-4 步骤3: SDE 扩展——多步对 $\\sigma$ 鲁棒, 少步中间 $\\sigma$ 有红利; 解析对照分离粗步离散化与模型 score 误差\n'
+             '（(a)-(c) 为 800 样本单种子演示组, 与 (d) 的多种子统计不可直接对比）',
+             fontsize=12.5, y=1.06)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤3_sigma扫描.png'), dpi=150, bbox_inches='tight')
 plt.close()
@@ -423,12 +507,12 @@ fig, ax = plt.subplots(figsize=(7.2, 4.2))
 ax.plot([e for e, _ in losses_v], [l for _, l in losses_v], '-', color='#2a7de1')
 ax.set_xlabel('训练 epoch', fontsize=11); ax.set_ylabel('CFM 损失（MSE）', fontsize=11)
 ax.grid(alpha=0.3)
-ax.set_title('实验14.3-4 步骤4: CFM 训练收敛（直线插值, 独立耦合）', fontsize=12)
+ax.set_title('实验14.3-4 步骤4: CFM 训练收敛（固定评估 batch 4096, 每 25 epoch）', fontsize=12)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤4_训练损失.png'), dpi=150, bbox_inches='tight')
 plt.close()
 print(f"图已保存: {os.path.join(SAVE_DIR, '步骤4_训练损失.png')}")
-print(f"  最终 CFM loss = {losses_v[-1][1]:.6f}")
+print(f"  最终 CFM loss（固定评估 batch） = {losses_v[-1][1]:.6f}")
 
 # ============================================================
 # 保存数值结果
@@ -443,6 +527,10 @@ def _to_native(obj):
     if isinstance(obj, (np.floating,)): return float(obj)
     if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
     return obj
+
+def _r5(v):
+    """NaN -> None(JSON null, 表示数值发散), 其余保留 5 位小数"""
+    return None if not np.isfinite(v) else round(float(v), 5)
 
 results_summary = {
     'setup': {
@@ -464,12 +552,24 @@ results_summary = {
     'sigma_sweep': {
         'sigma_list': SIGMA_SWEEP,
         'steps_list': STEPS_LIST,
-        'sliced_w2': {str(k): [round(v, 5) for v in row] for k, row in sw2_table.items()},
-        'best_sigma_5steps': float(best_5),
-        'best_sigma_100steps': float(best_100),
+        'n_seeds': N_SEEDS_SWEEP,
         'n_samples': N_SAMPLES_EVAL,
+        'sliced_w2_model_mean': {str(k): [_r5(v) for v in sw2_model[k][0]] for k in STEPS_LIST},
+        'sliced_w2_model_std': {str(k): [_r5(v) for v in sw2_model[k][1]] for k in STEPS_LIST},
+        'best_sigma_per_seed_5steps': [float(b) for b in best_per_seed],
+        'intermediate_sigma_gain': f'{n_gain}/{N_SEEDS_SWEEP} 个采样种子存在中间σ红利(最优σ>0)',
+        'best_sigma_5steps_seed_mean': float(best_5),
+        'best_sigma_100steps_seed_mean': float(best_100),
+        'analytic_control': {
+            'desc': '精确 v*/s* 同款采样器: 分离粗步离散化效应与模型 score 误差的 σ² 放大',
+            'sliced_w2_mean': {str(k): [_r5(v) for v in sw2_ana[k][0]] for k in STEPS_LIST},
+            'sliced_w2_std': {str(k): [_r5(v) for v in sw2_ana[k][1]] for k in STEPS_LIST},
+            'best_sigma_5steps': float(ana_best_5),
+            'best_sigma_100steps': float(ana_best_100),
+        },
     },
     'final_cfm_loss': round(float(losses_v[-1][1]), 6),
+    'final_cfm_loss_note': '固定评估 batch(4096 样本)上的 MSE, 非单训练 batch',
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
@@ -488,7 +588,10 @@ print(f"""1. 解析真值三重自检: 有限差分验证 score*（误差 {max(f
      （D=β·v+x、s=(t·v−x)/(1−t) 是精确线性换算, 系数即缩放因子, 三者不必同量级）
    -> 学一个 v_θ, 免费拿到去噪器与得分——三角的红利在数值上兑现
 
-3. SDE 扩展（14.3.7 的数值版）: s_θ 由三角公式从 v_θ 换算, 同一网络跑 5 档 σ
-   - 多步(100步): 各 σ 切片W2 同量级（{min(sw2_table[100]):.3f}~{max(sw2_table[100]):.3f}）-> 边际不变验证
-   - 少步(5步):  实测最优 σ = {best_5}（SW2={min(sw2_table[5]):.3f}）; σ=0 档 SW2={sw2_table[5][0]:.3f}
-   -> 随机性是"旋钮"而非"配方": 训练定路径, 采样选 σ, 最优档由实测给出""")
+3. SDE 扩展（14.3.7 的数值版）: s_θ 由三角公式从 v_θ 换算, 同一网络跑 5 档 σ × {N_SEEDS_SWEEP} 种子
+   - 多步(100步): SW2 自 {mean100[0]:.3f}（σ=0）升至 {mean100[-1]:.3f}（σ=4）; 解析对照（精确 v*/s*）下
+     100 步各 σ SW2 ≤ {np.nanmax(sw2_ana[100][0]):.3f} 且最优 σ={ana_best_100}
+     -> 劣化不是离散化假象, 而是模型 score 误差被 σ²/2 放大（"边际不变"前提是精确 score）
+   - 少步(5步): {n_gain}/{N_SEEDS_SWEEP} 种子存在中间 σ 红利; 种子平均最优 σ={best_5}（次优 {second_5}）,
+     解析对照最优 σ={ana_best_5} -> 红利来自粗步离散化本身, 模型误差只是叠加并压小红利
+   -> 随机性是"旋钮而非配方": 训练定路径, 采样选 σ; 最优档随步数/模型质量移动, 必须实测""")

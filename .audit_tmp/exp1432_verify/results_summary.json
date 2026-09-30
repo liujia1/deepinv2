@@ -1,0 +1,9 @@
+{
+  "wd_independent": 0.3598,
+  "wd_ot": 0.3649,
+  "curvature_diffusion": 0.1141,
+  "curvature_independent": 0.0225,
+  "curvature_ot": 0.0025,
+  "final_loss_ind": 0.770184,
+  "final_loss_ot": 0.0278
+}

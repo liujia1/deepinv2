@@ -1,0 +1,18 @@
+﻿== rf_final.pth == keys: ['model_state_dict', 'optimizer_state_dict']
+  鍙傛暟閲? 218269, 灞傛暟: 86
+== rf_checkpoint.pth == keys: ['epoch', 'model_state_dict', 'optimizer_state_dict']
+  epoch(鏈€鍚庝竴娆′繚瀛?: 49
+  鍙傛暟閲? 218269, 灞傛暟: 86
+== 2rf_final.pth == keys: ['model_state_dict', 'optimizer_state_dict']
+  鍙傛暟閲? 218269, 灞傛暟: 86
+== 2rf_checkpoint.pth == keys: ['epoch', 'model_state_dict', 'optimizer_state_dict']
+  epoch(鏈€鍚庝竴娆′繚瀛?: 49
+  鍙傛暟閲? 218269, 灞傛暟: 86
+
+1-RF 涓?2-RF final 鏉冮噸瀹屽叏鐩稿悓: False  (L1宸€诲拰: 1.0139e+04)
+
+== reflow_pairs.pth == keys: ['reflow_z', 'reflow_x0']
+  reflow_z: (60000, 1, 28, 28) mean=0.0001 std=0.9999 min=-5.359 max=5.464
+  reflow_x0: (60000, 1, 28, 28) mean=0.1275 std=0.3008 min=-0.087 max=1.099
+  reflow_x0 璐?姣斾緥: 0.244  璐?姣斾緥: 0.006
+  (z, x0) 鍍忕礌绾у急鐩稿叧绀轰緥 corr=0.0517锛堢嫭绔嬭€﹀悎锛孯eflow涓嶅仛OT閲嶆帓鈥斺€旂鍚?4.4-1瀹氫箟锛?

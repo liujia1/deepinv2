@@ -1,0 +1,8 @@
+﻿def __init__(self, time_dim=64, pred_type='epsilon'):
+ch = [1, 16, 32, 64]
+def train_ddpm(checkpoint_path, pred_type='epsilon', num_epochs=50):
+optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
+num_epochs = 3
+print(f"\n[快速验证模式] 仅训练 {num_epochs} 轮")
+print(f"\n开始训练 {pred_type}-prediction DDPM (T={T}, epochs={num_epochs}, UNet)...")
+if start_epoch >= num_epochs:

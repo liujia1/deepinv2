@@ -334,6 +334,9 @@ losses_1rf = train_rf_model(model_1rf, opt_1rf, z_1rf, x_1rf,
                              model_label='1-RF')
 
 # 生成固定噪声用于CRN曲率比较（跨轮共用同一批z，消除采样噪声对单调性判断的干扰）
+# 注意：z_curv 必须用独立固定种子抽取，否则其数值依赖于全局RNG历史——
+# 若 final checkpoint 已存在而跳过训练，全局RNG消耗量不同，κ值将无法复现
+torch.manual_seed(777)
 z_curv = torch.randn(500, 2, device=device)
 
 # 计算1-RF曲率
@@ -415,7 +418,6 @@ if n_reflow_rounds == 1:
 # 使用相同的噪声起点，以便直观比较
 torch.manual_seed(999)
 z_show = torch.randn(n_show_traj, 2, device=device)
-torch.manual_seed(42)  # 恢复随机种子
 
 for k in range(1, n_reflow_rounds + 1):
     ax = axes[k - 1]
@@ -491,7 +493,8 @@ print(f"图2已保存: {fig_path2}")
 n_gen = 1000
 fig, axes = plt.subplots(1, n_reflow_rounds + 1, figsize=(5 * (n_reflow_rounds + 1), 5))
 
-# (a) 目标分布
+# (a) 目标分布（固定种子，保证图可复现）
+torch.manual_seed(555)
 target_show = sample_crossed_gaussians(n_gen, device=device)
 ax = axes[0]
 ax.scatter(target_show[:, 0].cpu().numpy(), target_show[:, 1].cpu().numpy(),
@@ -502,11 +505,14 @@ ax.set_ylim(-5, 5)
 ax.set_aspect('equal')
 ax.grid(alpha=0.3)
 
-# (b-d) 各轮Reflow采样
+# (b-d) 各轮Reflow采样（固定种子+同一批z，保证可复现且跨轮可比）
 for k in range(1, n_reflow_rounds + 1):
     ax = axes[k]
     with torch.no_grad():
-        z_gen = torch.randn(n_gen, 2, device=device)
+        if k == 1:
+            torch.manual_seed(3407)
+            z_gen_shared = torch.randn(n_gen, 2, device=device)
+        z_gen = z_gen_shared
         samples = ode_sample(models[k], z_gen, n_steps=n_ode_steps)
     ax.scatter(samples[:, 0].cpu().numpy(), samples[:, 1].cpu().numpy(),
                c='green', alpha=0.3, s=8)

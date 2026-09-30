@@ -1,0 +1,88 @@
+f25cd0b 2026-09-30 15:15:51 +0800 1
+
+ .audit_tmp/exp1422_verify/14.2-2.py                | 417 +++++++++++++++
+ .audit_tmp/exp1422_verify/check_ellipse_bug.py     |  18 +
+ .audit_tmp/exp1422_verify/results_summary.json     |  31 ++
+ .audit_tmp/exp1422_verify/步骤2_cINN训练收敛.png   | Bin 0 -> 48647 bytes
+ .audit_tmp/exp1422_verify/步骤3_cINN后验采样.png   | Bin 0 -> 218033 bytes
+ .audit_tmp/exp1422_verify/步骤4_后验统计对比.png   | Bin 0 -> 61498 bytes
+ .audit_tmp/exp1431_verify/.chinese/chinese_font.py |  77 +++
+ .audit_tmp/exp1431_verify/14.3-1.py                | 594 +++++++++++++++++++++
+ .audit_tmp/exp1431_verify/check_claims.py          |  95 ++++
+ .audit_tmp/exp1431_verify/md_final.diff            | 105 ++++
+ .audit_tmp/exp1431_verify/old_1433.py              | Bin 0 -> 39280 bytes
+ .audit_tmp/exp1431_verify/old_1433_f704f40.py      | 525 ++++++++++++++++++
+ .audit_tmp/exp1431_verify/old_vs_new.diff          |  73 +++
+ .audit_tmp/exp1431_verify/proto_marg.py            |  60 +++
+ .audit_tmp/exp1431_verify/results_summary.json     | 199 +++++++
+ .audit_tmp/exp1431_verify/步骤1_OT传输计划对比.png | Bin 0 -> 175089 bytes
+ .audit_tmp/exp1431_verify/步骤2_精度效率权衡.png   | Bin 0 -> 216034 bytes
+ .audit_tmp/exp1431_verify/步骤3_正则化参数影响.png | Bin 0 -> 128195 bytes
+ .../14.2 连续归一化流(CNF).md                      |   8 +-
+ .../14.3 Flow Matching.md                          |  69 +--
+ .../第十四章 配套实验/实验14.2-1/14.2-1.py         |  20 +-
+ .../第十四章 配套实验/实验14.2-1/步骤2_采样质量对比.png | Bin 213201 -> 212778 bytes
+ .../第十四章 配套实验/实验14.2-1/步骤3_轨迹形态对比.png | Bin 66189 -> 65782 bytes
+ .../第十四章 配套实验/实验14.2-2/.chinese/chinese_font.py |  77 +++
+ .../第十四章 配套实验/实验14.2-2/14.2-2.py         |  60 ++-
+ .../第十四章 配套实验/实验14.2-2/results_summary.json |  20 +-
+ .../第十四章 配套实验/实验14.2-2/步骤2_cINN训练收敛.png | Bin 42769 -> 48520 bytes
+ .../第十四章 配套实验/实验14.2-2/步骤3_cINN后验采样.png | Bin 207976 -> 217887 bytes
+ .../第十四章 配套实验/实验14.2-2/步骤4_后验统计对比.png | Bin 51739 -> 98840 bytes
+ .../第十四章 配套实验/实验14.3-1/14.3-1.py         | 363 +++++++------
+ .../第十四章 配套实验/实验14.3-1/results_summary.json | 199 +++++++
+ .../第十四章 配套实验/实验14.3-1/步骤1_OT传输计划对比.png | Bin 171412 -> 175089 bytes
+ .../第十四章 配套实验/实验14.3-1/步骤2_精度效率权衡.png | Bin 174222 -> 221132 bytes
+ .../第十四章 配套实验/实验14.3-1/步骤3_正则化参数影响.png | Bin 113350 -> 128195 bytes
+ .../15.5 训练最佳实践.md                           |   6 +-
+ 35 files changed, 2770 insertions(+), 246 deletions(-)
+b94b79e 2026-09-30 11:23:23 +0800 1
+
+ .audit_tmp/14.1-1_旧图_backup.png                  | Bin 0 -> 250202 bytes
+ .audit_tmp/14.2-1_backup/步骤1_训练效率对比.png    | Bin 0 -> 144978 bytes
+ .audit_tmp/14.2-1_backup/步骤2_采样质量对比.png    | Bin 0 -> 213201 bytes
+ .audit_tmp/14.2-1_backup/步骤3_轨迹形态对比.png    | Bin 0 -> 66189 bytes
+ .audit_tmp/142md_diff.txt                          |  48 ++
+ .../smoke1551/.chinese/NotoSansSC-Regular.ttf      | Bin 0 -> 2171336 bytes
+ .audit_tmp/smoke1551/.chinese/chinese_font.py      |  77 +++
+ .audit_tmp/smoke1551/15.5-1_extend.py              | 692 +++++++++++++++++++++
+ .audit_tmp/smoke1551/_tamper.py                    |  14 +
+ .../data/MNIST/raw/t10k-images-idx3-ubyte          | Bin 0 -> 7840016 bytes
+ .../data/MNIST/raw/t10k-images-idx3-ubyte.gz       | Bin 0 -> 1648877 bytes
+ .../data/MNIST/raw/t10k-labels-idx1-ubyte          | Bin 0 -> 10008 bytes
+ .../data/MNIST/raw/t10k-labels-idx1-ubyte.gz       | Bin 0 -> 4542 bytes
+ .../data/MNIST/raw/train-images-idx3-ubyte         | Bin 0 -> 47040016 bytes
+ .../data/MNIST/raw/train-images-idx3-ubyte.gz      | Bin 0 -> 9912422 bytes
+ .../data/MNIST/raw/train-labels-idx1-ubyte         | Bin 0 -> 60008 bytes
+ .../data/MNIST/raw/train-labels-idx1-ubyte.gz      | Bin 0 -> 28881 bytes
+ .audit_tmp/smoke1551/rerun_log.txt                 | Bin 0 -> 6494 bytes
+ .../smoke1551/results_summary_extend100.json       |  28 +
+ .audit_tmp/smoke1551/resume_test_log.txt           | Bin 0 -> 183626 bytes
+ .audit_tmp/smoke1551/smoke_log.txt                 | Bin 0 -> 749778 bytes
+ .audit_tmp/smoke1551/延长验证_E1_双口径曲线.png    | Bin 0 -> 104539 bytes
+ .audit_tmp/smoke1551/延长验证_E2_交叉与排名.png    | Bin 0 -> 107347 bytes
+ .audit_tmp/smoke1551/延长验证_E3_采样对比.png      | Bin 0 -> 145308 bytes
+ .audit_tmp/test_ylabel.png                         | Bin 0 -> 48197 bytes
+ .audit_tmp/verify_1421.py                          | 140 +++++
+ .../14.1 最优传输基础.md                           |   8 +-
+ .../14.2 连续归一化流(CNF).md                      |  18 +-
+ .../第十四章 配套实验/实验14.1-1/results_summary.json |   5 +
+ .../第十四章 配套实验/实验14.2-1/14.2-1.py         |  21 +-
+ .../第十四章 配套实验/实验14.2-1/results_summary.json |  11 +
+ .../15.5 训练最佳实践.md                           | 103 +--
+ .../第十五章 配套实验/实验15.4-1/15.4-1.py         |  12 +-
+ .../实验15.4-1/验证实验15.4-1_Zero初始化消融_收敛对比.py |   6 +-
+ .../第十五章 配套实验/实验15.4-2/15.4-2.py         |   5 +-
+ .../第十五章 配套实验/实验15.5-1/15.5-1.py         |  36 +-
+ .../第十五章 配套实验/实验15.5-1/15.5-1_extend.py  | 691 ++++++++++++++++++++
+ .../第十五章 配套实验/实验15.5-1/_chk_inspect.py   |  47 ++
+ .../第十五章 配套实验/实验15.5-1/results_summary.json |  14 +
+ .../第十五章 配套实验/实验15.5-1/results_summary_extend100.json |  28 +
+ .../第十五章 配套实验/实验15.5-1/延长验证_E1_双口径曲线.png | Bin 0 -> 129197 bytes
+ .../第十五章 配套实验/实验15.5-1/延长验证_E2_交叉与排名.png | Bin 0 -> 133552 bytes
+ .../第十五章 配套实验/实验15.5-1/延长验证_E3_采样对比.png | Bin 0 -> 116543 bytes
+ .../第十五章 配套实验/实验15.5-1/步骤1_Adam_vs_AdamW.png | Bin 100808 -> 95565 bytes
+ .../第十五章 配套实验/实验15.5-1/步骤2_学习率调度对比.png | Bin 175525 -> 175150 bytes
+ .../第十五章 配套实验/实验15.5-1/步骤3_综合对比.png | Bin 125660 -> 120632 bytes
+ .../第十五章 配套实验/实验15.5-1/步骤4_采样质量对比.png | Bin 52846 -> 64983 bytes
+ 47 files changed, 1922 insertions(+), 82 deletions(-)

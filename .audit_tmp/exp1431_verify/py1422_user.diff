@@ -1,0 +1,74 @@
+--- before_1204
++++ current
+@@ -199,27 +199,39 @@
+ # 步骤2: 训练 cINN（最大似然 NLL）
+ # ══════════════════════════════════════════════════════════
+ print("\n[步骤 2] 训练 cINN（最大似然）...")
+ 
++weights_path = os.path.join(SAVE_DIR, 'cinn_weights.pt')
++losses_path = os.path.join(SAVE_DIR, 'losses.npy')
+ model = CINN().to(device)
+-opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+-n_iters = 6000
+-batch_size = 256
+-losses = []
+-t_start = time.time()
+-for it in range(n_iters):
+-    x = sample_prior(batch_size).to(device)
+-    y = forward_obs(x).to(device)
+-    z, logdet = model.forward(x, y)
+-    # NLL = -mean[ log N(z;0,I) + log|det J| ]，含归一化常数 D/2·log(2π)
+-    nll = (0.5 * (z ** 2).sum(1) + 0.5 * z.shape[1] * np.log(2 * np.pi) - logdet).mean()
+-    opt.zero_grad()
+-    nll.backward()
+-    opt.step()
+-    losses.append(nll.item())
+-    if (it + 1) % 1000 == 0:
+-        print(f"  迭代 {it+1}/{n_iters}: NLL = {nll.item():.4f}")
+-print(f"  训练完成，耗时 {time.time()-t_start:.1f} 秒，最终 NLL = {losses[-1]:.4f}")
++if os.path.exists(weights_path) and os.path.exists(losses_path):
++    # 已有权重：跳过训练，直接出图（删除 cinn_weights.pt / losses.npy 可强制重新训练）
++    model.load_state_dict(torch.load(weights_path, map_location=device))
++    model.eval()
++    losses = np.load(losses_path).tolist()
++    print(f"  已加载现成权重 {os.path.basename(weights_path)}，跳过训练（最终 NLL = {losses[-1]:.4f}）")
++else:
++    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
++    n_iters = 6000
++    batch_size = 256
++    losses = []
++    t_start = time.time()
++    for it in range(n_iters):
++        x = sample_prior(batch_size).to(device)
++        y = forward_obs(x).to(device)
++        z, logdet = model.forward(x, y)
++        # NLL = -mean[ log N(z;0,I) + log|det J| ]，含归一化常数 D/2·log(2π)
++        nll = (0.5 * (z ** 2).sum(1) + 0.5 * z.shape[1] * np.log(2 * np.pi) - logdet).mean()
++        opt.zero_grad()
++        nll.backward()
++        opt.step()
++        losses.append(nll.item())
++        if (it + 1) % 1000 == 0:
++            print(f"  迭代 {it+1}/{n_iters}: NLL = {nll.item():.4f}")
++    torch.save(model.state_dict(), weights_path)
++    np.save(losses_path, np.asarray(losses, dtype=np.float32))
++    print(f"  训练完成，耗时 {time.time()-t_start:.1f} 秒，最终 NLL = {losses[-1]:.4f}")
++    print(f"  权重已保存: {weights_path}（下次运行自动跳过训练）")
+ 
+ # 损失曲线
+ fig, ax = plt.subplots(figsize=(7, 4.5))
+ ax.plot(losses, lw=1.5, color='steelblue')
+@@ -333,10 +345,12 @@
+     am = st['analytic_mean']
+     acov = st['analytic_cov']
+     sm = st['sample_mean']
+     scov = st['sample_cov']
+-    # 解析后验 2σ 椭圆（各分量）
++    # 解析后验 2σ 椭圆（跳过后验权重可忽略的分量：w<1e-3 时 2000 个样本期望出现 <2 个）
+     for c in comps:
++        if c['w'] < 1e-3:
++            continue
+         eigv, eigvec = np.linalg.eigh(c['cov'])
+         theta = np.linspace(0, 2 * np.pi, 100)
+         circle = np.stack([np.cos(theta), np.sin(theta)])          # (2,100)
+         ell = eigvec @ (2 * np.sqrt(eigv)[:, None] * circle)       # 先主轴缩放再旋转

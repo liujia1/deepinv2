@@ -1,0 +1,35 @@
+﻿diff --git a/绗?4绔?Flow Matching涓庢渶浼樹紶杈?绗崄鍥涚珷 閰嶅瀹為獙/瀹為獙14.4-3/14.4-3.py b/绗?4绔?Flow Matching涓庢渶浼樹紶杈?绗崄鍥涚珷 閰嶅瀹為獙/瀹為獙14.4-3/14.4-3.py
+index 44817cd..7be5378 100644
+--- a/绗?4绔?Flow Matching涓庢渶浼樹紶杈?绗崄鍥涚珷 閰嶅瀹為獙/瀹為獙14.4-3/14.4-3.py	
++++ b/绗?4绔?Flow Matching涓庢渶浼樹紶杈?绗崄鍥涚珷 閰嶅瀹為獙/瀹為獙14.4-3/14.4-3.py	
+@@ -560,3 +560,31 @@ print(f"""
+    - 鏈疄楠屽湪2D鐐逛簯涓婇獙璇佹洸鐜囧崟璋冩€х悊璁?    - 涓よ€呭叡鍚岄獙璇丷eflow瀹氱悊锛氬疄璺垫晥鏋?鐞嗚淇濊瘉
+ """)
++
++# ===== 淇濆瓨鏁板€肩粨鏋?=====
++import json
++
++def _to_native(obj):
++    """閫掑綊杞崲numpy/torch绫诲瀷涓篜ython鍘熺敓绫诲瀷"""
++    import numpy as np
++    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
++    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
++    if isinstance(obj, (np.integer,)): return int(obj)
++    if isinstance(obj, (np.floating,)): return float(obj)
++    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
++    try:
++        import torch
++        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
++    except: pass
++    return obj
++
++results_summary = {
++    'curvature_1rf': round(float(curvatures[1]), 6),
++    'curvature_2rf': round(float(curvatures[2]), 6),
++    'curvature_3rf': round(float(curvatures[3]), 6),
++    'monotonic': bool(monotonic),
++}
++results_summary = _to_native(results_summary)
++with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
++    json.dump(results_summary, f, ensure_ascii=False, indent=2)
++print(f"鏁板€肩粨鏋滃凡淇濆瓨: {os.path.join(SAVE_DIR, 'results_summary.json')}")

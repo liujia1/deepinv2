@@ -1,0 +1,12 @@
+{
+  "dist_1rf_1step": 5.9394,
+  "dist_2rf_1step": 6.8389,
+  "dist_1rf_10step": 6.049,
+  "dist_1rf_50step": 7.1966,
+  "dist_real_baseline": 6.5112,
+  "diversity_1rf_1step": 0.8902,
+  "diversity_2rf_1step": 8.7993,
+  "diversity_1rf_10step": 8.587,
+  "diversity_1rf_50step": 10.0683,
+  "diversity_real": 9.9189
+}

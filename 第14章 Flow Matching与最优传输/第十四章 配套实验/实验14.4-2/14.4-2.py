@@ -478,7 +478,7 @@ labels = ['1-RF', '2-RF', '3-RF', 'OT-CFM']
 vals_wd = [wd_1rf, wd_2rf, wd_3rf, wd_ot]
 bars = ax.bar(labels, vals_wd, color=colors, alpha=0.7)
 ax.set_ylabel('Wasserstein-1 距离', fontsize=12)
-ax.set_title('(e) 采样质量随Reflow提升', fontsize=12)
+ax.set_title('(e) 100步采样W1距离（随Reflow轮数上升）', fontsize=12)
 for bar, val in zip(bars, vals_wd):
     ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01, f'{val:.3f}',
             ha='center', fontsize=11, fontweight='bold')
@@ -486,12 +486,14 @@ ax.grid(alpha=0.3, axis='y')
 
 # 下面行右：少步采样对比
 ax = axes[1, 2]
+few_step_wd = {}  # 存档各模型少步W1曲线
 for label, model in [('1-RF', model_1rf), ('3-RF', model_3rf), ('OT-CFM', model_ot)]:
     wd_list = []
     for n_steps in [1, 5, 10, 20, 50, 100]:
         traj = flow_sample(model, z_test_rf, n_steps=n_steps)
         wd = wasserstein_distance_nd(traj[-1], target_test)
         wd_list.append(wd)
+    few_step_wd[label] = wd_list
     ax.plot([1, 5, 10, 20, 50, 100], wd_list, '-o', markersize=5, label=label)
 ax.set_xlabel('ODE求解步数', fontsize=12)
 ax.set_ylabel('W1距离', fontsize=12)
@@ -529,7 +531,19 @@ if S_3rf <= S_ot:
 else:
     print("  ⚠ 3-RF曲率略高于OT-CFM（训练轮数有限，未完全收敛）")
 
-print("\n  → Reflow迭代使轨迹逐步变直，趋近OT映射")
+if S_1rf > S_3rf:
+    print("\n  → 曲率层面：Reflow迭代使轨迹逐步变直" + ("，且3-RF曲率低于OT-CFM，趋近OT映射" if S_3rf <= S_ot else ""))
+
+# W1随轮数上升的机理提示：零基线（同分布两组独立样本间的经验W1，n=200）
+# 用于区分“真实分布漂移”与“有限样本噪声”；置于所有结果采样之后，不影响任何已算结果
+wd_null_list = []
+for sd in range(10):
+    np.random.seed(1234 + sd)
+    wd_null_list.append(wasserstein_distance_nd(sample_target(n_test), target_test))
+wd_null = float(np.mean(wd_null_list))
+print(f"\n  ⓘ W1零基线（真实目标两个独立n=200样本集之间的距离）= {wd_null:.4f}")
+print("    1-RF的W1与零基线同量级，而2-RF/3-RF明显超出→W1上升是真实的分布漂移，")
+print("    源于Reflow端点对取自上一轮模型自身输出、训练误差逐轮累积（见讲义分析）")
 
 
 # ============================================================
@@ -588,6 +602,9 @@ results_summary = {
     'wd_2rf': round(float(wd_2rf), 4),
     'wd_3rf': round(float(wd_3rf), 4),
     'wd_ot': round(float(wd_ot), 4),
+    'wd_null_baseline': round(wd_null, 4),  # 同分布独立样本间的经验W1（有限样本噪声水平）
+    'ode_steps': [1, 5, 10, 20, 50, 100],
+    'wd_fewstep': {k: [round(float(v), 4) for v in lst] for k, lst in few_step_wd.items()},
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

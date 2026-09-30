@@ -1,0 +1,18 @@
+{
+  "dist_ddpm_200step": 6.0491,
+  "dist_rf_50step": 7.2078,
+  "dist_rf_10step": 6.8741,
+  "dist_rf_1step": 5.5797,
+  "dist_real_baseline": 6.5112,
+  "diversity_ddpm_200step": 8.59,
+  "diversity_rf_50step": 10.17,
+  "diversity_rf_10step": 9.13,
+  "diversity_rf_1step": 0.86,
+  "diversity_real": 9.92,
+  "time_ddpm": 4.848,
+  "time_rf_10step": 0.219,
+  "time_rf_50step": 1.223,
+  "speedup_rf10_vs_ddpm": 22.1,
+  "final_loss_rf": 0.091016,
+  "final_loss_ddpm": 0.033038
+}
