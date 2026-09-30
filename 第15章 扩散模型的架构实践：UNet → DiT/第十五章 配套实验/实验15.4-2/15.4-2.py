@@ -36,7 +36,6 @@ import matplotlib.pyplot as plt
 import warnings
 import logging
 from tqdm import tqdm
-from copy import deepcopy
 
 if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
@@ -102,7 +101,7 @@ else:
 # ============================================================
 # Checkpoint工具
 # ============================================================
-def load_train_state(checkpoint_path, model, optimizer, num_epochs_total, scheduler=None):
+def load_train_state(checkpoint_path, model, optimizer, scheduler=None):
     if not os.path.exists(checkpoint_path):
         return 0, False, []
 
@@ -405,7 +404,7 @@ for name, cfg in dit_configs.items():
     optimizer = torch.optim.AdamW(model.parameters(), lr=2e-4, weight_decay=0.01)
 
     start_epoch, is_final, loss_history = load_train_state(
-        checkpoint_paths[name], model, optimizer, num_epochs)
+        checkpoint_paths[name], model, optimizer)
 
     if is_final:
         trained_models[name] = model

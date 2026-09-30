@@ -104,7 +104,7 @@ import torch.nn.functional as F
 # 2D目标分布: 8-Gaussian
 # ============================================================
 def sample_8gaussian(n, device='cpu'):
-    """8-Gaussian分布：8个高斯均匀分布在单位圆上"""
+    """8-Gaussian分布：8个高斯均匀分布在半径为2的圆上"""
     # 8个中心分布在半径为2的圆上
     n_modes = 8
     radius = 2.0
@@ -780,7 +780,8 @@ print(f"""
 2. 采样质量对比（14.2.3节）
    - Neural ODE采样 MMD: {mmd_cnll:.6f}
    - Flow Matching采样 MMD: {mmd_fm:.6f}
-   - 两种方法都能学会目标分布，但FM训练更快达到相同质量
+   - 两种方法都能学会目标分布；FM用更短的墙钟时间到达平台，
+     但注意NLL与CFM损失量纲不同，两条loss曲线绝对值不可比
 
 3. 轨迹形态对比（基于{n_traj_stats}条轨迹统计）
    - Neural ODE轨迹曲率: {curv_cnll:.4f}
@@ -792,12 +793,14 @@ print(f"""
    - CFM定理突破: 梯度等价，无需仿真ODE（14.3.2节）
    - Flow Matching = CNF训练的"免仿真"方案
 
-5. 教学脚注：为什么Neural ODE的loss曲线通常比Flow Matching更"毛躁"？
-   - Neural ODE训练中，迹估计 tr(∇_x v_θ) 每步只用一个随机探针 eps（Hutchinson估计），
-     单探针方差较大，靠训练步数多来平均掉。这是FFJORD等原论文的标准做法，不是错误。
-   - Flow Matching的CFM损失是简单的MSE，目标 v_target = x_0 - z 无随机性（给定x_0,z），
-     所以loss曲线天然更平滑。
-   - 如果观察到Neural ODE的loss抖动较大，这是预期行为，不影响收敛。
+5. 教学脚注：为什么反而是FM的loss曲线抖动更大？
+   - Neural ODE(CNLL)每个epoch在同一批固定的训练点上评估似然，Hutchinson
+     单探针迹估计的随机性已被"样本数×ODE步数"平均掉，曲线反而平滑。
+     但其NLL绝对值有偏：20步Euler离散化会系统性低估NLL（本实验最终值
+     低于目标分布的理论熵下界），趋势正确、纵坐标不可当真值。
+   - Flow Matching每步重新采样(z, t)，t~U[0,1]的随机性使单样本CFM损失方差
+     很大，epoch均值只由少量batch平均而来，抖动是CFM目标的固有蒙特卡洛噪声。
+   - 两条曲线量纲不同（NLL vs MSE），只能各看自己的收敛趋势，不可跨曲线比大小。
 
 6. 教学脚注：MMD说FM更优，但图2c/图3b中FM轨迹反而有更多"桥接"弧线？
    - 统计采样点到最近高斯中心的距离，FM的"桥接点"（距最近中心>0.5）占比约4%，
@@ -828,7 +831,7 @@ def _to_native(obj):
 results_summary = {
     'avg_time_cnll_per_epoch': round(float(np.mean(times_cnll)), 4) if times_cnll else None,
     'avg_time_fm_per_epoch': round(float(np.mean(times_fm)), 4) if times_fm else None,
-    'speedup': round(float(avg_time_cnll / avg_time_fm), 1) if times_cnll and times_fm and avg_time_fm > 0 else None,
+    'speedup': round(float(np.mean(times_cnll) / np.mean(times_fm)), 1) if times_cnll and times_fm and np.mean(times_fm) > 0 else None,
     'mmd_cnll': round(float(mmd_cnll), 6),
     'mmd_fm': round(float(mmd_fm), 6),
     'curv_cnll': round(float(curv_cnll), 6),

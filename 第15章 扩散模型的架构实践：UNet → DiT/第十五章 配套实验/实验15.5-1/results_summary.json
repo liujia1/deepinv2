@@ -1,0 +1,14 @@
+{
+  "final_losses": {
+    "adam_const": 0.052356,
+    "adamw_const": 0.052343,
+    "adam_cosine": 0.056928,
+    "adamw_cosine": 0.056877
+  },
+  "ranking_best_to_worst": [
+    "AdamW + Constant",
+    "Adam + Constant",
+    "AdamW + Warmup+Cosine",
+    "Adam + Warmup+Cosine"
+  ]
+}

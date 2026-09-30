@@ -9,7 +9,7 @@
            而原实验用训练MSE($L_{simple}$)——MSE是FID的弱代理;
        (2) 深度不足: depth=4 时恒等初始化的"深层信号传播"收益本就有限,
            检验"Zero优势随深度增大"必须把深度作为自变量;
-       (3) 单次运行: 两种初始化末轮Loss差异~0.001属随机波动量级,
+       (3) 单次运行: 两种初始化末轮Loss差异(实测0.0035)与跨run种子噪声(~0.002)同量级,
            没有多种子配对比较就无法区分效应与噪声。
 
 本脚本的设计:
@@ -512,7 +512,7 @@ for lr in LRS:
 # 汇总与统计(配对: 同seed相减)
 # ============================================================
 def paired_stats(depth, lr, metric):
-    """返回末轮配对差值 mean±std (nozero - zero; 正=zero更优)"""
+    """返回末轮配对差值 mean±std (nozero - zero; pixel-FD正值=Zero更优, NN-PSNR正值=NoZero更优)"""
     diffs = []
     for seed in SEEDS:
         z = results[(depth, 'zero', lr)][seed][1][metric]
@@ -555,7 +555,7 @@ for lr in LRS:
         print(f"    末轮验证Loss:  Zero={s['final_val_zero']:.5f}  NoZero={s['final_val_nozero']:.5f}")
         print(f"    pixel-FD差值:  {s['paired_diff_pixel_frechet_mean']:+.3f} "
               f"(±{s['paired_diff_pixel_frechet_std'] or 0:.3f})  正=Zero生成更真实")
-        print(f"    NN-PSNR差值:   {s['paired_diff_nn_psnr_mean']:+.2f} dB      正=Zero更优")
+        print(f"    NN-PSNR差值:   {s['paired_diff_nn_psnr_mean']:+.2f} dB      正=NoZero更优")
         print(f"    早期振荡幅度:  Zero={s['early_instability_zero']:.5f}  "
               f"NoZero={s['early_instability_nozero']:.5f}")
 

@@ -4,7 +4,7 @@
 对应章节: 15.5.1 优化器与学习率调度
 
 知识点:
-  - Adam vs AdamW: 解耦权重衰减的一致正则化
+  - Adam vs AdamW: 相同wd=0.01下, L2耦合权重衰减 vs 解耦权重衰减
   - Warmup + Cosine Decay vs Constant LR: 训练稳定性与收敛质量
   - 2x2因子设计: 优化器 x 调度策略, 系统分离各因素贡献
 
@@ -303,9 +303,11 @@ total_steps = num_epochs * batches_per_epoch
 warmup_steps = min(500, total_steps // 10)
 
 configs = {
+    # 注: Adam 与 AdamW 均设置 weight_decay=0.01: Adam 以 L2 形式耦合衰减,
+    #     AdamW 为解耦衰减, 严格对照 15.5.1 节 "耦合 vs 解耦" 的核心论点
     'adam_const': {
         'optimizer_cls': torch.optim.Adam,
-        'optimizer_kwargs': {'lr': 2e-4},
+        'optimizer_kwargs': {'lr': 2e-4, 'weight_decay': 0.01},
         'use_scheduler': False,
         'label': 'Adam + Constant',
         'color': '#e74c3c',
@@ -319,7 +321,7 @@ configs = {
     },
     'adam_cosine': {
         'optimizer_cls': torch.optim.Adam,
-        'optimizer_kwargs': {'lr': 2e-4},
+        'optimizer_kwargs': {'lr': 2e-4, 'weight_decay': 0.01},
         'use_scheduler': True,
         'label': 'Adam + Warmup+Cosine',
         'color': '#e67e22',
@@ -444,9 +446,11 @@ print("步骤1: Adam vs AdamW对比 (固定Constant LR, 15.5.1节)")
 print(f"{'='*60}")
 print("""
 15.5.1节 核心区别:
-  Adam:  权重衰减与自适应学习率耦合, 正则化效果不一致
-  AdamW: 解耦权重衰减, 正则化强度一致
+  Adam:  权重衰减以 L2 形式加入梯度, 再被自适应学习率缩放, 正则化强度不一致
+  AdamW: 解耦权重衰减, 直接作用于权重本身, 正则化强度一致
   实践建议: 扩散模型训练首选 AdamW (weight_decay=0.01)
+  注: 本实验 Adam 与 AdamW 均使用 weight_decay=0.01,
+      Adam 为 L2 耦合衰减, AdamW 为解耦衰减, 严格对照耦合 vs 解耦
 """)
 
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
@@ -489,7 +493,7 @@ improve = (loss_adam - loss_adamw) / loss_adam * 100
 print(f"  Adam  最终Loss: {loss_adam:.6f}")
 print(f"  AdamW 最终Loss: {loss_adamw:.6f}")
 if improve > 0:
-    print(f"  AdamW 相对改善: {improve:.2f}% (解耦权重衰减的正则化优势)")
+    print(f"  AdamW 相对改善: {improve:.2f}% (解耦权重衰减的正则化更一致)")
 else:
     print(f"  注意: 在当前设置下AdamW未显示优势, 可能因模型较小或训练轮数不足")
 
@@ -648,7 +652,10 @@ def sample_ddpm(model, n_samples):
         x0_pred = (x - torch.sqrt(1 - alpha_bar_t) * pred) / torch.sqrt(alpha_bar_t)
         x0_pred = x0_pred.clamp(-1, 1)
         if t_val > 0:
-            sigma_t = torch.sqrt(betas[t_val])
+            # 严格DDPM后验方差: beta~_t = beta_t * (1-abar_{t-1}) / (1-abar_t)
+            # 此时均值分解 x = sqrt(abar_{t-1})*x0_pred + sqrt(1-abar_{t-1}-sigma^2)*eps_pred
+            # 与真实后验均值严格等价 (原实现 sigma=sqrt(beta_t) 仅为DDIM族近似)
+            sigma_t = torch.sqrt(betas[t_val] * (1 - alpha_bar_prev) / (1 - alpha_bar_t))
             dir_xt = torch.sqrt(torch.clamp(1 - alpha_bar_prev - sigma_t**2, min=0)) * pred
             x = torch.sqrt(alpha_bar_prev) * x0_pred + dir_xt + sigma_t * torch.randn_like(x)
         else:
@@ -667,10 +674,12 @@ for col in range(n_samples):
     axes[1, col].imshow(to_vis_range(samples_worst[col, 0].cpu()).clamp(0, 1),
                          cmap='gray', vmin=0, vmax=1)
     axes[1, col].axis('off')
-axes[0, 0].set_ylabel(f'最佳: {configs[best_name]["label"]}',
-                       fontsize=9, rotation=0, labelpad=120)
-axes[1, 0].set_ylabel(f'最差: {configs[worst_name]["label"]}',
-                       fontsize=9, rotation=0, labelpad=120)
+# 行标签用 axes 坐标文本放在每行左侧:
+# set_ylabel(rotation=0, labelpad=120) 在 bbox_inches='tight' 下会被裁剪丢失
+for row, (name, tag) in enumerate([(best_name, '最佳'), (worst_name, '最差')]):
+    axes[row, 0].text(-0.12, 0.5, f"{tag}: {configs[name]['label']}",
+                      fontsize=9, rotation=0, ha='right', va='center',
+                      transform=axes[row, 0].transAxes)
 
 plt.suptitle(r'步骤4: 采样质量对比 (最佳 vs 最差配置)', fontsize=14, y=1.01)
 plt.tight_layout()
@@ -691,7 +700,7 @@ print(f"""
 1. 优化器对比 (步骤1, 15.5.1节)
    - Adam  最终Loss: {trained_histories['adam_const'][-1]:.6f}
    - AdamW 最终Loss: {trained_histories['adamw_const'][-1]:.6f}
-   - AdamW解耦权重衰减, 正则化更一致
+   - 相同wd=0.01下: Adam为L2耦合衰减, AdamW为解耦衰减, 后者正则化更一致
 
 2. 学习率调度对比 (步骤2, 15.5.1节)
    - Constant 最终Loss: {trained_histories['adamw_const'][-1]:.6f}
@@ -701,7 +710,8 @@ print(f"""
 3. 综合对比 (步骤3)
    - 最佳配置: {configs[ranking[0]]['label']} (Loss={trained_histories[ranking[0]][-1]:.6f})
    - 最差配置: {configs[ranking[-1]]['label']} (Loss={trained_histories[ranking[-1]][-1]:.6f})
-   - 优化器和调度器的贡献可叠加
+   - 注意: 短程训练中 Cosine 调度可能因后期 lr 退火减慢 train loss
+     下降而显得不如 Constant, 与理论预期方向相反时以实测为准
 
 4. 实践建议 (15.5.1节)
    - 首选: AdamW (weight_decay=0.01) + Warmup + Cosine Decay

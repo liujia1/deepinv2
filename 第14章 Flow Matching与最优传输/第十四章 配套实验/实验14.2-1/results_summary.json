@@ -1,0 +1,11 @@
+{
+  "avg_time_cnll_per_epoch": 1.2472,
+  "avg_time_fm_per_epoch": 0.079,
+  "speedup": 15.8,
+  "mmd_cnll": 0.001453,
+  "mmd_fm": 0.000992,
+  "curv_cnll": 0.115022,
+  "curv_fm": 0.346852,
+  "final_loss_cnll": 0.949112,
+  "final_loss_fm": 1.918094
+}
