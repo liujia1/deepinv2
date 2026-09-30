@@ -7,12 +7,13 @@
   - 匈牙利算法: 精确OT求解，O(n^3)复杂度，不可扩展
   - Sinkhorn算法: 熵正则化OT近似，可微分，可GPU加速
   - Minibatch OT: 实际Flow Matching中的做法
-  - 精度-效率权衡: Sinkhorn的reg参数控制近似精度
+  - 精度-效率权衡: Sinkhorn的reg参数控制近似精度（熵偏差）
 
 实验内容:
   步骤1: 匈牙利算法精确求解OT（小规模）
-  步骤2: Sinkhorn算法近似求解OT
-  步骤3: 精度-效率权衡分析（随样本量增长的扩展性）
+  步骤2: Sinkhorn算法近似求解OT，不同ε的传输计划对比（图1）
+  步骤3: 扩展性测试: 运行时间与熵偏差随样本量的变化（图2）
+  步骤4: 正则化参数敏感性: 熵偏差与迭代次数随ε的变化（图3）
 
 数据集: 2D点云，纯CPU实验
 
@@ -123,7 +124,7 @@ print("14.1.2节: Kantorovich问题的线性规划解")
 print("  匈牙利算法（分配问题）: O(n^3)")
 print("  当源和目标样本数相等时，OT问题退化为分配问题")
 
-n_small = 50  # 小规模用于精确求解
+n_small = 50  # 小规模用于精确求解（本步噪声std=0.3，步骤2/3用默认0.2）
 
 source_small, centers_s = sample_gaussian_mixture(n_small, n_modes=4, radius=2.0, std=0.3, seed=42)
 target_small, centers_t = sample_gaussian_mixture(n_small, n_modes=4, radius=2.0, std=0.3, seed=123)
@@ -149,32 +150,32 @@ print("="*60)
 print("14.3.5节: 熵正则化OT近似")
 print("  OT_ε = min <C, P> + ε·KL(P||ab^T)")
 print("  Sinkhorn迭代: P = diag(u)Kdiag(v), K=exp(-C/ε)")
-print("  优点: 可微分、可GPU并行、O(n^2)复杂度")
+print("  优点: 可微分、可GPU并行、每迭代O(n^2)复杂度")
 print("\n  本实验采用Log域稳定化Sinkhorn算法（Cuturi 2013, POT库标准实现）")
 print("  Log域迭代避免小ε时的数值下溢，是工业级OT近似的推荐做法")
 
 
-def sinkhorn_log_stabilized(cost_matrix, reg=0.1, max_iter=1000, tol=1e-6):
+def sinkhorn_log_stabilized(cost_matrix, reg=0.1, max_iter=20000, tol=1e-5):
     """Log域稳定化Sinkhorn算法（参考POT库实现）
 
     通过在log域进行迭代，避免小ε时的数值下溢问题。
-    这是Cuturi (2013)和POT库推荐的标准做法。
 
     参数:
       cost_matrix: (n, m) 代价矩阵
-      reg: 熵正则化参数ε，越小越接近精确OT
+      reg: 熵正则化参数ε，越小越接近精确OT（熵偏差越小），但收敛越慢
       max_iter: 最大迭代次数
-      tol: 收敛容差（对 dual 变量 log_u, log_v 的最大变化）
+      tol: 收敛容差（边际误差判据，POT库 stopCrit='marginal' 同款思路）
 
     返回:
       transport_plan: (n, m) 传输计划
       n_iter: 实际迭代次数
-      cost_current: 最终的传输代价 <C, P>
+      cost_current: 传输代价 <C, P>
+      converged: 是否达到tol（False表示被max_iter截断）
 
     收敛判据说明：
-      采用 POT 库 sinkhorn_log 的标准判据 — max(|Δlog_u|, |Δlog_v|) < tol
-      tol=1e-6 是经验推荐值，ε=0.1 时约 200-500 次即可收敛
-      tol=1e-9 过严，会导致小ε 下迭代次数爆炸（10000+次）
+      采用边际误差 ||P·1 - a||_inf 与 ||P^T·1 - b||_inf 作为停止条件。
+      注意：未收敛时重建的P不是有效耦合（边际错误），其<C,P>可能远低于
+      真实OT代价，因此"迭代次数"必须与converged标志一起解读。
     """
     n, m = cost_matrix.shape
 
@@ -185,31 +186,27 @@ def sinkhorn_log_stabilized(cost_matrix, reg=0.1, max_iter=1000, tol=1e-6):
     log_u = np.zeros(n)
     log_v = np.zeros(m)
 
-    iteration = 0
-    for iteration in range(max_iter):
-        log_u_prev = log_u.copy()
-        log_v_prev = log_v.copy()
+    a = np.full(n, 1.0 / n)
+    b = np.full(m, 1.0 / m)
 
+    iteration = 0
+    P = None
+    for iteration in range(1, max_iter + 1):
         log_u = log_a - logsumexp(log_K + log_v[None, :], axis=1)
         log_v = log_b - logsumexp(log_K + log_u[:, None], axis=0)
 
-        # POT 库标准 dual 变量收敛判据
-        err_u = np.max(np.abs(log_u - log_u_prev))
-        err_v = np.max(np.abs(log_v - log_v_prev))
-        if max(err_u, err_v) < tol:
+        # 重建P并检查边际误差（POT库 stopCrit='marginal' 判据）
+        log_P = log_u[:, None] + log_v[None, :] + log_K
+        P = np.exp(log_P - log_P.max())
+        P /= P.sum()
+        marg_err = max(np.max(np.abs(P.sum(axis=1) - a)),
+                       np.max(np.abs(P.sum(axis=0) - b)))
+        if marg_err < tol:
             break
 
-    # 重建传输计划
-    log_P = log_u[:, None] + log_v[None, :] + log_K
-    log_P_max = log_P.max()
-    if np.isfinite(log_P_max):
-        P_unnormalized = np.exp(log_P - log_P_max)
-        transport_plan = P_unnormalized / P_unnormalized.sum()
-    else:
-        transport_plan = np.ones((n, m)) / (n * m)
-
-    cost_final = np.sum(cost_matrix * transport_plan)
-    return transport_plan, iteration + 1, cost_final
+    cost_final = np.sum(cost_matrix * P)
+    converged = marg_err < tol
+    return P, iteration, float(cost_final), bool(converged)
 
 
 # Sinkhorn算法精度验证（多ε对比）
@@ -219,23 +216,27 @@ sinkhorn_results = {}
 
 for reg in reg_values:
     t_start = time.perf_counter()
-    # max_iter=10000：保证小ε能真正收敛到高精度
-    max_iter_temp = 10000
-    plan, n_iter, cost_sinkhorn = sinkhorn_log_stabilized(cost_matrix, reg=reg, max_iter=max_iter_temp)
+    plan, n_iter, cost_sinkhorn, converged = sinkhorn_log_stabilized(
+        cost_matrix, reg=reg, max_iter=20000, tol=1e-5)
     time_sinkhorn = time.perf_counter() - t_start
-    sinkhorn_results[reg] = {'plan': plan, 'cost': cost_sinkhorn, 'time': time_sinkhorn, 'n_iter': n_iter}
+    sinkhorn_results[reg] = {'plan': plan, 'cost': cost_sinkhorn,
+                             'time': time_sinkhorn, 'n_iter': n_iter,
+                             'converged': converged}
     cost_rel_error = abs(cost_sinkhorn - cost_hungarian) / cost_hungarian * 100
+    conv_tag = '收敛' if converged else '截断(未达tol)'
     print(f"  ε={reg:.2f}: 传输代价={cost_sinkhorn:.4f} (相对误差={cost_rel_error:.2f}%), "
-          f"迭代={n_iter}次, 耗时={time_sinkhorn*1000:.2f} ms")
+          f"迭代={n_iter}次[{conv_tag}], 耗时={time_sinkhorn*1000:.2f} ms")
 
 print(f"\n  精度验证结论: 匈牙利算法代价={cost_hungarian:.4f}")
-print(f"  → 小ε(如0.01)需更多迭代才能达到高精度，ε=1.0仅需几百次但误差较大")
+print(f"  → ε越大熵偏差越大（传输代价系统性偏高），ε=1.0时偏差已达数十个百分点")
+print(f"  → 小ε需极多迭代才能满足边际判据，实践中常按固定迭代数早停换取速度")
 print(f"  → 实际Flow Matching中推荐使用POT库（pip install POT）")
 
 
 # ============================================================
 # 可视化: OT传输计划对比
 # ============================================================
+panel_labels = ['(b)', '(c)', '(d)']
 fig, axes = plt.subplots(1, 4, figsize=(20, 5))
 
 # (a) 匈牙利算法（精确OT）
@@ -260,6 +261,7 @@ for idx, reg in enumerate(reg_values):
     plan = sinkhorn_results[reg]['plan']
     cost_val = sinkhorn_results[reg]['cost']
     cost_err = abs(cost_val - cost_hungarian) / cost_hungarian * 100
+    conv_mark = '' if sinkhorn_results[reg]['converged'] else '，截断'
 
     # 只画传输概率>阈值的连线
     threshold = 1.0 / (n_small * 10)
@@ -273,7 +275,9 @@ for idx, reg in enumerate(reg_values):
 
     ax.scatter(source_small[:, 0], source_small[:, 1], c='blue', alpha=0.6, s=15)
     ax.scatter(target_small[:, 0], target_small[:, 1], c='red', alpha=0.6, s=15)
-    ax.set_title(rf'(b) Sinkhorn $\varepsilon$={reg} (误差={cost_err:.1f}%)', fontsize=12)
+    ax.set_title(rf'{panel_labels[idx]} Sinkhorn $\varepsilon$={reg} '
+                 rf'(误差={cost_err:.1f}%, 迭代={sinkhorn_results[reg]["n_iter"]}次{conv_mark})',
+                 fontsize=12)
     ax.set_xlim(-4, 4)
     ax.set_ylim(-4, 4)
     ax.set_aspect('equal')
@@ -288,26 +292,36 @@ print(f"\n图1已保存: {fig_path1}")
 
 
 # ============================================================
-# 步骤3：精度-效率权衡分析
+# 步骤3：扩展性测试（精度-效率权衡）
 # ============================================================
 print("\n" + "="*60)
-print("步骤3: 精度-效率权衡分析")
+print("步骤3: 扩展性测试——运行时间与熵偏差随样本量的变化（对应图2）")
 print("="*60)
 print("14.3.5节: Minibatch OT的实践意义")
-print("  大规模数据无法使用精确OT，必须用Sinkhorn近似")
-print("  Minibatch策略: 每次在小batch上计算OT近似")
+print("  匈牙利算法总时间O(n^3)且不可微；Sinkhorn每迭代O(n^2)、可GPU批量并行")
+print("  本测试用固定收敛判据（边际误差tol=1e-5），如实报告迭代数与是否收敛")
 
 # 扩展性测试：不同样本量下的运行时间
-# 上限 300：纯 numpy Sinkhorn 在 n=500 时部分机器内存紧张（500x500 cost matrix + 临时数组）
+# 上限300：纯numpy教学实现的墙钟时间限制（n=300时ε=0.1单次求解已达数十秒），
+# 与内存无关（n=500的float64代价矩阵仅2MB）
 sample_sizes = [50, 100, 200, 300]
-n_trials = 5  # 多次实验取中位数（增加试验次数减少系统噪声影响）
+n_trials = 4  # 1次预热 + 3次计时，取中位数
 
-results_scalability = {'hungarian': [], 'sinkhorn_0.01': [], 'sinkhorn_0.1': [], 'sinkhorn_1.0': []}
-results_cost = {'hungarian': [], 'sinkhorn_0.01': [], 'sinkhorn_0.1': [], 'sinkhorn_1.0': []}
+reg_scale = [0.1, 1.0]  # ε=0.01收敛太慢，仅在固定预算下于步骤4扫描中考察
+results_scalability = {'hungarian': [], 'per_iter': {r: [] for r in reg_scale},
+                       'iters': {r: [] for r in reg_scale},
+                       'bias': {r: [] for r in reg_scale},
+                       'converged': {r: [] for r in reg_scale}}
+for r in reg_scale:
+    results_scalability[f'sinkhorn_{r}'] = []
 
 for n in tqdm(sample_sizes, desc="扩展性测试"):
-    times_h, times_s001, times_s01, times_s1 = [], [], [], []
-    costs_h, costs_s001, costs_s01, costs_s1 = [], [], [], []
+    times_h = []
+    times_s = {r: [] for r in reg_scale}
+    per_iter = {r: [] for r in reg_scale}
+    iters_s = {r: [] for r in reg_scale}
+    bias_s = {r: [] for r in reg_scale}
+    conv_s = {r: [] for r in reg_scale}
 
     for trial in range(n_trials):
         src, _ = sample_gaussian_mixture(n, seed=42 + trial)
@@ -317,117 +331,106 @@ for n in tqdm(sample_sizes, desc="扩展性测试"):
         # 预热：第一次不计时（让CPU缓存预热，减少波动）
         if trial == 0:
             row, col = linear_sum_assignment(C)
-            plan_dummy, _, _ = sinkhorn_log_stabilized(C, reg=0.1, max_iter=100)
+            plan_dummy, _, _, _ = sinkhorn_log_stabilized(C, reg=0.1, max_iter=100)
             continue
 
         # 匈牙利算法
         t0 = time.perf_counter()
         row, col = linear_sum_assignment(C)
         t_h = time.perf_counter() - t0
-        c_h = C[row, col].mean()
         times_h.append(t_h)
-        costs_h.append(c_h)
 
-        # Sinkhorn (不同ε) — 为不同ε分配不同迭代预算，保证公平比较
-        # ★ 关键修复：max_iter 随 n² 缩放，确保不同规模都能真正收敛
-        # Sinkhorn 的收敛速度依赖于问题规模（条件数），固定迭代预算会导致大 n 时未收敛
-        # 这恰好说明 Minibatch OT 用小批量做近似的动机之一
-        # 注：迭代预算公式 max_iter = base * (n/n_ref)^2，基准 n_ref=50
-        base_iter_001 = 2000  # n=50 时 ε=0.01 需要 ~2000 次进入稳态
-        base_iter_01 = 500   # n=50 时 ε=0.1 需要 ~500 次进入稳态
-        base_iter_1 = 200    # n=50 时 ε=1.0 需要 ~200 次进入稳态
-        scale_factor = (n / 50.0) ** 2  # 按 n² 缩放
-        for reg, t_list, c_list, label, base_iter in [
-            (0.01, times_s001, costs_s001, 'sinkhorn_0.01', base_iter_001),
-            (0.1, times_s01, costs_s01, 'sinkhorn_0.1', base_iter_01),
-            (1.0, times_s1, costs_s1, 'sinkhorn_1.0', base_iter_1),
-        ]:
-            max_iter_test = int(base_iter * scale_factor)  # 随 n² 缩放
+        # Sinkhorn（固定收敛判据，不设缩放预算——迭代数由问题本身决定）
+        for reg in reg_scale:
             t0 = time.perf_counter()
-            plan, _, cost_s = sinkhorn_log_stabilized(C, reg=reg, max_iter=max_iter_test)
+            plan, n_it, cost_s, conv = sinkhorn_log_stabilized(C, reg=reg, tol=1e-5)
             t_s = time.perf_counter() - t0
-            t_list.append(t_s)
-            c_list.append(cost_s)
+            c_h = C[row, col].mean()
+            times_s[reg].append(t_s)
+            per_iter[reg].append(t_s / n_it)
+            iters_s[reg].append(n_it)
+            bias_s[reg].append(abs(cost_s - c_h) / c_h * 100)
+            conv_s[reg].append(conv)
 
-    # 取中位数而非平均值，降低系统噪声（如后台进程抢占）对 timing 的影响
     results_scalability['hungarian'].append(np.median(times_h))
-    results_scalability['sinkhorn_0.01'].append(np.median(times_s001))
-    results_scalability['sinkhorn_0.1'].append(np.median(times_s01))
-    results_scalability['sinkhorn_1.0'].append(np.median(times_s1))
-    results_cost['hungarian'].append(np.mean(costs_h))
-    results_cost['sinkhorn_0.01'].append(np.mean(costs_s001))
-    results_cost['sinkhorn_0.1'].append(np.mean(costs_s01))
-    results_cost['sinkhorn_1.0'].append(np.mean(costs_s1))
+    for reg in reg_scale:
+        key = f'sinkhorn_{reg}'
+        results_scalability[key].append(np.median(times_s[reg]))
+        results_scalability['per_iter'][reg].append(np.median(per_iter[reg]))
+        results_scalability['iters'][reg].append(int(np.median(iters_s[reg])))
+        results_scalability['bias'][reg].append(float(np.mean(bias_s[reg])))
+        results_scalability['converged'][reg].append(bool(np.all(conv_s[reg])))
 
-    if n <= 200:
-        err_s001 = abs(np.mean(costs_s001) - np.mean(costs_h)) / np.mean(costs_h) * 100
-        err_s01 = abs(np.mean(costs_s01) - np.mean(costs_h)) / np.mean(costs_h) * 100
-        err_s1 = abs(np.mean(costs_s1) - np.mean(costs_h)) / np.mean(costs_h) * 100
-        print(f"  n={n:5d}: 匈牙利={np.median(times_h)*1000:8.2f}ms, "
-              f"Sinkhorn(ε=0.01)={np.median(times_s001)*1000:8.2f}ms (误差={err_s001:.1f}%), "
-              f"Sinkhorn(ε=0.1)={np.median(times_s01)*1000:8.2f}ms (误差={err_s01:.1f}%)")
-    else:
-        print(f"  n={n:5d}: 匈牙利={np.median(times_h)*1000:8.2f}ms, "
-              f"Sinkhorn(ε=0.1)={np.median(times_s01)*1000:8.2f}ms")
+        line = (f"  n={n:5d}: 匈牙利={np.median(times_h)*1000:9.2f}ms | "
+                f"Sinkhorn(ε={reg}): {np.median(times_s[reg])*1000:9.1f}ms "
+                f"({int(np.median(iters_s[reg]))}次迭代, "
+                f"{'收敛' if np.all(conv_s[reg]) else '截断'}, "
+                f"熵偏差={np.mean(bias_s[reg]):.1f}%)")
+        print(line)
 
 # 可视化: 扩展性曲线
 fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
 
-# (a) 运行时间 vs 样本数
-# 单位用微秒（μs）而非毫秒（ms）— 避免 n=50 时匈牙利算法耗时 < 0.01ms
-# 在对数轴上被截断为 0 而不显示的问题
+# (a) 运行时间 vs 样本数（log-log，附O(n^2)/O(n^3)参考斜率）
 ax = axes[0]
-ax.plot(sample_sizes, [t * 1e6 for t in results_scalability['hungarian']],
-        'o-', label=r'匈牙利算法 $O(n^3)$', color='red', lw=2, markersize=6)
-ax.plot(sample_sizes, [t * 1e6 for t in results_scalability['sinkhorn_0.01']],
-        's--', label=r'Sinkhorn $\varepsilon$=0.01', color='orange', lw=1.5, markersize=5)
-ax.plot(sample_sizes, [t * 1e6 for t in results_scalability['sinkhorn_0.1']],
-        '^--', label=r'Sinkhorn $\varepsilon$=0.1', color='green', lw=1.5, markersize=5)
-ax.plot(sample_sizes, [t * 1e6 for t in results_scalability['sinkhorn_1.0']],
-        'd--', label=r'Sinkhorn $\varepsilon$=1.0', color='blue', lw=1.5, markersize=5)
+n_ref = np.array(sample_sizes, dtype=float)
+t_h = np.array(results_scalability['hungarian']) * 1e6  # μs
+ax.plot(sample_sizes, t_h, 'o-', label=r'匈牙利算法（总时间）', color='red', lw=2, markersize=6)
+ax.plot(n_ref, t_h[0] * (n_ref / n_ref[0]) ** 3, ':',
+        color='red', lw=1, alpha=0.6, label=r'参考斜率 $O(n^3)$')
+first_p_i = None
+for reg, color, marker in [(0.1, 'green', '^'), (1.0, 'blue', 'd')]:
+    t_s = np.array(results_scalability[f'sinkhorn_{reg}']) * 1e6
+    ax.plot(sample_sizes, t_s, marker + '--',
+            label=rf'Sinkhorn $\varepsilon$={reg}（总时间）', color=color, lw=1.5, markersize=5)
+    p_i = np.array(results_scalability['per_iter'][reg]) * 1e6
+    ax.plot(sample_sizes, p_i, marker + ':',
+            color=color, lw=1, alpha=0.8,
+            label=rf'ε={reg} 每迭代时间')
+    if first_p_i is None:
+        first_p_i = p_i[0]
+if first_p_i is not None:
+    ax.plot(n_ref, first_p_i * (n_ref / n_ref[0]) ** 2, 'k:', lw=1, alpha=0.5,
+            label=r'参考斜率 $O(n^2)$（锚定ε=0.1首点）')
 ax.set_xlabel(r'样本数 $n$', fontsize=12)
 ax.set_ylabel(r'运行时间 ($\mu$s)', fontsize=12)
-ax.set_title(r'(a) 运行时间 vs 样本数', fontsize=13)
-ax.legend(fontsize=10)
-ax.grid(alpha=0.3)
+ax.set_title(r'(a) 运行时间 vs 样本数（log-log）', fontsize=13)
+ax.legend(fontsize=8)
+ax.grid(alpha=0.3, which='both')
+ax.set_xscale('log', base=2)
+ax.set_xticks(sample_sizes)
+ax.set_xticklabels([str(s) for s in sample_sizes])
 ax.set_yscale('log')
 
-# (b) 代价精度对比（小规模，有精确解参照）
+# (b) 熵偏差 vs 样本数（固定ε，收敛后）
 ax = axes[1]
-small_sizes = [s for s in sample_sizes if s <= 500]
-small_idx = [i for i, s in enumerate(sample_sizes) if s <= 500]
-h_costs = [results_cost['hungarian'][i] for i in small_idx]
-s001_costs = [results_cost['sinkhorn_0.01'][i] for i in small_idx]
-s01_costs = [results_cost['sinkhorn_0.1'][i] for i in small_idx]
-s1_costs = [results_cost['sinkhorn_1.0'][i] for i in small_idx]
-
-# 画相对误差
-err_s001 = [abs(s - h) / h * 100 for s, h in zip(s001_costs, h_costs)]
-err_s01 = [abs(s - h) / h * 100 for s, h in zip(s01_costs, h_costs)]
-err_s1 = [abs(s - h) / h * 100 for s, h in zip(s1_costs, h_costs)]
-
-ax.plot(small_sizes, err_s001, 's--', label=r'Sinkhorn $\varepsilon$=0.01', color='orange', lw=1.5)
-ax.plot(small_sizes, err_s01, '^--', label=r'Sinkhorn $\varepsilon$=0.1', color='green', lw=1.5)
-ax.plot(small_sizes, err_s1, 'd--', label=r'Sinkhorn $\varepsilon$=1.0', color='blue', lw=1.5)
+for reg, color, marker in [(0.1, 'green', '^'), (1.0, 'blue', 'd')]:
+    ax.plot(sample_sizes, results_scalability['bias'][reg], marker + '-',
+            label=rf'Sinkhorn $\varepsilon$={reg}', color=color, lw=1.5, markersize=6)
 ax.set_xlabel(r'样本数 $n$', fontsize=12)
-ax.set_ylabel(r'传输代价相对误差 (%)', fontsize=12)
-ax.set_title(r'(b) 近似精度 vs 样本数', fontsize=13)
+ax.set_ylabel(r'收敛后传输代价相对偏差 (%)', fontsize=12)
+ax.set_title(r'(b) 熵偏差 vs 样本数（$\varepsilon$固定）', fontsize=13)
 ax.legend(fontsize=10)
 ax.grid(alpha=0.3)
 
 plt.suptitle(r'实验14.3-1：Sinkhorn算法精度-效率权衡（14.3.5节）'
-             '\n（注：迭代预算随 $n^2$ 缩放以确保真正收敛；纯NumPy教学实现常数开销大）',
-             fontsize=12, y=1.04)
+             '\n（固定边际误差判据tol=$10^{-5}$；每迭代时间按$O(n^2)$增长；'
+             r'熵偏差随$n$增大而上升——同一$\varepsilon$在不同规模下精度不同）',
+             fontsize=12, y=1.06)
 plt.tight_layout()
 fig_path2 = os.path.join(SAVE_DIR, '步骤2_精度效率权衡.png')
 plt.savefig(fig_path2, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"\n图2已保存: {fig_path2}")
 
-# Sinkhorn算法对正则化参数的敏感性分析
-print("\n正则化参数敏感性分析...")
+# ============================================================
+# 步骤4：正则化参数敏感性扫描
+# ============================================================
+print("\n" + "="*60)
+print("步骤4: 正则化参数敏感性分析（对应图3，固定迭代预算，如实标注截断）")
+print("="*60)
 reg_range = np.logspace(-3, 1, 20)
-n_sens = 100  # 降低样本量避免 OOM
+n_sens = 100
 src_sens, _ = sample_gaussian_mixture(n_sens, seed=42)
 tgt_sens, _ = sample_gaussian_mixture(n_sens, seed=123)
 C_sens = compute_cost_matrix(src_sens, tgt_sens)
@@ -438,45 +441,51 @@ cost_exact = C_sens[row_h, col_h].mean()
 
 costs_by_reg = []
 iters_by_reg = []
+converged_by_reg = []
 
 for reg in tqdm(reg_range, desc="正则化参数扫描"):
-    # 为不同 ε 范围分配迭代预算
-    # 对数域 dual 变量在 ε≤0.1 时收敛缓慢，但代价 <C,P> 在前几百次就稳定
-    # max_iter 设大是为了让代价真正进入稳态，不是要求 dual 收敛
-    if reg < 0.01:
-        max_iter_scan = 5000
-    elif reg < 0.1:
-        max_iter_scan = 3000
-    elif reg < 1.0:
-        max_iter_scan = 2000
-    else:
-        max_iter_scan = 500
-    plan, n_iter, cost_approx = sinkhorn_log_stabilized(C_sens, reg=reg, max_iter=max_iter_scan)
+    plan, n_iter, cost_approx, conv = sinkhorn_log_stabilized(
+        C_sens, reg=reg, max_iter=20000, tol=1e-5)
     costs_by_reg.append(cost_approx)
     iters_by_reg.append(n_iter)
+    converged_by_reg.append(conv)
 
 cost_errors_by_reg = [abs(c - cost_exact) / cost_exact * 100 for c in costs_by_reg]
+n_truncated = int(np.sum(~np.array(converged_by_reg)))
+print(f"  扫描完成: {n_truncated}/{len(reg_range)} 个点在20000次预算内未达tol=1e-5（图中以×标出）")
 
 # 可视化: 正则化参数影响
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
 # (a) 传输代价误差 vs ε
 ax = axes[0]
-ax.semilogx(reg_range, cost_errors_by_reg, 'b-o', lw=2, markersize=4)
+ax.semilogx(reg_range, cost_errors_by_reg, 'b-', lw=2)
+conv_arr = np.array(converged_by_reg)
+ax.semilogx(reg_range[conv_arr], np.array(cost_errors_by_reg)[conv_arr], 'o',
+            color='blue', ms=5, label='收敛')
+if (~conv_arr).any():
+    ax.semilogx(reg_range[~conv_arr], np.array(cost_errors_by_reg)[~conv_arr], 'x',
+                color='red', ms=8, mew=2, label='预算截断(20000次)')
 ax.set_xlabel(r'正则化参数 $\varepsilon$', fontsize=12)
 ax.set_ylabel(r'传输代价相对误差 (%)', fontsize=12)
 ax.set_title(r'(a) 近似精度 vs 正则化参数', fontsize=13)
 ax.grid(alpha=0.3)
+ax.legend(fontsize=10)
 
 # (b) 收敛迭代次数 vs ε
 ax = axes[1]
-# 对数 y 轴：小ε（≤0.05）需~10000次达到tol=1e-9，平台是真实代价而非截断artifact
-ax.semilogx(reg_range, iters_by_reg, 'r-o', lw=2, markersize=4)
+ax.semilogx(reg_range[conv_arr], np.array(iters_by_reg)[conv_arr], 'o',
+            color='red', ms=5, label='收敛')
+if (~conv_arr).any():
+    ax.semilogx(reg_range[~conv_arr], np.array(iters_by_reg)[~conv_arr], 'x',
+                color='red', ms=8, mew=2, label='截断(=预算上限)')
+ax.axhline(20000, color='gray', ls=':', lw=1, label='预算上限20000')
 ax.set_yscale('log')
 ax.set_xlabel(r'正则化参数 $\varepsilon$', fontsize=12)
-ax.set_ylabel(r'收敛迭代次数（对数尺度）', fontsize=12)
+ax.set_ylabel(r'迭代次数（对数尺度）', fontsize=12)
 ax.set_title(r'(b) 收敛速度 vs 正则化参数', fontsize=13)
 ax.grid(alpha=0.3, which='both')
+ax.legend(fontsize=10)
 
 plt.suptitle(r'实验14.3-1：Sinkhorn正则化参数敏感性（14.3.5节）', fontsize=14, y=1.02)
 plt.tight_layout()
@@ -495,33 +504,36 @@ print("=" * 60)
 print(f"""
 关键结论:
 1. 匈牙利算法 vs Sinkhorn（14.3.5节）
-   - 匈牙利: 精确解，O(n^3)复杂度
-   - Sinkhorn: 近似解，O(n^2)复杂度/迭代，可GPU并行
-   - 当n>1000时，匈牙利算法已明显变慢
+   - 匈牙利: 精确解，总时间O(n^3)，不可微（scipy C实现常数极小，n=300实测见步骤3打印，含机器负载差异）
+   - Sinkhorn: 熵正则近似，每迭代O(n^2)，可微、可GPU批量并行
+   - 本实验的纯NumPy教学实现常数开销大，总墙钟时间反而远慢于C实现的匈牙利算法；
+     Sinkhorn的可扩展性优势要在GPU批量并行下才能体现（POT库生产环境实测远快于精确解）
 
 2. Log域稳定化Sinkhorn的收敛特性
    - 直接在log域迭代避免K=exp(-C/ε)的数值下溢
-   - 收敛速度依赖问题规模：n=50时ε=0.01约需2000次迭代进入稳态，n=200时需约8000次
-   - 迭代预算按n²缩放是确保不同规模都能真正收敛的关键
-   - 该实现与POT库的stable_sinkhorn_log等效（Cuturi 2013）
+   - 收敛所需迭代次数由ε主导（ε越小对偶缩放越病态、迭代越多），
+     对样本量n的增长并不剧烈（本实验实测：不随n^2增长）
+   - 未收敛时重建的P不是有效耦合，其<C,P>可能低于真实OT代价——
+     报告迭代数时必须同时标注是否收敛
 
-3. 精度-效率权衡与规模依赖性
-   - ε越小: 越接近精确OT，但需要更多迭代次数（且迭代次数随n²增长）
-   - ε越大: 收敛快，但近似误差大（传输代价偏高）
-   - 最优权衡点通常在ε≈0.05~0.1之间
-   - 重要：大样本时小ε的收敛成本急剧上升，这也是Minibatch策略的动机之一
+3. 精度-效率权衡的真实图景
+   - 熵偏差 |<C,P_ε>-OT| 随ε单调增大，且在固定ε下随样本量n增大而上升
+     （实测ε=0.1: n=50约9~14% → n=300约17%；ε=1.0: n=50约54~61% → n=300约70%）
+   - 因此ε不是绝对常数：同一ε在不同batch规模/数据分布下精度不同，
+     实际使用时应在目标规模上标定ε（这是Minibatch OT调参的真实注意点）
+   - 小ε(≤0.01)在固定tol下迭代数急剧上升，实践中常早停换取速度
 
 4. Minibatch OT实践（14.3.5节）
-   - 大规模数据(如MNIST 6万张)无法整体计算OT
+   - 大规模数据(如MNIST 6万张)无法整体计算OT：代价矩阵O(N^2)存储与求解都不可行
    - Minibatch策略: 每个batch(如256样本)内计算OT近似
-   - Sinkhorn的批处理能力使其适合GPU加速
+   - Sinkhorn每迭代O(n^2)且是纯矩阵运算，天然适合GPU批量并行与自动微分
    - 这是OT-CFM实际可行的关键
 
-5. 正则化参数选择建议（以n≈100为基准）
-   - ε=0.01: 高精度（<1%误差），但需大量迭代（n=100时约8000次），适合小规模学术研究
-   - ε=0.05~0.1: 精度与速度平衡（5-10%误差），推荐实际应用默认值
-   - ε=1.0: 快速近似（>60%误差），仅适合粗略估计
-   - 注：以上迭代次数随n²增长，大规模数据推荐Minibatch策略
+5. 正则化参数选择建议（以n≈50~100的教学规模为例）
+   - ε=0.01: 高精度（<1%熵偏差），但边际判据下迭代数上千甚至截断
+   - ε=0.05~0.1: 精度与速度平衡（~8%偏差、数百次迭代），教学演示推荐
+   - ε=1.0: 快速近似（数十%偏差），仅适合展示熵平滑效应
+   - 注：以上数字依赖数据规模与分布，换规模需重新标定（见结论3）
 """)
 
 # ===== 保存数值结果 =====
@@ -535,6 +547,7 @@ def _to_native(obj):
     if isinstance(obj, (np.integer,)): return int(obj)
     if isinstance(obj, (np.floating,)): return float(obj)
     if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    if isinstance(obj, (bool, np.bool_)): return bool(obj)
     try:
         import torch
         if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
@@ -542,15 +555,37 @@ def _to_native(obj):
     return obj
 
 results_summary = {
-    'cost_hungarian': round(float(cost_hungarian), 4),
-    'time_hungarian_ms': round(float(time_hungarian * 1000), 2),
+    'step1_cost_hungarian': round(float(cost_hungarian), 4),
+    'step1_time_hungarian_ms': round(float(time_hungarian * 1000), 2),
     'sinkhorn_results': {
         f'eps_{reg}': {
             'cost': round(float(sinkhorn_results[reg]['cost']), 4),
             'time_ms': round(float(sinkhorn_results[reg]['time'] * 1000), 2),
             'n_iter': int(sinkhorn_results[reg]['n_iter']),
+            'converged': bool(sinkhorn_results[reg]['converged']),
             'rel_error_pct': round(float(abs(sinkhorn_results[reg]['cost'] - cost_hungarian) / cost_hungarian * 100), 2),
         } for reg in reg_values
+    },
+    'scalability': {
+        'sample_sizes': sample_sizes,
+        'hungarian_ms': [round(t * 1000, 3) for t in results_scalability['hungarian']],
+        'sinkhorn': {
+            f'eps_{reg}': {
+                'total_ms': [round(t * 1000, 1) for t in results_scalability[f'sinkhorn_{reg}']],
+                'per_iter_us': [round(t * 1e6, 1) for t in results_scalability['per_iter'][reg]],
+                'iters': results_scalability['iters'][reg],
+                'converged_all': results_scalability['converged'][reg],
+                'bias_pct': [round(b, 2) for b in results_scalability['bias'][reg]],
+            } for reg in reg_scale
+        },
+    },
+    'sensitivity': {
+        'n': n_sens,
+        'cost_exact': round(float(cost_exact), 4),
+        'reg_range': [round(float(r), 5) for r in reg_range],
+        'rel_error_pct': [round(float(e), 2) for e in cost_errors_by_reg],
+        'iters': [int(i) for i in iters_by_reg],
+        'converged': [bool(c) for c in converged_by_reg],
     },
 }
 results_summary = _to_native(results_summary)

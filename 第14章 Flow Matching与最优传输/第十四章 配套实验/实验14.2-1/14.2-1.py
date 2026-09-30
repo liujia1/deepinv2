@@ -233,7 +233,7 @@ def ode_solve_euler(vf_net, z0, n_steps, t_start=0.0, t_end=1.0, return_trajecto
 def compute_log_likelihood(vf_net, x_data, n_steps):
     """计算对数似然 log p_1(x_data)
 
-    14.2.1节: 瞬时变量替换公式
+    14.2.3节: 瞬时变量替换公式
     log p_1(x) = log p_0(z) - ∫_0^1 tr(∇_x v_θ(x_t, t)) dt
 
     使用Hutchinson迹估计（有限差分法，FFJORD标准做法）
@@ -447,7 +447,7 @@ if not skip_training_fm:
             batch = x_data.shape[0]
 
             # Flow Matching训练（CFM目标）
-            # 14.3.2节: 条件向量场 v_t = x_0 - z
+            # 14.3.4节: 条件向量场 v_t = x_0 - z
             z = torch.randn_like(x_data)  # 源分布: N(0,I)
             t = torch.rand(batch, device=device)  # t ~ U[0,1]
             t_2d = t[:, None]  # (batch, 1)
@@ -640,7 +640,7 @@ if curv_fm < curv_cnll:
 else:
     traj_conclusion = f"Neural ODE轨迹更直（κ低{(curv_fm - curv_cnll)/curv_fm*100:.1f}%），" \
                       f"这是因为本实验使用独立耦合，条件路径虽直但边际向量场随位置变化。" \
-                      f"OT-CFM(14.4节)通过最优传输耦合可进一步降低曲率。"
+                      f"OT-CFM(14.3.5节)通过最优传输耦合可进一步降低曲率。"
     print(f"  → {traj_conclusion}")
 
 # ============================================================
@@ -719,7 +719,7 @@ ax.set_ylim(ylim)
 ax.set_aspect('equal')
 ax.grid(alpha=0.3)
 
-plt.suptitle(r'实验14.2-1：采样质量对比（14.2.3节）', fontsize=14, y=1.02)
+plt.suptitle(r'实验14.2-1：采样质量对比（14.2节）', fontsize=14, y=1.02)
 plt.tight_layout()
 fig_path2 = os.path.join(SAVE_DIR, '步骤2_采样质量对比.png')
 plt.savefig(fig_path2, dpi=150, bbox_inches='tight')
@@ -755,7 +755,7 @@ ax.set_ylim(ylim)
 ax.set_aspect('equal')
 ax.grid(alpha=0.3)
 
-plt.suptitle(r'实验14.2-1：采样轨迹形态对比（14.2.3节）', fontsize=14, y=1.02)
+plt.suptitle(r'实验14.2-1：采样轨迹形态对比（14.2节）', fontsize=14, y=1.02)
 plt.tight_layout()
 fig_path3 = os.path.join(SAVE_DIR, '步骤3_轨迹形态对比.png')
 plt.savefig(fig_path3, dpi=150, bbox_inches='tight')
@@ -771,13 +771,13 @@ print("实验14.2-1 完成!")
 print("=" * 60)
 print(f"""
 关键结论:
-1. 训练效率对比（14.2.3节）
+1. 训练效率对比（14.2.4节）
    - Neural ODE: 每次迭代需求解ODE计算似然，耗时 {np.mean(times_cnll):.3f}s/epoch
    - Flow Matching: 无需求解ODE，仅前向传播+MSE损失，耗时 {np.mean(times_fm):.3f}s/epoch
    - 加速比: {np.mean(times_cnll)/np.mean(times_fm):.1f}x
    - 这是CFM定理的核心价值：绕过ODE仿真实现高效训练
 
-2. 采样质量对比（14.2.3节）
+2. 采样质量对比（14.2节）
    - Neural ODE采样 MMD: {mmd_cnll:.6f}
    - Flow Matching采样 MMD: {mmd_fm:.6f}
    - 两种方法都能学会目标分布；FM用更短的墙钟时间到达平台，
@@ -789,8 +789,8 @@ print(f"""
    - {traj_conclusion}
 
 4. 理论联系
-   - CNF训练瓶颈: 求解ODE计算似然（14.2.3节）
-   - CFM定理突破: 梯度等价，无需仿真ODE（14.3.2节）
+   - CNF训练瓶颈: 求解ODE计算似然（14.2.4节）
+   - CFM定理突破: 梯度等价，无需仿真ODE（14.3.3节）
    - Flow Matching = CNF训练的"免仿真"方案
 
 5. 教学脚注：为什么反而是FM的loss曲线抖动更大？
@@ -808,7 +808,7 @@ print(f"""
    - 但MMD作为整体分布距离度量，对这几个百分点的桥接离群点不敏感，
      更多反映的是整体均值/协方差/形状的匹配（FM在这些方面确实更贴近目标）。
    - MMD更优不代表视觉上更"干净"——不同指标衡量的是分布匹配的不同侧面，
-     这也是后面14.4节引入OT-CFM的动机之一。
+     这也是14.3.5节引入OT-CFM的动机之一。
 """)
 
 # ===== 保存数值结果 =====
