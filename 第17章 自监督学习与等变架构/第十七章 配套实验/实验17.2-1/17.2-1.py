@@ -25,6 +25,20 @@ Step 4: Neighbor2Neighbor空间配对 —— 利用邻域结构近似配对
    不匹配，通过后缀自动隔离，避免resume误加载。
 3. N2B全分辨率版的identity诊断改为对齐训练目标y[sub2]：v1误测f(y)[sub1]
    与y[sub1]的相关性，漏检了"直接抄目标像素"的identity shortcut。
+
+★v3修订（修复N2B下采样版的实现缺陷）：
+v2的neighbor_split只取每个2×2块的(0,0)/(0,1)两个像素，原图一半像素（奇数行）
+从未进入训练信号；neighbor_merge又用"对角交换"把奇数行填成非真实像素，
+既损失训练数据又引入棋盘伪影，使下采样版PSNR降到12.2dB——该数字反映的是
+**实现缺陷**而非算法固有局限。此前把该差距归因为"空间独立性假设下的近似配对"
+属于错误归因。v3改用Huang et al. (2021)原文的随机邻域降采样：
+  - 每个2×2块随机选一对相邻像素构成sub1，互补的两个像素构成sub2
+    （两张子图各含2像素/块，尺寸(B,2C,H/2,W/2)，与原论文一致）
+  - 随机模式使网络无法学到固定的空间偏移捷径
+  - sub1与sub2的像素位置互补且无重叠，配合记录下来的模式可**无损还原**原图，
+    因此下采样版PSNR恢复为全图口径、可直接与其他方法比较，不再需要"公平评估"补丁
+  - N2B模型输入/输出通道数由1改为2（对应块内2个像素），旧权重不兼容，
+    通过N2B_CKPT_VER='v3'自动隔离
 """
 
 import numpy as np
@@ -156,6 +170,9 @@ LR = 1e-3
 # 旧v1权重基于clamp噪声训练，与新管线的训练/评估不匹配，
 # 通过版本后缀自动隔离，避免resume逻辑误加载旧权重导致结果混杂
 CKPT_VER = 'v2'
+# ★N2B专用版本后缀：v3起Step 4改用原论文的随机邻域降采样（2通道子图），
+# 与v2的1通道固定配对权重不兼容，单独设版本避免影响其他已训练好的模型
+N2B_CKPT_VER = 'v3'
 
 transform = transforms.Compose([
     transforms.Resize(IMG_SIZE),
@@ -928,32 +945,43 @@ print("\n" + "="*70)
 print("Step 4: Neighbor2Neighbor空间配对")
 print("="*70)
 
-def neighbor_split(y):
-    """将噪声图像分成两个子图像（仅使用偶数行）
+# 2×2块内四个位置的编号：k = 2*行内偏移 + 列内偏移
+#   0=(0,0), 1=(0,1), 2=(1,0), 3=(1,1)
+# 四种模式各把一对相邻像素给sub1、互补的一对给sub2，恰好覆盖整块4个像素
+_PAT_SUB1_A = (0, 0, 1, 2)
+_PAT_SUB1_B = (1, 2, 3, 3)
+_PAT_SUB2_A = (2, 1, 0, 0)
+_PAT_SUB2_B = (3, 3, 2, 1)
 
-    原理：空间独立的噪声在相邻像素间也独立，
-    因此两个子图可近似作为同一信号的配对噪声观测
+def neighbor_split(y, pattern=None, generator=None):
+    """随机邻域降采样：由单帧噪声图像构造伪配对（Huang et al. 2021）
 
-    ★简化实现：取每个2×2块的(0,0)作为子图1，(0,1)作为子图2
-    即仅使用原图偶数行的像素，奇数行不参与训练信号构造
-    这样两个子图的像素空间相邻（水平方向），噪声独立，满足N2B核心假设
+    对每个2×2块随机选一种相邻像素对模式 p ∈ {0,1,2,3}：
+      p=0: sub1=(0,0),(0,1)  sub2=(1,0),(1,1)   （水平：上行 / 下行）
+      p=1: sub1=(0,0),(1,0)  sub2=(0,1),(1,1)   （垂直：左列 / 右列）
+      p=2: sub1=(0,1),(1,1)  sub2=(0,0),(1,0)   （垂直：右列 / 左列）
+      p=3: sub1=(1,0),(1,1)  sub2=(0,0),(0,1)   （水平：下行 / 上行）
 
-    ★★★ 重要理论缺陷（教学要点）★★★
+    ★为什么是"一对相邻像素×2"而不是"两个相邻的单像素"：
+    每个2×2块共4个像素。sub1与sub2各取2个互补像素（无重叠、无遗漏），
+    合起来正好覆盖整块，因此两张子图尺寸为 (B, 2C, H//2, W//2)，
+    与原论文一致；并且可由 (子图, pattern) **无损还原**原图（见neighbor_merge），
+    使下采样版PSNR就是全图口径，可与其他方法直接比较。
+    （注：空间独立的噪声在相邻像素间也独立，故互补像素可互为"噪声标签"。）
 
-    本实现采用固定位置配对，与原论文（Huang et al. 2021）的随机采样策略不同：
-
-    1. 原论文设计：每次迭代随机选择2×2块内的配对位置（如(0,0)-(0,1),
-       (0,1)-(1,1), (1,1)-(1,0), (1,0)-(0,0)），避免网络学到固定的空间偏移模式
-
-    2. 本实现：固定取(0,0)和(0,1)，每个epoch都一样
-
-    3. 潜在风险：网络可能学到"往右挪一个像素"这种确定性的空间映射捷径，
-       而不是真正的去噪。这是简化实现的教学代价
-
-    4. 教学价值：本实验展示了"实现简化 vs 理论严格"的权衡，
-       工程应用建议参考原论文的随机采样实现
+    ★随机模式的作用：若模式固定（如恒取(0,0)-(0,1)），网络容易学到
+    "往右挪一个像素"这种确定性的空间偏移捷径；每个样本/每个batch随机取模式可消除该捷径。
 
     参考: Huang et al. (2021) Neighbor2Neighbor
+
+    Args:
+        y: (B, C, H, W) 噪声图像
+        pattern: 可选，(B, H//2, W//2) int64；为None时随机采样
+        generator: 可选，torch.Generator，用于随机模式的可复现性
+
+    Returns:
+        sub1, sub2: (B, 2C, H//2, W//2)
+        pattern:    (B, H//2, W//2)
     """
     B, C, H, W = y.shape
     # 确保 H, W 为偶数
@@ -962,79 +990,77 @@ def neighbor_split(y):
     if W % 2 != 0:
         y = y[:, :, :, :-1]
     B, C, H, W = y.shape
+    H2, W2 = H // 2, W // 2
 
-    # 重塑为2×2块结构
-    y_blocks = y.reshape(B, C, H//2, 2, W//2, 2)
+    # 把每个2×2块的4个像素摊到最后一维：blk[..., k]
+    blk = y.reshape(B, C, H2, 2, W2, 2).permute(0, 1, 2, 4, 3, 5).reshape(B, C, H2, W2, 4)
 
-    # 子图1：每个2×2块的(0,0)位置
-    sub1 = y_blocks[:, :, :, 0, :, 0]  # shape: (B, C, H//2, W//2)
-    # 子图2：每个2×2块的(0,1)位置（相邻像素，噪声独立）
-    sub2 = y_blocks[:, :, :, 0, :, 1]  # shape: (B, C, H//2, W//2)
+    if pattern is None:
+        pattern = torch.randint(0, 4, (B, H2, W2), device=y.device, generator=generator)
 
-    return sub1, sub2
+    def _take(flat_table):
+        table = torch.tensor(flat_table, device=y.device, dtype=torch.long)
+        idx = table[pattern].unsqueeze(1).expand(B, C, H2, W2).unsqueeze(-1)
+        return torch.gather(blk, 4, idx).squeeze(-1)
 
-def neighbor_merge(sub1, sub2, H, W):
-    """将两个子图合并回原始尺寸
+    sub1 = torch.cat([_take(_PAT_SUB1_A), _take(_PAT_SUB1_B)], dim=1)  # (B, 2C, H2, W2)
+    sub2 = torch.cat([_take(_PAT_SUB2_A), _take(_PAT_SUB2_B)], dim=1)
+    return sub1, sub2, pattern
 
-    ★重要局限性（教学说明）：
-    由于neighbor_split只取了每个2×2块的偶数行像素（第0行），
-    奇数行的真实像素信息从未被采样使用。
-    本函数采用棋盘式对角交换填充奇数行（非真实像素值）：
-      - 偶数行：col0=sub1, col1=sub2
-      - 奇数行：col0=sub2, col1=sub1（对角交换）
-    这会引入额外的棋盘格伪影，使得下采样版N2B的重建质量低于真实水平。
+def neighbor_merge(sub1, sub2, pattern):
+    """按 pattern 将两张子图还原为原图（每个像素恰好被填一次，无损）
 
-    因此，下采样版的PSNR评估存在系统性偏差，不应与全分辨率版
-    做"公平"对比。全分辨率版才是更准确的N2B实现。
-
-    注：此处棋盘式 merge 是本实验自定的还原方式，并非原论文做法。
-    Huang et al. (2021) 原论文对每个 2×2 块随机选 2 个相邻像素（水平或垂直）
-    得到两张半分辨率子图，全程在半分辨率下训练与评估，不涉及"填回全分辨率"，
-    也没有"行平均插值"。下采样版仅用于教学对比，评估口径见上文说明。
+    由于 sub1/sub2 在每个2×2块内互补且无重叠，还原结果不含任何
+    插值或复制填充的"伪像素"，下采样版的PSNR因此是全图口径，
+    可直接与全分辨率方法、监督基线比较。
     """
-    B, C, h, w = sub1.shape  # h=H//2, w=W//2
-    out = torch.zeros(B, C, H, W, device=sub1.device)
-    # 将子图填回对应位置（棋盘式填充）
-    out[:, :, 0::2, 0::2] = sub1  # 偶数行偶数列 ← sub1
-    out[:, :, 0::2, 1::2] = sub2  # 偶数行奇数列 ← sub2
-    out[:, :, 1::2, 0::2] = sub2  # 奇数行偶数列 ← sub2（对角交换，引入伪影）
-    out[:, :, 1::2, 1::2] = sub1  # 奇数行奇数列 ← sub1（对角交换，引入伪影）
-    return out
+    B, C2, H2, W2 = sub1.shape
+    C = C2 // 2
+    canvas = torch.empty(B, C, H2, W2, 4, device=sub1.device, dtype=sub1.dtype)
+
+    def _put(flat_table, val):
+        table = torch.tensor(flat_table, device=sub1.device, dtype=torch.long)
+        idx = table[pattern].unsqueeze(1).expand(B, C, H2, W2).unsqueeze(-1)
+        canvas.scatter_(4, idx, val.unsqueeze(-1))
+
+    _put(_PAT_SUB1_A, sub1[:, :C])
+    _put(_PAT_SUB1_B, sub1[:, C:])
+    _put(_PAT_SUB2_A, sub2[:, :C])
+    _put(_PAT_SUB2_B, sub2[:, C:])
+
+    return canvas.reshape(B, C, H2, W2, 2, 2).permute(0, 1, 2, 4, 3, 5).reshape(B, C, H2 * 2, W2 * 2)
 
 # --- 训练Neighbor2Neighbor ---
 print("\n  训练Neighbor2Neighbor...")
 
 """
-★ Neighbor2Neighbors 的分辨率问题与伪影风险（重要说明）：
+★ Neighbor2Neighbor 的实现要点（v3起）
 
 1. 分辨率减半：
-   - neighbor_split 后，图像从 32×32 变为 16×16
+   - 每个2×2块取2个像素作为子图，图像从 32×32 变为 16×16（2通道）
    - 模型在半分辨率下训练，感受野相对变大
+   - 预测结果由 neighbor_merge 按记录的模式**无损还原**回 32×32，
+     所以下采样版的PSNR就是全图口径，可直接与监督/N2N比较
 
-2. ★奇数行丢失问题（关键局限性）：
-   - neighbor_split 只取偶数行像素，奇数行从未被采样
-   - neighbor_merge 用偶数行值复制填充奇数行，引入棋盘格伪影
-   - 这使得下采样版的PSNR存在系统性偏差，低于真实水平
-   - 因此，下采样版与全分辨率版的对比主要展示"实现差异"，而非"算法优劣"
+2. 与原文一致之处：
+   - 每块随机选一对相邻像素（4种模式等概率随机），互补像素对作为配对目标
+   - 训练时每batch随机模式，测试时用固定模式（保证可复现）
 
-3. 尺度不匹配风险：
-   - 测试时直接用全分辨率输入可能导致纹理偏移
-   - 本实验通过 neighbor_merge 将预测结果合并回全分辨率来缓解
+3. 相对原文的已知简化：
+   - 未实现原论文的 reg 项（‖f(sub1)-sub1‖² 之类的额外正则项），
+     这会使本实验的N2B结果略低于论文设定的上限，属已知简化而非算法缺陷
+   - 未做模型选择/超参搜索
 
-4. 实践中的改进策略：
-   - 正则项：添加 ‖f(sub1) - sub1‖² 或类似约束，防止过度平滑
-     （这是 N2N 原论文的 reg 项，属论文真实内容）
-   - 数据增强：随机翻转/旋转子图对，增强泛化能力
-   - 多尺度训练：混合不同下采样比例
-
-5. 本实验的简化处理：
-   - 为教学目的，本实验未添加额外正则项
-   - 实际应用中建议参考原论文的完整实现（每块随机配对 + 正则项）
+4. 差距拆分对照（见下方Step 4a2）：
+   - 额外训练一个"半分辨率监督对照"，其输入表示、架构、优化器、轮数与推理/还原方式
+     与N2B降采样**完全相同**，仅把训练目标换成分辨率表示下的干净像素；
+   - 用途：把 N2B−N2N 的差距实测拆分为"表示/分辨率代价"与"伪配对目标代价"两部分，
+     避免把差距笼统归因于未经检验的原因
 """
 
-model_n2nb = SmallUNet().to(device)
+model_n2nb = SmallUNet(in_ch=2, out_ch=2).to(device)  # ★子图为2通道（每2×2块取2像素）
 optimizer_n2nb = optim.Adam(model_n2nb.parameters(), lr=LR)
-n2nb_ckpt_path = os.path.join(SAVE_DIR, f'ckpt_N2B_{CKPT_VER}.pt')
+n2nb_ckpt_path = os.path.join(SAVE_DIR, f'ckpt_N2B_{N2B_CKPT_VER}.pt')
 n2nb_start = 0
 is_n2nb_final = False
 losses_n2nb = []
@@ -1072,11 +1098,11 @@ else:
         for batch_x, _ in pbar:
             batch_x = batch_x.to(device)
             y = add_noise(batch_x, SIGMA)
-            # 从单帧y构造伪配对
-            sub1, sub2 = neighbor_split(y)
+            # 从单帧y构造伪配对（★每个batch随机采样邻域模式）
+            sub1, sub2, _ = neighbor_split(y)
             optimizer_n2nb.zero_grad()
             pred1 = model_n2nb(sub1)
-            # ★ N2B核心：用sub2作为sub1的"噪声标签"
+            # ★ N2B核心：用sub2（互补位置的独立噪声实现）作为sub1的"噪声标签"
             loss = nn.MSELoss()(pred1, sub2.detach())
             loss.backward()
             optimizer_n2nb.step()
@@ -1110,24 +1136,27 @@ else:
         }, n2nb_ckpt_path)
         print(f"  [N2B] ✓ 训练完成, 最终checkpoint已保存")
 
-# 评估N2B：对完整尺寸输入去噪
-# ★使用固定噪声（与evaluate_psnr一致），确保跨模型评估一致性
+# 评估N2B：降采样→去噪→按同一模式无损还原
+# ★使用固定噪声（与evaluate_psnr一致）+固定邻域模式，确保评估可复现
 model_n2nb.eval()
 psnr_n2nb_vals = []
 ssim_n2nb_vals = []
 n2b_noise_rng = torch.Generator(device=device)
 n2b_noise_rng.manual_seed(12345)  # 与evaluate_psnr的noise_seed一致
+n2b_pat_rng = torch.Generator(device=device)
+n2b_pat_rng.manual_seed(20240)    # 评估用固定邻域模式
 with torch.no_grad():
     for batch_x, _ in tqdm(test_loader, desc='评估N2B PSNR', leave=False):
         batch_x = batch_x.to(device)
         noise = torch.randn(batch_x.shape, generator=n2b_noise_rng, device=device)
         y = batch_x + SIGMA * noise
-        # 用子图去噪后合并
-        sub1, sub2 = neighbor_split(y)
+        pattern = torch.randint(0, 4, (y.shape[0], IMG_SIZE // 2, IMG_SIZE // 2),
+                                device=device, generator=n2b_pat_rng)
+        sub1, sub2, pat = neighbor_split(y, pattern=pattern)
         pred_sub1 = model_n2nb(sub1).clip(0, 1)
         pred_sub2 = model_n2nb(sub2).clip(0, 1)
-        # 合并回原始尺寸
-        pred_full = neighbor_merge(pred_sub1, pred_sub2, IMG_SIZE, IMG_SIZE)
+        # ★无损还原：每个像素恰好被sub1或sub2的预测填充一次，无棋盘伪影
+        pred_full = neighbor_merge(pred_sub1, pred_sub2, pat)
         pred_np = pred_full.cpu().numpy()
         x_np = batch_x.cpu().numpy()
         for i in range(min(pred_np.shape[0], x_np.shape[0])):
@@ -1138,11 +1167,122 @@ with torch.no_grad():
 
 psnr_n2nb = np.mean(psnr_n2nb_vals)
 ssim_n2nb = np.mean(ssim_n2nb_vals)
-# ★命名说明：n2nb = N2B下采样版（neighbor_split/merge），n2b_fullres = N2B全分辨率版
+# ★命名说明：n2nb = N2B降采样版（neighbor_split/merge，全图口径）；n2b_fullres = N2B全分辨率版
 print(f"  Neighbor2Neighbor PSNR = {psnr_n2nb:.2f} dB, SSIM = {ssim_n2nb:.4f}")
 
-# --- Step 4b: 保持分辨率版N2B（消除合并误差，但需警惕identity shortcut）---
-print("\n  训练保持分辨率版N2B（消除合并误差；identity shortcut风险见后续诊断）...")
+# --- Step 4a2: 半分辨率监督对照（★用于实际拆分 N2B 与 N2N 的差距来源）---
+# ★动机：N2B降采样与N2N的差距里，有两个本来纠缠在一起的因素：
+#   (i)  表示/分辨率：N2B在半分辨率(32→16)的2通道子图上训练与推理；
+#   (ii) 目标端噪声：N2B用互补位置的"带噪"y₂作目标，而N2N用独立的噪声实现y′作目标。
+# 本对照与N2B降采样**共用完全相同的输入表示、网络架构、优化器、轮数与推理/还原方式**，
+# 唯一差别是把训练目标换成分辨率表示下的**干净**像素（即同位置的有监督去噪）。于是可实测拆分为：
+#   表示/分辨率代价 = PSNR(N2N) − PSNR(本对照)
+#   伪配对目标代价   = PSNR(本对照) − PSNR(N2B降采样)
+print("\n  训练半分辨率监督对照（同表示、同架构，仅把目标换成干净像素）...")
+
+model_hfsup = SmallUNet(in_ch=2, out_ch=2).to(device)
+optimizer_hfsup = optim.Adam(model_hfsup.parameters(), lr=LR)
+hfsup_ckpt_path = os.path.join(SAVE_DIR, f'ckpt_HalfResSup_{N2B_CKPT_VER}.pt')
+hfsup_start = 0
+is_hfsup_final = False
+losses_hfsup = []
+
+if os.path.exists(hfsup_ckpt_path):
+    checkpoint = torch.load(hfsup_ckpt_path, map_location=device, weights_only=False)
+    model_state = checkpoint.get('model_state_dict', checkpoint.get('model_state'))
+    optimizer_state = checkpoint.get('optimizer_state_dict', checkpoint.get('optimizer_state'))
+    losses_hfsup = checkpoint.get('train_losses', [])
+    if checkpoint.get('is_final', False):
+        print(f"  [半分辨率监督] ✓ 检测到最终权重，直接加载，跳过训练过程")
+        print(f"  训练轮数: {checkpoint['epoch']+1}")
+        model_hfsup.load_state_dict(model_state)
+        if optimizer_state:
+            optimizer_hfsup.load_state_dict(optimizer_state)
+        hfsup_start = checkpoint['epoch'] + 1
+        is_hfsup_final = True
+    else:
+        print(f"  [半分辨率监督] 检测到未完成的训练，从第 {checkpoint['epoch']+1} 轮继续")
+        model_hfsup.load_state_dict(model_state)
+        if optimizer_state:
+            optimizer_hfsup.load_state_dict(optimizer_state)
+        hfsup_start = checkpoint['epoch'] + 1
+
+if is_hfsup_final or hfsup_start >= N_EPOCHS:
+    print("  [半分辨率监督] 模型已训练完毕，跳过。")
+else:
+    model_hfsup.train()
+    for epoch in range(hfsup_start, N_EPOCHS):
+        epoch_loss = 0
+        n_batch = 0
+        pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{N_EPOCHS} [半分辨率监督]', leave=False, unit='batch')
+        for batch_x, _ in pbar:
+            batch_x = batch_x.to(device)
+            y = add_noise(batch_x, SIGMA)
+            # ★对噪声图与干净图施加**同一**邻域模式，确保输入表示与N2B降采样完全一致
+            sub1, _, pattern = neighbor_split(y)          # 与N2B训练完全相同的模式采样方式
+            clean_sub1, _, _ = neighbor_split(batch_x, pattern=pattern)
+            optimizer_hfsup.zero_grad()
+            loss = nn.MSELoss()(model_hfsup(sub1), clean_sub1.detach())
+            loss.backward()
+            optimizer_hfsup.step()
+            epoch_loss += loss.item()
+            n_batch += 1
+            pbar.set_postfix(loss=f'{loss.item():.4f}')
+        avg_loss = epoch_loss / n_batch
+        losses_hfsup.append(avg_loss)
+        if (epoch + 1) % 10 == 0:
+            print(f"  [半分辨率监督] Epoch {epoch+1}/{N_EPOCHS}, Loss: {avg_loss:.6f}")
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model_hfsup.state_dict(),
+                'optimizer_state_dict': optimizer_hfsup.state_dict(),
+                'loss': avg_loss,
+                'train_losses': losses_hfsup,
+                'is_final': False
+            }, hfsup_ckpt_path)
+            print(f"  [半分辨率监督] ✓ checkpoint已保存 (epoch {epoch+1})")
+    if losses_hfsup:
+        torch.save({
+            'epoch': N_EPOCHS - 1,
+            'model_state_dict': model_hfsup.state_dict(),
+            'loss': losses_hfsup[-1],
+            'train_losses': losses_hfsup,
+            'is_final': True
+        }, hfsup_ckpt_path)
+        print(f"  [半分辨率监督] ✓ 训练完成, 最终checkpoint已保存")
+
+# 评估半分辨率监督对照：与N2B降采样使用完全相同的评估口径（同噪声、同模式、同还原方式）
+model_hfsup.eval()
+psnr_hfsup_vals, ssim_hfsup_vals = [], []
+hfsup_noise_rng = torch.Generator(device=device); hfsup_noise_rng.manual_seed(12345)
+hfsup_pat_rng = torch.Generator(device=device); hfsup_pat_rng.manual_seed(20240)
+with torch.no_grad():
+    for batch_x, _ in tqdm(test_loader, desc='评估半分辨率监督 PSNR', leave=False):
+        batch_x = batch_x.to(device)
+        noise = torch.randn(batch_x.shape, generator=hfsup_noise_rng, device=device)
+        y = batch_x + SIGMA * noise
+        pattern = torch.randint(0, 4, (y.shape[0], IMG_SIZE // 2, IMG_SIZE // 2),
+                                device=device, generator=hfsup_pat_rng)
+        sub1, sub2, pat = neighbor_split(y, pattern=pattern)
+        pred_sub1 = model_hfsup(sub1).clip(0, 1)
+        pred_sub2 = model_hfsup(sub2).clip(0, 1)
+        pred_full = neighbor_merge(pred_sub1, pred_sub2, pat)
+        pred_np = pred_full.cpu().numpy()
+        x_np = batch_x.cpu().numpy()
+        for i in range(min(pred_np.shape[0], x_np.shape[0])):
+            h = min(pred_np.shape[2], x_np.shape[2])
+            w = min(pred_np.shape[3], x_np.shape[3])
+            psnr_hfsup_vals.append(psnr(x_np[i, 0, :h, :w], pred_np[i, 0, :h, :w], data_range=1.0))
+            ssim_hfsup_vals.append(ssim(x_np[i, 0, :h, :w], pred_np[i, 0, :h, :w], data_range=1.0))
+
+psnr_hfsup = np.mean(psnr_hfsup_vals)
+ssim_hfsup = np.mean(ssim_hfsup_vals)
+print(f"  半分辨率监督对照 PSNR = {psnr_hfsup:.2f} dB, SSIM = {ssim_hfsup:.4f}")
+print(f"    → 表示/分辨率代价 = PSNR(N2N) − PSNR(对照) = {psnr_n2n - psnr_hfsup:+.2f} dB")
+print(f"    → 伪配对目标代价   = PSNR(对照) − PSNR(N2B降采样) = {psnr_hfsup - psnr_n2nb:+.2f} dB")
+
+# --- Step 4b: 保持分辨率版N2B（★作为"感受野泄漏/identity shortcut"的对照负例）---
+print("\n  训练保持分辨率版N2B（该版本有意保留感受野泄漏，作为对照负例）...")
 
 def get_subgrid_indices(H, W, device):
     """获取棋盘格子图位置的索引
@@ -1154,18 +1294,21 @@ def get_subgrid_indices(H, W, device):
         idx_sub1: 子图1位置的扁平索引
         idx_sub2: 子图2位置的扁平索引
 
-    ★ 与原始N2B下采样方案的对比：
+    ★ 与N2B降采样方案的对比：
     ─────────────────────────────────────────
-    原始方案（neighbor_split）：
-      - 物理下采样：32×32 → 16×16 子图
-      - 模型在低分辨率上训练
-      - 测试时需neighbor_merge合并，引入近似误差
+    N2B降采样方案（neighbor_split/merge，v3）：
+      - 物理下采样：32×32 → 16×16（2通道）子图
+      - 模型在低分辨率上训练，sub2位置不在输入中 → 无感受野泄漏
+      - 测试时按记录的模式无损还原，无需近似填充
 
     本方案（保持分辨率）：
       - 逻辑下采样：仅提取子图位置的索引
-      - 模型在全分辨率上训练，损失只在子图位置计算
-      - 测试时直接推理，无需合并，消除近似误差
+      - 模型在全分辨率上训练，输入包含全部像素 → 存在感受野泄漏
+      - 损失只在idx_sub1位置计算，目标取相邻的idx_sub2像素
+      - 测试时直接推理、无需合并，但泄漏使其退化为identity shortcut
     ─────────────────────────────────────────
+    ★教学定位：本方案是"保持分辨率但未屏蔽输入像素"的**负例**，
+      用于对照说明真正的blind-spot必须保证目标像素不在感受野内。
     """
     idx_sub1 = []
     idx_sub2 = []
@@ -1192,15 +1335,15 @@ def train_n2b_fullres(model, train_loader, n_epochs=N_EPOCHS, tag="N2B_FullRes")
     - 测试时直接在原图上推理，无需合并
 
     优点：
-    1. 消除neighbor_merge引入的近似误差
-    2. 训练和测试分辨率一致
+    1. 训练和测试分辨率一致（都是32×32），无需降采样/还原
+    2. 与N2B降采样版形成对照：唯一差异是"输入是否包含目标像素"
 
     ★★★ 重要理论缺陷（教学要点）★★★
 
     本实现存在"感受野泄漏"问题，这是blind-spot自监督去噪方法的经典陷阱：
 
     1. 问题本质：
-       - 原始neighbor_split版本：模型输入是16×16的下采样图，sub2位置的信息
+       - 原始neighbor_split版本：模型输入是16×16的下采样子图，sub2位置的信息
          从未进入模型输入，天然满足blind-spot约束
        - 本版本：模型输入是完整的y，包含了位置i自身的像素值
        - SmallUNet的skip connection会让网络学到恒等映射 f(y)[i] ≈ y[i]
@@ -1212,14 +1355,14 @@ def train_n2b_fullres(model, train_loader, n_epochs=N_EPOCHS, tag="N2B_FullRes")
        - 这与经典blind-spot网络文献（Laine et al. 2019）要解决的问题一致
 
     3. 正确的blind-spot实现需要：
-       - 输入掩码：对目标位置置零或用掩码卷积
+       - 输入掩码：对目标位置置零或用掩码卷积（见实验17.4-1的N2V masking）
        - 或使用旋转不变架构等标准blind-spot技巧
 
     4. 教学价值：
-       - 本实验展示了"消除合并伪影 vs 引入感受野泄漏"的权衡
-       - 下采样版消除了感受野泄漏但有合并伪影
-       - 全分辨率版消除了合并伪影但有感受野泄漏
-       - 两者各有缺陷，而非简单的"谁更准确"
+       - 本版本是"未屏蔽输入像素"的**负例**：保留分辨率却引入泄漏，
+         结果被吸向恒等映射、PSNR反而不如下采样版
+       - N2B降采样版（v3）既无感受野泄漏、也无合并伪影，
+         是本实验中更接近原论文的实现
 
     参考: Laine et al. (2019) "High-Quality Self-Supervised Deep Image Denoising"
     """
@@ -1338,45 +1481,16 @@ psnr_n2b_fullres = np.mean(psnr_n2b_fullres_vals)
 ssim_n2b_fullres = np.mean(ssim_n2b_fullres_vals)
 print(f"  保持分辨率版N2B PSNR = {psnr_n2b_fullres:.2f} dB, SSIM = {ssim_n2b_fullres:.4f}")
 
-# --- ★公平评估：仅在idx_sub1位置计算PSNR/SSNR ---
-# 目的：让下采样版（仅在sub1位置有真实预测）和全分辨率版使用相同评估口径
-# 避免下采样版的"合并伪影"奇数行被错误地拉低分数
-print(f"\n  ★公平评估：仅在idx_sub1位置计算（与下采样版监督范围一致）")
-model_n2b_fullres.eval()
-idx_sub1_fair, _ = get_subgrid_indices(IMG_SIZE, IMG_SIZE, device)
-psnr_n2b_fullres_fair = []
-ssim_n2b_fullres_fair = []
-fair_noise_rng = torch.Generator(device=device)
-fair_noise_rng.manual_seed(12345)
-with torch.no_grad():
-    for batch_x, _ in tqdm(test_loader, desc='公平评估N2B FullRes', leave=False):
-        batch_x = batch_x.to(device)
-        noise = torch.randn(batch_x.shape, generator=fair_noise_rng, device=device)
-        y = batch_x + SIGMA * noise
-        pred = model_n2b_fullres(y).clip(0, 1)
-        B, C, H, W = pred.shape
-        pred_flat = pred.view(B, C, -1)
-        x_flat = batch_x.view(B, C, -1)
-        # ★只取idx_sub1位置（与下采样版评估口径一致）
-        pred_sub1 = pred_flat[:, :, idx_sub1_fair]
-        x_sub1 = x_flat[:, :, idx_sub1_fair]
-        # 重塑为2D图像计算PSNR/SSIM
-        h_sub = H // 2
-        w_sub = W // 2
-        pred_2d = pred_sub1.view(B, C, h_sub, w_sub).cpu().numpy()
-        x_2d = x_sub1.view(B, C, h_sub, w_sub).cpu().numpy()
-        for i in range(pred_2d.shape[0]):
-            psnr_n2b_fullres_fair.append(psnr(x_2d[i, 0], pred_2d[i, 0], data_range=1.0))
-            ssim_n2b_fullres_fair.append(ssim(x_2d[i, 0], pred_2d[i, 0], data_range=1.0))
-
-psnr_n2b_fullres_fair_mean = np.mean(psnr_n2b_fullres_fair)
-ssim_n2b_fullres_fair_mean = np.mean(ssim_n2b_fullres_fair)
-print(f"  公平评估（全分辨率版）: PSNR = {psnr_n2b_fullres_fair_mean:.2f} dB, SSIM = {ssim_n2b_fullres_fair_mean:.4f}")
+# 注（v3）：原"公平评估（仅在idx_sub1位置）"补丁已删除。
+# 该补丁是为绕开旧版neighbor_merge的棋盘伪影而设的补偿口径；
+# v3的降采样版按记录模式无损还原，PSNR本就是全图口径，
+# 与监督/N2N/全分辨率版同口径可比，无需再做非对称补偿。
 
 # --- ★偶数行vs奇数行PSNR对比（量化"卷积空间共享泛化"假设） ---
-print(f"\n  ★★ 偶数行vs奇数行PSNR对比（验证卷积空间共享泛化假设）★★")
-print("  两种N2B实现都只训练了偶数行（sub1位置），奇数行依赖'卷积核空间共享→泛化'。")
+print(f"\n  ★★ 偶数行vs奇数行PSNR对比（仅针对全分辨率负例）★★")
+print("  全分辨率版只在偶数行的idx_sub1位置被监督，奇数行依赖'卷积核空间共享→泛化'。")
 print("  量化对比可以验证这个隐含假设是否成立：")
+print("  （N2B降采样版v3的4种随机模式在期望意义上覆盖了全部像素，不存在该问题）")
 model_n2b_fullres.eval()
 # 定义偶数行/奇数行的索引
 even_row_idx = []
@@ -1503,22 +1617,28 @@ with torch.no_grad():
     pred_sup_vis = model_sup(vis_noisy).cpu().clip(0, 1)
     pred_n2n_vis = model_n2n(vis_noisy).cpu().clip(0, 1)
     pred_naive_vis = model_naive(vis_noisy).cpu().clip(0, 1)
-    # N2B 下采样+合并版
-    sub1_v, sub2_v = neighbor_split(vis_noisy)
+    # N2B 降采样+无损还原版（可视化用固定邻域模式，与评估口径一致）
+    vis_pat = torch.randint(0, 4, (vis_noisy.shape[0], IMG_SIZE // 2, IMG_SIZE // 2),
+                            device=device, generator=torch.Generator(device=device).manual_seed(20240))
+    sub1_v, sub2_v, pat_v = neighbor_split(vis_noisy, pattern=vis_pat)
     # ★变量名更具体：pred_s1_n2b/pred_s2_n2b 避免与Step 1的 pred_s1/pred_s2 混淆
     pred_s1_n2b = model_n2nb(sub1_v).clip(0, 1)
     pred_s2_n2b = model_n2nb(sub2_v).clip(0, 1)
-    pred_n2b_vis = neighbor_merge(pred_s1_n2b, pred_s2_n2b, IMG_SIZE, IMG_SIZE).cpu()
+    pred_n2b_vis = neighbor_merge(pred_s1_n2b, pred_s2_n2b, pat_v).cpu()
+    # 半分辨率监督对照（与N2B降采样同口径还原，便于目视对比）
+    pred_hfsup_vis = neighbor_merge(model_hfsup(sub1_v).clip(0, 1),
+                                    model_hfsup(sub2_v).clip(0, 1), pat_v).cpu()
     # N2B 保持分辨率版
     pred_n2b_fullres_vis = model_n2b_fullres(vis_noisy).cpu().clip(0, 1)
 
-fig, axes = plt.subplots(7, 3, figsize=(10, 21))
+fig, axes = plt.subplots(8, 3, figsize=(10, 24))
 row_labels = ['干净图像x', '噪声输入y',
               f'监督 ({psnr_sup:.1f}dB, SSIM={ssim_sup:.3f})',
               f'N2N ({psnr_n2n:.1f}dB, SSIM={ssim_n2n:.3f})',
               f'朴素 ({psnr_naive:.1f}dB, SSIM={ssim_naive:.3f})',
-              f'N2B下采样 ({psnr_n2nb:.1f}dB, SSIM={ssim_n2nb:.3f})',
-              f'N2B全分辨率 ({psnr_n2b_fullres:.1f}dB, SSIM={ssim_n2b_fullres:.3f})']
+              f'N2B降采样 ({psnr_n2nb:.1f}dB, SSIM={ssim_n2nb:.3f})',
+              f'半分辨率监督对照 ({psnr_hfsup:.1f}dB, SSIM={ssim_hfsup:.3f})',
+              f'N2B全分辨率负例 ({psnr_n2b_fullres:.1f}dB, SSIM={ssim_n2b_fullres:.3f})']
 
 for i in range(3):
     axes[0, i].imshow(vis_imgs[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
@@ -1534,14 +1654,17 @@ for i in range(3):
     # N2B下采样版
     axes[5, i].imshow(pred_n2b_vis[i, 0], cmap='gray', vmin=0, vmax=1)
     axes[5, i].axis('off')
-    # N2B全分辨率版
-    axes[6, i].imshow(pred_n2b_fullres_vis[i, 0], cmap='gray', vmin=0, vmax=1)
+    # 半分辨率监督对照
+    axes[6, i].imshow(pred_hfsup_vis[i, 0], cmap='gray', vmin=0, vmax=1)
     axes[6, i].axis('off')
+    # N2B全分辨率版
+    axes[7, i].imshow(pred_n2b_fullres_vis[i, 0], cmap='gray', vmin=0, vmax=1)
+    axes[7, i].axis('off')
 
 for r, label in enumerate(row_labels):
     axes[r, 0].set_ylabel(label, fontsize=10, rotation=0, labelpad=80)
 
-fig.suptitle('Step 4: 六种去噪方法完整对比', fontsize=13)
+fig.suptitle('Step 4: 六种去噪方法完整对比（含干净/噪声参考）', fontsize=13)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, 'step4_comparison.png'), dpi=150, bbox_inches='tight')
 plt.close()
@@ -1557,13 +1680,15 @@ print(f"  ───────────────────────�
 print(f"  监督 ‖x-f(y)‖²       {psnr_sup:6.2f}       {ssim_sup:6.4f}    基线（需要配对数据）")
 print(f"  N2N  ‖y'-f(y)‖²      {psnr_n2n:6.2f}       {ssim_n2n:6.4f}    等价于监督（需配对噪声）")
 print(f"  朴素 ‖y-f(y)‖²       {psnr_naive:6.2f}       {ssim_naive:6.4f}    有偏——低估风险")
-print(f"  N2B  下采样+合并      {psnr_n2nb:6.2f}       {ssim_n2nb:6.4f}    ⚠️系统性偏低，仅供参考")
-print(f"  N2B  保持分辨率        {psnr_n2b_fullres:6.2f}       {ssim_n2b_fullres:6.4f}    消除合并误差")
+print(f"  N2B  降采样(v3)        {psnr_n2nb:6.2f}       {ssim_n2nb:6.4f}    单帧伪配对，全图口径")
+print(f"  半分辨率监督对照        {psnr_hfsup:6.2f}       {ssim_hfsup:6.4f}    同表示/同架构，仅目标换干净像素")
+print(f"  N2B  保持分辨率(负例)  {psnr_n2b_fullres:6.2f}       {ssim_n2b_fullres:6.4f}    感受野泄漏→identity shortcut")
 print(f"  ─────────────────────────────────────────────────────────")
-print(f"  ★公平评估（仅在idx_sub1位置，两种N2B可比口径）：")
-print(f"  N2B  保持分辨率(公平)  {psnr_n2b_fullres_fair_mean:6.2f}       {ssim_n2b_fullres_fair_mean:6.4f}    消除合并误差+公平口径")
-print(f"\n  ★注：下采样+合并版的全图PSNR因奇数行棋盘伪影填充而系统性偏低，")
-print(f"        上方'公平评估'行与下采样版使用相同评估口径（仅sub1位置），可做苹果对苹果比较。")
+print(f"\n  ★注（v3）：以上六种方法的PSNR均为**全图口径**，可直接互相比较。")
+print(f"     '保持分辨率(负例)'一行是为暴露identity shortcut而刻意保留的对照实现，")
+print(f"     其低分来自泄漏（网络抄输入而非去噪），不代表N2B的算法上限。")
+print(f"     '半分辨率监督对照'与'N2B降采样'共用同一输入表示、架构、轮数与推理方式，")
+print(f"     仅训练目标不同（干净像素 vs 互补位置的带噪像素），用于实测拆分N2B−N2N的差距。")
 print(f"\n  核心结论:")
 # ★动态校验：根据实际PSNR值生成结论，而非硬编码断言
 n2n_sup_diff = abs(psnr_n2n - psnr_sup)
@@ -1577,28 +1702,47 @@ if psnr_naive < min(psnr_sup, psnr_n2n):
 else:
     print(f"  2. 反常：朴素MSE并未最低，与理论预期不符，建议检查训练过程")
 
-if psnr_n2nb < psnr_n2n:
-    print(f"  3. N2B ≈ N2N-δ (低{psnr_n2n - psnr_n2nb:.2f}dB) → 空间独立性假设下的近似配对")
+# ★N2B与N2N的差距归因（v4）：用"半分辨率监督对照"把差距**实测拆分**，不再停留于定性判断
+n2b_gap = psnr_n2n - psnr_n2nb
+gap_repr = psnr_n2n - psnr_hfsup      # 表示/分辨率代价
+gap_target = psnr_hfsup - psnr_n2nb   # 伪配对目标代价
+if n2b_gap < 2.0:
+    print(f"  3. N2B ≈ N2N (低{n2b_gap:.2f}dB < 2dB) → 单帧噪声下用相邻互补像素构造伪配对有效")
 else:
-    print(f"  3. N2B接近或超过N2N，与理论预期一致")
+    print(f"  3. N2B 比 N2N 低 {n2b_gap:.2f}dB，由'半分辨率监督对照'实测拆分：")
+    print(f"     · 表示/分辨率代价 PSNR(N2N)−PSNR(对照) = {gap_repr:+.2f} dB")
+    print(f"       （半分辨率2通道子图 vs 全分辨率，属结构性代价）")
+    print(f"     · 伪配对目标代价   PSNR(对照)−PSNR(N2B) = {gap_target:+.2f} dB")
+    print(f"       （目标用互补位置的带噪像素，而非同位置的干净像素）")
+    if gap_repr > gap_target + 0.5:
+        main_cause = "半分辨率表示(i)"
+    elif gap_target > gap_repr + 0.5:
+        main_cause = "伪配对目标自带独立噪声(ii)"
+    else:
+        main_cause = "(i)与(ii)相当"
+    print(f"     → 主导因素：{main_cause}")
+    print(f'     注：该拆分是"先表示、后目标"的单路径可加分解，两项之和恒等于总差距，')
+    print(f"         但未分离二者的交互项（例如分辨率代价在目标带噪时可能略有不同）。")
+    print(f"     注：噪声为i.i.d.时 E[y₂|y₁]=E[x|y₁]，伪配对目标对x无偏，")
+    print(f"         '相邻像素的信号相关性'不是成因（该说法仅在噪声相关时成立）。")
 
 print(f"\n  ★ N2B两种实现对比（简表）：")
 print(f"  ┌───────────────┬──────────────────────┬──────────────────────┐")
-print(f"  │               │  下采样+合并版        │  保持分辨率版        │")
+print(f"  │               │  降采样版(v3)         │  保持分辨率版(负例)   │")
 print(f"  ├───────────────┼──────────────────────┼──────────────────────┤")
 print(f"  │ 盲点约束      │  ✓ 天然满足           │  ✗ 存在感受野泄漏    │")
 print(f"  │               │  (sub2不在输入中)     │  (输入包含完整y)     │")
 print(f"  ├───────────────┼──────────────────────┼──────────────────────┤")
-print(f"  │ 分辨率        │  ✗ 减半(32→16)       │  ✓ 保持(32×32)      │")
+print(f"  │ 分辨率        │  减半(32→16，2通道)   │  ✓ 保持(32×32)      │")
 print(f"  ├───────────────┼──────────────────────┼──────────────────────┤")
-print(f"  │ 合并伪影      │  ✗ 棋盘式对角交换    │  ✓ 无合并步骤        │")
-print(f"  │               │  (奇数行非真实像素)   │                      │")
+print(f"  │ 还原方式      │  ✓ 按模式无损还原     │  无需还原步骤        │")
+print(f"  │               │  (无插值/无伪影)      │                      │")
 print(f"  ├───────────────┼──────────────────────┼──────────────────────┤")
-print(f"  │ identity风险  │  ✓ 无                │  ✗ 可能f(y)≈y       │")
+print(f"  │ identity风险  │  ✓ 无                │  ✗ 实测f(y)≈y       │")
 print(f"  ├───────────────┼──────────────────────┼──────────────────────┤")
-print(f"  │ PSNR评估      │  ⚠️ 系统性偏低       │  可能虚高(若泄漏)    │")
+print(f"  │ PSNR口径      │  ✓ 全图，可比较       │  被泄漏扭曲，仅作警示")
 print(f"  └───────────────┴──────────────────────┴──────────────────────┘")
-print(f"  性能差异：{psnr_n2b_fullres - psnr_n2nb:+.2f} dB（保持分辨率版）")
+print(f"  性能差异：{psnr_n2b_fullres - psnr_n2nb:+.2f} dB（保持分辨率版 − 降采样版）")
 # ★动态校验：根据诊断结果给出风险评估（对齐训练目标y[sub2]的口径）
 if correlation > 0.9 and mse_to_target < SIGMA**2 / 10:
     print(f"  ★诊断：f(y)[sub1]与目标y[sub2]的相关系数{correlation:.2f}>0.9，")
@@ -1606,10 +1750,11 @@ if correlation > 0.9 and mse_to_target < SIGMA**2 / 10:
     print(f"  identity shortcut确凿，保持分辨率版的PSNR反映的是'抄像素'而非去噪能力")
 elif correlation > 0.9:
     print(f"  ★诊断：相关系数{correlation:.2f}>0.9，identity shortcut风险明显")
-    print(f"  建议：全分辨率版PSNR可能虚高，下采样版更可靠")
+    print(f"  建议：以N2B降采样版(v3)的结果为准；全分辨率版分数被泄漏扭曲，不可比")
 else:
     print(f"  ★诊断：相关系数{correlation:.2f}≤0.9，identity shortcut风险较低（但仍需关注理论缺陷）")
-print(f"  ★结论：两种实现各有缺陷，正确的blind-spot实现需输入掩码等额外措施")
+print(f"  ★结论：降采样版(v3)是本实验的正确实现；保持分辨率版是刻意保留的泄漏负例，")
+print(f"     其低分不构成N2B的算法上限")
 print(f"\n  ★ 从N2N到SURE的逻辑演进（关键发现）：")
 print(f"  ─────────────────────────────────────────────────────────")
 print(f"  本实验Step 3量化了朴素MSE的偏差来源：")
@@ -1691,7 +1836,15 @@ results_summary = {
         '监督': {'PSNR': psnr_sup, 'SSIM': ssim_sup},
         'Noise2Noise': {'PSNR': psnr_n2n, 'SSIM': ssim_n2n},
         '朴素自监督': {'PSNR': psnr_naive, 'SSIM': ssim_naive},
-        '保持分辨率版N2B': {'PSNR': psnr_n2b_fullres, 'SSIM': ssim_n2b_fullres},
+        'N2B降采样(全图口径)': {'PSNR': psnr_n2nb, 'SSIM': ssim_n2nb},
+        '半分辨率监督对照(同表示同架构)': {'PSNR': psnr_hfsup, 'SSIM': ssim_hfsup},
+        'N2B保持分辨率(泄漏负例)': {'PSNR': psnr_n2b_fullres, 'SSIM': ssim_n2b_fullres},
+    },
+    'N2B−N2N差距拆分': {
+        '总差距(dB)': psnr_n2n - psnr_n2nb,
+        '表示_分辨率代价(dB)': psnr_n2n - psnr_hfsup,
+        '伪配对目标代价(dB)': psnr_hfsup - psnr_n2nb,
+        '说明': '由"半分辨率监督对照"实测拆分：对照与N2B降采样共用输入表示/架构/轮数/推理方式，仅训练目标不同',
     },
     '偏差分析': {
         '朴素散度': div_naive,

@@ -1,0 +1,26 @@
+{
+  "final_loss_uniform": 0.093529,
+  "final_loss_logit": 0.085975,
+  "dist_by_step": {
+    "1_step": {
+      "uniform": 5.676,
+      "logit_normal": 6.5605,
+      "improvement_pct": -15.6
+    },
+    "5_step": {
+      "uniform": 6.4599,
+      "logit_normal": 6.3592,
+      "improvement_pct": 1.6
+    },
+    "10_step": {
+      "uniform": 6.6619,
+      "logit_normal": 6.54,
+      "improvement_pct": 1.8
+    },
+    "50_step": {
+      "uniform": 6.8295,
+      "logit_normal": 6.6423,
+      "improvement_pct": 2.7
+    }
+  }
+}

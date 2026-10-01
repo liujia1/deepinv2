@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-实验13.3-1：DPS的Tweedie闭环验证
+实验13.2-2：DPS的Tweedie闭环验证
 
 ★ 原创设计：DPS的Tweedie闭环验证
   DPS核心近似：p(x_0|x_t) ~ delta(x_0 - x_hat_{0|t})
@@ -45,7 +45,7 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    SAVE_DIR = os.path.join(_gdrive, '实验13.3-1')
+    SAVE_DIR = os.path.join(_gdrive, '实验13.2-2')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
     try:
@@ -66,7 +66,7 @@ except ImportError:
 np.random.seed(42)
 
 print("\n" + "=" * 60)
-print("实验13.3-1: DPS的Tweedie闭环验证")
+print("实验13.2-2: DPS的Tweedie闭环验证")
 print("=" * 60)
 print("知识点: Tweedie等式, delta函数近似, 似然得分的Laplace近似")
 
@@ -278,7 +278,7 @@ print("""
 """)
 
 print("\n" + "=" * 60)
-print("实验13.3-1 完成!")
+print("实验13.2-2 完成!")
 print("=" * 60)
 print("""
 关键结论:

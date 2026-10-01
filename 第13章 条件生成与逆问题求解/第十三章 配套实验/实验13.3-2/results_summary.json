@@ -1,0 +1,21 @@
+{
+  "DPS_PSNR": 9.35,
+  "DiffPIR_PSNR": 25.9,
+  "obs_PSNR": 24.57,
+  "config": {
+    "img_size": 256,
+    "noise_sigma": 0.02,
+    "dps_n_steps": 1000,
+    "dps_weight": 0.5,
+    "dps_clip": [
+      0.0,
+      1.0
+    ],
+    "diffpir_max_iter": 100,
+    "diffpir_zeta": 0.3,
+    "diffpir_lambda": 7.0,
+    "seed": 42,
+    "deepinv_version": "0.4.2",
+    "note": "seed参数在部分deepinv版本中被忽略（solver.rng未初始化告警），复现性依赖全局torch.manual_seed"
+  }
+}

@@ -737,7 +737,8 @@ ax.set_ylabel(r'平均最近邻距离', fontsize=12)
 ax.set_title(r'实验14.5-1：采样质量量化对比（14.5.1节）', fontsize=14)
 ax.set_xticks(x_pos)
 ax.set_xticklabels([f'{s}步' for s in step_counts])
-ax.legend(fontsize=11)
+ax.set_ylim(0, max(list(dist_uniform.values()) + list(dist_logit.values())) * 1.28)  # 顶部留白，避免图例遮挡柱顶数值
+ax.legend(fontsize=11, loc='upper left')
 ax.grid(alpha=0.3, axis='y')
 
 plt.tight_layout()
@@ -789,10 +790,17 @@ print(f"""
      * 在测试的步数{step_counts}中，{positive_steps}改善为正
      * 改善幅度并非单调：{best_step}步改善最大（{best_imp:+.1f}%）
    - 需注意的实验局限性：
-     * 量化指标(n_samples={n_samples_quant})已减小统计噪声，但仍建议肉眼观察图片验证
-     * 1步采样是极端外推场景，对t≈0附近的训练数据敏感，单次结果不稳定
-     * 若训练轮数不足(如<30轮)，低步数采样结果可能偏噪声，建议训练充分后再观察趋势
-   - SD3论文的结论是"少步采样(4-8步)时优势明显"，而非1步
+     * 量化指标(n_samples={n_samples_quant})是像素级L2代理，不等价于FID，且对'糊成平均脸'的
+       低方差输出有系统性偏好，故5/10/50步的个位数'改善%'不宜过度解读
+     * 本脚本为单种子(seed=42)单次运行，上述所有改善%均来自本次数据，未做多种子统计：
+       5/10/50步的个位数改善处于像素L2代理指标的噪声量级，本规模(MNIST+小UNet+30轮)
+       不足以稳定复现SD3报告的'少步FID显著优势'
+     * 1步采样Logit-Normal明显更差（改善={improvements[1]:+.1f}%）的定性结论可由图3目视
+       独立佐证（其1步输出呈噪声主导）：根因是端点(t≈0/t≈1)采样稀缺导致端点速度场欠拟合
+       ——这是Logit-Normal的固有属性（其密度在t→0/1处衰减到0，见诊断图），
+       但具体幅度受整数时间步离散化影响（采样首步查询的t_int={T-1}在训练中两个模型均未见）
+   - SD3论文在5/50步评估中对比各时间采样分布（最优为rf/lognorm(0.00, 1.00)），
+     未声称Logit-Normal改善1步采样，故本实验的1步结果与文献不矛盾
 """)
 
 # ===== 保存数值结果 =====

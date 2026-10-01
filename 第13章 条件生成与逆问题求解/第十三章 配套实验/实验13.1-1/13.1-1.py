@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-实验13.2-1：1D逆问题原理演示
+实验13.1-1：1D逆问题原理演示
 
 ★ 原创设计：1D逆问题原理演示（先理解原理再看图像）
   问题：y = Ax + n，已知y和A，求x的后验p(x|y)
@@ -45,7 +45,7 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    SAVE_DIR = os.path.join(_gdrive, '实验13.2-1')
+    SAVE_DIR = os.path.join(_gdrive, '实验13.1-1')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
     try:
@@ -66,7 +66,7 @@ except ImportError:
 np.random.seed(42)
 
 print("\n" + "=" * 60)
-print("实验13.2-1: 1D逆问题原理演示")
+print("实验13.1-1: 1D逆问题原理演示")
 print("=" * 60)
 print("知识点: 条件采样 vs 无条件采样，后验p(x|y) vs 先验p(x)")
 
@@ -141,6 +141,11 @@ def posterior_score_vp(x, t, y_obs, sigma_obs, zeta=1.0):
 
     参数:
         zeta: 似然项的权重系数（简化起见取1.0，完整DPS会根据梯度范数自适应调节）
+
+    注意: DPS的插件近似（用p(y|x_hat_0)代替p(y|x_t)）会系统性低估后验方差、
+    使分布过度收缩向观测y（本例解析真后验均值0.176/方差0.233，采样得到
+    0.078/0.144）。这是DPS类一阶近似的固有偏差，调节zeta无法完全消除，
+    定性结论（条件采样受观测约束且不坍缩到单点）不受影响。
     """
     mean_t, std_t = vp_marginal(t)
     prior_score = vp_score_analytic(x, t)
@@ -248,11 +253,11 @@ plt.close()
 print(f"\n图已保存: {fig_path}")
 
 print("\n" + "=" * 60)
-print("实验13.2-1 完成!")
+print("实验13.1-1 完成!")
 print("=" * 60)
 print("""
 关键结论:
-1. 1D逆问题原理（13.2节）
+1. 1D逆问题原理（13.1节）
    - 扩散后验采样 = 逆向SDE + 似然梯度
    - nabla log p(x_t|y) = nabla log p(x_t) + zeta * nabla log p(y|x_hat_{0|t})
    - 本实验取 zeta=1.0（简化起见），完整DPS会根据梯度范数自适应调节
@@ -266,7 +271,9 @@ print("""
 3. 物理意义
    - 似然项起"软约束"作用：把粒子从整个先验空间拉向 y 附近的区域
    - 同时先验项保持"多样性"：不会坍缩到单点（与MAP的本质区别）
-   - 后验采样能反映出真实信号 x0_star 来自哪个高斯分量
+   - 注意：DPS插件近似使采样分布比真后验更集中于y附近（方差被低估），
+     本例中 x0_star 抽自分量的尾部，后验集中在 y 附近，并不能据此
+     反推 x0_star 来自哪个分量——这是小噪声逆问题的正常行为
 """)
 
 # ===== 保存数值结果 =====

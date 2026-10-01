@@ -500,9 +500,10 @@ for col in range(6):
     axes[2, col].axis('off')
 
 # matplotlib 中数学符号使用 LaTeX 格式
-axes[0, 0].set_ylabel(r'含噪 ($\sigma$=' + f'{sigma_fixed})', fontsize=11, rotation=0, labelpad=60)
-axes[1, 0].set_ylabel(r'DnCNN去噪' + '\n' + r'(固定$\sigma$, 15.1.1)', fontsize=11, rotation=0, labelpad=70)
-axes[2, 0].set_ylabel('原始图像', fontsize=11, rotation=0, labelpad=60)
+# axis('off')后 set_ylabel 不渲染, 改用 text 定位到子图左侧 (clip_on=False 以纳入 bbox_inches='tight')
+axes[0, 0].text(-0.15, 0.5, r'含噪 ($\sigma$=' + f'{sigma_fixed})', fontsize=11, rotation=0, ha='right', va='center', transform=axes[0, 0].transAxes, clip_on=False)
+axes[1, 0].text(-0.15, 0.5, r'DnCNN去噪' + '\n' + r'(固定$\sigma$, 15.1.1)', fontsize=11, rotation=0, ha='right', va='center', transform=axes[1, 0].transAxes, clip_on=False)
+axes[2, 0].text(-0.15, 0.5, '原始图像', fontsize=11, rotation=0, ha='right', va='center', transform=axes[2, 0].transAxes, clip_on=False)
 
 plt.suptitle(r'步骤1: DnCNN固定$\sigma$去噪（15.1.1节; UNet时间步条件去噪见步骤4）', fontsize=14, y=1.01)
 plt.tight_layout()
@@ -776,7 +777,8 @@ for row, t_idx in enumerate(t_indices_vis):
         axes[row, col].imshow(x0_hat_vis[col, 0].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
         axes[row, col].axis('off')
         if col == 0:
-            axes[row, col].set_ylabel(r'$t$=' + f'{t_idx}\nSNR={snr:.2f}', fontsize=10, rotation=0, labelpad=50)
+            # axis('off')后 set_ylabel 不渲染, 改用 text 定位到子图左侧
+            axes[row, col].text(-0.15, 0.5, r'$t$=' + f'{t_idx}\nSNR={snr:.2f}', fontsize=10, rotation=0, ha='right', va='center', transform=axes[row, col].transAxes, clip_on=False)
 
 plt.suptitle(r'$\star$ 不同噪声水平下的去噪行为（15.2.1节）', fontsize=14, y=1.01)
 plt.tight_layout()

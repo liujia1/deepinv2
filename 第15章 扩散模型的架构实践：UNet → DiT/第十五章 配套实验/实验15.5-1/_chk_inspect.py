@@ -3,6 +3,13 @@
 import torch, os, json
 d = os.path.dirname(os.path.abspath(__file__))
 names = ['adam_const', 'adamw_const', 'adam_cosine', 'adamw_cosine']
+# 前置检查: 本脚本用于 100 轮延长实验跑完后的产物一致性自检, 需要4个 extend checkpoint 齐备
+missing = [n for n in names if not os.path.exists(os.path.join(d, f'extend_{n}_checkpoint.pth'))]
+if missing:
+    raise SystemExit(
+        "缺少 extend checkpoint, 无法审计:\n  " + "\n  ".join(f"extend_{n}_checkpoint.pth" for n in missing) +
+        "\n请先完整运行 15.5-1_extend.py (100轮), 生成全部4个 extend_*_checkpoint.pth 后再执行本脚本。"
+    )
 hist_t, hist_v = {}, {}
 for n in names:
     ck = torch.load(os.path.join(d, f'extend_{n}_checkpoint.pth'), map_location='cpu', weights_only=False)
@@ -40,8 +47,6 @@ for opt in ['adam', 'adamw']:
 print("\n=== 排名复算 ===")
 rank = sorted(names, key=lambda n: hist_v[n][-1])
 print("  val排名:", rank)
-print("  json排名:", [k.replace(' + ', '_').replace('Warmup+Cosine', '_cosine').lower().replace('adamw + constant','adamw_const') for k in []] or "对照:", )
-label2name = {js['val_ranking_best_to_worst'][i]: names[i] if False else None for i in range(4)}
 mapping = {'Adam + Constant':'adam_const','AdamW + Constant':'adamw_const','AdamW + Warmup+Cosine':'adamw_cosine','Adam + Warmup+Cosine':'adam_cosine'}
 json_rank = [mapping[k] for k in js['val_ranking_best_to_worst']]
 print("  json映射:", json_rank, "->", "一致" if json_rank == rank else "不一致!")

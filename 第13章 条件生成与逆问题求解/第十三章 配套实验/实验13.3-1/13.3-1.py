@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-实验13.3-2：DPS图像去噪端到端
+实验13.3-1：DPS图像去噪端到端
 
 实验内容：
   - 训练UNet扩散模型（MNIST, epsilon-prediction）
@@ -41,7 +41,7 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    SAVE_DIR = os.path.join(_gdrive, '实验13.3-2')
+    SAVE_DIR = os.path.join(_gdrive, '实验13.3-1')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
     try:
@@ -70,7 +70,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'使用设备: {device}')
 
 print("\n" + "=" * 60)
-print("实验13.3-2: DPS图像去噪端到端")
+print("实验13.3-1: DPS图像去噪端到端")
 print("=" * 60)
 print("知识点: DPS算法流程, autograd自动Jacobian, 质量-多样性权衡")
 
@@ -188,9 +188,10 @@ class SmallUNet(nn.Module):
 def dps_sample(model, y, forward_op, shape, zeta=1.0, n_steps=None):
     """
     DPS 采样。
-    注：本实现对似然梯度做单位范数归一化,只取其方向,
-        残差强度统一由外部超参 zeta 控制,不依赖 sigma_y,
-        故函数签名中未保留 sigma_y。
+    注：本实现保留似然梯度的原始幅度(不做归一化)。
+        若对梯度做单位范数归一化,会抹去残差大小信息,使修正项与 DDPM
+        步进系数 β/σ 失配,并在采样末段(√(1-ᾱ_t)→0)几乎失效,
+        DPS 退化为无条件采样(PSNR 反而低于含噪观测)。
     """
     model.eval()
     if n_steps is None:
@@ -208,11 +209,8 @@ def dps_sample(model, y, forward_op, shape, zeta=1.0, n_steps=None):
         Ax0_hat = forward_op(x0_hat)
         likelihood_loss = torch.sum((y - Ax0_hat) ** 2)
         likelihood_grad = torch.autograd.grad(likelihood_loss, x)[0]
-        # 每个样本独立归一化梯度方向（DPS 论文推荐做法）
-        batch_size = likelihood_grad.shape[0]
-        grad_norms = likelihood_grad.view(batch_size, -1).norm(dim=1)  # shape=(batch_size,)
-        grad_norms = grad_norms.clamp(min=1e-8)  # 防止零范数
-        likelihood_grad = likelihood_grad / grad_norms.view(batch_size, 1, 1, 1)
+        # 保留似然梯度的原始幅度(不做归一化)：归一化会把修正强制压成单位方向,
+        # 与 DDPM 步进系数失配,导致 DPS 严重欠修正(退化为近无条件采样)。
         x = x.detach()
         eps_pred = eps_pred.detach()
         # 后验得分分解: ∇log p(x_t|y) = ∇log p(x_t) + ∇log p(y|x_t)
@@ -368,7 +366,7 @@ print("步骤1：训练UNet扩散模型（epsilon-prediction, MNIST）")
 print("=" * 60)
 
 CHECKPOINT_PATH = os.path.join(SAVE_DIR, 'dps_denoise_checkpoint.pth')
-num_epochs = 100
+num_epochs = 50
 model = train_model(CHECKPOINT_PATH, num_epochs=num_epochs)
 
 
@@ -384,7 +382,7 @@ print("""
 DPS算法: 在逆向DDPM采样中注入似然梯度
   先验得分: -eps_hat_theta(x_t, t) / sqrt(1-alpha_bar_t)
   似然梯度方向: ∇_x ||y - A x_hat_{0|t}||² (保留原始幅度,不做归一化)
-  修正噪声残差: eps_hat - zeta * sqrt(1-alpha_bar_t) * 似然梯度
+  修正噪声残差: eps_hat + zeta * sqrt(1-alpha_bar_t) * 似然梯度 (ε 空间为加号)
   注：保留似然梯度的幅度信息——不归一化,否则与 DDPM 步进系数 β/σ 失配
       导致修正对 x 的更新几乎为零(DPS 完全失效)
 
@@ -457,7 +455,7 @@ plt.close()
 print(f"\n图已保存: {fig_path}")
 
 print("\n" + "=" * 60)
-print("实验13.3-2 完成!")
+print("实验13.3-1 完成!")
 print("=" * 60)
 print("""
 关键结论:
@@ -467,12 +465,12 @@ print("""
    - autograd自动处理任意正向算子A的Jacobian
 
 2. 质量-多样性权衡（对应13.4.3节）
-   - ζ小(0.1): 采样结果多样化，偏离观测（高多样性，低一致性）
-   - ζ大(1.0): 采样结果趋近观测，但可能发散（低多样性，高一致性）
-   - ζ=0.5是折中点，平衡质量与多样性
+   - ζ小: 采样结果多样化, 与观测一致性较弱（高多样性, 低一致性）
+   - ζ大: 采样结果趋近观测, PSNR 更高但多样性降低（低多样性, 高一致性）
+   - 本实验 ζ∈{1,3,5} 均远超含噪观测, 呈现清晰的单调权衡趋势
 
 3. 实践要点
-   - 梯度归一化（likelihood_grad / grad_norm）稳定不同时间步的修正幅度
+   - 保留似然梯度原始幅度（不归一化）才能与 DDPM 步进系数匹配, 保证修正有效
    - DDPM采样步使用修正后的eps_hat，无需重新推导
 """)
 # ===== 保存数值结果 =====

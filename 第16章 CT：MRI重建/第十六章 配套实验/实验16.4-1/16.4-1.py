@@ -469,6 +469,16 @@ print(f"  零填充:  PSNR={np.mean(psnr_zf):.1f}±{np.std(psnr_zf):.1f}dB")
 print(f"  UNet:    PSNR={np.mean(psnr_unet):.1f}±{np.std(psnr_unet):.1f}dB")
 print(f"  LGD:     PSNR={np.mean(psnr_lgd):.1f}±{np.std(psnr_lgd):.1f}dB")
 
+# 测量一致性：相对数据残差 ||A x_hat - y|| / ||y||（直接检验 A x_hat ≈ y，而非只看 PSNR）
+with torch.no_grad():
+    def _data_resid(pred):
+        r = mri_op.A(pred) - y_test
+        return float(torch.linalg.norm(r) / torch.linalg.norm(y_test))
+    resid_zf = _data_resid(x_zf_test)
+    resid_unet = _data_resid(x_unet_test)
+    resid_lgd = _data_resid(x_lgd_test)
+print(f"  相对数据残差 ||Ax-y||/||y||: 零填充={resid_zf:.4f}  UNet={resid_unet:.4f}  LGD={resid_lgd:.4f}")
+
 # 可视化：取前8张展示（评估已覆盖全部 N_test 张）
 n_show = 8
 fig, axes = plt.subplots(3, n_show, figsize=(20, 7))
@@ -556,6 +566,11 @@ results_summary = {
         "零填充": {"mean": round(float(np.mean(psnr_zf)), 2), "std": round(float(np.std(psnr_zf)), 2)},
         "UNet": {"mean": round(float(np.mean(psnr_unet)), 2), "std": round(float(np.std(psnr_unet)), 2)},
         "LGD": {"mean": round(float(np.mean(psnr_lgd)), 2), "std": round(float(np.std(psnr_lgd)), 2)},
+    },
+    "步骤3_测量一致性_相对残差": {
+        "零填充": round(resid_zf, 4),
+        "UNet": round(resid_unet, 4),
+        "LGD": round(resid_lgd, 4),
     },
 }
 results_summary = _to_native(results_summary)

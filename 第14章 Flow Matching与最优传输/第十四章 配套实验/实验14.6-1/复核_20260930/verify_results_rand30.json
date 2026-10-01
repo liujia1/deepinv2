@@ -1,0 +1,96 @@
+{
+  "name": "C_rand30",
+  "n_templates": 30,
+  "corpus": [
+    "big a mat big sat a",
+    "on sat it up a big",
+    "ate on mat mat cat cat",
+    "cat ate a red dog it",
+    "up cat sat a rug it",
+    "a sat big cat red sat",
+    "on big ate fish red fish",
+    "the sat dog a the a",
+    "the red rug big rug a",
+    "sat on rug a rug rug",
+    "cat it red on up big",
+    "big it ate a red sat",
+    "the a up dog mat up",
+    "fish red big cat red fish",
+    "it it ate the rug mat",
+    "it dog on on the ate",
+    "big mat a up it on",
+    "on rug red fish on dog",
+    "on it cat rug up a",
+    "it it a sat rug cat",
+    "fish dog on fish dog the",
+    "red big dog dog the cat",
+    "red it cat red on the",
+    "on it cat up the mat",
+    "fish a dog rug cat red",
+    "a red ate fish on mat",
+    "sat big rug cat ate red",
+    "the mat fish dog on rug",
+    "rug a cat mat ate dog",
+    "a rug fish mat cat mat"
+  ],
+  "rows": [
+    {
+      "train_seed": 42,
+      "sample_seed": 2025,
+      "hit_mlm": 0.6367,
+      "hit_unif": 0.7305,
+      "diff_mlm_minus_unif": -0.0938,
+      "rewrite_mlm": 0.000169,
+      "rewrite_unif": 0.036072
+    },
+    {
+      "train_seed": 42,
+      "sample_seed": 2026,
+      "hit_mlm": 0.5898,
+      "hit_unif": 0.7109,
+      "diff_mlm_minus_unif": -0.1211,
+      "rewrite_mlm": 0.000212,
+      "rewrite_unif": 0.036296
+    },
+    {
+      "train_seed": 7,
+      "sample_seed": 2025,
+      "hit_mlm": 0.6602,
+      "hit_unif": 0.6953,
+      "diff_mlm_minus_unif": -0.0352,
+      "rewrite_mlm": 0.000211,
+      "rewrite_unif": 0.037882
+    },
+    {
+      "train_seed": 7,
+      "sample_seed": 2026,
+      "hit_mlm": 0.5625,
+      "hit_unif": 0.6484,
+      "diff_mlm_minus_unif": -0.0859,
+      "rewrite_mlm": 0.000254,
+      "rewrite_unif": 0.037821
+    },
+    {
+      "train_seed": 123,
+      "sample_seed": 2025,
+      "hit_mlm": 0.6992,
+      "hit_unif": 0.7539,
+      "diff_mlm_minus_unif": -0.0547,
+      "rewrite_mlm": 0.000254,
+      "rewrite_unif": 0.036438
+    },
+    {
+      "train_seed": 123,
+      "sample_seed": 2026,
+      "hit_mlm": 0.6719,
+      "hit_unif": 0.7891,
+      "diff_mlm_minus_unif": -0.1172,
+      "rewrite_mlm": 0.000296,
+      "rewrite_unif": 0.037354
+    }
+  ],
+  "mlm_wins": 0,
+  "ties": 0,
+  "diff_min": -0.1211,
+  "diff_max": -0.0352
+}

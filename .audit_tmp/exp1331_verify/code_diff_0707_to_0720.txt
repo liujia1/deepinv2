@@ -1,0 +1,37 @@
+﻿diff --git a/绗?3绔?鏉′欢鐢熸垚涓庨€嗛棶棰樻眰瑙?绗崄涓夌珷 閰嶅瀹為獙/瀹為獙13.3-1/13.3-1.py b/绗?3绔?鏉′欢鐢熸垚涓庨€嗛棶棰樻眰瑙?绗崄涓夌珷 閰嶅瀹為獙/瀹為獙13.3-1/13.3-1.py
+index 4d9556f..4e33d9f 100644
+--- a/绗?3绔?鏉′欢鐢熸垚涓庨€嗛棶棰樻眰瑙?绗崄涓夌珷 閰嶅瀹為獙/瀹為獙13.3-1/13.3-1.py	
++++ b/绗?3绔?鏉′欢鐢熸垚涓庨€嗛棶棰樻眰瑙?绗崄涓夌珷 閰嶅瀹為獙/瀹為獙13.3-1/13.3-1.py	
+@@ -474,4 +474,31 @@ print("""
+ 3. 瀹炶返瑕佺偣
+    - 姊害褰掍竴鍖栵紙likelihood_grad / grad_norm锛夌ǔ瀹氫笉鍚屾椂闂存鐨勪慨姝ｅ箙搴?    - DDPM閲囨牱姝ヤ娇鐢ㄤ慨姝ｅ悗鐨別ps_hat锛屾棤闇€閲嶆柊鎺ㄥ
+-""")
+\ No newline at end of file
++""")
++# ===== 淇濆瓨鏁板€肩粨鏋?=====
++import json
++
++def _to_native(obj):
++    """閫掑綊杞崲numpy/torch绫诲瀷涓篜ython鍘熺敓绫诲瀷"""
++    import numpy as np
++    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
++    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
++    if isinstance(obj, (np.integer,)): return int(obj)
++    if isinstance(obj, (np.floating,)): return float(obj)
++    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
++    try:
++        import torch
++        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
++    except: pass
++    return obj
++
++results_summary = {
++    "zeta_values": zeta_values,
++    "sigma_y_denoise": round(float(sigma_y_denoise), 4),
++    "PSNR_鍚剒eta": {f"zeta={z}": round(float(p), 2) for z, p in zip(zeta_values, psnr_denoise_list)},
++    "PSNR_鍚櫔瑙傛祴": round(float(psnr_noisy), 2),
++}
++results_summary = _to_native(results_summary)
++with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
++    json.dump(results_summary, f, ensure_ascii=False, indent=2)
++print(f"鏁板€肩粨鏋滃凡淇濆瓨: {os.path.join(SAVE_DIR, 'results_summary.json')}")

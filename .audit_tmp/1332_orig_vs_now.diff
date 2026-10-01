@@ -1,0 +1,36 @@
+﻿diff --git a/绗?3绔?鏉′欢鐢熸垚涓庨€嗛棶棰樻眰瑙?绗崄涓夌珷 閰嶅瀹為獙/瀹為獙13.3-4/13.3-4.py b/绗?3绔?鏉′欢鐢熸垚涓庨€嗛棶棰樻眰瑙?绗崄涓夌珷 閰嶅瀹為獙/瀹為獙13.3-2/13.3-2.py
+index 31f7076..e0150b4 100644
+--- a/绗?3绔?鏉′欢鐢熸垚涓庨€嗛棶棰樻眰瑙?绗崄涓夌珷 閰嶅瀹為獙/瀹為獙13.3-4/13.3-4.py	
++++ b/绗?3绔?鏉′欢鐢熸垚涓庨€嗛棶棰樻眰瑙?绗崄涓夌珷 閰嶅瀹為獙/瀹為獙13.3-2/13.3-2.py	
+@@ -457,3 +457,31 @@ else:
+    - 鎯宠鐞嗚娓呮櫚銆佷笌寰楀垎鍑芥暟涓ユ牸瀵瑰簲 -> 閫塂PS
+    - 鎯宠PnP鎬濇兂銆佹ā鍧楀寲璁捐 -> 閫塂iffPIR
+ """)
++# ===== 淇濆瓨鏁板€肩粨鏋?=====
++import json
++
++def _to_native(obj):
++    """閫掑綊杞崲numpy/torch绫诲瀷涓篜ython鍘熺敓绫诲瀷"""
++    import numpy as np
++    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
++    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
++    if isinstance(obj, (np.integer,)): return int(obj)
++    if isinstance(obj, (np.floating,)): return float(obj)
++    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
++    try:
++        import torch
++        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
++    except: pass
++    return obj
++
++results_summary = {}
++if HAS_RUN and dps_psnr is not None:
++    results_summary["DPS_PSNR"] = round(float(dps_psnr), 2)
++    results_summary["DiffPIR_PSNR"] = round(float(diffpir_psnr), 2)
++else:
++    results_summary["note"] = "GPU鏈娴嬪埌锛屾湭瀹為檯杩愯"
++results_summary = _to_native(results_summary)
++with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
++    json.dump(results_summary, f, ensure_ascii=False, indent=2)
++print(f"鏁板€肩粨鏋滃凡淇濆瓨: {os.path.join(SAVE_DIR, 'results_summary.json')}")
++

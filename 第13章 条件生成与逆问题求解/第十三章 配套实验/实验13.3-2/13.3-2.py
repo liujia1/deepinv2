@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-实验13.3-4：deepinv框架 DPS vs DiffPIR 对比
+实验13.3-2：deepinv框架 DPS vs DiffPIR 对比
 
 实验内容：
   - deepinv扩散后验采样：图像去模糊（DPS，DiffUNet/ADM + VE-SDE）
@@ -8,9 +8,12 @@
   - 两类算法在各自最优配置下的对比（deepinv 官方推荐用法）
 
 设计说明：
-  - DPS 需要 score network（训练时输出 ∇log p_σ(x)），使用 DiffUNet/ADM UNet
-  - DiffPIR 需要去噪器（训练时输出 x_clean），使用 DRUNet
-  - 两者使用不同模型不是"不公乎"，而是 deepinv 官方设计的最优配置
+  - DPS 的先验得分由去噪器经 Tweedie 公式近似得到，任何 Denoiser 均可接入；
+    此处按 deepinv 官方 demo 使用 DiffUNet/ADM UNet + VE-SDE
+  - DiffPIR 使用去噪器（训练时输出 x_clean）做交替优化，此处使用 DRUNet
+  - 两者使用不同模型是 deepinv 官方 demo 的默认配置，而非算法硬性要求
+    （DRUNet 同样可接入 DPSDataFidelity，已经 deepinv 0.4.0 验证）；
+    因此 PSNR 差异含“先验模型不同”的混杂因素，不能单独归因于 Grad vs Opt 算法差异
   - DiffUNet 默认 checkpoint 为 FFHQ 256x256 的 OpenAI guided-diffusion（ADM 架构），
     对应 VE-SDE 参数 sigma_min=0.02, sigma_max=20.0
 
@@ -50,7 +53,7 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    SAVE_DIR = os.path.join(_gdrive, '实验13.3-4')
+    SAVE_DIR = os.path.join(_gdrive, '实验13.3-2')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
     try:
@@ -110,7 +113,7 @@ def _ensure_deepinv():
 
 
 print("\n" + "=" * 60)
-print("实验13.3-4: deepinv框架 DPS vs DiffPIR 对比")
+print("实验13.3-2: deepinv框架 DPS vs DiffPIR 对比")
 print("=" * 60)
 print("对应章节: 13.3.6节 四类方法对比与选择指南")
 print("知识点: deepinv工程框架, 扩散后验采样, PnP交替优化")
@@ -134,7 +137,9 @@ from deepinv.sampling import (
 
 dps_psnr = None
 diffpir_psnr = None
+obs_psnr = None
 HAS_RUN = False
+run_error = None  # GPU分支异常信息，用于区分"无GPU"与"运行失败"
 use_clip = False  # 模块级默认值，保证无GPU分支也有定义
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -218,6 +223,8 @@ if device.type == "cuda":
         physics = dinv.physics.Blur(
             filter=kernel_t.unsqueeze(0).unsqueeze(0),
             device=device,
+            padding='circular',  # 0.4.x 默认 'valid' 会把输出缩小 (256→240) 导致尺寸失配；
+                                  # circular 与旧版 deepinv 默认行为及 DiffUNet 内部填充一致
             noise_model=dinv.physics.GaussianNoise(sigma=0.02)
         )
 
@@ -243,6 +250,13 @@ if device.type == "cuda":
                 x_test = torch.rand(1, 3, IMG_SIZE, IMG_SIZE, device=device)
 
         y = physics(x_test)
+        assert y.shape == x_test.shape, (
+            f"观测尺寸 {tuple(y.shape)} 与图像 {tuple(x_test.shape)} 不一致，"
+            "请检查 Blur 的 padding/kernel 设置"
+        )
+        mse_y = torch.mean((y - x_test)**2).item()
+        obs_psnr = 10 * np.log10(1.0 / (mse_y + 1e-10))
+        print(f"观测y（模糊+噪声）PSNR: {obs_psnr:.2f} dB")
 
         # ---- DPS ----
         # DPS 用 DiffUNet/ADM UNet + VE-SDE（deepinv 官方 DPS demo 配置）
@@ -302,8 +316,10 @@ if device.type == "cuda":
             device=device,
             verbose=True,         # 开启 tqdm 进度条
         )
-        # 防御性解包
-        result_dps = model_dps(y, physics, seed=42, denoise_output=True)
+        # 防御性解包（注：deepinv 0.4.0 的 PosteriorDiffusion 返回张量；
+        # seed 参数在部分版本会因 solver.rng 未初始化而被忽略并告警，
+        # 复现性实际依赖脚本顶部 torch.manual_seed(42) 与调用顺序）
+        result_dps = model_dps(y, physics, seed=42)
         x_hat_dps = result_dps[0] if isinstance(result_dps, (tuple, list)) else result_dps
         print(f"DPS重建耗时: {time.time() - t0:.1f}s")
         print(f"DPS重建: shape={x_hat_dps.shape}, min={x_hat_dps.min():.3f}, max={x_hat_dps.max():.3f}")
@@ -322,6 +338,7 @@ if device.type == "cuda":
             model=drunet,             # DRUNet（去噪器）
             data_fidelity=dinv.optim.L2(),
             sigma=0.02,
+            max_iter=n_steps_diffpir,  # 显式传入，不依赖默认值
             zeta=0.3,
             lambda_=7.0,
             verbose=True,
@@ -353,7 +370,7 @@ if device.type == "cuda":
         axes[2].set_title(f'DiffPIR重建\nPSNR={diffpir_psnr:.2f} dB', fontsize=12)
         axes[2].axis('off')
 
-        plt.suptitle('deepinv框架：DPS vs DiffPIR 图像去模糊对比（13.3.4节）', fontsize=13, y=1.01)
+        plt.suptitle('deepinv框架：DPS vs DiffPIR 图像去模糊对比（13.3.6节）', fontsize=13, y=1.01)
         plt.tight_layout()
         fig_path = os.path.join(SAVE_DIR, 'DPSvsDiffPIR对比.png')
         plt.savefig(fig_path, dpi=150, bbox_inches='tight')
@@ -361,7 +378,9 @@ if device.type == "cuda":
         print(f"\n图已保存: {fig_path}")
 
     except Exception as e:
+        run_error = f"{type(e).__name__}: {e}"
         print(f"步骤执行出错: {e}")
+        print("注意：本次未生成新结果，目录中若存在旧图/旧JSON均为历史产物，不代表本次运行")
 else:
     print("未检测到GPU，跳过图像实验（需要GPU运行扩散模型）")
 
@@ -380,7 +399,7 @@ print("\nDPS vs DiffPIR 对比：")
 print(f"{'属性':<20s} | {'DPS':<25s} | {'DiffPIR':<25s}")
 print("-" * 75)
 print(f"{'核心思想':<20s} | {'似然梯度引导逆向SDE':<25s} | {'PnP嵌入扩散采样':<25s}")
-print(f"{'似然近似':<20s} | {'Laplace近似':<25s} | {'交替优化':<25s}")
+print(f"{'似然近似':<20s} | {'delta近似（插件式）':<25s} | {'交替优化':<25s}")
 print(f"{'采样方式':<20s} | {'修正逆向SDE':<25s} | {'去噪-投影交替':<25s}")
 print(f"{'调度方式':<20s} | {'VE-SDE（连续时间）':<25s} | {'DDPM（离散1000步）':<25s}")
 print(f"{'去噪器':<20s} | {'DiffUNet/ADM (FFHQ 256x256)':<25s} | {'DRUNet':<25s}")
@@ -395,7 +414,7 @@ clip_advice = (
 )
 
 print("\n" + "=" * 60)
-print("实验13.3-4 完成!")
+print("实验13.3-2 完成!")
 print("=" * 60)
 if HAS_RUN and dps_psnr is not None:
     print(f"""
@@ -405,21 +424,25 @@ if HAS_RUN and dps_psnr is not None:
    - DiffPIR使用DRUNet + DDPM + L2数据保真项 → MAP-like解
    - 本次DPS参数配置：weight=0.5, {clip_advice}
    - 两者在各自最优配置下的PSNR对比：DPS={dps_psnr:.2f} dB vs DiffPIR={diffpir_psnr:.2f} dB
+   - 观测y（未重建）的PSNR={obs_psnr:.2f} dB，两种方法的重建均高于观测
 
 2. 算法差异（验证13.3.6节对比表）
    - DPS (Grad类): 在逆向SDE的每一步用autograd计算似然梯度，直接修正eps
-     → 快但有偏（Laplace近似引入系统性偏差）
-   - DiffPIR (Opt类): 在每步去噪后做一次数据一致性投影（PnP风格）
-     → 给出MAP-like解，确定性优化无法探索后验多峰
+     → 快但有偏（delta插件近似引入系统性偏差，误差无界，见13.3.6节对比表）
+   - DiffPIR (Opt类): 在每步去噪后做一次数据一致性投影（PnP风格），再按 zeta 重新注入噪声（半随机）
+     → 给出MAP-like解；多样性受 zeta 控制，zeta→0 时退化为确定性优化，无法探索后验多峰
 
 3. 选型建议（13.3.6节方法选择指南）
-   - 快速原型/非线性问题/需要后验样本 -> 选DPS（配 DiffUNet/ADM 等 score network）
+   - 快速原型/非线性问题/需要后验样本 -> 选DPS（配 DiffUNet/ADM 等去噪器，官方 demo 配置）
    - 需要MAP解/PnP模块化设计/现成去噪器 -> 选DiffPIR（配 DRUNet 等去噪器）
 
-4. 框架差异
-   - DPS 的 score-based 框架需要 score network（DiffUNet/ADM），不能用普通去噪器（DRUNet）
-   - DiffPIR 的 HQS 框架可以直接吃去噪器（DRUNet），无需 score network
-   - 两者使用不同模型不是"不公平"，而是 deepinv 官方推荐的最优配置
+4. 框架差异（deepinv 0.4.0 API 实测）
+   - DPS 的先验得分由去噪器经 Tweedie 公式近似，DRUNet 也可直接接入 DPSDataFidelity，
+     并非"必须用 score network"；此处按官方 demo 用 DiffUNet/ADM + VE-SDE
+   - DiffPIR 的 HQS 框架直接吃去噪器（DRUNet）
+   - 注意：两方法用了不同预训练先验（FFHQ人脸 ADM vs 通用 DRUNet），
+     PSNR 差异混杂了模型差异，本实验只能作工程用法演示，
+     不能把数值差归因为 Grad/Opt 算法类别本身的优劣
 
 5. 分辨率与退化强度的关系（实验设计考量）
    - Levin09 模糊核尺寸固定（约十几像素），但图像从 64×64 变成 256×256，
@@ -435,10 +458,13 @@ if HAS_RUN and dps_psnr is not None:
    - 但 PSNR 反映全局 MSE，可能掩盖局部伪影：实测中 DPS 偶有眼睛/嘴部等
      高频区域的局部过冲斑块（似然梯度单步过大的典型表现），而 DiffPIR 全局
      更平滑但整图易偏色
-   - 注意 DPS 子图中人物鼻子出现重影：这是采样式方法的典型 artifact。
-     DPS 每次反向过程注入随机噪声，单次采样落在"两个合理位置之间"时
-     会呈现重影；若固定 y_obs 用不同 seed 多次采样，鼻子位置会有 ±1-2 像素
-     抖动——这正是 DPS 的后验多样性，而非算法错误
+   - 注意 DPS 子图中人物鼻子出现重影（双重轮廓）。需要澄清：这不是"后验多样性"——
+     多样性指不同 seed 的样本之间不同；而单张样本内部的重影更可能是
+     delta 插件近似偏差与似然梯度步长过冲的表现（轨迹被拉向两个模式之间的
+     均值方向），这正是 13.3.6 节所述 Grad 类"快但有偏"的系统性瑕疵
+     （参见 13.3.8 节 DMAP/DPPS 等改进动机：经典 DPS 更像 MAP 估计而非真后验采样器）。
+     若要区分"偏差"与"多样性"，需补做对照：固定 y，用不同 seed 多次采样，
+     检查重影是否逐 seed 变化；本实验未含该对照，不应下"固有属性"结论
    - 这恰好印证 13.3.6 节核心观点：Grad 类（快但有偏）vs Opt 类（稳定但慢），
      PSNR 数值高低 ≠ 视觉质量优劣
 """)
@@ -478,8 +504,26 @@ results_summary = {}
 if HAS_RUN and dps_psnr is not None:
     results_summary["DPS_PSNR"] = round(float(dps_psnr), 2)
     results_summary["DiffPIR_PSNR"] = round(float(diffpir_psnr), 2)
+    if obs_psnr is not None:
+        results_summary["obs_PSNR"] = round(float(obs_psnr), 2)
+    results_summary["config"] = {
+        "img_size": IMG_SIZE,
+        "noise_sigma": 0.02,
+        "dps_n_steps": n_steps_dps,
+        "dps_weight": 0.5,
+        "dps_clip": [0.0, 1.0] if use_clip else None,
+        "diffpir_max_iter": n_steps_diffpir,
+        "diffpir_zeta": 0.3,
+        "diffpir_lambda": 7.0,
+        "seed": 42,
+        "deepinv_version": dinv.__version__,
+        "note": "seed参数在部分deepinv版本中被忽略（solver.rng未初始化告警），复现性依赖全局torch.manual_seed",
+    }
 else:
-    results_summary["note"] = "GPU未检测到，未实际运行"
+    if run_error is not None:
+        results_summary["note"] = f"GPU实验运行失败，未产生新结果: {run_error}"
+    else:
+        results_summary["note"] = "GPU未检测到，未实际运行"
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
     json.dump(results_summary, f, ensure_ascii=False, indent=2)

@@ -154,6 +154,14 @@ def load_train_state(checkpoint_path, model, optimizer, num_epochs_total, schedu
             scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         except Exception:
             pass
+    # 恢复 RNG 状态, 使续训的噪声流与一次性训练严格一致
+    if 'rng_state' in checkpoint:
+        try:
+            torch.set_rng_state(checkpoint['rng_state'])
+            if torch.cuda.is_available() and 'cuda_rng_state' in checkpoint:
+                torch.cuda.set_rng_state_all(checkpoint['cuda_rng_state'])
+        except Exception:
+            pass
     return checkpoint['epoch'] + 1, False, checkpoint.get('loss_history', [])
 
 
@@ -170,6 +178,10 @@ def save_train_state(checkpoint_path, model, optimizer, epoch, loss, loss_histor
         ckpt['optimizer_state_dict'] = optimizer.state_dict()
         if scheduler is not None:
             ckpt['scheduler_state_dict'] = scheduler.state_dict()
+        # 保存 RNG 状态: 续训时从中恢复, 保证噪声流与一次性训练一致(不重放)
+        ckpt['rng_state'] = torch.get_rng_state()
+        if torch.cuda.is_available():
+            ckpt['cuda_rng_state'] = torch.cuda.get_rng_state_all()
     torch.save(ckpt, checkpoint_path)
 
 
@@ -354,12 +366,6 @@ del base_model
 # ============================================================
 def train_model(config_name, config, checkpoint_path):
     """训练单个配置, 返回 (model, loss_history)"""
-    # 修复: 在每次配置训练前重置全局随机状态, 确保4个配置在相同的数据顺序
-    # 和DDPM噪声(t, eps)序列下训练, 严格保证2x2因子实验的公平对比前提
-    torch.manual_seed(42)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(42)
-
     model = SmallUNet().to(device)
     model.load_state_dict(deepcopy(base_state_dict))
     optimizer = config['optimizer_cls'](model.parameters(), **config['optimizer_kwargs'])
@@ -373,6 +379,14 @@ def train_model(config_name, config, checkpoint_path):
 
     if is_final:
         return model, loss_history
+
+    # 公平性协议: 仅在从零开始训练(start_epoch==0)时重置全局随机状态, 确保4个配置
+    # 在相同的数据顺序和DDPM噪声(t, eps)序列下训练; 续训(start_epoch>0)时沿用
+    # checkpoint 中保存的 RNG 状态, 避免无条件重新播种导致重放 epoch0 的噪声流
+    if start_epoch == 0:
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
 
     if start_epoch >= num_epochs:
         print(f"  start_epoch({start_epoch}) >= num_epochs({num_epochs}), 跳过训练")
@@ -595,7 +609,8 @@ ax.legend(fontsize=9)
 ax.grid(alpha=0.3)
 
 ax = axes[1]
-names_all = list(configs.keys())
+# 按最终Loss从优到劣排序, 使柱状图与标题"(b) 最终Loss排名"名副其实
+names_all = sorted(configs.keys(), key=lambda n: trained_histories[n][-1])
 labels_all = [configs[n]['label'] for n in names_all]
 losses_all = [trained_histories[n][-1] for n in names_all]
 colors_all = [configs[n]['color'] for n in names_all]

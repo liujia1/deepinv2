@@ -1,0 +1,76 @@
+﻿commit 541068b06897f6f1fd605401ed12c5aa7219f9b9
+Author: liujia1 <liujia830629@gmail.com>
+Date:   Mon Jul 20 11:38:21 2026 +0800
+
+    1
+
+diff --git a/绗?3绔?鏉′欢鐢熸垚涓庨€嗛棶棰樻眰瑙?绗崄涓夌珷 閰嶅瀹為獙/瀹為獙13.3-3/13.3-3.py b/绗?3绔?鏉′欢鐢熸垚涓庨€嗛棶棰樻眰瑙?绗崄涓夌珷 閰嶅瀹為獙/瀹為獙13.3-3/13.3-3.py
+index 8f2d179..82faa3b 100644
+--- a/绗?3绔?鏉′欢鐢熸垚涓庨€嗛棶棰樻眰瑙?绗崄涓夌珷 閰嶅瀹為獙/瀹為獙13.3-3/13.3-3.py	
++++ b/绗?3绔?鏉′欢鐢熸垚涓庨€嗛棶棰樻眰瑙?绗崄涓夌珷 閰嶅瀹為獙/瀹為獙13.3-3/13.3-3.py	
+@@ -125,6 +125,31 @@ def vp_sde_forward(x0, t_idx):
+     x_t = np.sqrt(alpha_bar_t) * x0 + np.sqrt(1.0 - alpha_bar_t) * noise
+     return x_t, noise
+ 
++# 鈽?鑷锛氶獙璇乂P-SDE璋冨害鐨勫叧閿€ц川(閬垮厤T/beta鑼冨洿琚敼鍚嶵weedie鍏紡浠嶆寜鏃у€煎伐浣?
++# 璋冨害: T=200, beta_min=1e-4, beta_max=2e-2
++# 妫€楠岃鍒?
++#   Q1: 峋盻1 鈮?1-尾_min (鍥犖盻1=1-尾_min, 绱Н涓€姝ョ殑杩戜技)
++#   Q2: 峋盻T 鎺ヨ繎0 (T=200鏃跺簲璇ユ瘮T=1000鏃跺ぇ寰堝, 娈嬩綑淇″彿鏇村己)
++#   Q3: 峋盻t鍗曡皟閫掑噺, 浠嬩簬(0,1]涔嬮棿
++#   Q4: VP-SDE鍓嶅悜杩囩▼x_t鐨勫潎鍊煎拰鏂瑰樊绗﹀悎鐞嗚(鏃犲櫔澹版椂x_t=鈭氠颈路x0)
++print(f"[DDRM鑷] VP-SDE璋冨害涓庡墠鍚戣繃绋嬮獙璇?瀹為檯杩愯, 闈炴墜绠?:")
++print(f"  Q1: 峋盻1={alpha_bars[0]:.6f} (搴斺増1-尾_min={1-beta_min:.6f}): "
++      f"{'OK' if abs(alpha_bars[0] - (1-beta_min)) < 1e-3 else 'FAIL'}")
++print(f"  Q2: 峋盻T={alpha_bars[-1]:.6e} (搴斿緢灏忎絾>0, T=200鏃朵粛姣擳=1000澶?: "
++      f"{'OK' if 0 < alpha_bars[-1] < 0.1 else 'FAIL'}")
++print(f"  Q3: 鍗曡皟閫掑噺: {'OK' if (np.diff(alpha_bars) <= 0).all() else 'FAIL'}, "
++      f"鑼冨洿: [{alpha_bars.min():.4f}, {alpha_bars.max():.4f}] (搴斺垐(0,1])")
++# Q4: 鍓嶅悜杩囩▼x_t鐨勭悊璁哄潎鍊?鈭氠颈路x0, 鏂瑰樊=(1-峋? (瀵箈0=0)
++np.random.seed(42)
++_x0 = np.array([1.0, 2.0])
++for _t in [0, T//4, T//2, T-1]:
++    _xt_samples = np.array([vp_sde_forward(_x0, _t)[0] for _ in range(5000)])
++    _mean = _xt_samples.mean(axis=0)
++    _var = _xt_samples.var(axis=0)
++    _theory_mean = np.sqrt(alpha_bars[_t]) * _x0
++    _theory_var = (1 - alpha_bars[_t]) * np.ones_like(_x0)
++    print(f"  Q4 t={_t+1:4d}: E[x_t]={_mean}, 鐞嗚={_theory_mean} (鐩稿璇樊<5%鍗冲彲)")
++
+ def tweedie_estimate(x_t, t_idx):
+     """鍩轰簬楂樻柉娣峰悎鍏堥獙鐨勮В鏋怲weedie浼拌锛堝悗楠屽潎鍊?E[x_0|x_t]锛? 
+@@ -496,4 +521,33 @@ print("""
+    - 灞曠ず棰戣氨鍩熸潯浠跺寲鐨勪紭鍔?    - 鐞嗚ВDDRM鏂囩尞鏂规硶鐨勬暟瀛﹀熀纭€
+    - 瀵规瘮涓嶅悓杩戜技鏂规硶鐨勯€傜敤鑼冨洿
+-""")
+\ No newline at end of file
++""")
++# ===== 淇濆瓨鏁板€肩粨鏋?=====
++import json
++
++def _to_native(obj):
++    """閫掑綊杞崲numpy/torch绫诲瀷涓篜ython鍘熺敓绫诲瀷"""
++    import numpy as np
++    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
++    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
++    if isinstance(obj, (np.integer,)): return int(obj)
++    if isinstance(obj, (np.floating,)): return float(obj)
++    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
++    try:
++        import torch
++        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
++    except: pass
++    return obj
++
++results_summary = {
++    "DDRM_鍚勬椂闂存骞冲潎璇樊": [round(float(e), 4) for e in ddrm_errors],
++    "DPS_鍚勬椂闂存骞冲潎璇樊": [round(float(e), 4) for e in dps_errors],
++    "DDRM_鎬诲钩鍧囪宸?: round(float(np.mean(ddrm_errors)), 4),
++    "DPS_鎬诲钩鍧囪宸?: round(float(np.mean(dps_errors)), 4),
++    "DDRM鐩稿鏀硅繘鐧惧垎姣?: round(float((np.mean(dps_errors) - np.mean(ddrm_errors)) / np.mean(dps_errors) * 100), 2),
++    "SVD_濂囧紓鍊?: [round(float(s), 4) for s in S],
++}
++results_summary = _to_native(results_summary)
++with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
++    json.dump(results_summary, f, ensure_ascii=False, indent=2)
++print(f"鏁板€肩粨鏋滃凡淇濆瓨: {os.path.join(SAVE_DIR, 'results_summary.json')}")

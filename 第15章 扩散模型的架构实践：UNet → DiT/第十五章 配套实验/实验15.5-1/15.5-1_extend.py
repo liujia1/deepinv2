@@ -126,6 +126,14 @@ def load_train_state(checkpoint_path, model, optimizer, num_epochs_total, schedu
                 scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
             except Exception:
                 pass
+        # 恢复 RNG 状态, 使续训的噪声流与一次性训练严格一致
+        if 'rng_state' in checkpoint:
+            try:
+                torch.set_rng_state(checkpoint['rng_state'])
+                if torch.cuda.is_available() and 'cuda_rng_state' in checkpoint:
+                    torch.cuda.set_rng_state_all(checkpoint['cuda_rng_state'])
+            except Exception:
+                pass
 
     if checkpoint.get('is_final', False):
         print(f"✓ 这是最终训练完成的模型, 直接加载, 跳过训练过程")
@@ -154,6 +162,10 @@ def save_train_state(checkpoint_path, model, optimizer, epoch, loss,
         ckpt['optimizer_state_dict'] = optimizer.state_dict()
         if scheduler is not None:
             ckpt['scheduler_state_dict'] = scheduler.state_dict()
+        # 保存 RNG 状态: 续训时从中恢复, 保证噪声流与一次性训练一致(不重放)
+        ckpt['rng_state'] = torch.get_rng_state()
+        if torch.cuda.is_available():
+            ckpt['cuda_rng_state'] = torch.cuda.get_rng_state_all()
     torch.save(ckpt, checkpoint_path)
 
 
@@ -309,11 +321,12 @@ total_steps = num_epochs * batches_per_epoch
 warmup_steps = 500
 
 configs = {
-    # 注: Adam 未设置 weight_decay (默认0), 与15.5-1保持同一设计局限并同样如实标注:
-    #     步骤对比的是"无正则Adam" vs "解耦wd=0.01的AdamW"
+    # 注: Adam 与 AdamW 均设置 weight_decay=0.01 (与15.5-1.py口径一致):
+    #     Adam 以 L2 形式把 wd 耦合进梯度, AdamW 解耦 —— 这样两侧同 λ,
+    #     才是 15.5.1 节"耦合 vs 解耦"的干净对照(而非"有正则 vs 无正则")
     'adam_const': {
         'optimizer_cls': torch.optim.Adam,
-        'optimizer_kwargs': {'lr': 2e-4},
+        'optimizer_kwargs': {'lr': 2e-4, 'weight_decay': 0.01},
         'use_scheduler': False,
         'label': 'Adam + Constant',
         'color': '#e74c3c',
@@ -327,7 +340,7 @@ configs = {
     },
     'adam_cosine': {
         'optimizer_cls': torch.optim.Adam,
-        'optimizer_kwargs': {'lr': 2e-4},
+        'optimizer_kwargs': {'lr': 2e-4, 'weight_decay': 0.01},
         'use_scheduler': True,
         'label': 'Adam + Warmup+Cosine',
         'color': '#e67e22',
@@ -360,12 +373,6 @@ del base_model
 # ============================================================
 def train_model(config_name, config, checkpoint_path):
     """训练单个配置, 返回 (model, loss_history, val_history)"""
-    # 与15.5-1相同的公平性协议: 每配置训练前重置全局随机状态,
-    # 保证4个配置的数据顺序与(t, eps)噪声序列完全一致
-    torch.manual_seed(42)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(42)
-
     model = SmallUNet().to(device)
     model.load_state_dict(deepcopy(base_state_dict))
     optimizer = config['optimizer_cls'](model.parameters(), **config['optimizer_kwargs'])
@@ -379,6 +386,15 @@ def train_model(config_name, config, checkpoint_path):
 
     if is_final:
         return model, loss_history, val_history
+
+    # 公平性协议: 仅从零开始训练(start_epoch==0)时重置全局随机状态,
+    # 保证4个配置的数据顺序与(t, eps)噪声序列完全一致;
+    # 续训(start_epoch>0)时沿用 checkpoint 中保存的 RNG 状态,
+    # 避免无条件重新播种导致后续 epoch 重放 epoch0 的噪声流
+    if start_epoch == 0:
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
 
     if start_epoch >= num_epochs:
         print(f"  start_epoch({start_epoch}) >= num_epochs({num_epochs}), 跳过训练")
@@ -432,7 +448,7 @@ def train_model(config_name, config, checkpoint_path):
 print(f"\n{'='*60}")
 print("训练所有配置 (2x2因子设计, 100轮)")
 print(f"{'='*60}")
-print(f"  优化器: Adam vs AdamW (weight_decay=0.01)")
+print(f"  优化器: Adam(耦合wd=0.01) vs AdamW(解耦wd=0.01)")
 print(f"  调度器: Constant LR vs Warmup({warmup_steps}步, 占{warmup_steps/total_steps*100:.1f}%)+Cosine")
 print(f"  训练轮数: {num_epochs}, 总步数: {total_steps}")
 
@@ -555,28 +571,6 @@ print(f"{'='*60}")
 
 def to_vis_range(x):
     return (x + 1) / 2
-
-@torch.no_grad()
-def sample_ddpm(model, n_samples, gen):
-    """DDPM ancestral sampling; gen固定初始噪声, 使4配置在同一x_T下对比"""
-    model.eval()
-    x = torch.randn(n_samples, 1, 28, 28, device=device, generator=gen)
-    for t_val in reversed(range(T)):
-        t = torch.full((n_samples,), t_val, device=device, dtype=torch.long)
-        pred = model(x, t)
-        alpha_bar_t = alpha_bars[t_val]
-        alpha_bar_prev = alpha_bars[t_val - 1] if t_val > 0 else torch.tensor(1.0, device=device)
-        x0_pred = (x - torch.sqrt(1 - alpha_bar_t) * pred) / torch.sqrt(alpha_bar_t)
-        x0_pred = x0_pred.clamp(-1, 1)
-        if t_val > 0:
-            sigma_t = torch.sqrt(betas[t_val])
-            dir_xt = torch.sqrt(torch.clamp(1 - alpha_bar_prev - sigma_t**2, min=0)) * pred
-            noise = torch.randn(x.shape, device=device, generator=gen)
-            x = torch.sqrt(alpha_bar_prev) * x0_pred + dir_xt + sigma_t * noise
-        else:
-            x = x0_pred
-    model.train()
-    return x
 
 n_samples = 8
 # 先固定一次初始x_T与逐步噪声, 4配置共用 -> 采样差异只来自模型本身

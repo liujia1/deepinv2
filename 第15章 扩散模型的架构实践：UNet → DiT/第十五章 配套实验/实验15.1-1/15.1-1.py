@@ -414,6 +414,42 @@ for size in [16, 32, 64]:
         tag = "Full更省" if ratio > 1 else "两者持平"
         print(f"    {tag}: {max(ratio, 1/ratio):.1f}× (N≤d²时Full不劣于Linear)")
 
+# ★ 实测: 两种注意力的显存开销（把步骤2的"显存"宣称落地）
+# - GPU: 用 torch.cuda 实测单次前向+反传的峰值显存
+# - CPU: 无显存概念, 退用主导激活张量的解析字节数(N×N 注意力矩阵 vs N×d 上下文向量)
+attn_full = attn_full.to(device)
+attn_linear = attn_linear.to(device)
+_use_cuda = torch.cuda.is_available()
+attn_mem = {}
+mem_mode = '实测峰值显存(含反传)' if _use_cuda else '解析激活值(CPU无显存, 取主导激活张量)'
+print(f"\n  显存开销 [{mem_mode}]:")
+for size in [16, 32, 64]:
+    x_s = torch.randn(1, 64, size, size, device=device)
+    N = size * size
+    row = {}
+    for tag, mod in [('full', attn_full), ('linear', attn_linear)]:
+        measured = False
+        if _use_cuda:
+            try:
+                mod.zero_grad(set_to_none=True)
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
+                y = mod(x_s)
+                y.sum().backward()
+                row[tag] = round(torch.cuda.max_memory_allocated() / 1024**2, 3)
+                measured = True
+            except RuntimeError:
+                torch.cuda.empty_cache()  # 显存不足时回退解析值
+        if not measured:
+            # float32(4B): Full 主导项 heads×N×N; Linear 主导项 N×hidden(=heads×dim_head)
+            n_bytes = (4 * 4 * N * N) if tag == 'full' else (4 * N * 128)
+            row[tag] = round(n_bytes / 1024**2, 4)
+    row['unit'] = 'MB'
+    row['measured_on_gpu'] = bool(_use_cuda)
+    attn_mem[str(size)] = row
+    r = row['full'] / row['linear'] if row['linear'] else float('inf')
+    print(f"    {size}×{size} (N={N}): Full={row['full']} MB, Linear={row['linear']} MB, Full/Linear={r:.2f}×")
+
 
 # ============================================================
 # 步骤3: PreNorm模式演示
@@ -432,6 +468,59 @@ prenorm = PreNorm(64, Attention(64))
 x_norm = torch.randn(2, 64, 16, 16)
 out_norm = prenorm(x_norm)
 print(f"PreNorm: input {tuple(x_norm.shape)} -> output {tuple(out_norm.shape)}")
+
+# ★ 实测: PreNorm vs PostNorm 的梯度流通畅性（把步骤3的"梯度流"宣称落地）
+# 堆叠深层残差块, 前向+反传后记录各层归一化权重的梯度L2范数(逐层梯度量级)
+class _PreNormBlock(nn.Module):
+    """PreNorm残差块: x + fn(Norm(x))"""
+    def __init__(self, dim):
+        super().__init__()
+        self.norm = nn.GroupNorm(1, dim)
+        self.fn = Attention(dim)
+    def forward(self, x):
+        return x + self.fn(self.norm(x))
+
+
+class _PostNormBlock(nn.Module):
+    """PostNorm残差块: Norm(x + fn(x))"""
+    def __init__(self, dim):
+        super().__init__()
+        self.norm = nn.GroupNorm(1, dim)
+        self.fn = Attention(dim)
+    def forward(self, x):
+        return self.norm(x + self.fn(x))
+
+
+DEPTH_GF = 12
+grad_flow = {}
+print(f"\n  逐层梯度范数 (堆叠{DEPTH_GF}层, 前向+反传):")
+for tag, cls in [('PreNorm', _PreNormBlock), ('PostNorm', _PostNormBlock)]:
+    torch.manual_seed(0)
+    layers = nn.ModuleList([cls(64) for _ in range(DEPTH_GF)]).to(device)
+    h = torch.randn(2, 64, 16, 16, device=device)
+    for l in layers:
+        h = l(h)
+    h.pow(2).mean().backward()
+    norms = [float(l.norm.weight.grad.norm()) for l in layers]
+    grad_flow[tag] = norms
+    print(f"    {tag}: 第1层={norms[0]:.3e}, 第{DEPTH_GF}层={norms[-1]:.3e}, "
+          f"最深层/最浅层={norms[-1] / max(norms[0], 1e-12):.3f}")
+
+# 绘图: 逐层梯度范数(log纵轴), 直观展示归一化位置对梯度流通的影响
+plt.figure(figsize=(7, 4.5))
+for tag, color in [('PreNorm', '#2ecc71'), ('PostNorm', '#e74c3c')]:
+    plt.plot(range(1, DEPTH_GF + 1), grad_flow[tag], marker='o', ms=4, color=color, label=tag)
+plt.yscale('log')
+plt.xlabel('层序号 (1=最靠近输入)', fontsize=11)
+plt.ylabel('归一化权重梯度L2范数 (log)', fontsize=11)
+plt.title(r'步骤3: PreNorm vs PostNorm 逐层梯度流通畅性 (16×16, 12层)', fontsize=12)
+plt.legend(fontsize=10)
+plt.grid(alpha=0.3, which='both')
+plt.tight_layout()
+fig_path_gf = os.path.join(SAVE_DIR, '步骤3_梯度流对比.png')
+plt.savefig(fig_path_gf, dpi=150, bbox_inches='tight')
+plt.close()
+print(f"梯度流图已保存: {fig_path_gf}")
 
 
 # ============================================================
@@ -757,6 +846,10 @@ results_summary = {
     'total_params': int(total_params),
     'final_loss': round(float(loss_history[-1]), 6) if loss_history else None,
     'num_epochs': len(loss_history),
+    # 步骤2实测: Full vs Linear 注意力的显存开销(单位MB); GPU为实测峰值, CPU为主导激活解析值
+    'attn_memory_MB': attn_mem,
+    # 步骤3实测: PreNorm/PostNorm 堆叠12层的逐层归一化权重梯度L2范数
+    'grad_flow_by_layer': {k: [round(v, 8) for v in vals] for k, vals in grad_flow.items()},
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

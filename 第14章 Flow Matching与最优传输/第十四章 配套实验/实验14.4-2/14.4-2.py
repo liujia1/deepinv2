@@ -243,6 +243,22 @@ def flow_sample(model, z_source, n_steps=100):
     return np.array(trajectory)  # (n_steps+1, B, 2)
 
 
+# Reflow端点生成的ODE步数（与采样评测一致，避免离散化误差不一致）
+ENDPOINT_ODE_STEPS = 100
+
+
+@torch.no_grad()
+def ode_endpoint(model, z, n_steps=ENDPOINT_ODE_STEPS):
+    """从z积分ODE得到t=1端点（用于Reflow重配对），Euler步数与采样评测一致"""
+    model.eval()
+    x = z.clone()
+    dt = 1.0 / n_steps
+    for step in range(n_steps):
+        t = torch.full((x.shape[0], 1), step / n_steps)
+        x = x + model(x, t) * dt
+    return x
+
+
 # ============================================================
 # 曲率计算函数
 # ============================================================
@@ -312,43 +328,19 @@ def reflow_step(model, reflow_round, n_samples=256, n_epochs=1500, lr=1e-3,
             z = checkpoint['reflow_z']
             print(f"  恢复端点对噪声起点（确保训练数据一致性）")
             # 重新生成对应的x_endpoint
-            model.eval()
-            with torch.no_grad():
-                x_endpoint = z.clone()
-                dt = 1.0 / 50
-                for step in range(50):
-                    t_val = step / 50
-                    t = torch.full((x_endpoint.shape[0], 1), t_val)
-                    v = model(x_endpoint, t)
-                    x_endpoint = x_endpoint + v * dt
+            x_endpoint = ode_endpoint(model, z)
         else:
             # 兼容旧版本checkpoint（无reflow_z字段）
             print("  注意：旧版本checkpoint不含端点对噪声，将重新生成")
-            model.eval()
-            with torch.no_grad():
-                np.random.seed(reflow_round * 1000 + 42)  # 使用确定性种子
-                z = torch.FloatTensor(sample_source(n_samples))
-                x_endpoint = z.clone()
-                dt = 1.0 / 50
-                for step in range(50):
-                    t_val = step / 50
-                    t = torch.full((x_endpoint.shape[0], 1), t_val)
-                    v = model(x_endpoint, t)
-                    x_endpoint = x_endpoint + v * dt
+            np.random.seed(reflow_round * 1000 + 42)  # 使用确定性种子
+            z = torch.FloatTensor(sample_source(n_samples))
+            x_endpoint = ode_endpoint(model, z)
     else:
         # 用当前模型生成端点对（使用确定性种子）
-        model.eval()
-        with torch.no_grad():
-            np.random.seed(reflow_round * 1000 + 42)  # 每轮Reflow使用固定种子
-            z = torch.FloatTensor(sample_source(n_samples))
-            # 运行ODE得到终点
-            x_endpoint = z.clone()
-            dt = 1.0 / 50
-            for step in range(50):
-                t_val = step / 50
-                t = torch.full((x_endpoint.shape[0], 1), t_val)
-                v = model(x_endpoint, t)
-                x_endpoint = x_endpoint + v * dt
+        np.random.seed(reflow_round * 1000 + 42)  # 每轮Reflow使用固定种子
+        z = torch.FloatTensor(sample_source(n_samples))
+        # 运行ODE得到终点
+        x_endpoint = ode_endpoint(model, z)
 
         # 新的配对：(z, x_endpoint)作为训练数据
         # 重新训练模型
@@ -487,7 +479,7 @@ ax.grid(alpha=0.3, axis='y')
 # 下面行右：少步采样对比
 ax = axes[1, 2]
 few_step_wd = {}  # 存档各模型少步W1曲线
-for label, model in [('1-RF', model_1rf), ('3-RF', model_3rf), ('OT-CFM', model_ot)]:
+for label, model in [('1-RF', model_1rf), ('2-RF', model_2rf), ('3-RF', model_3rf), ('OT-CFM', model_ot)]:
     wd_list = []
     for n_steps in [1, 5, 10, 20, 50, 100]:
         traj = flow_sample(model, z_test_rf, n_steps=n_steps)
@@ -521,10 +513,10 @@ print(f"  {'OT-CFM':<12s}  {S_ot:8.4f}  {wd_ot:8.4f}")
 print(f"\n曲率变化分析:")
 if S_1rf > S_2rf > S_3rf:
     print("  ✓ 曲率随Reflow轮数单调下降（1-RF > 2-RF > 3-RF），验证通过")
-elif S_1rf > S_2rf and S_2rf > S_3rf:
-    print("  ✓ 曲率总体呈下降趋势，符合Reflow理论预期")
+elif S_1rf > S_3rf:
+    print("  ✓ 曲率总体呈下降趋势（1-RF > 3-RF，中间轮存在波动），符合Reflow理论预期")
 else:
-    print("  ⚠ 曲率未严格单调下降（小规模训练存在随机性），但总体呈下降趋势")
+    print("  ⚠ 曲率未随Reflow轮数下降（小规模训练存在随机性），建议增加训练轮数后复核")
 
 if S_3rf <= S_ot:
     print("  ✓ 3-RF曲率 ≤ OT-CFM，趋近最优传输映射")
@@ -541,7 +533,8 @@ for sd in range(10):
     np.random.seed(1234 + sd)
     wd_null_list.append(wasserstein_distance_nd(sample_target(n_test), target_test))
 wd_null = float(np.mean(wd_null_list))
-print(f"\n  ⓘ W1零基线（真实目标两个独立n=200样本集之间的距离）= {wd_null:.4f}")
+wd_null_std = float(np.std(wd_null_list))
+print(f"\n  ⓘ W1零基线（真实目标两个独立n=200样本集之间的距离）= {wd_null:.4f} ± {wd_null_std:.4f}")
 print("    1-RF的W1与零基线同量级，而2-RF/3-RF明显超出→W1上升是真实的分布漂移，")
 print("    源于Reflow端点对取自上一轮模型自身输出、训练误差逐轮累积（见讲义分析）")
 
@@ -603,6 +596,7 @@ results_summary = {
     'wd_3rf': round(float(wd_3rf), 4),
     'wd_ot': round(float(wd_ot), 4),
     'wd_null_baseline': round(wd_null, 4),  # 同分布独立样本间的经验W1（有限样本噪声水平）
+    'wd_null_std': round(wd_null_std, 4),  # 零基线在10个种子下的标准差（W1评测的噪声尺度参照）
     'ode_steps': [1, 5, 10, 20, 50, 100],
     'wd_fewstep': {k: [round(float(v), 4) for v in lst] for k, lst in few_step_wd.items()},
 }

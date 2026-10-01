@@ -529,8 +529,10 @@ for row, (name, cfg) in enumerate(dit_configs.items()):
         axes[row, col].imshow(to_vis_range(samples[col, 0].cpu()).clamp(0, 1),
                                cmap='gray', vmin=0, vmax=1)
         axes[row, col].axis('off')
-    axes[row, 0].set_ylabel(f"{cfg['label']}\n({param_counts[name]/1e6:.2f}M)",
-                             fontsize=10, rotation=0, labelpad=55)
+    # axis('off')后 set_ylabel 不渲染, 改用 text 定位到子图左侧
+    axes[row, 0].text(-0.15, 0.5, f"{cfg['label']}\n({param_counts[name]/1e6:.2f}M)",
+                      fontsize=10, rotation=0, ha='right', va='center',
+                      transform=axes[row, 0].transAxes, clip_on=False)
 
 plt.suptitle(r'步骤3: DiT缩放采样质量对比 (DDPM, $T$=200步)', fontsize=14, y=1.01)
 plt.tight_layout()

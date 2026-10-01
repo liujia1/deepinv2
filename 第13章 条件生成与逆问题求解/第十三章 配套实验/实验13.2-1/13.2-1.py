@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-实验13.2-2：后验得分分解定理验证
+实验13.2-1：后验得分分解定理验证
 
 实验内容：
   - 验证后验得分分解定理：nabla log p(x_t|y) = nabla log p(x_t) + nabla log p(y|x_t)
@@ -42,7 +42,7 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    SAVE_DIR = os.path.join(_gdrive, '实验13.2-2')
+    SAVE_DIR = os.path.join(_gdrive, '实验13.2-1')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
     try:
@@ -63,7 +63,7 @@ except ImportError:
 np.random.seed(42)
 
 print("\n" + "=" * 60)
-print("实验13.2-2: 后验得分分解定理验证")
+print("实验13.2-1: 后验得分分解定理验证")
 print("=" * 60)
 print("知识点: nabla log p(x_t|y) = nabla log p(x_t) + nabla log p(y|x_t)")
 
@@ -316,7 +316,7 @@ plt.close()
 print(f"\n图已保存: {fig_path}")
 
 print("\n" + "=" * 60)
-print("实验13.2-2 完成!")
+print("实验13.2-1 完成!")
 print("=" * 60)
 print("""
 关键结论:
@@ -355,7 +355,8 @@ results_summary = {
         "sigma_y": round(float(sigma_y), 4),
         "y_obs": round(float(y_obs), 4),
     },
-    "分解定理验证误差": {f"t={t_val}": round(float(max_err), 6) for t_val, max_err in decomposition_errors.items()},
+    # 误差量级为 1e-7~1e-8,用3位有效数字的科学计数法保存,避免 round 抹成 0
+    "分解定理验证误差": {f"t={t_val}": float(f"{max_err:.3e}") for t_val, max_err in decomposition_errors.items()},
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

@@ -1913,12 +1913,23 @@ print(f"  已保存: qualitative_comparison.png")
 print("\n" + "="*70)
 print("实验17.4-1 总结")
 print("="*70)
+# ★（评审意见修订）盲点一行的"说明"由静态断言改为按实测动态生成：
+# 原静态文案写"受限最优，次优"，与下方"泄漏主导"的诊断自相矛盾。
+# 若实测泄漏使盲点接近恒等基线，就不能再称"受限最优"。
+gap_bs_sure_pre = psnr_sure - psnr_bs
+if gap_bs_sure_pre <= 0.5:
+    bs_note = "盲点约束生效"
+elif gap_bs_sure_pre <= 3.0:
+    bs_note = "受限最优 < 全局最优"
+else:
+    bs_note = "泄漏主导(详见下方诊断)"
+
 print(f"  方法                    PSNR (dB)    SSIM        散度估计    说明")
 print(f"  ─────────────────────────────────────────────────────────────────")
 print(f"  监督 ‖x-f(y)‖²         {psnr_sup:.2f}       {ssim_sup:.4f}      ─         基线")
 print(f"  SURE ‖y-f(y)‖²+2σ²div  {psnr_sure:.2f}       {ssim_sure:.4f}      MC/Auto   自由度修正→无偏")
 print(f"  R2R  ‖y_b-f(y_a)‖²     {psnr_r2r:.2f}       {ssim_r2r:.4f}      不需要     避免散度计算")
-print(f"  盲点 ‖y-f(y)‖²(∂f/∂y=0) {psnr_bs:.2f}       {ssim_bs:.4f}      ≈0        受限最优，次优")
+print(f"  盲点 ‖y-f(y)‖²(∂f/∂y=0) {psnr_bs:.2f}       {ssim_bs:.4f}      设计≈0     {bs_note}")
 print(f"  盲点+mask(仅masked像素)  {psnr_bs_mask:.2f}       {ssim_bs_mask:.4f}      ≈0        N2V masking抑制泄漏")
 print(f"  朴素 ‖y-f(y)‖²         {psnr_naive:.2f}       {ssim_naive:.4f}     非零       有偏，低估风险")
 print(f"\n  核心结论 (基于实际PSNR动态判断):")

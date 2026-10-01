@@ -1024,6 +1024,8 @@ def main():
         else:
             loss_txt = f"MAE 损失下 UNet 更优（+{-gap_loss:.2f} dB）"
         print(f"    3. {loss_txt}")
+        print(f"       注意：UNet(MSE) 训练 {N_EPOCHS_UNET} 轮、UNet(MAE) 训练 {N_EPOCHS_MAE} 轮，"
+              f"轮数不等，上述差值不能判定损失函数优劣（等轮数比较需固定 N_EPOCHS 重跑）")
     else:
         print(f"    3. MSE/MAE 损失对比数据不完整（需两个模型均训练完成）")
 
