@@ -134,30 +134,30 @@ def sample_from_prior(n_samples):
     return samples
 
 def gaussian_mixture_score(x_t, t_idx):
-    """混合高斯先验的真实得分函数（Torch可导版本）
+    """混合高斯先验在VP-SDE下的边际得分函数（Torch可导版本）
 
-    对于混合高斯 p(x) = sum_i w_i * N(x; mu_i, sigma_i^2)
-    在扩散时刻t，x_t的分布为：
-    p(x_t) = sum_i w_i * N(x_t; mu_i, sigma_i^2 + 1 - alpha_bar_t)
+    VP-SDE前向边际：x_t = √ᾱ_t·x_0 + √(1-ᾱ_t)·z，故
+    p(x_t) = sum_i w_i * N(x_t; √ᾱ_t·mu_i, ᾱ_t·sigma_i^2 + 1 - ᾱ_t)
 
     得分函数：s(x_t) = nabla log p(x_t)
 
-    注意：此版本支持Torch自动求导，用于DOC的全局优化
+    注意：此版本与VP离散化/Tweedie公式使用同一约定（含√ᾱ信号衰减），
+    支持Torch自动求导，用于DOC的全局优化
     """
     alpha_bar_t = alpha_bars[t_idx]
-    sigma_t_sq = 1.0 - alpha_bar_t
+    sqrt_ab = torch.sqrt(alpha_bar_t)
 
     # 计算每个高斯分量的概率密度（使用torch保持计算图）
     log_probs = []
     for i in range(len(GM_WEIGHTS)):
         mu_i = torch.tensor(GM_MEANS[i], device=device, dtype=x_t.dtype)
         sigma_i_sq = torch.tensor(GM_STDS[i] ** 2, device=device, dtype=x_t.dtype)
-        total_sigma_sq = sigma_i_sq + sigma_t_sq
+        m_i = sqrt_ab * mu_i                        # 边际均值 √ᾱ·mu_i
+        total_sigma_sq = alpha_bar_t * sigma_i_sq + (1.0 - alpha_bar_t)  # 边际方差 ᾱσ²+1-ᾱ
         # log_prob = log(w_i) - 0.5*log(2*pi*sigma^2) - 0.5*(x-mu)^2/sigma^2
-        # 但得分函数只需要最后一项的梯度
         log_prob = torch.log(torch.tensor(GM_WEIGHTS[i], device=device, dtype=x_t.dtype)) \
                    - 0.5 * torch.log(2 * np.pi * total_sigma_sq) \
-                   - 0.5 * (x_t - mu_i) ** 2 / total_sigma_sq
+                   - 0.5 * (x_t - m_i) ** 2 / total_sigma_sq
         log_probs.append(log_prob)
 
     # 使用log-sum-exp技巧计算加权得分
@@ -166,14 +166,15 @@ def gaussian_mixture_score(x_t, t_idx):
     exp_probs = torch.exp(log_probs_stack - max_log_prob)
     sum_exp = torch.sum(exp_probs)
 
-    # 计算得分：s(x_t) = sum_i w_i * N(x_t; mu_i, sigma_i^2 + sigma_t^2) * (-(x_t - mu_i) / (sigma_i^2 + sigma_t^2)) / p(x_t)
+    # 计算得分：s(x_t) = sum_i [posterior_weight_i] * (-(x_t - m_i) / v_i)
     score = torch.tensor(0.0, device=device, dtype=x_t.dtype)
     for i in range(len(GM_WEIGHTS)):
         mu_i = torch.tensor(GM_MEANS[i], device=device, dtype=x_t.dtype)
         sigma_i_sq = torch.tensor(GM_STDS[i] ** 2, device=device, dtype=x_t.dtype)
-        total_sigma_sq = sigma_i_sq + sigma_t_sq
+        m_i = sqrt_ab * mu_i
+        total_sigma_sq = alpha_bar_t * sigma_i_sq + (1.0 - alpha_bar_t)
         weight = exp_probs[i] / sum_exp
-        score = score + weight * (-(x_t - mu_i) / total_sigma_sq)
+        score = score + weight * (-(x_t - m_i) / total_sigma_sq)
 
     return score
 
@@ -355,21 +356,26 @@ DPS贪心策略（13.3节）：
 - 忽略全局轨迹协调性
 - 可能导致终端状态偏离观测
 
-DOC优势：
+DOC理论定位（需实际场景才体现）：
 - 考虑整个轨迹的全局最优
 - 通过反向传播优化所有控制步骤
-- 精确匹配终端观测约束
+- 终端代价可任意定制（采样→优化的范式转换）
+
+注：本场景得分解析精确且观测线性，DPS的Tweedie近似误差很小，
+DOC的全局优势在此不必然体现，见步骤4实测结果。
 """)
 
-def dps_sampling(y_obs, A_obs, sigma_obs, x_T, zeta=1.0):
-    """DPS采样（贪心策略）
+def dps_sampling(y_obs, A_obs, sigma_obs, x_T, zeta=0.3):
+    """DPS采样（贪心策略，标准得分修正形式）
 
     完整逆向SDE：dx = [f(x,t) - g(t)^2 * s_theta(x,t)] dt + g(t) dw
     DPS修正：s_corrected = s_theta + zeta * nabla log p(y|x_hat_0|t)
 
     本实现中：
-    - 使用混合高斯的真实得分函数（而非简化的高斯得分）
-    - u_t = zeta * 似然得分（精确Tweedie估计），贪心策略
+    - 使用混合高斯在VP-SDE下的边际得分函数
+    - 得分修正乘以g(t)^2=β_t（与逆向SDE离散化同尺度），
+      即 u_t = β_t · ζ · A(y - A·x̂_{0|t})/σ²，ζ=0.3为稳定区间
+      （σ_obs=0.1时梯度量级大，ζ≳0.7会发散，属步长调参问题）
     """
     trajectory = [x_T.clone()]
     x_t = x_T.clone()
@@ -385,20 +391,16 @@ def dps_sampling(y_obs, A_obs, sigma_obs, x_T, zeta=1.0):
         score = gaussian_mixture_score(x_t, t_idx)
         x_hat_0 = (x_t + (1.0 - alpha_bar_t_safe) * score) / torch.sqrt(alpha_bar_t_safe)
 
-        # DPS似然得分（贪心，基于Tweedie估计）
+        # DPS似然梯度（基于Tweedie估计）
         residual = y_obs - A_obs * x_hat_0
-        likelihood_score = zeta * A_obs * residual / (sigma_obs**2)
-
-        # 梯度裁剪，防止数值爆炸
-        likelihood_score = torch.clamp(likelihood_score, min=-100, max=100)
+        likelihood_grad = A_obs * residual / (sigma_obs**2)
 
         # 完整逆向SDE漂移 = 固有漂移 + 得分项
-        # 修正：逆向SDE的漂移项符号应为正（解开前向的收缩）
         # 标准 VP-SDE 逆向采样：x_{t-1} = x_t + 0.5*β_t*x_t + β_t*score(x_t,t) + √β_t*z
         drift = 0.5 * beta_t * x_t + beta_t * score
 
-        # 控制输入（贪心策略：似然得分作为控制）
-        u_t = 0.01 * likelihood_score  # 降低控制强度
+        # 控制输入（贪心策略：标准得分修正，含β_t尺度）
+        u_t = zeta * beta_t * likelihood_grad
 
         # 扩散
         diffusion = torch.sqrt(beta_t) * torch.randn_like(x_t)
@@ -421,9 +423,10 @@ n_trials = 50
 doc_errors = []
 dps_errors = []
 
-# 支持断点续传
+# 支持断点续传（检查点同时保存最后一次试验的轨迹数据，保证续传完成后可视化可用）
 checkpoint_file = os.path.join(os.path.dirname(__file__) if '__file__' in dir() else '.', 'experiment_checkpoint.pkl')
 start_trial = 0
+viz_data = None
 
 if os.path.exists(checkpoint_file):
     with open(checkpoint_file, 'rb') as f:
@@ -431,6 +434,7 @@ if os.path.exists(checkpoint_file):
         doc_errors = checkpoint['doc_errors']
         dps_errors = checkpoint['dps_errors']
         start_trial = len(doc_errors)
+        viz_data = checkpoint.get('viz')
         print(f"\n从检查点恢复，已完成{start_trial}/{n_trials}次试验")
 
 print(f"\n开始{n_trials}次试验...")
@@ -446,7 +450,7 @@ for trial_idx in range(start_trial, n_trials):
 
     # DOC采样
     doc_sampler = SimpleDOC(y_obs, A_obs, sigma_obs)
-    doc_trajectory, doc_controls, doc_history, doc_costs = doc_sampler.optimize_control(x_T, n_iters=100, lr=0.01, trial_idx=trial_idx)
+    doc_trajectory, doc_controls, doc_history, doc_costs = doc_sampler.optimize_control(x_T, n_iters=300, lr=0.01, trial_idx=trial_idx)
 
     # DPS采样
     dps_trajectory = dps_sampling(torch.tensor(y_obs, device=device),
@@ -459,9 +463,19 @@ for trial_idx in range(start_trial, n_trials):
     doc_errors.append(abs(doc_x0 - x0_star))
     dps_errors.append(abs(dps_x0 - x0_star))
 
+    # 保存最后一次试验的可视化数据（随检查点一同归档）
+    viz_data = {
+        'x0_star': float(x0_star),
+        'y_obs': float(y_obs), 'A_obs': float(A_obs), 'sigma_obs': float(sigma_obs),
+        'doc_traj': doc_trajectory.detach().cpu().numpy().tolist(),
+        'dps_traj': dps_trajectory.detach().cpu().numpy().tolist(),
+        'doc_controls': doc_controls.detach().cpu().numpy().tolist(),
+        'doc_history': [np.asarray(th).tolist() for th in doc_history],
+    }
+
     # 每轮保存检查点
     with open(checkpoint_file, 'wb') as f:
-        pickle.dump({'doc_errors': doc_errors, 'dps_errors': dps_errors}, f)
+        pickle.dump({'doc_errors': doc_errors, 'dps_errors': dps_errors, 'viz': viz_data}, f)
 
 # 统计结果
 doc_mean_error = np.mean(doc_errors)
@@ -476,6 +490,17 @@ print(f"  DOC相对改进：{(dps_mean_error - doc_mean_error) / dps_mean_error 
 
 # 单次试验可视化（使用最后一次试验的结果）
 print("\n单次试验可视化（用于展示轨迹对比）...")
+
+# 若从完整检查点恢复（未执行任何试验），从检查点的viz数据重建可视化变量
+if start_trial >= n_trials and doc_errors:
+    if viz_data is None:
+        raise RuntimeError("检查点缺少viz数据（旧格式），请删除experiment_checkpoint.pkl后重新完整运行")
+    x0_star = viz_data['x0_star']
+    doc_trajectory = torch.tensor(viz_data['doc_traj'], device=device)
+    dps_trajectory = torch.tensor(viz_data['dps_traj'], device=device)
+    doc_controls = torch.tensor(viz_data['doc_controls'], device=device)
+    doc_history = [np.asarray(th) for th in viz_data['doc_history']]
+    doc_sampler = SimpleDOC(viz_data['y_obs'], viz_data['A_obs'], viz_data['sigma_obs'])
 
 # 可视化对比（使用最后一次试验的结果）
 fig, axes = plt.subplots(2, 2, figsize=(12, 10))
@@ -621,7 +646,11 @@ print("""
 2. DOC vs DPS对比
    - DOC：全局最优控制，考虑整个轨迹协调性
    - DPS：贪心策略，仅做局部最优决策
-   - 实验显示DOC终端误差更小（理论优势）
+   - 本1D基准下，标准得分修正的DPS（u=β_t·ζ·∇log p(y|x̂0)，ζ=0.3）
+     终端误差优于简化DOC——因得分解析精确、观测线性，
+     Tweedie近似误差很小，DOC的"全局 vs 贪心"优势无从体现
+   - DOC的真实优势出现在得分网络弱、少步采样的实际图像问题
+     （见Li & Pereira 2024），本简化场景复现不了该前提
 
 3. DOC计算代价
    - 需存储整个采样轨迹

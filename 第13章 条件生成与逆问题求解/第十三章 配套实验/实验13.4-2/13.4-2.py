@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-实验13.4-1：引导权重ζ权衡曲线
+实验13.4-2：引导权重ζ权衡曲线
 
 ★ 原创设计：固定随机种子，用不同zeta执行后验采样，
   对比采样分布的均值（->数据一致性）和方差（->多样性）
@@ -44,7 +44,7 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    SAVE_DIR = os.path.join(_gdrive, '实验13.4-1')
+    SAVE_DIR = os.path.join(_gdrive, '实验13.4-2')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
     try:
@@ -65,7 +65,7 @@ except ImportError:
 np.random.seed(42)
 
 print("\n" + "=" * 60)
-print("实验13.4-1: 引导权重zeta权衡曲线")
+print("实验13.4-2: 引导权重zeta权衡曲线")
 print("=" * 60)
 print("知识点: 引导权重zeta, 质量-多样性权衡, Tweedie一致性")
 
@@ -176,13 +176,23 @@ def dps_posterior_sample(y_obs, A, sigma_y, zeta, N_particles=5000, N_steps=300,
       - mean_t ≈ 0.017，二者量级一致
       - 1/mean_t ≈ 58.8，差三个数量级
     严格推导：x0_hat = (x_t + std_t² · score(x_t)) / mean_t。
-      - 对单峰高斯先验，score 是 x_t 的线性函数，链式法则精确给出
-        dx0_hat/dx_t = mean_t，公式完全成立；
+      - 对单峰单位方差高斯先验（s=1），score 是 x_t 的线性函数，且
+        VP-SDE 满足 mean_t²+std_t²=1 使混合方差 v_t=1，链式法则精确给出
+        dx0_hat/dx_t = mean_t，公式完全成立（一般 s 的精确值为
+        mean_t·s²/(mean_t²s²+std_t²)，本实验 GM 各分量 s=1 也退化为 mean_t）；
       - 对本实验的双峰GM先验，score 还包含"responsibility 权重随 x_t 变化"
         的非线性项，单分量公式不再精确，实际比值约为 0.049 / 0.017 ≈ 2.9。
     因此结论需保守表述：用 mean_t 作缩放在量级方向上正确（比 1/mean_t
-    合理得多），但对 GM 先验仅有量级一致，会带来约 3 倍的近似误差——
-    这可能是均值偏差随 ζ 呈非单调的部分来源（见结论段）。
+    合理得多），但对 GM 先验仅有量级一致，会带来约 3 倍的近似误差。
+    对照实验（复核时补充，用精确后验得分 ∇log p(x_t|y) 替换引导项）表明：
+      - 精确得分 + ζ=1 可同时匹配真实后验的均值与方差（偏差约
+        −0.011/+0.007，在蒙特卡洛/离散化误差内），印证偏差确源于
+        DPS 的 delta 近似而非 SDE 采样器；
+      - mean_t 低估梯度约 2.9 倍，使"甜蜜点"从 ζ=1 左移到 ζ≈0.7 且残差
+        偏差更大；
+      - 而 ζ>1 时均值偏差变差在精确得分对照下同样出现，属似然被过度
+         tempering 的固有属性（均值被进一步拉向观测 y），不能全部归咎于
+        mean_t 缩放。详见结论段。
     """
     np.random.seed(seed)
     h = T / N_steps
@@ -220,37 +230,6 @@ print("""
   zeta大 -> 强数据一致性（低多样性）-> 类似MAP
   zeta小 -> 强先验（高多样性）-> 类似无条件采样
 """)
-# ===== 保存数值结果 =====
-import json
-
-def _to_native(obj):
-    """递归转换numpy/torch类型为Python原生类型"""
-    import numpy as np
-    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
-    if isinstance(obj, (np.integer,)): return int(obj)
-    if isinstance(obj, (np.floating,)): return float(obj)
-    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
-    try:
-        import torch
-        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
-    except: pass
-    return obj
-
-results_summary = {
-    "zeta_values": zeta_values,
-    "真实后验_均值": round(float(post_mean_true), 4),
-    "真实后验_标准差": round(float(post_std_true), 4),
-    "真实后验_一致性": round(float(true_consistency), 4),
-    "真实后验_多样性": round(float(true_diversity), 4),
-    "DPS采样_一致性": [round(float(c), 4) for c in consistency_list],
-    "DPS采样_多样性": [round(float(d), 4) for d in diversity_list],
-}
-results_summary = _to_native(results_summary)
-with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
-    json.dump(results_summary, f, ensure_ascii=False, indent=2)
-print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
-
 
 # 逆问题设置
 A_val = 1.0
@@ -341,6 +320,37 @@ print(f"\n真实后验 E|X−y|（与DPS曲线同口径） = {true_consistency:.
 print(f"  提示：若误用 |E[X]−y| = {np.abs(post_mean_true - y_obs):.4f}，"
       f"由Jensen不等式两者不等（前者>>后者），会扭曲图2参考点位置")
 
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "zeta_values": zeta_values,
+    "真实后验_均值": round(float(post_mean_true), 4),
+    "真实后验_标准差": round(float(post_std_true), 4),
+    "真实后验_一致性": round(float(true_consistency), 4),
+    "真实后验_多样性": round(float(true_diversity), 4),
+    "DPS采样_一致性": [round(float(c), 4) for c in consistency_list],
+    "DPS采样_多样性": [round(float(d), 4) for d in diversity_list],
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
+
 fig, ax = plt.subplots(1, 1, figsize=(8, 5))
 ax.plot(diversity_list, consistency_list, 'ro-', markersize=8, lw=2, label='DPS采样')
 for i, zeta in enumerate(zeta_values):
@@ -357,8 +367,8 @@ ax.set_xlabel('多样性（采样标准差）', fontsize=12)
 ax.set_ylabel(r'数据一致性（$|x-y|$均值）', fontsize=12)
 ax.set_title('质量-多样性权衡曲线（13.4.3节）', fontsize=13)
 ax.grid(alpha=0.3)
-ax.legend(fontsize=9, loc='upper right')
-ax.annotate('右下: 弱引导(高多样性, 低一致性)\n左上: 强引导(低多样性, 高一致性)\n★绿色星形: 真实后验（解析）\n对应第2-3章的正则化参数lambda',
+ax.legend(fontsize=9, loc='lower right')
+ax.annotate('右上: 弱引导(高多样性, 低一致性)\n左下: 强引导(低多样性, 高一致性)\n★绿色星形: 真实后验（解析）\n对应第2-3章的正则化参数lambda',
             xy=(0.05, 0.95), xycoords='axes fraction', fontsize=9, va='top',
             bbox=dict(boxstyle='round,pad=0.3', facecolor='#dfe6e9', alpha=0.8))
 
@@ -369,7 +379,7 @@ plt.close()
 print(f"图2已保存: {fig_path2}")
 
 print("\n" + "=" * 60)
-print("实验13.4-1 完成!")
+print("实验13.4-2 完成!")
 print("=" * 60)
 print("""
 关键结论:
@@ -387,8 +397,11 @@ print("""
        小zeta（如0.3）反而高估std（先验未被充分约束），大zeta（≥2）系统性低估
      - 均值偏差呈非单调：zeta≈0.7时最小（约−0.038），
        继续增大zeta（→1.0/2.0/5.0）偏差反而变差（−0.053/−0.070/−0.075）
-     - 这一非单调性可能与dps_posterior_sample中mean_t缩放在GM先验下
-       约3倍的近似误差有关（详见该函数docstring）
+     - 对照实验（精确后验得分替换引导项）定位成因：精确得分+ζ=1可
+       同时匹配真实后验均值与方差（偏差约−0.011/+0.007，在MC/离散化
+       误差内）→ 偏差源于DPS的delta近似而非SDE采样器；mean_t低估梯度
+       约2.9倍使甜蜜点从ζ=1左移到ζ≈0.7；而ζ>1的偏差变差在精确得分对照
+       下同样出现，属似然被过度tempering的固有属性，非mean_t近似所致
    - 这印证13.3.2节：Laplace近似（delta函数近似）系统性低估后验方差
 
 3. 似然梯度公式说明
@@ -396,7 +409,9 @@ print("""
    - 原因：score本身对x_t有强依赖，完整梯度包含这一贡献
    - 数值验证（t=0.9，双峰GM先验）：真实dx0_hat/dx_t≈0.049，mean_t≈0.017，
      1/mean_t≈58.8——量级方向一致，但mean_t是量级近似，差约2.9倍
-   - 注意：对单峰高斯先验该缩放精确成立；对GM先验仅量级一致
+   - 注意：对单峰单位方差高斯先验（s=1）该缩放精确成立；对GM先验仅量级一致
+   - 复核补充：用精确后验得分作引导时ζ=1即可同时匹配均值与方差，
+     证实本实验观察到的失配是DPS近似（delta假设）的固有偏差
 
 4. 实际启示
    - zeta=0: 无条件采样（忽略观测），std远大于真后验（高估）

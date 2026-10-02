@@ -1,0 +1,75 @@
+{
+  "DPS_orig(0.01阻尼+clamp, ζ=1)": {
+    "method": "DPS_orig(0.01阻尼+clamp, ζ=1)",
+    "mean_abs_err": 0.485,
+    "std_abs_err": 0.1346,
+    "n": 50
+  },
+  "DPS_beta ζ=0.1": {
+    "method": "DPS_beta ζ=0.1",
+    "mean_abs_err": 0.0885,
+    "std_abs_err": 0.073,
+    "n": 50
+  },
+  "DPS_beta ζ=0.5": {
+    "method": "DPS_beta ζ=0.5",
+    "mean_abs_err": 0.062,
+    "std_abs_err": 0.0446,
+    "n": 50
+  },
+  "DPS_beta ζ=0.2": {
+    "method": "DPS_beta ζ=0.2",
+    "mean_abs_err": 0.074,
+    "std_abs_err": 0.0556,
+    "n": 50
+  },
+  "DPS_beta ζ=0.3": {
+    "method": "DPS_beta ζ=0.3",
+    "mean_abs_err": 0.068,
+    "std_abs_err": 0.0492,
+    "n": 50
+  },
+  "DPS_beta ζ=0.7": {
+    "method": "DPS_beta ζ=0.7",
+    "mean_abs_err": 16.5909,
+    "std_abs_err": 8.6686,
+    "n": 50
+  },
+  "DPS_beta ζ=1.0": {
+    "method": "DPS_beta ζ=1.0",
+    "mean_abs_err": 153825.9332,
+    "std_abs_err": 86114.124,
+    "n": 50
+  },
+  "DPS_beta ζ=1.0 确定性读出": {
+    "method": "DPS_beta ζ=1.0 确定性读出",
+    "mean_abs_err": 153772.1087,
+    "std_abs_err": 86083.9923,
+    "n": 50
+  },
+  "MMSE后验均值(理论最优)": {
+    "method": "MMSE",
+    "mean_abs_err": 0.0364,
+    "std_abs_err": 0.0266,
+    "n": 50,
+    "后验std均值(参考下限)": 0.0498
+  },
+  "DOC原版": {
+    "method": "DOC",
+    "mean_abs_err": 0.1275,
+    "std_abs_err": 0.0946,
+    "n": 50
+  },
+  "DPS_beta ζ=1 (T=200)": {
+    "method": "DPS_beta ζ=1 (T=200)",
+    "mean_abs_err": NaN,
+    "std_abs_err": NaN,
+    "n": 20
+  },
+  "DOC (T=200)": {
+    "method": "DOC (T=200)",
+    "mean_abs_err": 0.4254,
+    "std_abs_err": 0.2676,
+    "n": 20
+  }
+}

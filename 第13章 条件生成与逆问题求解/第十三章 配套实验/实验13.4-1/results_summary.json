@@ -1,0 +1,13 @@
+{
+  "model": "CompVis/stable-diffusion-v1-4",
+  "prompt": "a cat wearing sunglasses, high quality",
+  "seed": 42,
+  "num_inference_steps": 25,
+  "guidance_scales": [
+    1,
+    3,
+    7.5,
+    15
+  ],
+  "note": "CFG引导对比实验，需要GPU+Diffusers运行；定性结论以对比图为准：s增大→图文一致性增强、色彩更饱和，s=1为纯条件采样（无CFG增强）"
+}

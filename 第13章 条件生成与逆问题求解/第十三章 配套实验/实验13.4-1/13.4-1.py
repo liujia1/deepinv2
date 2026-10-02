@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-实验13.4-3：Diffusers库基础与CFG
+实验13.4-1：Diffusers库基础与CFG
 
 实验内容：
   - Diffusers库基础（Pipeline/UNet/Scheduler架构）
@@ -43,7 +43,7 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    SAVE_DIR = os.path.join(_gdrive, '实验13.4-3')
+    SAVE_DIR = os.path.join(_gdrive, '实验13.4-1')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
     try:
@@ -62,7 +62,7 @@ except ImportError:
 # ========================================================
 
 print("\n" + "=" * 60)
-print("实验13.4-3: Diffusers库基础与CFG")
+print("实验13.4-1: Diffusers库基础与CFG")
 print("=" * 60)
 print("知识点: Diffusers库架构, CFG核心公式, 引导强度guidance_scale")
 
@@ -161,7 +161,7 @@ else:
 """)
 
 print("\n" + "=" * 60)
-print("实验13.4-3 完成!")
+print("实验13.4-1 完成!")
 print("=" * 60)
 print("""
 关键结论:
@@ -199,8 +199,12 @@ def _to_native(obj):
     return obj
 
 results_summary = {
+    "model": "CompVis/stable-diffusion-v1-4",
+    "prompt": "a cat wearing sunglasses, high quality",
+    "seed": 42,
+    "num_inference_steps": 25,
     "guidance_scales": [1, 3, 7.5, 15],
-    "note": "CFG引导对比实验，需要GPU+Diffusers运行",
+    "note": "CFG引导对比实验，需要GPU+Diffusers运行；定性结论以对比图为准：s增大→图文一致性增强、色彩更饱和，s=1为纯条件采样（无CFG增强）",
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

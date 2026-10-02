@@ -76,7 +76,7 @@ plt.rcParams['axes.unicode_minus'] = False
 # ========================================================
 
 print("\n" + "=" * 60)
-print("实验13.4-5: ControlNet深度条件生成")
+print("实验13.4-4: ControlNet深度条件生成")
 print("=" * 60)
 print("知识点: ControlNet架构(13.4节), 条件控制, 预训练模型应用")
 
@@ -714,11 +714,13 @@ def _to_native(obj):
     return obj
 
 results_summary = {
-    "SSIM_ControlNet": round(float(ssim_ctrlnet), 4),
-    "SSIM_CFG": round(float(ssim_cfg), 4),
-    "边缘IoU_ControlNet": round(float(iou_ctrlnet), 4),
-    "边缘IoU_CFG": round(float(iou_cfg), 4),
+    "说明": "以下SSIM/边缘IoU均基于步骤2手工构造的受控模拟数组计算，仅用于教学示意，非ControlNet真实生成的测量值；真实GPU生成图因深度图与RGB跨模态、像素级SSIM无意义，仅做边缘热力图定性评估",
+    "SSIM_ControlNet_模拟": round(float(ssim_ctrlnet), 4),
+    "SSIM_CFG_模拟": round(float(ssim_cfg), 4),
+    "边缘IoU_ControlNet_模拟": round(float(iou_ctrlnet), 4),
+    "边缘IoU_CFG_模拟": round(float(iou_cfg), 4),
     "ControlNet可训练参数_M": 361,
+    "CFG可训练参数_M": 0,
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
