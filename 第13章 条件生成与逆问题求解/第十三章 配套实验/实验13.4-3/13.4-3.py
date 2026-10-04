@@ -196,7 +196,7 @@ def dps_sample(model, y, forward_op, shape, zeta=1.0, seed=None):
         外部超参 zeta 控制, 不依赖 sigma_y. 故函数签名中未保留 sigma_y.
         这与 Chung et al. (2022) 原论文"步长∝1/‖y-Ax̂₀‖"的自适应方案不同,
         故本实验中 zeta=1 并非论文原版公式的"标准强度";
-        实测本实现的最优 zeta≈15, 与 Chung 惯例(0.3-0.6)不可直接对比.
+        实测本实现的最优 zeta≈10~15(10与15基本持平), 与 Chung 惯例(0.3-0.6)不可直接对比.
 
     修正 eps 的符号推导:
       Chung 原代码: x_{t-1} -= scale · g_chung, 其中
@@ -211,10 +211,15 @@ def dps_sample(model, y, forward_op, shape, zeta=1.0, seed=None):
           曲线形状的干扰(与 13.4-2 做法一致)
 
     尺度提示: 单位归一化使修正幅度与残差 ‖r‖ 脱钩, zeta 的"有效尺度"
-        比 Chung 原版大得多——实测本实现的最优 zeta≈15(见扫描结果),
-        而非论文惯例的 0.3-0.6; 且末段修正量∝√(1-ᾱ_t)→0, 引导在采样
-        后期自动退场, 因此"大zeta过拟合噪声"的下降段在该实现中被
-        显著放缓(实测ζ=100仅比峰值低约4dB), 而非完全消失。
+        比 Chung 原版(ζ'·∇‖r‖)大得多——实测本实现的最优 zeta≈10~15
+        (见扫描结果, 10与15基本持平), 而非论文惯例的 0.3-0.6。
+
+    退场机制(修订): eps 空间修正 ζ·√(1-ᾱ_t)·ĝ 乘以均值步进系数
+        β_t/√(1-ᾱ_t) 后, √(1-ᾱ_t) 恰好完全相消, 引导对均值的实际位移
+        = ζ·β_t/√α_t·ĝ。末段衰减的真实来源是 β_t→β_min(=1e-4), 而非
+        "√(1-ᾱ_t)→0"; 相对注入噪声幅度√(posterior_var)≈√β_t, 引导强度
+        按 √β_t 衰减。因此"大zeta过拟合噪声"的下降段在该实现中被显著
+        放缓(实测ζ=100比峰值低约4.5dB), 而非完全消失。
     """
     model.eval()
     if seed is not None:
@@ -253,12 +258,19 @@ class IdentityOperator:
         return x
 
 
-def dps_sample_chung(model, y, forward_op, shape, zeta=1.0, sigma_y=0.3, seed=None):
+def dps_sample_chung(model, y, forward_op, shape, zeta_prime=0.3, seed=None):
     """
-    Chung et al. (2022) 原版 DPS 步长(对照组):
-        x_{t-1} ← x_{t-1} - zeta·σ̂_t²/(σ_y²·√ᾱ_t·‖r‖) · ∇_{x_t}‖r‖,  r = y-Ax̂₀
-    与上方归一化实现的区别: 修正幅度含 1/‖r‖ 自适应因子与 σ̂_t²/σ_y² 尺度,
-    zeta 的数值含义与论文惯例(常用 0.3-0.6)一致。同样用 CRN 保证公平对比。
+    Chung et al. (2022) 原版 DPS 步长(对照组), 与论文/官方代码一致:
+        论文 Algorithm 1:  x_{t-1} ← x'_{t-1} − ζ_i·∇_{x_t}‖y−A(x̂₀)‖²
+        论文脚注: ζ_i = ζ'/‖y−A(x̂₀)‖  ⟹ 等价于 步长 = ζ'·∇‖r‖, r = y−Ax̂₀
+        官方代码('ps'类): x_t -= norm_grad * scale  (norm_grad=∇‖r‖, scale=常数)
+    即"常数系数 × 范数梯度": 系数不随 t 衰减, 无 σ̂_t²/σ_y² 尺度, 亦无额外
+    1/‖r‖ 归一化(∇‖r‖ 自身已含 1/‖r‖ 因子)。引导加在含噪的 x_prev 上
+    (噪声后), 与论文 Algorithm 1 的时机一致。
+    论文附录: ζ' 最佳范围 [0.1, 1.0](常用 0.3-0.6), 并报告 ζ'>5 出现
+    "放大噪声的饱和伪影"——本对照检验该行为在本任务上是否复现。
+    注意: zeta_prime 的数值含义仅对原版参数化成立, 与主曲线(单位归一化
+    实现)的 ζ 不可直接对比。同样用 CRN 保证公平对比。
     """
     model.eval()
     if seed is not None:
@@ -273,7 +285,7 @@ def dps_sample_chung(model, y, forward_op, shape, zeta=1.0, sigma_y=0.3, seed=No
         x0_hat = (x - sqrt_1mab_t * eps_pred) / sqrt_ab_t
         r = y - forward_op(x0_hat)
         rnorm = torch.sqrt(torch.sum(r ** 2) + 1e-12)
-        grad = torch.autograd.grad(rnorm, x)[0]
+        grad = torch.autograd.grad(rnorm, x)[0]  # ∇‖r‖ (自身已含 1/‖r‖ 因子)
         with torch.no_grad():
             model_mean = sqrt_recip_alphas[t_idx] * (
                 x.detach() - beta_over_sqrt_1m_ab[t_idx] * eps_pred.detach()
@@ -282,8 +294,8 @@ def dps_sample_chung(model, y, forward_op, shape, zeta=1.0, sigma_y=0.3, seed=No
                 x_prev = model_mean + torch.sqrt(posterior_var[t_idx]) * torch.randn_like(x)
             else:
                 x_prev = model_mean
-            step = zeta * posterior_var[t_idx] / (sigma_y ** 2 * sqrt_ab_t * rnorm)
-            x = x_prev - step * grad
+            # 原版步长: 常数 ζ' × ∇‖r‖ (不随 t 衰减, 与官方代码 x_t -= norm_grad*scale 一致)
+            x = x_prev - zeta_prime * grad
     return x.clamp(-1, 1)
 
 
@@ -435,7 +447,7 @@ print("""
 """)
 
 zeta_values = [0.0, 0.3, 0.7, 1.0, 1.5, 3.0, 6.0, 10.0, 15.0, 30.0, 50.0, 100.0]
-zeta_values_chung = [0.1, 0.3, 0.7, 1.5, 3.0, 10.0, 30.0, 100.0]
+zeta_values_chung = [0.1, 0.3, 0.6, 1.0, 3.0, 5.0, 10.0, 30.0]  # 覆盖论文惯例[0.1,1.0]与"ζ'>5伪影"区间
 psnr_results = []
 psnr_results_chung = []
 
@@ -475,14 +487,14 @@ for zeta in zeta_values:
     print(f"  [归一化实现] zeta={zeta:5.1f}: PSNR={psnr:.2f} dB")
 
 print()
-for zeta in zeta_values_chung:
+for zeta_prime in zeta_values_chung:
     psnr_c = compute_psnr(
         dps_sample_chung(model, y_single, identity_op,
-                          shape=single_img.shape, zeta=zeta,
-                          sigma_y=sigma_y_denoise, seed=CRN_SEED),
+                          shape=single_img.shape, zeta_prime=zeta_prime,
+                          seed=CRN_SEED),
         single_img)
     psnr_results_chung.append(psnr_c)
-    print(f"  [Chung原版 ] zeta={zeta:5.1f}: PSNR={psnr_c:.2f} dB")
+    print(f"  [Chung原版 ] zeta'={zeta_prime:5.1f}: PSNR={psnr_c:.2f} dB")
 
 # 可视化: 复用上面已采样的 x_hat, 保证子图标题 PSNR 与图像严格对应
 # 拆分为两个独立文件: 数字重建图(2x6) + zeta-PSNR 曲线图(单独)
@@ -508,7 +520,7 @@ fig2, ax2 = plt.subplots(1, 1, figsize=(9, 6))
 ax2.plot(zeta_values, psnr_results, 'ro-', markersize=8, lw=2,
          label='单位归一化实现(本实验主曲线)')
 ax2.plot(zeta_values_chung, psnr_results_chung, 'bs--', markersize=8, lw=2,
-         label='Chung et al. (2022) 原版步长(对照)')
+         label=r"Chung et al. (2022) 原版步长 $\zeta'\!\cdot\!\nabla\Vert r\Vert$(对照)")
 ax2.axhline(psnr_obs, color='gray', linestyle=':', lw=1.5)
 # x用轴分数(贴右边缘)、y用数据坐标(贴着参照线上方):
 # 必须用blended变换, 否则y=psnr_obs+0.15会被transAxes当成16.5倍轴高,
@@ -543,7 +555,7 @@ bc_zeta = zeta_values_chung[bc_idx]
 bc_psnr = psnr_results_chung[bc_idx]
 ax2.plot(bc_zeta, bc_psnr, 'g*', markersize=16, zorder=5,
          markeredgecolor='darkgreen', markeredgewidth=0.5)
-ax2.annotate(rf'Chung对照最优 $\zeta$={bc_zeta:g}' + '\n' + rf'PSNR={bc_psnr:.2f}dB',
+ax2.annotate(rf"Chung对照最优 $\zeta'$={bc_zeta:g}" + '\n' + rf'PSNR={bc_psnr:.2f}dB',
              xy=(bc_zeta, bc_psnr),
              xytext=(bc_zeta * 0.25, bc_psnr - 4.5),
              fontsize=9, ha='left',
@@ -560,19 +572,19 @@ print("\n" + "=" * 60)
 print("实验13.4-3 完成!")
 print("=" * 60)
 print(f"""
-关键结论(基于实测数据, 扫描范围ζ∈[0,100], CRN seed={CRN_SEED}):
+关键结论(基于实测数据, 归一化ζ∈[0,100] / 原版ζ'∈[0.1,30], CRN seed={CRN_SEED}):
 1. zeta-重建质量权衡（13.4.3节）
    - zeta=0: 无条件采样, PSNR最低({psnr_results[0]:.1f}dB), 甚至低于含噪观测({psnr_obs:.1f}dB)
    - 归一化实现: PSNR随zeta先升后缓降, 最优zeta={best_zeta:g}(PSNR={best_psnr:.1f}dB),
      zeta=100时回落至{psnr_results[-1]:.1f}dB(较峰值约-{best_psnr - psnr_results[-1]:.1f}dB)——
      "倒U形"存在但下降段平缓, 且最优值远大于论文惯例的0.3-0.6:
      单位归一化使修正幅度与‖r‖脱钩, zeta的有效尺度被整体推大;
-     又因末段修正量∝√(1-ᾱ_t)→0, 引导自动退场,
-     "过拟合噪声"的下降段被结构性放缓(非完全消失)。
-   - Chung原版步长对照: 在[0.1,100]全程单调上升, 扫描范围内未出现下降段
-     (zeta={bc_zeta:g}时PSNR={bc_psnr:.1f}dB, 甚至高于归一化实现峰值),
-     说明"陡峭倒U"在本任务(单图、恒等去噪、强先验MNIST)中并非普适形态,
-     峰值位置与下降段深浅由步长参数化方式决定。
+     引导对均值的位移=ζ·β_t/√α_t·ĝ(eps空间修正中的√(1-ᾱ_t)与步进系数相消),
+     随β_t→β_min末段自动退场, "过拟合噪声"的下降段被结构性放缓(非完全消失)。
+   - Chung原版步长(ζ'·∇‖r‖, 系数不随t衰减)对照: 最优ζ'={bc_zeta:g}
+     (PSNR={bc_psnr:.1f}dB), 其数值尺度应与论文惯例[0.1,1.0]区间对照,
+     而非与归一化实现的ζ互比; 若ζ'>5段PSNR回落, 即复现论文记录的
+     "饱和伪影/噪声放大"——峰值位置与下降段深浅由步长参数化方式决定。
 2. 实践要点
    - zeta的"最优区间"依赖引导步长的参数化方式, 不可照搬论文惯例数值,
      必须在本实现自己的尺度上扫描定位峰值(先粗扫再细扫)
@@ -607,16 +619,25 @@ results_summary = {
     "最优zeta_归一化实现": round(float(best_zeta), 2),
     "最优PSNR_归一化实现": round(float(best_psnr), 2),
     "对照_Chung原版": {
-        "zeta_values": zeta_values_chung,
-        "PSNR_各zeta": {f"zeta={z}": round(float(p), 2) for z, p in zip(zeta_values_chung, psnr_results_chung)},
-        "最优zeta": round(float(bc_zeta), 2),
+        "步长形式": "ζ'·∇‖r‖ (Algorithm 1 + 官方代码, 系数不随t衰减)",
+        "zeta_prime_values": zeta_values_chung,
+        "PSNR_各zeta_prime": {f"zeta'={z}": round(float(p), 2) for z, p in zip(zeta_values_chung, psnr_results_chung)},
+        "最优zeta_prime": round(float(bc_zeta), 2),
         "最优PSNR": round(float(bc_psnr), 2),
     },
     "含噪观测PSNR参照": round(float(psnr_obs), 2),
     "sigma_y": sigma_y_denoise,
     "CRN_seed": CRN_SEED,
     "观测噪声seed": 2026,
-    "曲线形态结论": "归一化实现呈平缓倒U(峰ζ≈15, ζ=100回落约4dB); Chung对照在[0.1,100]单调上升未见下降段; 陡峭倒U非本任务普适形态, 峰值位置与下降段深浅由步长参数化决定",
+    "曲线形态结论": (
+        f"归一化实现呈平缓倒U, 最优ζ={best_zeta:g}(PSNR={best_psnr:.2f}, 10~15为平台), "
+        f"ζ=100回落至{psnr_results[-1]:.2f}; "
+        f"Chung原版对照(ζ'·∇‖r‖,系数不随t衰减)最优ζ'={bc_zeta:g}(PSNR={bc_psnr:.2f}), "
+        f"位于论文惯例区间[0.1,1.0]下缘; ζ'>5后PSNR持续回落(ζ'=5/10/30分别为"
+        f"{psnr_results_chung[5]:.2f}/{psnr_results_chung[6]:.2f}/{psnr_results_chung[7]:.2f}dB), "
+        "复现论文'ζ>5出现放大噪声的饱和伪影'记录; 两参数化最优权重相差约两个数量级, "
+        "峰值位置与下降段深浅由步长参数化决定"
+    ),
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

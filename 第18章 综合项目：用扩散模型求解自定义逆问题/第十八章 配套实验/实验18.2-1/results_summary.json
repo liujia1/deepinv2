@@ -1,9 +1,9 @@
 {
   "experiment": "实验18.2-1 自定义前向算子与伴随验证",
   "environment": {
-    "device": "cuda",
-    "torch_version": "2.11.0+cu128",
-    "deepinv_version": "0.4.2"
+    "device": "cpu",
+    "torch_version": "2.11.0+cpu",
+    "deepinv_version": "0.4.0"
   },
   "scene": {
     "image_size": [
@@ -24,19 +24,27 @@
     }
   },
   "adjoint_relative_error": {
-    "downsampling_factor2": 2.907293731075046e-07,
-    "multiview_manual_mean": 0.011483757559489636,
-    "multiview_manual_std": 0.008255571876078331,
-    "multiview_manual_adjointness_test_raw": 0.9332122802734375,
-    "multiview_autograd": 6.803633840373458e-07,
-    "blur": 1.1481321201101393e-07,
-    "composite_blur_downsample": 1.7830920015881454e-07,
-    "mri": 9.678298161650855e-08
+    "downsampling_factor2": 2.0203872612804297e-07,
+    "multiview_manual_mean": 0.005113837464525357,
+    "multiview_manual_std": 0.003938050819300627,
+    "multiview_manual_adjointness_test_raw": 1.6325225830078125,
+    "multiview_autograd": 6.187148749074862e-08,
+    "blur": 8.353174641371825e-08,
+    "composite_blur_downsample": 4.3988576767791784e-07,
+    "mri": 2.093729296156315e-07
   },
   "noise_mae": {
-    "gaussian": 0.03960438445210457,
-    "poisson": 0.12620490789413452,
-    "poisson_gaussian": 0.130599245429039
+    "gaussian": 0.040080610662698746,
+    "poisson": 0.12398243695497513,
+    "poisson_gaussian": 0.13198912143707275
+  },
+  "operator_norm": {
+    "downsampling_factor2_compute_norm": 1.0000008344650269
+  },
+  "composition_order_check": {
+    "composite_vs_manual_max_rel_diff": 0.0,
+    "pass_threshold": 1e-05,
+    "passed": true
   },
   "output_files": [
     "step2_multiview_forward.png",

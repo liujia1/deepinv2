@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-实验13.6-2：Diffusers img2img管线
+实验13.6-3：Diffusers img2img管线
 
 实验内容：
   - 使用Diffusers的StableDiffusionImg2ImgPipeline
+  - 同一初始图 + 三个不同prompt（strength=0.75固定），展示文本条件的作用
   - img2img与逆问题求解的本质区别：z_0已知完整 vs y有信息损失
   - 扩散模型引入外部信息的多种方式：初始化位置、似然梯度、CFG
 
@@ -41,7 +42,7 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    SAVE_DIR = os.path.join(_gdrive, '实验13.6-2')
+    SAVE_DIR = os.path.join(_gdrive, '实验13.6-3')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
     try:
@@ -60,7 +61,7 @@ except ImportError:
 # ========================================================
 
 print("\n" + "=" * 60)
-print("实验13.6-2: Diffusers img2img管线")
+print("实验13.6-3: Diffusers img2img管线")
 print("=" * 60)
 print("知识点: img2img与逆问题求解的本质区别, 扩散模型统一框架")
 
@@ -108,13 +109,15 @@ if HAS_DIFFUSERS and device == "cuda":
         init_image_pil = None
         try:
             from PIL import Image
-            import urllib.request
-            url = "https://raw.githubusercontent.com/CompVis/stable-diffusion/main/assets/stable-samples/img2img/sketch-mountains-input.jpg"
-            urllib.request.urlretrieve(url, os.path.join(SAVE_DIR, "init_image.jpg"))
-            init_image_pil = Image.open(os.path.join(SAVE_DIR, "init_image.jpg")).convert("RGB")
+            _init_path = os.path.join(SAVE_DIR, "init_image.jpg")
+            if not os.path.exists(_init_path):
+                import urllib.request
+                url = "https://raw.githubusercontent.com/CompVis/stable-diffusion/main/assets/stable-samples/img2img/sketch-mountains-input.jpg"
+                urllib.request.urlretrieve(url, _init_path)
+            init_image_pil = Image.open(_init_path).convert("RGB")
             init_image_pil = init_image_pil.resize((512, 512))
         except Exception as e:
-            print(f"无法下载初始图像: {e}")
+            print(f"无法获取初始图像: {e}")
 
         if init_image_pil is not None:
             prompts = [
@@ -130,6 +133,7 @@ if HAS_DIFFUSERS and device == "cuda":
                     image=init_image_pil,
                     strength=0.75,
                     guidance_scale=7.5,
+                    generator=torch.Generator(device=device).manual_seed(42),
                 ).images[0]
                 axes[idx].imshow(img)
                 axes[idx].axis('off')
@@ -166,7 +170,7 @@ img2img与逆问题求解器的对比（13.6节）：
 """)
 
 print("\n" + "=" * 60)
-print("实验13.6-2 完成!")
+print("实验13.6-3 完成!")
 print("=" * 60)
 print("""
 关键结论:
@@ -197,8 +201,23 @@ def _to_native(obj):
     return obj
 
 results_summary = {
-    "note": "img2img管线实验，需要GPU+Diffusers运行",
+    "note": "定性视觉对比实验（无量化指标）。本图存档（img2img闭环对比.png）生成于2026-07-07，"
+             "当时未固定随机种子；当前代码已固定seed=42，重跑会得到同样风格规律但细节不同的新样本。",
+    "模型": "runwayml/stable-diffusion-v1-5 (StableDiffusionImg2ImgPipeline, fp16)",
+    "初始图": "sketch-mountains-input.jpg (CompVis官方示例, resize到512x512)",
+    "prompts": [
+        "a beautiful landscape painting of mountains, oil painting style",
+        "a photorealistic photo of mountains, sunny day",
+        "a sketch of mountains with pencil",
+    ],
+    "strength": 0.75,
+    "guidance_scale": 7.5,
+    "seed": 42,
+    "num_inference_steps": "默认50步，strength=0.75对应跳过前13步加噪、从剩余37步开始逆向去噪",
     "对比": "img2img与逆问题求解器(DPS/DiffPIR)的本质区别",
+    "观察": "三幅图共享初始图的构图骨架（山体/河流色块布局），风格随prompt变化；"
+            "但'photorealistic'面板未真正照片化——strength=0.75下初始色粉笔画的色彩/平涂风格主导输出，"
+            "文本只能改变纹理细节，这是img2img'初始化位置约束'的固有体现。",
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

@@ -7,11 +7,15 @@
   扩散后验采样：同一训练好的模型可处理多种逆问题
 
 实验内容：
-  - 同一训练好的DPS去噪模型
-  - 应用到去噪、去模糊、超分三种不同逆问题
+  - 同一个先验模型（此处以解析score表示）
+  - 应用到去噪、去模糊、非线性退化三种不同逆问题
   - 验证零样本迁移能力
 
 注意：本实验为1D演示版本，避免GPU依赖。
+说明：1D高斯混合先验的score存在解析解，故本实验直接使用解析score
+      替代"训练好的DDPM网络"（二者在数学上等价地参数化同一个先验），
+      从而能在无需训练的前提下精确演示"同一先验模型零样本迁移到多种逆问题"。
+      图像任务中的神经网络先验不具备此处的精确后验可解条件。
 """
 
 import sys
@@ -193,6 +197,31 @@ def dps_posterior_sample(y_obs, A_func, A_prime_func, sigma_y, zeta=1.0, N_parti
     return x
 
 
+# ---- 精确后验基准（仅1D可解：网格数值积分） ----
+def exact_posterior_stats(y_obs, A_func, sigma_y, x_lo=-8.0, x_hi=8.0, n_grid=200_001):
+    """数值计算贝叶斯后验 p(x|y) ∝ p(x)·N(y;A(x),σ_y²) 的统计量。
+    用于核对DPS采样的校准度；图像任务中无此解析基准。"""
+    xg = np.linspace(x_lo, x_hi, n_grid)
+    q = gm1d_pdf(xg) * np.exp(-0.5 * ((y_obs - A_func(xg)) / sigma_y) ** 2)
+    q /= np.trapz(q, xg)
+    mean = np.trapz(xg * q, xg)
+    std = np.sqrt(np.trapz((xg - mean) ** 2 * q, xg))
+    cdf = np.concatenate([[0.0], np.cumsum(0.5 * (q[1:] + q[:-1]) * np.diff(xg))])
+    cdf /= cdf[-1]
+    ci_lo = xg[np.searchsorted(cdf, 0.025)]
+    ci_hi = xg[np.searchsorted(cdf, 0.975)]
+    p_right = np.trapz(q[xg >= 1.0], xg[xg >= 1.0])
+    return {"均值": mean, "标准差": std, "CI2.5%": ci_lo, "CI97.5%": ci_hi, "P(x>=1)": p_right}
+
+
+def exact_posterior_pdf(x_eval, y_obs, A_func, sigma_y, x_lo=-8.0, x_hi=8.0, n_grid=200_001):
+    """在x_eval处给出精确后验密度（归一化常数由细网格积分得到），用于绘图叠加。"""
+    xg = np.linspace(x_lo, x_hi, n_grid)
+    qg = gm1d_pdf(xg) * np.exp(-0.5 * ((y_obs - A_func(xg)) / sigma_y) ** 2)
+    Z = np.trapz(qg, xg)
+    return gm1d_pdf(x_eval) * np.exp(-0.5 * ((y_obs - A_func(x_eval)) / sigma_y) ** 2) / Z
+
+
 # ---- 任务1：去噪 (A=I) ----
 print("\n任务1：去噪 (A=I)")
 print("  前向算子: A(x) = x")
@@ -230,6 +259,19 @@ samples_nonlinear = dps_posterior_sample(y_nonlinear, lambda x: np.tanh(2 * x),
                                         sigma_y=0.3, zeta=0.5, seed=42)
 print(f"  后验采样: 均值={np.mean(samples_nonlinear):.3f}, 标准差={np.std(samples_nonlinear):.3f}")
 
+# ---- 精确后验基准对照 ----
+exact_denoise = exact_posterior_stats(y_denoise, lambda x: x, 0.3)
+exact_blur = exact_posterior_stats(y_blur, lambda x: 0.7 * x, 0.3)
+exact_nonlinear = exact_posterior_stats(y_nonlinear, lambda x: np.tanh(2 * x), 0.3)
+print("\n精确后验基准（网格数值积分） vs DPS：")
+for _name, _ex, _sm in [("任务1 去噪    ", exact_denoise, samples_denoise),
+                        ("任务2 去模糊  ", exact_blur, samples_blur),
+                        ("任务3 非线性  ", exact_nonlinear, samples_nonlinear)]:
+    print(f"  {_name}: 精确 均值={_ex['均值']:.3f} 标准差={_ex['标准差']:.3f} "
+          f"95%CI=[{_ex['CI2.5%']:.2f},{_ex['CI97.5%']:.2f}] P(x>=1)={_ex['P(x>=1)']:.3f}")
+    print(f"             DPS 均值={_sm.mean():.3f} 标准差={_sm.std():.3f} "
+          f"{'':9s} P(x>=1)={np.mean(_sm >= 1):.3f}")
+
 
 # ============================================================
 # 步骤2：不确定性量化
@@ -241,8 +283,9 @@ print("=" * 60)
 print("""
 不确定性量化（13.6节）：
   传统MAP: 给出单一最优解
-  扩散后验采样: 给出后验分布的样本，可以计算均值/方差/置信区间
-  示例: 同一观测下，后验采样给出多解，反映先验的多峰性
+  扩散后验采样: 给出后验分布的样本，可以计算均值/方差/分位数可信区间
+  示例: 本观测(y=0.5,σ=0.3)信息充分，后验为单峰集中分布；
+        只有当观测位于先验两峰之间且噪声较大时，后验才会保留多峰结构
 """)
 
 # 多次采样，统计均值和方差
@@ -256,13 +299,16 @@ for i in range(n_runs):
 
 all_means = [np.mean(s) for s in denoise_samples_list]
 all_stds = [np.std(s) for s in denoise_samples_list]
-print(f"\n{n_runs}次后验采样的均值: {all_means}")
+print(f"\n{n_runs}次后验采样的均值: {[round(m, 4) for m in all_means]}")
 print(f"均值: {np.mean(all_means):.3f} ± {np.std(all_means):.3f}")
 print(f"标准差: {np.mean(all_stds):.3f} ± {np.std(all_stds):.3f}")
-print(f"\n这反映了后验采样的'不确定性'：")
-print(f"  - 平均不确定性 (标准差) ~ {np.mean(all_stds):.3f}")
-print(f"  - 多次采样的差异 (标准误) ~ {np.std(all_means):.3f}")
-print(f"  - 可以构建置信区间: 95% CI = [{np.mean(all_means)-1.96*np.std(all_means):.3f}, {np.mean(all_means)+1.96*np.std(all_means):.3f}]")
+pooled = np.concatenate(denoise_samples_list)
+ci_lo, ci_hi = np.percentile(pooled, [2.5, 97.5])
+print(f"\n这里包含两类性质不同的不确定性，务必区分：")
+print(f"  - 后验本身的不确定性（单次采样平均标准差）~ {np.mean(all_stds):.3f}")
+print(f"    95% 后验可信区间（样本分位数）= [{ci_lo:.3f}, {ci_hi:.3f}]")
+print(f"  - 蒙特卡洛估计误差（{n_runs}次运行均值的标准误）~ {np.std(all_means):.3f}")
+print(f"    它仅来自有限粒子数(每次5000)，粒子越多越小，不是后验置信区间")
 
 # 可视化
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
@@ -276,6 +322,13 @@ axes[0].hist(samples_blur, bins=60, density=True, alpha=0.5, color='red',
 axes[0].hist(samples_nonlinear, bins=60, density=True, alpha=0.5, color='green',
              range=(-6, 6), label='非线性 A=tanh(2x)')
 axes[0].plot(x_hist, gm1d_pdf(x_hist), 'k--', lw=2, alpha=0.7, label='先验 p(x)')
+# 叠加各任务精确后验（同色细线），直观核对直方图校准度
+axes[0].plot(x_hist, exact_posterior_pdf(x_hist, y_denoise, lambda x: x, 0.3),
+             color='blue', lw=1.1, alpha=0.9)
+axes[0].plot(x_hist, exact_posterior_pdf(x_hist, y_blur, lambda x: 0.7 * x, 0.3),
+             color='red', lw=1.1, alpha=0.9)
+axes[0].plot(x_hist, exact_posterior_pdf(x_hist, y_nonlinear, lambda x: np.tanh(2 * x), 0.3),
+             color='green', lw=1.1, alpha=0.9, label='精确后验（同色细线）')
 axes[0].set_xlabel('x', fontsize=12)
 axes[0].set_ylabel('概率密度', fontsize=12)
 axes[0].set_title('(a) 同一模型处理三种不同逆问题', fontsize=13)
@@ -289,9 +342,8 @@ for i, samples in enumerate(denoise_samples_list):
 axes[1].plot(x_hist, gm1d_pdf(x_hist), 'k--', lw=2, alpha=0.7, label='先验')
 axes[1].axvline(np.mean(all_means), color='red', linestyle='-', lw=2,
                 label=r'平均后验均值={:.2f}'.format(np.mean(all_means)))
-axes[1].axvspan(np.mean(all_means) - np.std(all_means),
-                np.mean(all_means) + np.std(all_means),
-                alpha=0.2, color='red', label=r'$\pm 1\sigma$区间')
+axes[1].axvspan(ci_lo, ci_hi, alpha=0.15, color='red',
+                label=f'95%可信区间[{ci_lo:.2f},{ci_hi:.2f}]')
 axes[1].set_xlabel('x', fontsize=12)
 axes[1].set_ylabel('概率密度', fontsize=12)
 axes[1].set_title(f'(b) 后验采样的不确定性（{n_runs}次独立运行）', fontsize=13)
@@ -348,6 +400,16 @@ print("""
      变得更模糊，后验对先验的多峰结构（均值-2.0/1.0，权重0.3/0.7）更敏感
    - 这两个机制共同作用，导致任务3的不确定性最高、均值偏移最大
    - 呼应了"任意复杂先验"的优势：扩散后验采样能自动处理非线性A与复杂先验的交互
+
+4. 与精确后验基准的对照（本版新增，1D场景独有）
+   - 任务1/2：DPS与精确后验高度一致（均值/标准差偏差均<0.05），校准良好
+   - 任务3：精确后验为均值0.95、标准差0.77、P(x>=1)=0.38的严重右偏分布，
+     DPS给出0.66/0.59/0.23——定性趋势（最宽、右偏）正确，但定量上
+     分布偏窄、偏左，低估了不确定性。
+     机理：tanh饱和使似然在x>~1处形成平坦高原，经Tweedie传导的似然
+     引导在高原上信号微弱，粒子难以进入右尾；改变zeta(0.25~1.0)
+     只能移动偏差、无法消除。这是DPS近似的固有偏差，故任务3应
+     严格表述为"定性演示"，而任务1/2可视为忠实的后验采样。
 """)
 # ===== 保存数值结果 =====
 import json
@@ -367,11 +429,18 @@ def _to_native(obj):
     return obj
 
 results_summary = {
-    "去噪_A=I": {"均值": round(float(np.mean(samples_denoise)), 4), "标准差": round(float(np.std(samples_denoise)), 4)},
-    "去模糊_A=0.7x": {"均值": round(float(np.mean(samples_blur)), 4), "标准差": round(float(np.std(samples_blur)), 4)},
-    "非线性_A=tanh2x": {"均值": round(float(np.mean(samples_nonlinear)), 4), "标准差": round(float(np.std(samples_nonlinear)), 4)},
-    "多次采样_均值统计": {"均值": round(float(np.mean(all_means)), 4), "标准差": round(float(np.std(all_means)), 4)},
+    "去噪_A=I": {"均值": round(float(np.mean(samples_denoise)), 4), "标准差": round(float(np.std(samples_denoise)), 4),
+                 "95%CI(DPS分位数)": [round(float(ci_lo), 4), round(float(ci_hi), 4)],
+                 "P(x>=1)": round(float(np.mean(samples_denoise >= 1)), 4)},
+    "去模糊_A=0.7x": {"均值": round(float(np.mean(samples_blur)), 4), "标准差": round(float(np.std(samples_blur)), 4),
+                     "P(x>=1)": round(float(np.mean(samples_blur >= 1)), 4)},
+    "非线性_A=tanh2x": {"均值": round(float(np.mean(samples_nonlinear)), 4), "标准差": round(float(np.std(samples_nonlinear)), 4),
+                       "P(x>=1)": round(float(np.mean(samples_nonlinear >= 1)), 4)},
+    "多次采样_均值统计": {"均值": round(float(np.mean(all_means)), 4), "标准差(蒙特卡洛标准误)": round(float(np.std(all_means)), 4)},
     "多次采样_标准差统计": {"均值": round(float(np.mean(all_stds)), 4), "标准差": round(float(np.std(all_stds)), 4)},
+    "精确后验_去噪": {k: round(float(v), 4) for k, v in exact_denoise.items()},
+    "精确后验_去模糊": {k: round(float(v), 4) for k, v in exact_blur.items()},
+    "精确后验_非线性": {k: round(float(v), 4) for k, v in exact_nonlinear.items()},
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

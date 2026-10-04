@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-实验13.3-3：DPS去模糊与Inpainting零样本迁移
+实验13.6-2：DPS去模糊与Inpainting零样本迁移
 
 实验内容：
   - DPS求解图像去模糊逆问题
@@ -41,7 +41,7 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    SAVE_DIR = os.path.join(_gdrive, '实验13.3-3')
+    SAVE_DIR = os.path.join(_gdrive, '实验13.6-2')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
     try:
@@ -70,7 +70,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'使用设备: {device}')
 
 print("\n" + "=" * 60)
-print("实验13.3-3: DPS去模糊与Inpainting零样本迁移")
+print("实验13.6-2: DPS去模糊与Inpainting零样本迁移")
 print("=" * 60)
 print("知识点: 零样本迁移, 质量-多样性权衡")
 
@@ -396,8 +396,9 @@ print("""
 """)
 
 # zeta值对比：展示"质量-多样性权衡"的核心特性
-# 增大ζ值以获得更好的重建质量
-zeta_values = [1.0, 3.0, 5.0]
+# 本实现为"单位归一化梯度"参数化, 引导强度需较大ζ才见效(与13.4-3一致: 归一化实现最优ζ≈10)
+# 故ζ网格跨越"欠引导→良好重建": 1.0(低于观测) → 10.0/20.0(显著优于观测)
+zeta_values = [1.0, 10.0, 20.0]
 print(f"DPS引导权重对比: zeta = {zeta_values}")
 
 test_images = next(iter(test_loader))[0][:4].to(device)
@@ -459,15 +460,15 @@ for i in range(4):
     # 第1行：观测y
     axes1[0, i].imshow(((y_blur[i, 0] + 1) / 2).clamp(0, 1).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
     axes1[0, i].axis('off')
-    if i == 0: axes1[0, i].set_ylabel('观测y\n(模糊)', fontsize=11, rotation=0, labelpad=50)
+    if i == 0: axes1[0, i].text(-0.12, 0.5, '观测y\n(模糊)', transform=axes1[0, i].transAxes, rotation=0, ha='right', va='center', fontsize=11)
     
     # 第2-N行：不同zeta的采样结果
     for row_idx, (zeta_val, x_hat) in enumerate(zip(zeta_values, x_hat_blur_list)):
         axes1[row_idx+1, i].imshow(((x_hat[i, 0] + 1) / 2).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
         axes1[row_idx+1, i].axis('off')
         if i == 0:
-            axes1[row_idx+1, i].set_ylabel(f'ζ={zeta_val}\nPSNR={psnr_blur_list[row_idx]:.1f}dB', 
-                                           fontsize=10, rotation=0, labelpad=50)
+            axes1[row_idx+1, i].text(-0.12, 0.5, f'ζ={zeta_val}\nPSNR={psnr_blur_list[row_idx]:.1f}dB',
+                                     transform=axes1[row_idx+1, i].transAxes, rotation=0, ha='right', va='center', fontsize=10)
 
 plt.suptitle('DPS去模糊：质量-多样性权衡（零样本迁移）', fontsize=14, y=1.02)
 plt.tight_layout()
@@ -482,15 +483,15 @@ for i in range(4):
     # 第1行：观测y
     axes2[0, i].imshow(((y_inpaint[i, 0] + 1) / 2).clamp(0, 1).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
     axes2[0, i].axis('off')
-    if i == 0: axes2[0, i].set_ylabel('观测y\n(遮挡)', fontsize=11, rotation=0, labelpad=50)
+    if i == 0: axes2[0, i].text(-0.12, 0.5, '观测y\n(遮挡)', transform=axes2[0, i].transAxes, rotation=0, ha='right', va='center', fontsize=11)
     
     # 第2-N行：不同zeta的采样结果
     for row_idx, (zeta_val, x_hat) in enumerate(zip(zeta_values, x_hat_inpaint_list)):
         axes2[row_idx+1, i].imshow(((x_hat[i, 0] + 1) / 2).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
         axes2[row_idx+1, i].axis('off')
         if i == 0:
-            axes2[row_idx+1, i].set_ylabel(f'ζ={zeta_val}\nPSNR={psnr_inpaint_list[row_idx]:.1f}dB', 
-                                           fontsize=10, rotation=0, labelpad=50)
+            axes2[row_idx+1, i].text(-0.12, 0.5, f'ζ={zeta_val}\nPSNR={psnr_inpaint_list[row_idx]:.1f}dB',
+                                     transform=axes2[row_idx+1, i].transAxes, rotation=0, ha='right', va='center', fontsize=10)
 
 plt.suptitle('DPS Inpainting：质量-多样性权衡（零样本迁移）', fontsize=14, y=1.02)
 plt.tight_layout()
@@ -500,7 +501,7 @@ plt.close()
 print(f"\n图已保存: {fig_path2}")
 
 print("\n" + "=" * 60)
-print("实验13.3-3 完成!")
+print("实验13.6-2 完成!")
 print("=" * 60)
 print("""
 关键结论:
@@ -509,9 +510,11 @@ print("""
    - 无需针对特定逆问题重新训练——这是DPS的核心优势
 
 2. 质量-多样性权衡（对应13.4.3节）
-   - ζ小(0.1): 采样结果多样化，偏离观测（高多样性，低一致性）
-   - ζ大(1.0): 采样结果趋近观测，但可能发散（低多样性，高一致性）
-   - ζ=0.5是折中点，平衡质量与多样性
+   - 本实现用"单位归一化梯度"参数化, 引导强度需较大ζ才见效
+     (与13.4-3一致: 归一化实现最优ζ≈10, ζ≤1跑不赢含噪观测)
+   - ζ=1.0: 引导不足, 先验主导, 采样偏离观测(高多样性, PSNR低于观测)
+   - ζ=10.0/20.0: 数据一致性占主导, 去模糊与inpainting均显著超过观测(高一致性)
+   - 归一化参数化的下降段被β_t→β_min结构性放缓, 本ζ区间内未见明显过拟合回落
 
 3. DPS vs DiffPIR对比
    - DPS: 修正SDE轨迹，理论清晰（后验得分分解）

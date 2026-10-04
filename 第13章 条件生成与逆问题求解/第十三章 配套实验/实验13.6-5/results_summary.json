@@ -1,0 +1,11 @@
+{
+  "note": "定性视觉对比实验（无量化指标）。存档图（strength参数效应.png）生成于2026-07-07，其脚本为当时的13.6-3.py（本实验前身，逻辑与seed=42与当前版完全一致），同种子同依赖版本可复现。",
+  "模型": "runwayml/stable-diffusion-v1-5 (StableDiffusionImg2ImgPipeline, fp16)",
+  "初始图": "sketch-mountains-input.jpg (CompVis官方示例, resize到512x512)",
+  "prompt": "a beautiful sunset over mountains, oil painting style",
+  "strength_values": [0.1, 0.3, 0.5, 0.75, 0.95],
+  "guidance_scale": 7.5,
+  "seed": 42,
+  "num_inference_steps": "默认50步，strength=s对应跳过前 50-⌊50s⌋ 步、从噪声水平 t≈s·T 开始逆向去噪",
+  "观察": "strength=0.1/0.3几乎保留原图（含铅笔线条）；0.5保留构图骨架但色块被抹匀；0.75大幅重绘但仍同源构图；0.95几乎变成另一幅text-to-image图。prompt中的'sunset'直到strength≥0.75才真正出现，印证小strength下初始图约束压制文本约束。"
+}

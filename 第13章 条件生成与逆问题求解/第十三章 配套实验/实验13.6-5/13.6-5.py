@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-实验13.6-3：img2img strength参数效应
+实验13.6-5：img2img strength参数效应
 
 实验内容：
   - 使用同一初始图像 + 不同strength参数
@@ -41,7 +41,7 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    SAVE_DIR = os.path.join(_gdrive, '实验13.6-3')
+    SAVE_DIR = os.path.join(_gdrive, '实验13.6-5')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
     try:
@@ -60,7 +60,7 @@ except ImportError:
 # ========================================================
 
 print("\n" + "=" * 60)
-print("实验13.6-3: img2img strength参数效应")
+print("实验13.6-5: img2img strength参数效应")
 print("=" * 60)
 print("知识点: strength参数, 质量-多样性权衡的实践验证")
 
@@ -113,13 +113,15 @@ if HAS_DEPS and device == "cuda":
 
         init_image_pil = None
         try:
-            import urllib.request
-            url = "https://raw.githubusercontent.com/CompVis/stable-diffusion/main/assets/stable-samples/img2img/sketch-mountains-input.jpg"
-            urllib.request.urlretrieve(url, os.path.join(SAVE_DIR, "init_image.jpg"))
-            init_image_pil = Image.open(os.path.join(SAVE_DIR, "init_image.jpg")).convert("RGB")
+            _init_path = os.path.join(SAVE_DIR, "init_image.jpg")
+            if not os.path.exists(_init_path):
+                import urllib.request
+                url = "https://raw.githubusercontent.com/CompVis/stable-diffusion/main/assets/stable-samples/img2img/sketch-mountains-input.jpg"
+                urllib.request.urlretrieve(url, _init_path)
+            init_image_pil = Image.open(_init_path).convert("RGB")
             init_image_pil = init_image_pil.resize((512, 512))
         except Exception as e:
-            print(f"无法下载初始图像: {e}")
+            print(f"无法获取初始图像: {e}")
 
         if init_image_pil is not None:
             strengths = [0.1, 0.3, 0.5, 0.75, 0.95]
@@ -160,13 +162,14 @@ strength参数效应（13.6节）:
   strength=0.5: 平衡点
   strength=0.95: 几乎重新生成，多样性高
 
-  对应DPS的t_start:
-    DPS的t_start = int(strength * T)
-    t_start大 -> 起始噪声大 -> 多样性高、一致性低
+  加噪起点对应扩散时间步:
+    t_start ≈ int(strength * T)（前向过程加噪到的噪声水平）
+    注意这是img2img自身的机制，与DPS无关（DPS从纯噪声起步、靠似然梯度引导）
+    t_start大 -> 起始噪声大 -> 多样性高、与初始图一致性低
 """)
 
 print("\n" + "=" * 60)
-print("实验13.6-3 完成!")
+print("实验13.6-5 完成!")
 print("=" * 60)
 print("""
 关键结论:
@@ -179,6 +182,7 @@ print("""
    - DPS: zeta控制似然修正强度（约束对象：观测图像y）
    - CFG: s控制条件/无条件混合（约束对象：文本prompt）
    - img2img: strength控制加噪程度（约束对象：初始图像）
+     （strength大 -> 加噪到更高噪声水平t≈strength·T后再生成）
    - 三者本质上都是"先验强度 vs 条件强度"的tradeoff
    - 但需注意：zeta和strength约束的是图像层面的观测一致性，
      而CFG约束的是文本语义一致性，两者是独立的维度
@@ -201,8 +205,18 @@ def _to_native(obj):
     return obj
 
 results_summary = {
-    "note": "img2img strength参数效应实验，需要GPU+Diffusers运行",
+    "note": "定性视觉对比实验（无量化指标）。存档图（strength参数效应.png）生成于2026-07-07，"
+             "其脚本为当时的13.6-3.py（本实验前身，逻辑与seed=42与当前版完全一致），同种子同依赖版本可复现。",
+    "模型": "runwayml/stable-diffusion-v1-5 (StableDiffusionImg2ImgPipeline, fp16)",
+    "初始图": "sketch-mountains-input.jpg (CompVis官方示例, resize到512x512)",
+    "prompt": "a beautiful sunset over mountains, oil painting style",
     "strength_values": [0.1, 0.3, 0.5, 0.75, 0.95],
+    "guidance_scale": 7.5,
+    "seed": 42,
+    "num_inference_steps": "默认50步，strength=s对应跳过前 50-⌊50s⌋ 步、从噪声水平 t≈s·T 开始逆向去噪",
+    "观察": "strength=0.1/0.3几乎保留原图（含铅笔线条）；0.5保留构图骨架但色块被抹匀；"
+            "0.75大幅重绘但仍同源构图；0.95几乎变成另一幅text-to-image图。"
+            "prompt中的'sunset'直到strength≥0.75才真正出现，印证小strength下初始图约束压制文本约束。",
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

@@ -1,0 +1,16 @@
+{
+  "note": "定性视觉对比实验（无量化指标）。本图存档（img2img闭环对比.png）生成于2026-07-07，当时未固定随机种子；当前代码已固定seed=42，重跑会得到同样风格规律但细节不同的新样本。",
+  "模型": "runwayml/stable-diffusion-v1-5 (StableDiffusionImg2ImgPipeline, fp16)",
+  "初始图": "sketch-mountains-input.jpg (CompVis官方示例, resize到512x512)",
+  "prompts": [
+    "a beautiful landscape painting of mountains, oil painting style",
+    "a photorealistic photo of mountains, sunny day",
+    "a sketch of mountains with pencil"
+  ],
+  "strength": 0.75,
+  "guidance_scale": 7.5,
+  "seed": 42,
+  "num_inference_steps": "默认50步，strength=0.75对应跳过前13步加噪、从剩余37步开始逆向去噪",
+  "对比": "img2img与逆问题求解器(DPS/DiffPIR)的本质区别",
+  "观察": "三幅图共享初始图的构图骨架（山体/河流色块布局），风格随prompt变化；但'photorealistic'面板未真正照片化——strength=0.75下初始色粉笔画的色彩/平涂风格主导输出，文本只能改变纹理细节，这是img2img'初始化位置约束'的固有体现。"
+}

@@ -16,7 +16,11 @@ Step 5: ★自定义模糊核与MRI掩模算子 —— 将自定义退化集成�
 - 泊松-高斯复合噪声模型的可视化对比
 
 素材来源：MiniProject_DefiningOperator.ipynb、deepinv Physics API
-运行前提：无需GPU，CPU即可运行
+运行前提：无需 GPU，CPU 即可跑完全流程（设备自动选择：检测到 CUDA 时用 GPU，否则用 CPU）。
+  CPU 实测记录（2026-10-04，torch 2.11.0+cpu + deepinv 0.4.0）：全流程跑通，
+  内置算子伴随误差仍为 1e-7 量级、噪声 MAE 与 CUDA + deepinv 0.4.2 的记录偏差 ≤2%。
+  版本差异提示：deepinv 0.4.0 的 Blur 默认 valid padding，组合观测为 61×61；
+  0.4.2 下为 64×64。脚本按算子实际输出尺寸自适应，两版本结果均正确。
 """
 
 import os, sys, time
@@ -456,8 +460,9 @@ except (ImportError, AttributeError):
 
 # 3d. 算子范数
 print("\n--- 3d. 算子范数估计 ---")
+norm_down = None
 try:
-    norm_down = down_phys_step3.compute_norm(x_test)
+    norm_down = float(down_phys_step3.compute_norm(x_test))
     print(f"  下采样算子范数: {norm_down:.4f}")
 except Exception as e:
     print(f"  算子范数计算失败: {e}")
@@ -592,17 +597,22 @@ for i, (title, img) in enumerate(zip(titles, images)):
     axes[0, i].imshow(img[0].cpu().permute(1, 2, 0).clamp(0, 1))
     axes[0, i].set_title(title, fontsize=12)
     axes[0, i].axis('off')
-    
+
     if i > 0:
         residual = (img - y_clean)[0].cpu().permute(1, 2, 0)
-        axes[1, i].imshow(residual.clamp(-0.1, 0.1) + 0.5, vmin=0, vmax=1)
+        # 各噪声按自身残差 std 的 3 倍做对称归一化（中性灰=残差0）：
+        # 高斯 std≈0.05→±0.15，泊松类 std≈0.17→±0.5；
+        # 旧实现统一 clamp 到 ±0.1，泊松/复合噪声（残差可达±0.5）会大面积饱和丢信息
+        res_lim = max(3.0 * residual.std().item(), 1e-6)
+        axes[1, i].imshow((residual / (2.0 * res_lim) + 0.5).clamp(0, 1),
+                          vmin=0, vmax=1)
         mae_value = (images[i] - y_clean).abs().mean().item()
-        axes[1, i].set_title(f'残差 (MAE={mae_value:.4f})', fontsize=10)
-    else:
-        axes[1, i].text(0.5, 0.5, '(原始观测)', ha='center', va='center', fontsize=12)
+        axes[1, i].set_title(f'残差 (MAE={mae_value:.4f}, 显示±{res_lim:.2f})', fontsize=10)
     axes[1, i].axis('off')
 
-# 隐藏左下角的空位
+# 左下角放置无噪声观测（与上排首列一致）
+# 注意：不要在此处用 data 坐标先 text() 再 imshow()——imshow 会改变坐标范围，
+# 先前写的文字会被甩到坐标轴外（旧版本图最左侧的"(原始观测)"残影即源于此）
 axes[1, 0].imshow(y_clean[0].cpu().permute(1, 2, 0).clamp(0, 1))
 axes[1, 0].set_title('原始观测', fontsize=10)
 axes[1, 0].axis('off')
@@ -649,6 +659,8 @@ print("\n--- 5a. 自定义运动模糊核 ---")
 
 # 初始化所有flag，避免后续逻辑混乱
 has_blur = has_composite = has_mri = False
+# 组合顺序验证的最大相对误差（写入 JSON；组合部分跳过时保持 None）
+composite_order_rel_diff = None
 
 def create_motion_blur_kernel(length=15, angle=45):
     """创建运动模糊核"""
@@ -664,33 +676,8 @@ def create_motion_blur_kernel(length=15, angle=45):
     kernel = kernel / kernel.sum()
     return kernel
 
-# 创建两种模糊核
+# 创建运动模糊核（本实验只使用运动模糊；早期版本曾额外构造一个高斯核但从未被使用，已移除）
 motion_kernel = create_motion_blur_kernel(length=15, angle=30)
-# 尝试获取高斯核，fallback使用手动构造的单位冲激核（避免全零导致的问题）
-try:
-    # 使用新的API路径
-    try:
-        from deepinv.physics.functional import gaussian_blur as gauss_blur_func
-        gauss_kernel_np = gauss_blur_func(sigma=(2.0, 2.0)).numpy()
-    except ImportError:
-        # 兼容旧版本
-        if hasattr(dinv.physics.blur, 'gaussian_blur'):
-            import warnings
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                gauss_kernel_np = dinv.physics.blur.gaussian_blur(sigma=(2.0, 2.0)).numpy()
-        else:
-            raise AttributeError("gaussian_blur not available")
-except Exception:
-    # Fallback: 手动构造简单的高斯核或单位冲激核
-    size = 15
-    center = size // 2
-    gauss_kernel_np = np.zeros((1, 1, size, size))
-    # 使用单位冲激（中心为1，其余为0）作为最安全的fallback
-    gauss_kernel_np[0, 0, center, center] = 1.0
-    print("  [Warning] 使用单位冲激核作为gaussian_blur的fallback")
-
-gauss_kernel = torch.tensor(gauss_kernel_np, dtype=torch.float32)
 
 # 使用deepinv的Blur算子
 try:
@@ -741,6 +728,7 @@ if has_blur:
         abs_diff = (y_composite - y_manual).abs().max().item()
         y_scale = y_composite.abs().mean().item() + 1e-10
         order_diff = abs_diff / y_scale
+        composite_order_rel_diff = order_diff  # 供 results_summary.json 记录
         print(f"  组合顺序验证: 组合结果 vs 手动调用 最大相对误差 = {order_diff:.2e} (最大绝对误差 = {abs_diff:.2e})")
         if order_diff < 1e-5:
             print("  ✓ 组合顺序正确：D * K 确实对应 先应用K(模糊) 再应用D(下采样)")
@@ -1097,6 +1085,17 @@ results = {
         'gaussian': float(noise_gauss),
         'poisson': float(noise_poisson),
         'poisson_gaussian': float(noise_pg),
+    },
+    'operator_norm': {
+        # compute_norm 基于 power iteration 估计的谱范数（下采样 factor=2）；失败时为 null
+        'downsampling_factor2_compute_norm': norm_down,
+    },
+    'composition_order_check': {
+        # D*K 组合调用 vs 手动"先模糊后下采样"逐元素最大相对误差；阈值 1e-5
+        'composite_vs_manual_max_rel_diff': composite_order_rel_diff,
+        'pass_threshold': 1e-5,
+        'passed': (bool(composite_order_rel_diff < 1e-5)
+                  if composite_order_rel_diff is not None else None),
     },
     'output_files': saved_pngs + ['results_summary.json'],
 }

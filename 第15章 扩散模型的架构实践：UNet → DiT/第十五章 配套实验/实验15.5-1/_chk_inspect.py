@@ -41,7 +41,7 @@ for opt in ['adam', 'adamw']:
     first = negs[0] if negs else None
     print(f"  {opt}: 首次穿零epoch={first}, 负值轮数={len(negs)}, 负值区间示例={negs[:8]}...{negs[-3:] if negs else ''}")
     print(f"    diff@E10={diff[9]:+.6f} E14={diff[13]:+.6f} E20={diff[19]:+.6f} E30={diff[29]:+.6f} E50={diff[49]:+.6f} E100={diff[-1]:+.6f}")
-    js_ce = js['crossover_epoch_cosine_minus_constant'][opt.capitalize()]
+    js_ce = js['crossover_epoch_cosine_minus_constant'][{'adam': 'Adam', 'adamw': 'AdamW'}[opt]]
     print(f"    json记录交叉={js_ce} -> {'一致' if js_ce == first else '不一致!'}")
 
 print("\n=== 排名复算 ===")
