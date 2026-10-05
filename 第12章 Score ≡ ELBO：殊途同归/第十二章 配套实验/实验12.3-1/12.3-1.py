@@ -95,7 +95,8 @@ alpha_bars = torch.cumprod(alphas, dim=0)
 alpha_bars_prev = torch.cat([torch.ones(1, dtype=torch.float64), alpha_bars[:-1]])
 posterior_var = betas * (1 - alpha_bars_prev) / (1 - alpha_bars)
 
-# VP-SDE噪声水平: σ_t = √(1-ᾱ_t)
+# VP边际噪声标准差 s(t)σ(t)=√(1-ᾱ_t)（本实验记法约定下记作σ_t，见12.3正文"记法说明"）
+# 注意与Karras噪声水平 σ(t)=√((1-ᾱ_t)/ᾱ_t) 区分；权重匹配分母用的是 1-ᾱ_t
 sigma_t = torch.sqrt(1 - alpha_bars)
 
 # VLB权重 (ε-prediction)
@@ -136,8 +137,8 @@ for t_idx in [1, 10, 50, 100, 250, 500, 750, 999]:
 print("""
 --- Karras统一参数化 ---
 
-DSM路径的含噪输入 (VE-SDE):  x_t = x_0 + σ·ε              (s=1, 噪声=σ)
-VLB路径的含噪输入 (VP-SDE):  x_t = √ᾱ_t·x_0 + √(1-ᾱ_t)·ε  (s=√ᾱ_t, 噪声=√((1-ᾱ_t)/ᾱ_t))
+DSM路径的含噪输入 (VE-SDE):  x_t = x_0 + σ·ε              (s=1, σ为加性噪声标准差)
+VLB路径的含噪输入 (VP-SDE):  x_t = √ᾱ_t·x_0 + √(1-ᾱ_t)·ε  (s=√ᾱ_t, σ(t)=√((1-ᾱ_t)/ᾱ_t), s·σ=√(1-ᾱ_t))
 
 Karras et al. (2022) 统一参数化:
   x_t = s(t)·x_0 + s(t)·σ(t)·ε
@@ -150,21 +151,23 @@ Karras et al. (2022) 统一参数化:
 """)
 
 # Karras参数化数值展示
-# 注意：σ_t = √(1-ᾱ_t) 是VP-SDE的噪声水平定义
-# VE-SDE的噪声水平σ(t)是其原生参数，与VP-SDE的σ(t)物理意义不同
-# 这里展示的是两种参数化在相同时间步下的数值对照
+# σ(t) = √((1-ᾱ_t)/ᾱ_t)：Karras框架下VP的噪声水平，与VE-SDE原生σ同口径（见附录12B）
+# s(t)σ(t) = √(1-ᾱ_t)：VP前向过程实际注入x_0的噪声标准差（边际扰动，恒≤1）
+# VE-SDE下s(t)=1，故σ(t)与s(t)σ(t)退化为同一列；VP下高噪声步两者差异显著
 print("Karras参数化数值对照:")
-print(f"{'t':>5s}  {'s(t)=√ᾱ_t':>10s}  {'σ_t (VE-SDE)':>13s}  {'σ(t) (VP-SDE)':>14s}")
-print("-" * 48)
+print(f"{'t':>5s}  {'s(t)=√ᾱ_t':>10s}  {'σ(t)=√((1-ᾱ_t)/ᾱ_t)':>22s}  {'s(t)σ(t)=√(1-ᾱ_t)':>19s}")
+print("-" * 64)
 for t_idx in [1, 50, 100, 250, 500, 750, 999]:
-    s_t = np.sqrt(alpha_bars[t_idx].item())
-    sigma_ve = sigma_t[t_idx].item()  # VE-SDE: σ_t = √(1-ᾱ_t)
-    sigma_vp = np.sqrt((1 - alpha_bars[t_idx].item()) / alpha_bars[t_idx].item())
-    print(f"{t_idx:5d}  {s_t:10.6f}  {sigma_ve:13.6f}  {sigma_vp:14.6f}")
+    ab_t = alpha_bars[t_idx].item()
+    s_t = np.sqrt(ab_t)
+    sigma_karras = np.sqrt((1 - ab_t) / ab_t)   # Karras噪声水平（与VE的σ同口径）
+    sigma_marg = np.sqrt(1 - ab_t)              # VP边际扰动 s(t)σ(t)
+    print(f"{t_idx:5d}  {s_t:10.6f}  {sigma_karras:22.6f}  {sigma_marg:19.6f}")
 
 print("\n→ VE-SDE和VP-SDE只是 (s,σ) 参数化的两种选择，")
 print("  核心结构 ||ε - ε̂_θ(x_t, 条件)||² 完全相同。")
-print("  注：σ_t = √(1-ᾱ_t) 在VE-SDE中是噪声水平，在VP-SDE中对应不同物理意义")
+print("  注：与VE-SDE的σ同口径的是Karras噪声水平 σ(t)=√((1-ᾱ_t)/ᾱ_t)；")
+print("      √(1-ᾱ_t)=s(t)σ(t) 是VP前向过程实际注入的噪声标准差，两者勿混")
 
 
 # ============================================================
@@ -226,19 +229,21 @@ wt_dsm_matched = lambda_match / (1 - alpha_bars[1:])  # DSM权重 = λ(t) / σ_t
 # VLB权重（已有）
 wt_vlb_t = wt_vlb[1:].numpy()
 
-# 验证等价性：理论上 DSM权重 = 2 * VLB权重
+# 恒等性自检：λ(t)由w_t反解得到，故 DSM权重 = 2 * VLB权重 是代数恒等式（与调度无关）
 ratio = wt_dsm_matched.numpy() / wt_vlb_t
 ratio_mean = np.mean(ratio)
 ratio_std = np.std(ratio)
 ratio_max_dev = np.max(np.abs(ratio - 2.0))
 
-print("\n=== 权重匹配的数值验证 ===")
+print("\n=== 权重匹配的恒等性自检 ===")
 print(f"DSM权重 / VLB权重 的统计特性:")
-print(f"  理论值: 2.000 (常数倍关系)")
+print(f"  理论值: 2.000 (本实验省略DSM损失1/2系数所致的常数倍)")
 print(f"  实际均值: {ratio_mean:.6f}")
 print(f"  标准差: {ratio_std:.2e}")
-print(f"  与理论值最大偏差: {ratio_max_dev:.2e} (属于float64舍入误差范围，验证严格成立)")
-print(f"→ 数值验证: DSM权重 = 2 × VLB权重 (理论严格等价，数值验证偏差仅浮点误差)")
+print(f"  与理论值最大偏差: {ratio_max_dev:.2e} (float64浮点舍入级别)")
+print(f"→ 说明: 匹配λ(t)本就是从w_t反解得到的，比值=2是与噪声调度无关的代数恒等式")
+print(f"  (换成任意调度仍精确为2)；此处自检的是代码实现与12.4节公式严格一致，")
+print(f"  而非对一条经验规律的验证。严格证明见12.4节(其标准约定下比值为1)。")
 
 # 可视化：同一图上对比
 fig, ax = plt.subplots(1, 1, figsize=(10, 6))
@@ -256,7 +261,7 @@ ax.axhline(1, color='green', linestyle=':', linewidth=2,
 
 ax.set_xlabel('时间步 $t$', fontsize=13)
 ax.set_ylabel('权重', fontsize=13)
-ax.set_title('DSM权重与VLB权重的匹配验证', fontsize=14)
+ax.set_title('DSM权重与VLB权重的匹配（恒等性自检）', fontsize=14)
 ax.legend(fontsize=11, loc='upper right')
 ax.grid(True, alpha=0.3)
 
@@ -266,7 +271,8 @@ plt.savefig(fig_path, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"\n图表已保存: {fig_path}")
 print("\n→ 蓝色实线（DSM权重/2）与红色虚线（VLB权重）完全重合")
-print("  验证了权重匹配条件: λ(t) = β_t(1-ᾱ_t) / [(1-ᾱ_{t-1})·α_t]")
+print("  自检匹配公式的代码实现: λ(t) = β_t(1-ᾱ_t) / [(1-ᾱ_{t-1})·α_t]")
+print("  （该重合是代数恒等性的体现，对任意噪声调度均成立；严格证明见12.4节）")
 
 
 # ============================================================
@@ -283,21 +289,23 @@ print("""
    (2) 含噪输入可通过Karras统一参数化消除形式差异
    (3) 唯一实质差异是时间权重: DSM用λ(σ)/σ²，VLB用w_t
 
-2. 权重匹配的数值验证（本实验）
+2. 权重匹配的恒等性自检（本实验，严格证明见12.4节）
    (1) 简化VLB ≡ 简化DSM: λ(σ)=σ²时，两者权重均退化为常数1
    (2) 加权DSM ≡ 完整VLB:
        - 匹配条件: λ(t) = β_t(1-ᾱ_t) / [(1-ᾱ_{t-1})·α_t]
-       - DSM权重 = 2 × VLB权重（仅差常数因子2）
-       - 数值验证: 两条曲线在缩放后完全重合（偏差~1e-15，浮点舍入级别）
+       - DSM权重 = 2 × VLB权重（仅差常数因子2，源于本实验省略1/2系数的约定）
+       - 自检结果: 两条曲线在缩放后完全重合（偏差~1e-15，浮点舍入级别）
+       - 注意: 该比值对任意噪声调度恒为2，是匹配公式的代数恒等式，
+         此处验证的是代码实现与公式一致，而非经验规律
 
 3. VLB权重量级跨越约2个数量级，简化目标等权重1
    → 简化目标训练更稳定（Ho et al. 2020的关键实践发现）
    → 完整VLB用于似然优化（BPD指标）
 
 4. VE-SDE和VP-SDE的参数化差异
-   - VE-SDE: s(t)=1, σ(t)=σ_t（原生噪声水平）
-   - VP-SDE: s(t)=√ᾱ_t, σ(t)=√((1-ᾱ_t)/ᾱ_t)
-   - σ_t = √(1-ᾱ_t) 在两种参数化中物理意义不同
+   - VE-SDE: s(t)=1, σ(t)为原生加性噪声标准差（sσ=σ，两列退化）
+   - VP-SDE: s(t)=√ᾱ_t, σ(t)=√((1-ᾱ_t)/ᾱ_t)，实际边际噪声s(t)σ(t)=√(1-ᾱ_t)
+   - Karras噪声水平σ(t)与VP边际噪声s(t)σ(t)勿混（见附录12B）
 """)
 
 print(f"{'='*60}")
@@ -330,7 +338,7 @@ results_summary = {
         'ratio_mean': ratio_mean,
         'ratio_std': ratio_std,
         'ratio_max_dev_from_2': ratio_max_dev,
-        'note': 'DSM权重 = 2 × VLB权重 (理论严格等价)',
+        'note': 'DSM权重 = 2 × VLB权重；匹配公式的代数恒等性自检（与噪声调度无关，任意调度下恒为2）',
     },
     'VLB_weights_sampled': {
         f't_{t}': wt_vlb[t].item()

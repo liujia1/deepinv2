@@ -31,5 +31,70 @@
   "simplified_DSM": {
     "weight": 0.5,
     "note": "lambda(sigma)=sigma^2时DSM权重=1/2(均匀)"
+  },
+  "step4_training_equivalence": {
+    "setup": {
+      "data_distribution": "0.5*N(-3,1) + 0.5*N(3,1), 1D",
+      "T": 100,
+      "beta_const": 0.01,
+      "network": "MLP(sinusoidal_t_emb=16, 3x64 hidden, SiLU), eps-prediction",
+      "dtype": "float64",
+      "batch_size": 512,
+      "lr": 0.001,
+      "t_sampling": "uniform over {1,...,99} (t=0 excluded: weight inf)",
+      "denoise_eval": "Tweedie x0_hat on fixed testset n=40000, seed=999, t in {10,30,50,80}"
+    },
+    "synchronized_pair": {
+      "steps": 2000,
+      "init_seed": 42,
+      "data_seed": 2026,
+      "max_abs_step_loss_diff": 1.3877787807814457e-17,
+      "final_param_max_abs_diff": 1.1102230246251565e-15,
+      "denoise_mse_untrained_baseline": 0.6035449789123275,
+      "denoise_mse_vlb": 0.39463694433607843,
+      "denoise_mse_dsm": 0.39463694433607843,
+      "denoise_mse_per_t": {
+        "vlb": [
+          0.10473335125357883,
+          0.27734657262596246,
+          0.4453317691906841,
+          0.7511360842740883
+        ],
+        "dsm": [
+          0.10473335125357883,
+          0.27734657262596246,
+          0.4453317691906841,
+          0.7511360842740884
+        ]
+      }
+    },
+    "independent_seeds": {
+      "steps_per_run": 1200,
+      "vlb_seeds": [
+        101,
+        102,
+        103
+      ],
+      "dsm_seeds": [
+        201,
+        202,
+        203
+      ],
+      "vlb_denoise_mse": [
+        0.39853815813498705,
+        0.4020601198977848,
+        0.40171919094487973
+      ],
+      "dsm_denoise_mse": [
+        0.4008938975180576,
+        0.4015952354170644,
+        0.3954951623602623
+      ],
+      "vlb_mean": 0.40077248965921725,
+      "vlb_std_ddof1": 0.001942481958180992,
+      "dsm_mean": 0.3993280984317948,
+      "dsm_std_ddof1": 0.003337891236767146,
+      "relative_mean_diff": 0.003604017902153529
+    }
   }
 }
