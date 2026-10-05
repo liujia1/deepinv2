@@ -1,5 +1,9 @@
 {
-  "note": "定性视觉对比实验（无量化指标）。本图存档（img2img闭环对比.png）生成于2026-07-07，当时未固定随机种子；当前代码已固定seed=42，重跑会得到同样风格规律但细节不同的新样本。",
+  "run_status": "generated",
+  "generated_at": "2026-10-04T13:03:07",
+  "device": "cuda",
+  "存档图": "img2img闭环对比.png",
+  "note": "定性视觉对比实验（无量化指标）。以下观察基于本次（seed固定）实际生成的存档图，应逐面板对照核实。",
   "模型": "runwayml/stable-diffusion-v1-5 (StableDiffusionImg2ImgPipeline, fp16)",
   "初始图": "sketch-mountains-input.jpg (CompVis官方示例, resize到512x512)",
   "prompts": [
@@ -10,7 +14,32 @@
   "strength": 0.75,
   "guidance_scale": 7.5,
   "seed": 42,
-  "num_inference_steps": "默认50步，strength=0.75对应跳过前13步加噪、从剩余37步开始逆向去噪",
+  "num_inference_steps": "默认50步；strength=0.75时一次性加噪到第13个调度时间步对应的噪声水平(int(50*0.75)=37, t_start=50-37=13)，仅执行后37步逆向去噪",
   "对比": "img2img与逆问题求解器(DPS/DiffPIR)的本质区别",
-  "观察": "三幅图共享初始图的构图骨架（山体/河流色块布局），风格随prompt变化；但'photorealistic'面板未真正照片化——strength=0.75下初始色粉笔画的色彩/平涂风格主导输出，文本只能改变纹理细节，这是img2img'初始化位置约束'的固有体现。"
+  "strength_scan配置": {
+    "启用": true,
+    "strengths": [
+      0.6,
+      0.75,
+      0.9
+    ],
+    "prompt": "a photorealistic photo of mountains, sunny day",
+    "guidance_scale": 7.5,
+    "seed": 42,
+    "输出图": "img2img_strength扫描.png"
+  },
+  "观察": "三幅输出在strength=0.75下不同程度保留初始图的粗粒度构图与主要色块（河道/山丘/岸带等，各面板保留程度有差异，需逐面板对照），风格随prompt明显分化。strength锚定构图与色块是img2img固有的'保真-自由'权衡；但各风格目标的达成程度同时受随机种子与prompt措辞影响——若某风格目标（如photorealistic）在单次采样中仅部分达成，不能据此断言固有上界——同prompt的strength扫描(0.6/0.75/0.9，见'strength扫描'块)已证实0.9面板明显照片化，故0.75未照片化是保真-自由的参数权衡，而非固有上界。",
+  "strength扫描": {
+    "存档图": "img2img_strength扫描.png",
+    "prompt": "a photorealistic photo of mountains, sunny day",
+    "strengths": [
+      0.6,
+      0.75,
+      0.9
+    ],
+    "guidance_scale": 7.5,
+    "seed": 42,
+    "判读方法": "逐面板核对照片化程度。步数对应：0.6→30步(t_start=20)、0.75→37步(t_start=13)、0.9→45步(t_start=5)，strength越大初始图约束越弱、文本风格自由度越高。若照片化程度随strength单调增强且0.9面板明显照片化，则表明0.75处未照片化是'保真-自由'权衡（参数选择）而非img2img固有上界；若0.9仍无法照片化，再排查prompt措辞或模型能力。",
+    "观察": "三面板呈严格单调趋势。①strength=0.6（30步去噪）：仍为平涂卡通/插画风，初始图的蓝河道、亮绿山丘、桃色岸带、尖顶山几乎全部保留，构图忠实度最高，对'sunny day'仅有天空淡蓝色调、无太阳；②strength=0.75（37步）：几何化平涂插画，出现黄色卡通太阳与放射光线，河道退化为红粉色带、山体几何化，构图仅部分保留；③strength=0.9（45步，t_start=5）：明显照片化——写实山体纹理与光影、真实天空与强烈镜头光晕、前景为写实起伏的暖色沙丘，初始图的河道/亮绿山丘/城堡等具体构图元素全部消失，仅保留'山脉+晴天'的语义。结论：照片化程度随strength单调增强、对初始图的构图忠实度单调下降，0.9已达成照片写实风，证明0.75（含此前未固定种子与seed=42两次独立采样）未照片化是strength参数选择导致的'保真-自由'权衡，而非img2img机制或SD1.5的固有上界。"
+  }
 }

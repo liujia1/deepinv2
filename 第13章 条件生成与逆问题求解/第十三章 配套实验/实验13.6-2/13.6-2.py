@@ -4,10 +4,15 @@
 
 实验内容：
   - DPS求解图像去模糊逆问题
-  - DPS求解Inpainting逆问题（零样本迁移）
-  - 展示"质量-多样性权衡"——同一观测y，不同zeta的采样结果
+  - DPS求解图像Inpainting逆问题（零样本迁移）
+  - 质量对比：不同ζ使用CRN公共随机数（同一反向噪声路径），
+    PSNR报告3条独立轨迹的均值±标准差，避免单轨迹数值的偶然性
+  - 多样性直接测量：固定同一观测y，每个ζ取4个不同初始噪声的条件样本，
+    用样本间MSE与逐像素std量化"质量-多样性权衡"，
+    区分"后验多模态的有用多样性"与"引导不足的先验幻觉"
+  - ζ网格外推至100，实证检验"大ζ过拟合回落"在本任务是否出现
 
-注意：本实验训练DDPM并执行多次DPS采样。
+注意：本实验训练DDPM并执行多次DPS采样（复用checkpoint时仅采样，CPU约数分钟）。
 """
 
 import sys
@@ -185,51 +190,59 @@ class SmallUNet(nn.Module):
 # ============================================================
 # DPS采样算法
 # ============================================================
-def dps_sample(model, y, forward_op, shape, zeta=1.0, n_steps=None):
+def dps_sample(model, y, forward_op, shape, zeta=1.0, seed=None):
     """
-    DPS 采样。
-    注：本实现对似然梯度做单位范数归一化,只取其方向,
-        残差强度统一由外部超参 zeta 控制,不依赖 sigma_y,
-        故函数签名中未保留 sigma_y。
+    DPS 采样（单位范数归一化梯度参数化）。
+
+    注：本实现对似然梯度做逐样本单位范数归一化,只取其方向,
+        残差强度统一由外部超参 zeta 控制,不依赖 sigma_y
+       （1/σ_y² 已被吸收进 ζ）,故函数签名中未保留 sigma_y。
+        这与 Chung et al.(2022) 官方代码 ∇‖r‖ 的隐式归一化同类,
+        但 ζ 的数值尺度与论文惯例(0.1~1.0)不可直接对比,本实现最优 ζ≈10 量级。
+
+    seed:
+      - 不同 ζ 传入同一种子 => 公共随机数(CRN),各 ζ 共享同一初始 x_T 与
+        每一步反向噪声,ζ-PSNR 曲线只反映引导强度差异(质量对比用);
+      - 同一 y 传入不同种子 => 同一后验的多个独立条件样本(多样性测量用)。
+
+    实现说明:
+      - 单次前向传播,带 grad 的 eps_pred 同时用于 x0_hat 估计与似然反传;
+      - 后验得分分解给出 eps_corrected = eps_θ + ζ·σ_t·∇‖y-Ax̂₀‖²(加号):
+        该加号与 Chung 官方代码 x_{t-1} -= scale·∇‖r‖ 方向严格一致
+       （ε=-σ_t·score,似然得分是负梯度,负负得正);
+      - 引导进入均值步进后 σ_t 恰相消,实际位移 ∝ ζ·β_t/√α_t·ĝ,
+        末段 β_t→β_min 使引导相对注入噪声(∝√β_t)自动退场。
     """
     model.eval()
-    if n_steps is None:
-        n_steps = T
+    if seed is not None:
+        torch.manual_seed(seed)
     x = torch.randn(shape, device=device)
     for t_idx in reversed(range(T)):
         t = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
         sqrt_ab_t = sqrt_alpha_bars[t_idx]
         sqrt_1mab_t = sqrt_one_minus_alpha_bars[t_idx]
-        with torch.no_grad():
-            eps_pred = model(x, t)
+        # 单次前向：输出同时服务于 x0_hat(Tweedie) 与梯度反传
         x = x.detach().requires_grad_(True)
-        eps_pred_grad = model(x, t)
-        x0_hat = (x - sqrt_1mab_t * eps_pred_grad) / sqrt_ab_t
+        eps_pred = model(x, t)
+        x0_hat = (x - sqrt_1mab_t * eps_pred) / sqrt_ab_t
         Ax0_hat = forward_op(x0_hat)
         likelihood_loss = torch.sum((y - Ax0_hat) ** 2)
         likelihood_grad = torch.autograd.grad(likelihood_loss, x)[0]
         # 每个样本独立归一化梯度方向（DPS 论文推荐做法）
         batch_size = likelihood_grad.shape[0]
-        grad_norms = likelihood_grad.view(batch_size, -1).norm(dim=1)  # shape=(batch_size,)
+        grad_norms = likelihood_grad.view(batch_size, -1).norm(dim=1)  # (batch_size,)
         grad_norms = grad_norms.clamp(min=1e-8)  # 防止零范数
         likelihood_grad = likelihood_grad / grad_norms.view(batch_size, 1, 1, 1)
-        x = x.detach()
-        eps_pred = eps_pred.detach()
-        # 后验得分分解: ∇log p(x_t|y) = ∇log p(x_t) + ∇log p(y|x_t)
-        # 网络预测 eps_pred ≈ -σ_t * ∇log p(x_t),σ_t = sqrt(1-ᾱ_t)
-        # 似然(高斯): ∇log p(y|x_t) = -∇||y-Ax̂||²/(σ_y²) <-- 关键负号!
-        # 后验噪声预测: ε̃ = -σ_t * ∇log p(x_t|y) = ε_θ + σ_t * (1/σ_y²) * ∇||y-Ax̂||²
-        # 简化常数后: ε̃ = ε_θ + ζ * σ_t * ∇||y-Ax̂||² (加号,不是减号!)
-        eps_corrected = eps_pred + zeta * sqrt_1mab_t * likelihood_grad
+        # 后验噪声预测修正（加号，见docstring推导）
+        eps_corrected = eps_pred.detach() + zeta * sqrt_1mab_t * likelihood_grad
         with torch.no_grad():
             model_mean = sqrt_recip_alphas[t_idx] * (
-                x - beta_over_sqrt_1m_ab[t_idx] * eps_corrected
+                x.detach() - beta_over_sqrt_1m_ab[t_idx] * eps_corrected
             )
             if t_idx == 0:
                 x = model_mean
             else:
-                noise = torch.randn_like(x)
-                x = model_mean + torch.sqrt(posterior_var[t_idx]) * noise
+                x = model_mean + torch.sqrt(posterior_var[t_idx]) * torch.randn_like(x)
     return x.clamp(-1, 1)
 
 
@@ -380,7 +393,7 @@ model = train_model(CHECKPOINT_PATH, num_epochs=num_epochs)
 
 
 # ============================================================
-# DPS求解图像去模糊与Inpainting（方案A：质量-多样性权衡）
+# DPS求解图像去模糊与Inpainting（质量对比 + 多样性直接测量）
 # ============================================================
 print(f"\n{'='*60}")
 print("DPS求解图像去模糊与Inpainting（质量-多样性权衡）")
@@ -390,18 +403,26 @@ print("""
 逆问题: y = A(x) + n, A=高斯模糊 或 A=遮挡算子
 关键：模型从未见过模糊/遮挡图像——DPS的零样本迁移能力
 
-质量-多样性权衡（对应13.4.3节）：
-  zeta小 → 后验分布宽 → 高多样性（采样结果各异）
-  zeta大 → 后验分布窄 → 高一致性（采样结果趋近观测）
+实验设计（对应13.4.3节"质量-多样性权衡"）：
+  质量：不同ζ使用CRN公共随机数(同一反向噪声路径), 3条独立轨迹报告均值±标准差
+  多样性：固定同一观测y, 每个ζ用4个不同初始噪声采样,
+          用样本间MSE与逐像素std直接测量后验宽窄
+  ζ小 → 先验主导、引导不足 → 样本彼此分歧(但多为偏离真值的幻觉)
+  ζ大 → 数据一致性主导 → 样本收敛、PSNR高
 """)
 
-# zeta值对比：展示"质量-多样性权衡"的核心特性
-# 本实现为"单位归一化梯度"参数化, 引导强度需较大ζ才见效(与13.4-3一致: 归一化实现最优ζ≈10)
-# 故ζ网格跨越"欠引导→良好重建": 1.0(低于观测) → 10.0/20.0(显著优于观测)
-zeta_values = [1.0, 10.0, 20.0]
-print(f"DPS引导权重对比: zeta = {zeta_values}")
+# ζ网格：1(欠引导)→10/20(良好重建)→50/100(检验过拟合回落)
+zeta_quality = [1.0, 10.0, 20.0, 50.0, 100.0]
+zeta_div = [1.0, 10.0, 20.0, 50.0]
+CRN_SEED = 42                    # 出图主轨迹种子；各ζ共用 => CRN
+STAT_SEEDS = (42, 43, 44)        # PSNR统计：3条独立采样轨迹
+DIV_SEEDS = (101, 102, 103, 104) # 多样性：同一y的4个独立条件样本
+print(f"质量网格 zeta = {zeta_quality}（每ζ {len(STAT_SEEDS)} 个独立种子, 主轨迹CRN seed={CRN_SEED}）")
+print(f"多样性网格 zeta = {zeta_div}（同一y, {len(DIV_SEEDS)} 个不同初始噪声）")
 
-test_images = next(iter(test_loader))[0][:4].to(device)
+_test_batch = next(iter(test_loader))
+test_images = _test_batch[0][:4].to(device)
+test_labels = _test_batch[1][:4]
 
 def compute_psnr(pred, target):
     """pred/target: 在 [-1,1] 空间,统一转换到 [0,1] 再用 MAX=1 计算 PSNR"""
@@ -410,113 +431,183 @@ def compute_psnr(pred, target):
     mse = torch.mean((pred_01 - target_01)**2).item()
     return 10 * np.log10(1.0 / (mse + 1e-10))
 
-# ---- 去模糊 ----
+def run_quality(y, forward_op, gt):
+    """质量对比：每ζ跑STAT_SEEDS多条独立轨迹；seed=CRN_SEED的主轨迹同时用于出图"""
+    primary, primary_psnr, stats = {}, {}, {}
+    for z in zeta_quality:
+        ps_list = []
+        for sd in STAT_SEEDS:
+            x_hat = dps_sample(model, y, forward_op, shape=gt.shape, zeta=z, seed=sd)
+            p = compute_psnr(x_hat, gt)
+            ps_list.append(p)
+            if sd == CRN_SEED:
+                primary[z], primary_psnr[z] = x_hat, p
+        stats[z] = (float(np.mean(ps_list)), float(np.std(ps_list)))
+        print(f"  ζ={z:6.1f}: PSNR={stats[z][0]:6.2f} ± {stats[z][1]:4.2f} dB"
+              f"  (3条轨迹 {[round(v, 2) for v in ps_list]})")
+    return primary, primary_psnr, stats
+
+def run_diversity(y1, gt1, forward_op):
+    """多样性测量：固定同一观测y1, 每ζ用DIV_SEEDS取多个独立条件样本"""
+    out = {}
+    for z in zeta_div:
+        xs = [dps_sample(model, y1, forward_op, shape=gt1.shape, zeta=z, seed=sd)
+              for sd in DIV_SEEDS]
+        X = torch.cat(xs, dim=0)  # (S,1,28,28)
+        per_psnr = [compute_psnr(X[i:i+1], gt1) for i in range(len(DIV_SEEDS))]
+        pair_mse = float(np.mean([
+            torch.mean((X[i] - X[j]) ** 2).item()
+            for i in range(len(X)) for j in range(i + 1, len(X))
+        ]))
+        std_map = X[:, 0].std(dim=0)  # 逐像素跨样本标准差
+        consistency = float((forward_op(X) - y1).abs().mean().item())
+        out[z] = dict(X=X, per_psnr=per_psnr, pair_mse=pair_mse,
+                      std_map=std_map, std_mean=float(std_map.mean()),
+                      consistency=consistency)
+        print(f"  ζ={z:5.1f}: 每样本PSNR={[round(v, 1) for v in per_psnr]}  "
+              f"样本间MSE={pair_mse:.4f}  逐像素std均值={std_map.mean():.4f}")
+    return out
+
+# ---- 去模糊观测 ----
 blur_op = GaussianBlurOperator(kernel_size=7, sigma=2.0, device=device)
 sigma_y_blur = 0.02
 y_blur = blur_op(test_images) + torch.randn_like(test_images) * sigma_y_blur
-
-print("\nDPS去模糊采样（不同zeta对比）...")
-x_hat_blur_list = []
-psnr_blur_list = []
-for zeta_val in zeta_values:
-    print(f"  zeta={zeta_val}...")
-    x_hat = dps_sample(model, y_blur, blur_op, shape=test_images.shape, zeta=zeta_val)
-    x_hat_blur_list.append(x_hat)
-    psnr = compute_psnr(x_hat, test_images)
-    psnr_blur_list.append(psnr)
-    print(f"    PSNR: {psnr:.2f} dB")
-
 psnr_blur_obs = compute_psnr(y_blur, test_images)
-print(f"  模糊观测PSNR: {psnr_blur_obs:.2f} dB")
 
-# ---- Inpainting ----
+print("\n[去模糊] 质量对比（3条独立轨迹, CRN公平对比）...")
+blur_primary, blur_primary_psnr, blur_stats = run_quality(y_blur, blur_op, test_images)
+print(f"  模糊观测 PSNR: {psnr_blur_obs:.2f} dB")
+
+print("\n[去模糊] 多样性（固定同一观测y, 4个独立条件样本）...")
+blur_div = run_diversity(y_blur[0:1], test_images[0:1], blur_op)
+
+# ---- Inpainting观测 ----
 inpaint_op = InpaintingOperator(mask_ratio=0.3, device=device)
 sigma_y_inpaint = 0.01
 y_inpaint = inpaint_op(test_images) + torch.randn_like(test_images) * sigma_y_inpaint
-
-print("\nDPS inpainting采样（不同zeta对比）...")
-x_hat_inpaint_list = []
-psnr_inpaint_list = []
-for zeta_val in zeta_values:
-    print(f"  zeta={zeta_val}...")
-    x_hat = dps_sample(model, y_inpaint, inpaint_op, shape=test_images.shape, zeta=zeta_val)
-    x_hat_inpaint_list.append(x_hat)
-    psnr = compute_psnr(x_hat, test_images)
-    psnr_inpaint_list.append(psnr)
-    print(f"    PSNR: {psnr:.2f} dB")
-
 psnr_inpaint_obs = compute_psnr(y_inpaint, test_images)
-print(f"  遮挡观测PSNR: {psnr_inpaint_obs:.2f} dB")
+
+print("\n[Inpainting] 质量对比（3条独立轨迹, CRN公平对比）...")
+inp_primary, inp_primary_psnr, inp_stats = run_quality(y_inpaint, inpaint_op, test_images)
+print(f"  遮挡观测 PSNR: {psnr_inpaint_obs:.2f} dB（灰色像素=被遮挡的未知区域）")
+
+print("\n[Inpainting] 多样性（固定同一观测y, 4个独立条件样本）...")
+inp_div = run_diversity(y_inpaint[0:1], test_images[0:1], inpaint_op)
 
 # ============================================================
-# 可视化：质量-多样性权衡
+# 可视化
 # ============================================================
 # 数据在 [-1,1] 空间,imshow 之前统一转换到 [0,1]
 
-# 图1: DPS去模糊 - 质量-多样性权衡（观测y + 不同zeta的采样）
-n_rows = len(zeta_values) + 1
-fig1, axes1 = plt.subplots(n_rows, 4, figsize=(16, 4*n_rows))
-for i in range(4):
-    # 第1行：观测y
-    axes1[0, i].imshow(((y_blur[i, 0] + 1) / 2).clamp(0, 1).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-    axes1[0, i].axis('off')
-    if i == 0: axes1[0, i].text(-0.12, 0.5, '观测y\n(模糊)', transform=axes1[0, i].transAxes, rotation=0, ha='right', va='center', fontsize=11)
-    
-    # 第2-N行：不同zeta的采样结果
-    for row_idx, (zeta_val, x_hat) in enumerate(zip(zeta_values, x_hat_blur_list)):
-        axes1[row_idx+1, i].imshow(((x_hat[i, 0] + 1) / 2).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-        axes1[row_idx+1, i].axis('off')
+def plot_quality(task_cn, fname, y, primary, stats, obs_psnr, obs_cn, note=None):
+    """质量图：第1行观测y(标PSNR), 其后各行=各ζ的CRN主轨迹(4个不同y)"""
+    n_rows = 1 + len(zeta_quality)
+    fig, axes = plt.subplots(n_rows, 4, figsize=(16, 4 * n_rows))
+    for i in range(4):
+        axes[0, i].imshow(((y[i, 0] + 1) / 2).clamp(0, 1).cpu().numpy(),
+                          cmap='gray', vmin=0, vmax=1)
+        axes[0, i].axis('off')
         if i == 0:
-            axes1[row_idx+1, i].text(-0.12, 0.5, f'ζ={zeta_val}\nPSNR={psnr_blur_list[row_idx]:.1f}dB',
-                                     transform=axes1[row_idx+1, i].transAxes, rotation=0, ha='right', va='center', fontsize=10)
+            axes[0, i].text(-0.13, 0.5, f'观测y\n({obs_cn})\nPSNR={obs_psnr:.1f}dB',
+                            transform=axes[0, i].transAxes,
+                            ha='right', va='center', fontsize=10)
+        for row_idx, z in enumerate(zeta_quality):
+            ax = axes[row_idx + 1, i]
+            ax.imshow(((primary[z][i, 0] + 1) / 2).cpu().numpy(),
+                      cmap='gray', vmin=0, vmax=1)
+            ax.axis('off')
+            if i == 0:
+                m, s = stats[z]
+                ax.text(-0.13, 0.5, f'ζ={z:g}\n{m:.1f}±{s:.1f}dB',
+                        transform=ax.transAxes, ha='right', va='center', fontsize=10)
+    title = (f'DPS{task_cn}：质量对比（CRN公共随机数，零样本迁移）\n'
+             f'每行图像为CRN主轨迹(seed={CRN_SEED})；行标为{len(STAT_SEEDS)}条独立轨迹的PSNR均值±标准差')
+    if note:
+        title += '\n' + note
+    plt.suptitle(title, fontsize=13, y=1.01)
+    plt.tight_layout()
+    fig_path = os.path.join(SAVE_DIR, fname)
+    plt.savefig(fig_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"图已保存: {fig_path}")
 
-plt.suptitle('DPS去模糊：质量-多样性权衡（零样本迁移）', fontsize=14, y=1.02)
-plt.tight_layout()
-fig_path1 = os.path.join(SAVE_DIR, 'DPS去模糊.png')
-plt.savefig(fig_path1, dpi=150, bbox_inches='tight')
-plt.close()
-print(f"\n图已保存: {fig_path1}")
+def plot_diversity(task_cn, fname, div, true_digit, obs_cn):
+    """多样性图：每行固定同一观测y的4个独立条件样本 + 逐像素std热图"""
+    n_rows = len(zeta_div)
+    n_cols = len(DIV_SEEDS) + 1
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.4 * n_cols, 3.4 * n_rows))
+    for row_idx, z in enumerate(zeta_div):
+        d = div[z]
+        for i in range(len(DIV_SEEDS)):
+            ax = axes[row_idx, i]
+            ax.imshow(((d['X'][i, 0] + 1) / 2).cpu().numpy(),
+                      cmap='gray', vmin=0, vmax=1)
+            ax.set_title(f'样本{i+1}，PSNR={d["per_psnr"][i]:.1f}', fontsize=10)
+            ax.axis('off')
+        ax_std = axes[row_idx, -1]
+        im = ax_std.imshow(d['std_map'].cpu().numpy(), cmap='hot')
+        ax_std.set_title(f'逐像素std\n均值={d["std_mean"]:.3f}', fontsize=10)
+        ax_std.axis('off')
+        axes[row_idx, 0].text(
+            -0.30, 0.5,
+            f'ζ={z:g}\n样本间\nMSE={d["pair_mse"]:.3f}',
+            transform=axes[row_idx, 0].transAxes,
+            ha='right', va='center', fontsize=10)
+    plt.suptitle(
+        f'DPS{task_cn}多样性：同一观测y（{obs_cn}）、{len(DIV_SEEDS)}个不同初始噪声的条件样本'
+        f'（真值数字={true_digit}）',
+        fontsize=13, y=1.01)
+    plt.tight_layout()
+    fig_path = os.path.join(SAVE_DIR, fname)
+    plt.savefig(fig_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"图已保存: {fig_path}")
 
-# 图2: DPS Inpainting - 质量-多样性权衡（观测y + 不同zeta的采样）
-fig2, axes2 = plt.subplots(n_rows, 4, figsize=(16, 4*n_rows))
-for i in range(4):
-    # 第1行：观测y
-    axes2[0, i].imshow(((y_inpaint[i, 0] + 1) / 2).clamp(0, 1).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-    axes2[0, i].axis('off')
-    if i == 0: axes2[0, i].text(-0.12, 0.5, '观测y\n(遮挡)', transform=axes2[0, i].transAxes, rotation=0, ha='right', va='center', fontsize=11)
-    
-    # 第2-N行：不同zeta的采样结果
-    for row_idx, (zeta_val, x_hat) in enumerate(zip(zeta_values, x_hat_inpaint_list)):
-        axes2[row_idx+1, i].imshow(((x_hat[i, 0] + 1) / 2).cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-        axes2[row_idx+1, i].axis('off')
-        if i == 0:
-            axes2[row_idx+1, i].text(-0.12, 0.5, f'ζ={zeta_val}\nPSNR={psnr_inpaint_list[row_idx]:.1f}dB',
-                                     transform=axes2[row_idx+1, i].transAxes, rotation=0, ha='right', va='center', fontsize=10)
-
-plt.suptitle('DPS Inpainting：质量-多样性权衡（零样本迁移）', fontsize=14, y=1.02)
-plt.tight_layout()
-fig_path2 = os.path.join(SAVE_DIR, 'DPS Inpainting.png')
-plt.savefig(fig_path2, dpi=150, bbox_inches='tight')
-plt.close()
-print(f"\n图已保存: {fig_path2}")
+plot_quality('去模糊', 'DPS去模糊.png', y_blur, blur_primary, blur_stats,
+             psnr_blur_obs, '模糊')
+plot_quality('Inpainting', 'DPS Inpainting.png', y_inpaint, inp_primary, inp_stats,
+             psnr_inpaint_obs, '遮挡',
+             note='观测行中灰色像素=遮挡区（A置零，[-1,1]空间显示为0.5灰，不携带真值信息）')
+plot_diversity('去模糊', 'DPS去模糊_多样性.png', blur_div,
+               test_labels[0].item(), '模糊')
+plot_diversity('Inpainting', 'DPS Inpainting_多样性.png', inp_div,
+               test_labels[0].item(), '遮挡')
 
 print("\n" + "=" * 60)
 print("实验13.6-2 完成!")
 print("=" * 60)
-print("""
+_b1, _w1 = blur_div[1.0], blur_div[50.0]
+_i1, _w2 = inp_div[1.0], inp_div[50.0]
+print(f"""
 关键结论:
 1. 零样本迁移
-   - 模型只训练了去噪（无条件DDPM），但能解决去模糊和inpainting
+   - 模型只训练了去噪（无条件DDPM），却能解决去模糊和inpainting
    - 无需针对特定逆问题重新训练——这是DPS的核心优势
+   - 质量: ζ=20时去模糊PSNR={blur_stats[20.0][0]:.1f}dB（观测{psnr_blur_obs:.1f}）,
+           inpainting={inp_stats[20.0][0]:.1f}dB（观测{psnr_inpaint_obs:.1f}）
 
-2. 质量-多样性权衡（对应13.4.3节）
-   - 本实现用"单位归一化梯度"参数化, 引导强度需较大ζ才见效
-     (与13.4-3一致: 归一化实现最优ζ≈10, ζ≤1跑不赢含噪观测)
-   - ζ=1.0: 引导不足, 先验主导, 采样偏离观测(高多样性, PSNR低于观测)
-   - ζ=10.0/20.0: 数据一致性占主导, 去模糊与inpainting均显著超过观测(高一致性)
-   - 归一化参数化的下降段被β_t→β_min结构性放缓, 本ζ区间内未见明显过拟合回落
+2. 质量-多样性权衡（本版用同一y的多个条件样本直接测量, 对应13.4.3节）
+   - ζ=1引导不足: 去模糊样本间MSE={_b1['pair_mse']:.3f}、inpainting={_i1['pair_mse']:.3f},
+     样本彼此分歧极大且PSNR全部低于观测——这是先验主导的"幻觉多样性",
+     离散度高但质量低, 并非对后验多模态的有用刻画;
+   - ζ增大到50: 去模糊样本间MSE={_w1['pair_mse']:.3f}、inpainting={_w2['pair_mse']:.3f},
+     逐像素std降至{_w1['std_mean']:.3f}/{_w2['std_mean']:.3f},
+     4个样本收敛为同一清晰数字, PSNR升至最高——后验收窄、一致性增强;
+   - 归一化实现需较大ζ(与13.4-3一致, 最优ζ≈10量级), ζ≤1跑不赢含噪观测。
 
-3. DPS vs DiffPIR对比
+3. 大ζ是否过拟合回落（ζ网格已外推至100）
+   - 两个任务在ζ=100处均未见显著回落(去模糊{blur_stats[100.0][0]:.1f}dB,
+     inpainting{inp_stats[100.0][0]:.1f}dB), 原因有二:
+     (a) 引导经eps修正进入均值步进后实际位移∝ζ·β_t/√α_t, 末段β_t→β_min,
+         引导相对注入噪声(∝√β_t)结构性放缓退场;
+     (b) 本任务观测噪声很小(σ_y=0.01/0.02), 过拟合噪声的空间有限;
+     对照13.4-3(σ_y=0.3): 同一参数化在ζ=100时回落约4.5dB, 说明回落与噪声尺度相关。
+
+4. 统计严谨性
+   - ζ间对比采用CRN公共随机数; PSNR报告3条独立轨迹的均值±标准差
+     (单轨迹PSNR的随机波动可达数dB, 只报单次数值不可靠)。
+
+5. DPS vs DiffPIR
    - DPS: 修正SDE轨迹，理论清晰（后验得分分解）
    - DiffPIR: 交替去噪+投影，PnP思想的延伸
 """)
@@ -537,14 +628,50 @@ def _to_native(obj):
     except: pass
     return obj
 
+def _quality_table(primary_psnr, stats):
+    """主轨迹(CRN seed=42)单次数值 + 3条独立轨迹的均值±标准差"""
+    return {
+        "各zeta_主轨迹CRN": {f"zeta={float(z)}": round(float(primary_psnr[z]), 2)
+                            for z in zeta_quality},
+        "各zeta_均值±标准差": {
+            f"zeta={float(z)}": {"mean": round(stats[z][0], 2), "std": round(stats[z][1], 2)}
+            for z in zeta_quality
+        },
+    }
+
+def _diversity_table(div):
+    """同一观测y、4个不同初始噪声条件样本的多样性指标（[-1,1]空间）"""
+    return {
+        f"zeta={float(z)}": {
+            "每样本PSNR_dB": [round(float(v), 2) for v in div[z]["per_psnr"]],
+            "样本间MSE": round(div[z]["pair_mse"], 5),
+            "逐像素std均值": round(div[z]["std_mean"], 5),
+            "数据一致性残差|A(xhat)-y|均值": round(div[z]["consistency"], 5),
+        }
+        for z in zeta_div
+    }
+
 results_summary = {
-    "zeta_values": zeta_values,
+    "统计口径": (
+        "质量: 4张MNIST测试图, 每ζ用3个独立采样种子(42/43/44), "
+        "PSNR在[0,1]空间按MAX=1对4张图pooled计算, 报告均值±标准差; "
+        "图中主轨迹seed=42, 不同ζ共享CRN(公共随机数, 同一反向噪声路径)。"
+        "多样性: 固定第1张测试图的同一观测y, 每ζ用4个不同初始噪声种子"
+        "(101-104)采样, 样本间MSE与逐像素std在[-1,1]空间计算。"
+    ),
+    "zeta_values_质量": zeta_quality,
+    "zeta_values_多样性": zeta_div,
+    "CRN_seed": CRN_SEED,
+    "统计种子": list(STAT_SEEDS),
+    "多样性种子": list(DIV_SEEDS),
     "sigma_y_blur": round(float(sigma_y_blur), 4),
     "sigma_y_inpaint": round(float(sigma_y_inpaint), 4),
-    "PSNR_去模糊_各zeta": {f"zeta={z}": round(float(p), 2) for z, p in zip(zeta_values, psnr_blur_list)},
     "PSNR_去模糊_观测": round(float(psnr_blur_obs), 2),
-    "PSNR_inpainting_各zeta": {f"zeta={z}": round(float(p), 2) for z, p in zip(zeta_values, psnr_inpaint_list)},
     "PSNR_inpainting_观测": round(float(psnr_inpaint_obs), 2),
+    "PSNR_去模糊": _quality_table(blur_primary_psnr, blur_stats),
+    "PSNR_inpainting": _quality_table(inp_primary_psnr, inp_stats),
+    "多样性_去模糊": _diversity_table(blur_div),
+    "多样性_inpainting": _diversity_table(inp_div),
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

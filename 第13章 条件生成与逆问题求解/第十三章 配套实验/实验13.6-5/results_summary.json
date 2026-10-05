@@ -1,11 +1,66 @@
 {
-  "note": "定性视觉对比实验（无量化指标）。存档图（strength参数效应.png）生成于2026-07-07，其脚本为当时的13.6-3.py（本实验前身，逻辑与seed=42与当前版完全一致），同种子同依赖版本可复现。",
+  "run_status": "generated",
+  "generated_at": "2026-10-05T02:10:43",
+  "环境": {
+    "python": "3.13.15",
+    "torch": "2.11.0+cu130",
+    "diffusers": "0.40.0",
+    "transformers": "5.17.0",
+    "device": "cuda",
+    "gpu": "Tesla T4"
+  },
   "模型": "runwayml/stable-diffusion-v1-5 (StableDiffusionImg2ImgPipeline, fp16)",
-  "初始图": "sketch-mountains-input.jpg (CompVis官方示例, resize到512x512)",
+  "初始图": "init_image.jpg（CompVis官方sketch-mountains示例，原始1024x512）",
+  "预处理": "等比缩放(scale=512/min(w,h))后中心裁剪到512x512，避免长宽比拉伸",
   "prompt": "a beautiful sunset over mountains, oil painting style",
-  "strength_values": [0.1, 0.3, 0.5, 0.75, 0.95],
+  "strength_values": [
+    0.1,
+    0.3,
+    0.5,
+    0.75,
+    0.95
+  ],
   "guidance_scale": 7.5,
   "seed": 42,
-  "num_inference_steps": "默认50步，strength=s对应跳过前 50-⌊50s⌋ 步、从噪声水平 t≈s·T 开始逆向去噪",
-  "观察": "strength=0.1/0.3几乎保留原图（含铅笔线条）；0.5保留构图骨架但色块被抹匀；0.75大幅重绘但仍同源构图；0.95几乎变成另一幅text-to-image图。prompt中的'sunset'直到strength≥0.75才真正出现，印证小strength下初始图约束压制文本约束。"
+  "num_inference_steps": "默认50步；strength=s时跳过前 50-⌊50s⌋ 步，一次性加噪到噪声水平 t≈s·T 后仅执行后 ⌊50s⌋ 步逆向去噪",
+  "样本数说明": "每个strength仅1个样本(seed=42)，图中展示的是重绘幅度/自由度趋势；统计意义上的'多样性'需每档多种子采样后用方差/最近邻距离等度量",
+  "量化指标_对初始图的像素距离": [
+    {
+      "strength": 0.1,
+      "mse": 136.931,
+      "rmse": 11.702,
+      "mae": 6.347
+    },
+    {
+      "strength": 0.3,
+      "mse": 262.279,
+      "rmse": 16.195,
+      "mae": 8.839
+    },
+    {
+      "strength": 0.5,
+      "mse": 625.09,
+      "rmse": 25.002,
+      "mae": 14.055
+    },
+    {
+      "strength": 0.75,
+      "mse": 1665.212,
+      "rmse": 40.807,
+      "mae": 30.481
+    },
+    {
+      "strength": 0.95,
+      "mse": 4177.5,
+      "rmse": 64.634,
+      "mae": 50.807
+    }
+  ],
+  "指标判读": "MSE/MAE度量输出与（预处理后）初始图的像素差异，strength越大总体应越高（对初始图保真度越低）；单次采样允许局部波动。更贴合感知的度量可用LPIPS，文本语义一致性可用CLIP-score。",
+  "存档图": {
+    "文件": "strength参数效应.png",
+    "存档生成时间": "2026-10-05T02:10:43",
+    "来源说明": "该存档图由2026-07-07运行的前身脚本生成；前身脚本未随本实验目录存档，且当时预处理为直接resize拉伸(1024x512→512x512)，与当前代码的等比中心裁剪不同，故不应期待用当前代码对存档图做像素级复现；同种子、同依赖版本可复现定性趋势。",
+    "观察（仅针对该存档文件的图面判读）": "strength=0.1/0.3几乎保留原图（含铅笔线条）；0.5保留构图骨架但色块被抹匀；0.75大幅重绘但仍同源构图；0.95几乎变成另一幅text-to-image图。prompt中的'sunset'直到strength≥0.75才真正出现，印证小strength下初始图约束压制文本约束。"
+  }
 }

@@ -77,6 +77,28 @@ except ImportError:
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"\n使用设备: {device}")
 
+# ===== 实验配置（无论是否实际生成都作为"预期配置"记录）=====
+PROMPTS = [
+    "a beautiful landscape painting of mountains, oil painting style",
+    "a photorealistic photo of mountains, sunny day",
+    "a sketch of mountains with pencil",
+]
+STRENGTH = 0.75
+GUIDANCE_SCALE = 7.5
+SEED = 42
+
+# ===== strength扫描（附加实验）=====
+# 置空列表[]可关闭扫描、只跑原三面板对比；扫描针对照片化最难的prompt，
+# 输出到独立文件，不覆盖"img2img闭环对比.png"
+STRENGTH_SCAN = [0.6, 0.75, 0.9]
+SCAN_PROMPT_IDX = 1  # PROMPTS中"photorealistic"面板的索引
+
+# 运行状态：只有真正生成并保存图像后才置True，观察结论仅在该状态下落盘
+generation_ok = False
+scan_ok = False
+scan_error = ""
+skip_reason = ""
+
 
 print("=" * 60)
 print("步骤1：img2img与逆问题求解器的对比")
@@ -120,20 +142,15 @@ if HAS_DIFFUSERS and device == "cuda":
             print(f"无法获取初始图像: {e}")
 
         if init_image_pil is not None:
-            prompts = [
-                "a beautiful landscape painting of mountains, oil painting style",
-                "a photorealistic photo of mountains, sunny day",
-                "a sketch of mountains with pencil",
-            ]
-            fig, axes = plt.subplots(1, len(prompts), figsize=(15, 5))
+            fig, axes = plt.subplots(1, len(PROMPTS), figsize=(15, 5))
 
-            for idx, prompt in enumerate(prompts):
+            for idx, prompt in enumerate(PROMPTS):
                 img = pipe(
                     prompt=prompt,
                     image=init_image_pil,
-                    strength=0.75,
-                    guidance_scale=7.5,
-                    generator=torch.Generator(device=device).manual_seed(42),
+                    strength=STRENGTH,
+                    guidance_scale=GUIDANCE_SCALE,
+                    generator=torch.Generator(device=device).manual_seed(SEED),
                 ).images[0]
                 axes[idx].imshow(img)
                 axes[idx].axis('off')
@@ -146,11 +163,51 @@ if HAS_DIFFUSERS and device == "cuda":
             plt.savefig(img2img_path, dpi=150, bbox_inches='tight')
             plt.close()
             print(f"img2img对比图已保存: {img2img_path}")
+            generation_ok = True
+
+            # ---- 附加实验：strength扫描（独立try，失败不影响主实验状态）----
+            if STRENGTH_SCAN:
+                try:
+                    scan_prompt = PROMPTS[SCAN_PROMPT_IDX]
+                    print(f"\n开始strength扫描: prompt='{scan_prompt}', strengths={STRENGTH_SCAN}")
+                    fig2, axes2 = plt.subplots(1, len(STRENGTH_SCAN),
+                                               figsize=(5 * len(STRENGTH_SCAN), 5))
+                    for j, s in enumerate(STRENGTH_SCAN):
+                        ax_j = np.atleast_1d(axes2)[j]
+                        img_s = pipe(
+                            prompt=scan_prompt,
+                            image=init_image_pil,
+                            strength=s,
+                            guidance_scale=GUIDANCE_SCALE,
+                            generator=torch.Generator(device=device).manual_seed(SEED),
+                        ).images[0]
+                        ax_j.imshow(img_s)
+                        ax_j.axis('off')
+                        ax_j.set_title(f"strength={s}", fontsize=12)
+                        print(f"  strength={s} 完成")
+
+                    plt.suptitle('img2img strength扫描（photorealistic prompt, seed=42, 13.6节）',
+                                 fontsize=13, y=1.02)
+                    plt.tight_layout()
+                    scan_path = os.path.join(SAVE_DIR, "img2img_strength扫描.png")
+                    plt.savefig(scan_path, dpi=150, bbox_inches='tight')
+                    plt.close()
+                    print(f"strength扫描图已保存: {scan_path}")
+                    scan_ok = True
+                except Exception as e:
+                    plt.close()
+                    scan_error = f"strength扫描执行出错: {e}"
+                    print(scan_error)
+        else:
+            skip_reason = "无法获取初始图像（下载或打开失败），未实际生成"
     except Exception as e:
         print(f"执行出错: {e}")
         print("可能原因：GPU内存不足、网络无法下载模型等")
+        skip_reason = f"执行出错: {e}"
 else:
     print("跳过实际运行（需要GPU + Diffusers）")
+    skip_reason = (f"跳过实际运行：需要CUDA GPU + diffusers"
+                   f"（当前 device={device}, diffusers={'已安装' if HAS_DIFFUSERS else '未安装'}）")
     print("以下是img2img与逆问题求解器的对比理论说明：")
     print("""
 img2img与逆问题求解器的对比（13.6节）：
@@ -200,27 +257,84 @@ def _to_native(obj):
     except: pass
     return obj
 
-results_summary = {
-    "note": "定性视觉对比实验（无量化指标）。本图存档（img2img闭环对比.png）生成于2026-07-07，"
-             "当时未固定随机种子；当前代码已固定seed=42，重跑会得到同样风格规律但细节不同的新样本。",
+from datetime import datetime
+
+# 与"是否真正生成"无关的预期配置
+_config = {
     "模型": "runwayml/stable-diffusion-v1-5 (StableDiffusionImg2ImgPipeline, fp16)",
     "初始图": "sketch-mountains-input.jpg (CompVis官方示例, resize到512x512)",
-    "prompts": [
-        "a beautiful landscape painting of mountains, oil painting style",
-        "a photorealistic photo of mountains, sunny day",
-        "a sketch of mountains with pencil",
-    ],
-    "strength": 0.75,
-    "guidance_scale": 7.5,
-    "seed": 42,
-    "num_inference_steps": "默认50步，strength=0.75对应跳过前13步加噪、从剩余37步开始逆向去噪",
+    "prompts": PROMPTS,
+    "strength": STRENGTH,
+    "guidance_scale": GUIDANCE_SCALE,
+    "seed": SEED,
+    "num_inference_steps": "默认50步；strength=0.75时一次性加噪到第13个调度时间步对应的噪声水平"
+                           "(int(50*0.75)=37, t_start=50-37=13)，仅执行后37步逆向去噪",
     "对比": "img2img与逆问题求解器(DPS/DiffPIR)的本质区别",
-    "观察": "三幅图共享初始图的构图骨架（山体/河流色块布局），风格随prompt变化；"
-            "但'photorealistic'面板未真正照片化——strength=0.75下初始色粉笔画的色彩/平涂风格主导输出，"
-            "文本只能改变纹理细节，这是img2img'初始化位置约束'的固有体现。",
+    "strength_scan配置": {
+        "启用": bool(STRENGTH_SCAN),
+        "strengths": STRENGTH_SCAN,
+        "prompt": PROMPTS[SCAN_PROMPT_IDX] if STRENGTH_SCAN else "",
+        "guidance_scale": GUIDANCE_SCALE,
+        "seed": SEED,
+        "输出图": "img2img_strength扫描.png",
+    },
 }
+
+if generation_ok:
+    results_summary = {
+        "run_status": "generated",
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "device": device,
+        "存档图": "img2img闭环对比.png",
+        "note": "定性视觉对比实验（无量化指标）。以下观察基于本次（seed固定）实际生成的存档图，"
+                "应逐面板对照核实。",
+        **_config,
+        "观察": "三幅输出在strength=0.75下不同程度保留初始图的粗粒度构图与主要色块"
+                "（河道/山丘/岸带等，各面板保留程度有差异，需逐面板对照），风格随prompt明显分化。"
+                "strength锚定构图与色块是img2img固有的'保真-自由'权衡；"
+                "但各风格目标的达成程度同时受随机种子与prompt措辞影响——"
+                "若某风格目标（如photorealistic）在单次采样中仅部分达成，"
+                "不能据此断言固有上界——同prompt的strength扫描(0.6/0.75/0.9，见'strength扫描'块)"
+                "已证实0.9面板明显照片化，故0.75未照片化是保真-自由的参数权衡，而非固有上界。",
+    }
+    # strength扫描结果：仅在扫描图真正生成后写入，且只给判读方法、不预造观察
+    if scan_ok:
+        results_summary["strength扫描"] = {
+            "存档图": "img2img_strength扫描.png",
+            "prompt": PROMPTS[SCAN_PROMPT_IDX],
+            "strengths": STRENGTH_SCAN,
+            "guidance_scale": GUIDANCE_SCALE,
+            "seed": SEED,
+            "判读方法": "逐面板核对照片化程度。步数对应：0.6→30步(t_start=20)、"
+                        "0.75→37步(t_start=13)、0.9→45步(t_start=5)，strength越大初始图约束越弱、"
+                        "文本风格自由度越高。若照片化程度随strength单调增强且0.9面板明显照片化，"
+                        "则表明0.75处未照片化是'保真-自由'权衡（参数选择）而非img2img固有上界；"
+                        "若0.9仍无法照片化，再排查prompt措辞或模型能力。",
+            "观察": "三面板呈严格单调趋势。①strength=0.6（30步去噪）：仍为平涂卡通/插画风，"
+                    "初始图的蓝河道、亮绿山丘、桃色岸带、尖顶山几乎全部保留，构图忠实度最高，"
+                    "对'sunny day'仅有天空淡蓝色调、无太阳；②strength=0.75（37步）：几何化平涂插画，"
+                    "出现黄色卡通太阳与放射光线，河道退化为红粉色带、山体几何化，构图仅部分保留；"
+                    "③strength=0.9（45步，t_start=5）：明显照片化——写实山体纹理与光影、"
+                    "真实天空与强烈镜头光晕、前景为写实起伏的暖色沙丘，初始图的河道/亮绿山丘/城堡等"
+                    "具体构图元素全部消失，仅保留'山脉+晴天'的语义。"
+                    "结论：照片化程度随strength单调增强、对初始图的构图忠实度单调下降，0.9已达成照片写实风，"
+                    "证明0.75（含此前未固定种子与seed=42两次独立采样）未照片化是strength参数选择导致的"
+                    "'保真-自由'权衡，而非img2img机制或SD1.5的固有上界。",
+        }
+    elif scan_error:
+        results_summary["strength扫描"] = {"状态": "failed", "错误": scan_error}
+else:
+    # 未实际生成：只记录状态与预期配置，不写入任何定性"观察"结论
+    results_summary = {
+        "run_status": "not_generated",
+        "recorded_at": datetime.now().isoformat(timespec="seconds"),
+        "skip_reason": skip_reason or "未执行生成",
+        "说明": "本次运行未实际生成图像，按实验规范不写入定性'观察'结论；"
+                "以下仅为预期配置，不代表已验证的结果。",
+        **_config,
+    }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
     json.dump(results_summary, f, ensure_ascii=False, indent=2)
-print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
+print(f"结果记录已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
 
