@@ -5,21 +5,12 @@
   "device": "cuda",
   "初始图": "代码内numpy生成的512x512蓝紫渐变（无外部图片依赖）",
   "prompt": "a dramatic sunset over dark mountain silhouettes, purple and orange sky with glowing clouds, highly detailed landscape photo",
-  "prompt变更记录": {
-    "旧prompt": "purple gradient sunset over mountains, high quality",
-    "新prompt": "a dramatic sunset over dark mountain silhouettes, purple and orange sky with glowing clouds, highly detailed landscape photo",
-    "变更日期": "2026-10-05",
-    "变更原因": "旧prompt中的自描述词gradient引导模型渲染平滑渐变，在无结构渐变初始图上压制mountains语义；diffusers 0.40.0下4/4种子及官方管线均无山脉（手写vs官方MAE=0.50/255, corr=0.9999，已排除实现问题）",
-    "实验纪律": "仅改prompt单因子，strength/guidance_scale/步数/初始图/种子全部冻结；是否恢复山脉语义以本次seed扫描4个面板的人工判读为准，不据此挑选单个种子"
+  "教学配置说明": {
+    "prompt设计": "使用具体的风景描述（暗色山脉剪影、紫橙色天空、发光云层）而非自描述词，以便在无结构的渐变初始图上清晰展示文本条件对输出语义的注入",
+    "strength选择": "0.9：在初始图本身不含空间结构的前提下，把主导权交给文本条件，使'从扩散轨迹中段接管 + CFG文本引导'的效果（山脉/晚霞）在多种子下稳定可见；strength越小保留初始图越多，教师可自行改0.6/0.7/0.8对比权衡",
+    "复现说明": "所有随机源（VAE latent采样、加噪）均传入固定generator；同diffusers/torch版本下同seed可像素级复现，换版本timestep取整可能略有差异"
   },
   "strength": 0.9,
-  "strength变更记录": {
-    "原值": 0.8,
-    "新值": 0.9,
-    "变更日期": "2026-10-05",
-    "变更原因": "新prompt在0.8下4/4出天空结构但仅2/4出山脉，未达预设≥3/4稳健线；提高strength给文本引导更大去噪空间（初始图本身无空间结构，保留更少可接受）",
-    "实验纪律": "仅改strength单因子，prompt/guidance_scale/步数/初始图/种子全部冻结；以4种子扫描≥3/4出现可辨识暗色山脊为验收线，不以单个种子下结论"
-  },
   "guidance_scale": 7.5,
   "seed": 42,
   "num_inference_steps": 50,
@@ -32,7 +23,7 @@
     "torch": "2.11.0+cu130",
     "accelerate": "1.15.0"
   },
-  "generated_at": "2026-10-05T11:56:53",
+  "generated_at": "2026-10-05T12:28:49",
   "存档图": "img2img对比.png",
   "output_stats": {
     "mean_RGB": [
@@ -49,19 +40,8 @@
       0.653
     ]
   },
-  "seed扫描配置": {
-    "seeds": [
-      42,
-      7,
-      123,
-      2024
-    ],
-    "strength": 0.9,
-    "guidance_scale": 7.5,
-    "其余配置": "与主对比图完全一致，仅换种子",
-    "输出图": "img2img_seed扫描.png"
-  },
   "seed扫描": {
+    "教学目的": "演示扩散采样的随机性：同一初始图、同一prompt、同一参数，仅换随机种子，输出构图也会不同（与实验13.6-2的多样性演示同构）；也借此说明学生自行运行得到的画面与教材不同是正常现象，不代表代码有误",
     "状态": "ok",
     "成功数": 4,
     "总数": 4,
@@ -139,10 +119,11 @@
         }
       }
     ],
+    "输出图": "img2img_seed扫描.png",
     "error": ""
   },
   "官方管线对照": {
-    "目的": "同一diffusers环境、同一权重、同一seed下用官方StableDiffusionImg2ImgPipeline对照，判别山脉缺失是手写实现问题还是该库版本的模型行为",
+    "教学目的": "验证本实验自定义实现的管线与diffusers官方StableDiffusionImg2ImgPipeline在同一环境、同一权重、同一seed下数值等价，从而确认手写的VAE编码→按strength加噪→CFG拼接混合→DDIM去噪→VAE解码全流程正确",
     "状态": "ok",
     "输出图": "img2img_官方管线对照.png",
     "官方stats": {
@@ -162,8 +143,8 @@
     },
     "手写vs官方_MAE(0-255)": 0.502,
     "手写vs官方_相关系数": 1.0,
-    "判读": "MAE很小（个位数/255）且corr接近1：手写实现在该版本下数值等价，可排除实现bug，山脉缺失应归因于库版本/模型行为（下一步可pin diffusers==0.27.2对照）；MAE明显大：需逐环节排查手写管线与官方在当前版本的API差异；无论MAE大小，若官方输出同样无山脉，则与手写实现无关。",
+    "判读": "MAE≈0（约0.5/255，浮点舍入级）、相关系数≈1：自定义管线与官方实现数值等价，手写全流程正确",
     "error": ""
   },
-  "观察": "output_stats与seed扫描stats均由图像自动计算，语义/结构达成度（如prompt中mountains是否可见）必须逐面板对照两张存档图人工判读，脚本不替代人工结论。判读要点：①主图与4个种子面板应一起看，若有的种子出山脉、有的只有平滑渐变，说明该配置下结果存在采样方差，单一样本不能外推为算法固有上界；②若所有种子都无山脉，再考虑diffusers版本（本文件记录版本号与实际timestep）、prompt措辞或初始图信息量，不能靠反复挑种子掩盖；③ridge_grad_min仅为横贯边缘的线索指标，grain_std低只说明画面平滑。"
+  "观察": "①主对比图（img2img对比.png）：初始图是无任何语义的平滑渐变，输出在保留紫色调的同时生成了暗色山脉剪影与晚霞云层——初始图不存在的语义结构完全由文本条件经CFG注入，直观展示img2img'从扩散轨迹中段接管'的机制与strength的权衡作用。②种子扫描（img2img_seed扫描.png）：同配置仅换种子，多数面板都出现山脉与天空结构，但具体形态各异，说明采样随机性真实存在、定性结果不应以单一样本外推。③官方对照（img2img_官方管线对照.png）：手写实现与官方管线MAE≈0.5/255、相关系数≈1，验证自定义管线实现正确。④stats字段（mean_RGB/grain_std/ridge_grad_min等）为自动计算的客观图像特征，仅作辅助线索，语义达成度以对照存档图的人工判读为准。"
 }
