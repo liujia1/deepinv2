@@ -197,8 +197,21 @@ print("=" * 60)
 
 # ===== 实验配置（无论是否实际生成都作为"预期配置"记录）=====
 MODEL_ID = "CompVis/stable-diffusion-v1-4"
-PROMPT = "purple gradient sunset over mountains, high quality"
-STRENGTH = 0.8
+# prompt变更（2026-10-05，有证据支持的单因子调整，strength等其余配置一律不动）：
+# 旧prompt "purple gradient sunset over mountains, high quality" 中的 "gradient" 是自描述词，
+# 模型忠实地渲染"紫色渐变"，在无结构的平滑初始图上压制了mountains语义——
+# diffusers 0.40.0下4/4种子与官方管线（MAE=0.50/255, corr=0.9999）均稳定输出平滑渐变。
+# 新prompt去掉gradient、强化山的结构词，保留purple以与初始图紫色调的保留演示相洽。
+PROMPT = ("a dramatic sunset over dark mountain silhouettes, "
+          "purple and orange sky with glowing clouds, "
+          "highly detailed landscape photo")
+OLD_PROMPT = "purple gradient sunset over mountains, high quality"
+OLD_STRENGTH = 0.8
+# strength变更（2026-10-05，第二轮单因子调整，新prompt及其余配置全部冻结）：
+# 新prompt在strength=0.8下4/4种子出现天空/云层结构，但只有2/4出现山脉（seed=123清晰剪影、
+# seed=2024小山峰），未达预设的≥3/4稳健线。提高strength到0.9给文本引导更大去噪空间，
+# 代价是初始图保留更少（初始图本身无结构，可接受）。验收仍以4种子扫描≥3/4出现可辨识山脉为准。
+STRENGTH = 0.9
 GUIDANCE_SCALE = 7.5
 NUM_INFERENCE_STEPS = 50
 SEED = 42
@@ -509,14 +522,36 @@ results_summary = {
     "device": str(device) if device is not None else "n/a",
     "初始图": "代码内numpy生成的512x512蓝紫渐变（无外部图片依赖）",
     "prompt": PROMPT,
+    "prompt变更记录": {
+        "旧prompt": OLD_PROMPT,
+        "新prompt": PROMPT,
+        "变更日期": "2026-10-05",
+        "变更原因": "旧prompt中的自描述词gradient引导模型渲染平滑渐变，在无结构渐变初始图上压制mountains语义；"
+                    "diffusers 0.40.0下4/4种子及官方管线均无山脉（手写vs官方MAE=0.50/255, corr=0.9999，已排除实现问题）",
+        "实验纪律": "仅改prompt单因子，strength/guidance_scale/步数/初始图/种子全部冻结；"
+                    "是否恢复山脉语义以本次seed扫描4个面板的人工判读为准，不据此挑选单个种子",
+    },
     "strength": STRENGTH,
+    "strength变更记录": {
+        "原值": OLD_STRENGTH,
+        "新值": STRENGTH,
+        "变更日期": "2026-10-05",
+        "变更原因": "新prompt在0.8下4/4出天空结构但仅2/4出山脉，未达预设≥3/4稳健线；"
+                    "提高strength给文本引导更大去噪空间（初始图本身无空间结构，保留更少可接受）",
+        "实验纪律": "仅改strength单因子，prompt/guidance_scale/步数/初始图/种子全部冻结；"
+                    "以4种子扫描≥3/4出现可辨识暗色山脊为验收线，不以单个种子下结论",
+    },
     "guidance_scale": GUIDANCE_SCALE,
     "seed": SEED,
     "num_inference_steps": NUM_INFERENCE_STEPS,
     "加噪起点": (
         f"实际起始timestep={actual_start_t}, alpha_bar={actual_alpha_bar:.4f}, "
         f"逆向去噪{actual_denoise_steps}步（timestep取整/offset随diffusers版本略有差异，以本次实测为准）"
-    ) if generation_ok else "int(50*0.8)=40, t_start=10, 实际timestep以scheduler运行时为准",
+    ) if generation_ok else (
+        f"配置值: num_inference_steps={NUM_INFERENCE_STEPS}, strength={STRENGTH} "
+        f"→ 从t_start={NUM_INFERENCE_STEPS - int(NUM_INFERENCE_STEPS * STRENGTH)}起"
+        f"去噪约{int(NUM_INFERENCE_STEPS * STRENGTH)}步, "
+        "实际timestep以scheduler运行时为准"),
     "CFG实现": "显式uncond/cond拼接 + 线性混合 eps_uncond+s*(eps_cond-eps_uncond)，与diffusers官方StableDiffusionImg2ImgPipeline逐项等价",
     "随机源": "VAE latent采样与加噪均传入同一个generator，同环境同版本下结果可复现",
     "依赖版本": dep_versions,
