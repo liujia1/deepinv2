@@ -295,13 +295,13 @@ ax.semilogy(t_range, wt_vlb.numpy(), 'b-', linewidth=2.5,
             label=r'完整VLB权重 $w_t$')
 ax.semilogy(t_range, wt_simple, 'r--', linewidth=2.5,
             label=r'简化目标权重 $=1$')
-# fill_between展示权重差异
+# fill_between展示权重差异（本调度下 w_t 处处<1，故蓝色 w_t>1 区域为空）
 ax.fill_between(t_range, wt_vlb.numpy(), wt_simple,
                 where=wt_vlb.numpy() > wt_simple, alpha=0.15, color='blue',
-                label='丢弃的低t权重(小噪声步)')
+                label=r'$w_t>1$（本调度未出现）')
 ax.fill_between(t_range, wt_vlb.numpy(), wt_simple,
                 where=wt_vlb.numpy() < wt_simple, alpha=0.15, color='red',
-                label='丢弃的高t权重(大噪声步)')
+                label=r'$w_t<1$：VLB 相对均匀权重下调')
 ax.set_xlabel(r'时间步 $t$', fontsize=13)
 ax.set_ylabel(r'权重 (对数尺度)', fontsize=13)
 ax.set_title(r'(b) 完整VLB权重 vs 简化目标权重', fontsize=13)
@@ -377,7 +377,12 @@ results_summary = {
         'note': 'lambda(t)/[2(1-ab_t)] = w_t 精确成立',
     },
     'lambda_equivalent': {
-        f't_{t}': lambda_equiv[t-1].item()
+        # 与步骤1控制台表格一致：直接取数组下标 t 处（下标0因1-ᾱ_0=0发散，不列入）
+        f't_{t}': float(lambda_equiv[t].item())
+        for t in [1, 10, 50, 100, 250, 500, 750, 999]
+    },
+    'wt_vlb': {
+        f't_{t}': float(wt_vlb[t].item())
         for t in [1, 10, 50, 100, 250, 500, 750, 999]
     },
     'VLB_weight_range': {

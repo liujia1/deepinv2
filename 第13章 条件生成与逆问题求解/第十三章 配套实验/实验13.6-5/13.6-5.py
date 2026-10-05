@@ -282,23 +282,31 @@ _config = {
                  "统计意义上的'多样性'需每档多种子采样后用方差/最近邻距离等度量",
 }
 
-# 目录内既有存档文件的客观信息（与本次是否实际运行无关，仅在文件存在时记录）
+# 目录内既有存档文件的客观信息：
+# 仅当本次"未实际生成"时才作为历史存档附带；本次若已生成，PNG即本次产物，不另挂存档块。
+# 旧存档的来源/观察说明只在文件mtime确为2026-07-07时附带，避免把旧结论张冠李戴到新文件上。
 _archive_path = os.path.join(SAVE_DIR, "strength参数效应.png")
 _archive_block = None
-if os.path.exists(_archive_path):
+if (not generation_ok) and os.path.exists(_archive_path):
+    _mtime = datetime.fromtimestamp(os.path.getmtime(_archive_path))
     _archive_block = {
         "文件": "strength参数效应.png",
-        "存档生成时间": datetime.fromtimestamp(
-            os.path.getmtime(_archive_path)).isoformat(timespec="seconds"),
-        "来源说明": "该存档图由2026-07-07运行的前身脚本生成；前身脚本未随本实验目录存档，"
-                   "且当时预处理为直接resize拉伸(1024x512→512x512)，与当前代码的等比中心裁剪不同，"
-                   "故不应期待用当前代码对存档图做像素级复现；同种子、同依赖版本可复现定性趋势。",
-        "观察（仅针对该存档文件的图面判读）":
+        "存档生成时间": _mtime.isoformat(timespec="seconds"),
+    }
+    if _mtime.strftime("%Y-%m-%d") == "2026-07-07":
+        _archive_block["来源说明"] = (
+            "该存档图由2026-07-07运行的前身脚本生成；前身脚本未随本实验目录存档，"
+            "且当时预处理为直接resize拉伸(1024x512→512x512)，与当前代码的等比中心裁剪不同，"
+            "故不应期待用当前代码对存档图做像素级复现；同种子、同依赖版本可复现定性趋势。")
+        _archive_block["观察（仅针对该存档文件的图面判读）"] = (
             "strength=0.1/0.3几乎保留原图（含铅笔线条）；0.5保留构图骨架但色块被抹匀；"
             "0.75大幅重绘但仍同源构图；0.95几乎变成另一幅text-to-image图。"
-            "prompt中的'sunset'直到strength≥0.75才真正出现，"
-            "印证小strength下初始图约束压制文本约束。",
-    }
+            "prompt中的'sunset'在该存档图中于strength≥0.75开始出现（单样本现象，阈值不具普适性），"
+            "整体印证小strength下初始图约束压制文本约束。")
+    else:
+        _archive_block["说明"] = (
+            "该图为其他日期的历史运行产物，非本次运行生成；请对照图面自行判读，"
+            "其结论不属于本次运行记录。")
 
 if generation_ok:
     results_summary = {
@@ -306,6 +314,7 @@ if generation_ok:
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "环境": _env,
         **_config,
+        "输出图": "strength参数效应.png（本次运行新生成，已覆盖同名旧文件）",
         "量化指标_对初始图的像素距离": strength_metrics,
         "指标判读": "MSE/MAE度量输出与（预处理后）初始图的像素差异，strength越大总体应越高"
                   "（对初始图保真度越低）；单次采样允许局部波动。"

@@ -13,7 +13,8 @@
   本实验为了直观展示权重匹配关系，定义DSM权重为λ(σ)/σ²(不含1/2系数)
   实验12.4-1采用标准DSM损失定义λ(t)/[2σ_t²](含1/2系数，与文献惯例一致)
   两份实验的结论本质相同：当λ(t)满足匹配条件时，DSM≡VLB仅差常数因子
-  本实验中"DSM权重≈2×VLB权重"，12.4-1中"DSM权重=VLB权重"（精确相等）
+  本实验中"DSM权重 = 2×VLB权重"（精确常数比），12.4-1中"DSM权重=VLB权重"（精确相等）
+  为让常数比的数值验证达到浮点舍入级别，本实验调度全部以float64计算
 
 本实验不需要GPU，纯数值验证。
 
@@ -88,10 +89,10 @@ print(f"输出目录: {SAVE_DIR}")
 # ============================================================
 T = 1000
 beta_min, beta_max = 1e-4, 0.02
-betas = torch.linspace(beta_min, beta_max, T)
+betas = torch.linspace(beta_min, beta_max, T, dtype=torch.float64)
 alphas = 1.0 - betas
 alpha_bars = torch.cumprod(alphas, dim=0)
-alpha_bars_prev = torch.cat([torch.ones(1), alpha_bars[:-1]])
+alpha_bars_prev = torch.cat([torch.ones(1, dtype=torch.float64), alpha_bars[:-1]])
 posterior_var = betas * (1 - alpha_bars_prev) / (1 - alpha_bars)
 
 # VP-SDE噪声水平: σ_t = √(1-ᾱ_t)
@@ -196,7 +197,8 @@ print("  → 两者训练行为完全一致")
 print()
 print("情况2: 加权DSM ≡ 完整VLB")
 print("  当 λ(t) = β_t(1-ᾱ_t)/[(1-ᾱ_{t-1})·α_t] 时")
-print("  DSM权重 = VLB权重，两个目标仅差常数")
+print("  本实验约定下 DSM权重 = 2 × VLB权重（仅差常数2）")
+print("  标准约定 λ/(2σ²) 下则 DSM权重 = VLB权重（精确相等）")
 print("  → 12.4节将严格证明并数值验证此等价性")
 
 # VLB权重的量级特征（简要展示）
@@ -286,7 +288,7 @@ print("""
    (2) 加权DSM ≡ 完整VLB:
        - 匹配条件: λ(t) = β_t(1-ᾱ_t) / [(1-ᾱ_{t-1})·α_t]
        - DSM权重 = 2 × VLB权重（仅差常数因子2）
-       - 数值验证: 两条曲线在缩放后完全重合（偏差<1e-10）
+       - 数值验证: 两条曲线在缩放后完全重合（偏差~1e-15，浮点舍入级别）
 
 3. VLB权重量级跨越约2个数量级，简化目标等权重1
    → 简化目标训练更稳定（Ho et al. 2020的关键实践发现）
@@ -331,7 +333,7 @@ results_summary = {
         'note': 'DSM权重 = 2 × VLB权重 (理论严格等价)',
     },
     'VLB_weights_sampled': {
-        f't_{t}': wt_vlb[t-1].item()
+        f't_{t}': wt_vlb[t].item()
         for t in [1, 10, 50, 100, 250, 500, 750, 999]
     },
 }

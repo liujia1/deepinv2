@@ -134,9 +134,11 @@ if HAS_DEPS:
             text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
 
             self.scheduler.set_timesteps(num_inference_steps)
+            # 注意：sample(generator)必须传入同一个generator，否则z_0采样走全局随机流，
+            # 相同seed的两次运行也会得到不同结果（diffusers官方retrieve_latents即如此传入）
             init_latents = self.vae.encode(
                 init_image.to(self.device)
-            ).latent_dist.sample()
+            ).latent_dist.sample(generator)
             init_latents = init_latents * self.vae.config.scaling_factor
 
             # 计算起始步：strength越大，保留原图结构越少
@@ -148,6 +150,12 @@ if HAS_DEPS:
             t_start = max(num_inference_steps - init_timestep, 0)
             timesteps = self.scheduler.timesteps[t_start:]
             start_timestep = timesteps[0:1]
+            # 记录本次实际使用的调度量（不同diffusers版本timestep取整/offset约定略有差异）
+            self.last_start_timestep = int(start_timestep.item())
+            self.last_denoise_steps = int(len(timesteps))
+            self.last_alpha_bar = float(
+                self.scheduler.alphas_cumprod[self.last_start_timestep].item()
+            )
 
             noise = torch.randn(
                 init_latents.shape, generator=generator, device=self.device
@@ -194,13 +202,32 @@ STRENGTH = 0.8
 GUIDANCE_SCALE = 7.5
 NUM_INFERENCE_STEPS = 50
 SEED = 42
+# 多种子扫描：img2img结果对随机采样敏感（平滑渐变初始图下尤甚），
+# 单一样本无法代表算法行为，故固定其余配置、只换种子做小扫描
+SEED_SCAN = [42, 7, 123, 2024]
 compare_path = os.path.join(SAVE_DIR, "img2img对比.png")
+sweep_path = os.path.join(SAVE_DIR, "img2img_seed扫描.png")
 
 # 运行状态：只有真正生成并保存图像后才置True，观察结论仅在该状态下落盘
 generation_ok = False
 gen_error = ""
 skip_reason = ""
 device = None
+output_stats = None
+actual_start_t = None
+actual_denoise_steps = None
+actual_alpha_bar = None
+sweep_results = []
+sweep_ok = False
+sweep_error = ""
+dep_versions = {}
+# 官方管线对照（同一环境/权重/种子，判别是手写实现问题还是库版本行为）
+official_ok = False
+official_stats = None
+official_mae = None
+official_corr = None
+official_error = ""
+official_path = os.path.join(SAVE_DIR, "img2img_官方管线对照.png")
 
 if HAS_DEPS:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -231,11 +258,16 @@ if HAS_DEPS:
         print(f"  UNet参数: {sum(p.numel() for p in unet.parameters()) / 1e6:.0f}M")
         print(f"  CLIP参数: {sum(p.numel() for p in text_encoder.parameters()) / 1e6:.0f}M")
 
-        # ---- 实际运行示例：生成一张img2img结果 ----
-        print("\n正在生成img2img对比图...")
-        from PIL import Image
+        # ---- 准备初始图像（渐变背景，所有种子共用）----
+        from PIL import Image, ImageFilter
+        from importlib.metadata import version as _pkg_version
+        for _pkg in ("diffusers", "transformers", "torch", "accelerate"):
+            try:
+                dep_versions[_pkg] = _pkg_version(_pkg)
+            except Exception:
+                dep_versions[_pkg] = "unknown"
+        print(f"  依赖版本: {dep_versions}")
 
-        # 创建一个简单的初始图像（渐变背景）- 使用numpy高效生成
         x = np.linspace(0, 255, 512)
         y = np.linspace(0, 255, 512)
         xx, yy = np.meshgrid(x, y)
@@ -256,31 +288,150 @@ if HAS_DEPS:
         init_image_tensor = init_image_tensor.permute(2, 0, 1).unsqueeze(0).to(device)
         init_image_tensor = init_image_tensor * 2.0 - 1.0  # [0,1] -> [-1,1]
 
-        # 生成图像
-        output_image = pipeline(
-            prompt=PROMPT,
-            init_image=init_image_tensor,
-            strength=STRENGTH,
-            num_inference_steps=NUM_INFERENCE_STEPS,
-            guidance_scale=GUIDANCE_SCALE,
-            generator=torch.Generator(device=device).manual_seed(SEED),
-        )
+        def compute_stats(out_img):
+            """从输出图像自动计算定量特征（不写主观结论，语义需人工对照存档图判读）"""
+            f = out_img.astype(np.float32)
+            blur = np.asarray(
+                Image.fromarray(out_img).filter(ImageFilter.GaussianBlur(4))
+            ).astype(np.float32)
+            h = f.shape[0]
+            band = f[int(h*0.55):int(h*0.85)].mean(axis=(1, 2))
+            return {
+                "mean_RGB": [round(float(v), 2) for v in f.reshape(-1, 3).mean(0)],
+                "grain_std": round(float((f - blur).std()), 3),
+                "edge_y_mean": round(float(np.abs(np.diff(f, axis=0)).mean()), 3),
+                # 55%-85%高度带内水平亮度骤降的最大幅度，仅作"可能存在横贯山脊"的线索
+                "ridge_grad_min": round(float(np.diff(band).min()), 3),
+                "dark_frac(<110)_top_mid_bottom": [
+                    round(float((f[:h//3].mean(2) < 110).mean()), 3),
+                    round(float((f[h//3:2*h//3].mean(2) < 110).mean()), 3),
+                    round(float((f[2*h//3:].mean(2) < 110).mean()), 3),
+                ],
+            }
 
-        # 对比展示
+        def generate(seed):
+            print(f"\n[seed={seed}] 采样中...")
+            out_img = pipeline(
+                prompt=PROMPT,
+                init_image=init_image_tensor,
+                strength=STRENGTH,
+                num_inference_steps=NUM_INFERENCE_STEPS,
+                guidance_scale=GUIDANCE_SCALE,
+                generator=torch.Generator(device=device).manual_seed(seed),
+            )
+            stats = compute_stats(out_img)
+            print(f"[seed={seed}] stats={stats}")
+            return out_img, stats
+
+        # ---- 主对比图：seed=42 ----
+        print("\n正在生成img2img对比图(seed=42)...")
+        output_image, output_stats = generate(SEED)
+        actual_start_t = pipeline.last_start_timestep
+        actual_denoise_steps = pipeline.last_denoise_steps
+        actual_alpha_bar = pipeline.last_alpha_bar
+        print(f"  实际起始timestep={actual_start_t}, alpha_bar={actual_alpha_bar:.4f}, "
+              f"逆向去噪{actual_denoise_steps}步")
+
         fig, axes = plt.subplots(1, 2, figsize=(10, 5))
         axes[0].imshow(init_image)
         axes[0].axis('off')
         axes[0].set_title('初始图像（渐变背景）')
-        result_img = Image.fromarray(output_image)
-        axes[1].imshow(result_img)
+        axes[1].imshow(Image.fromarray(output_image))
         axes[1].axis('off')
-        axes[1].set_title(f'img2img结果 (strength={STRENGTH})')
+        axes[1].set_title(f'img2img结果 (strength={STRENGTH}, seed={SEED})')
         plt.suptitle('img2img Pipeline效果演示', fontsize=14, y=1.02)
         plt.tight_layout()
         plt.savefig(compare_path, dpi=150, bbox_inches='tight')
         plt.close()
         generation_ok = True
         print(f"对比图已保存: {compare_path}")
+
+        # ---- 多种子扫描：刻画采样敏感性（非挑选好看的样本）----
+        print(f"\n开始多种子扫描: {SEED_SCAN}")
+        try:
+            fig2, axes2 = plt.subplots(1, len(SEED_SCAN) + 1,
+                                       figsize=(4 * (len(SEED_SCAN) + 1), 4.2))
+            axes2[0].imshow(init_image)
+            axes2[0].axis('off')
+            axes2[0].set_title('初始图像')
+            for _i, _seed in enumerate(SEED_SCAN):
+                try:
+                    if _seed == SEED:
+                        _out, _stats = output_image, output_stats  # 复用，不重复采样
+                    else:
+                        _out, _stats = generate(_seed)
+                    sweep_results.append({"seed": _seed, "stats": _stats})
+                    axes2[_i + 1].imshow(Image.fromarray(_out))
+                    axes2[_i + 1].set_title(f'seed={_seed}')
+                except Exception as e:
+                    sweep_error = (sweep_error + " | " if sweep_error else "") \
+                        + f"seed={_seed}: {type(e).__name__}: {e}"
+                    print(f"扫描失败: {sweep_error}")
+                    axes2[_i + 1].set_title(f'seed={_seed}\n(失败)')
+                axes2[_i + 1].axis('off')
+            plt.suptitle(f'img2img多种子扫描 (strength={STRENGTH}, gs={GUIDANCE_SCALE}, '
+                         f'同一初始图与prompt，仅换种子)', fontsize=13)
+            plt.tight_layout()
+            plt.savefig(sweep_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            sweep_ok = len(sweep_results) == len(SEED_SCAN)
+            print(f"种子扫描图已保存: {sweep_path} (成功{len(sweep_results)}/{len(SEED_SCAN)})")
+        except Exception as e:
+            plt.close()
+            sweep_error = f"扫描图绘制失败: {type(e).__name__}: {e}"
+            print(f"种子扫描未完成（不影响主对比图）: {sweep_error}")
+
+        # ---- 官方管线对照：同环境/权重/种子，验证手写实现与官方是否数值等价 ----
+        print("\n开始官方StableDiffusionImg2ImgPipeline对照(seed=42)...")
+        try:
+            from diffusers import StableDiffusionImg2ImgPipeline
+            # 复用同一批已加载权重，仅给官方一个全新scheduler实例（避免step_index状态共享）
+            _fresh_sched = DDIMScheduler.from_pretrained(MODEL_ID, subfolder="scheduler")
+            _common = dict(vae=vae, text_encoder=text_encoder, tokenizer=tokenizer,
+                           unet=unet, scheduler=_fresh_sched)
+            try:
+                # 不同diffusers版本对safety_checker参数签名要求不一，先显式禁用
+                official_pipe = StableDiffusionImg2ImgPipeline(
+                    safety_checker=None, feature_extractor=None,
+                    requires_safety_checker=False, **_common
+                ).to(device)
+            except TypeError:
+                official_pipe = StableDiffusionImg2ImgPipeline(**_common).to(device)
+            official_out = np.array(official_pipe(
+                prompt=PROMPT,
+                image=init_image,  # PIL，官方内部自行预处理（图已是512x512）
+                strength=STRENGTH,
+                num_inference_steps=NUM_INFERENCE_STEPS,
+                guidance_scale=GUIDANCE_SCALE,
+                generator=torch.Generator(device=device).manual_seed(SEED),
+            ).images[0])
+            official_stats = compute_stats(official_out)
+            _a = output_image.astype(np.float32)
+            _b = official_out.astype(np.float32)
+            official_mae = round(float(np.abs(_a - _b).mean()), 3)
+            official_corr = round(float(np.corrcoef(_a.ravel(), _b.ravel())[0, 1]), 4)
+            print(f"  官方管线stats={official_stats}")
+            print(f"  手写vs官方: MAE={official_mae}/255, corr={official_corr}")
+
+            fig3, axes3 = plt.subplots(1, 3, figsize=(15, 5))
+            axes3[0].imshow(init_image)
+            axes3[0].set_title('初始图像')
+            axes3[1].imshow(output_image)
+            axes3[1].set_title(f'手写管线 (seed={SEED})')
+            axes3[2].imshow(official_out)
+            axes3[2].set_title(f'官方diffusers管线 (seed={SEED})')
+            for _ax in axes3:
+                _ax.axis('off')
+            plt.suptitle(f'手写vs官方管线对照 (MAE={official_mae}/255, corr={official_corr})',
+                         fontsize=13)
+            plt.tight_layout()
+            plt.savefig(official_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            official_ok = True
+            print(f"官方对照图已保存: {official_path}")
+        except Exception as e:
+            official_error = f"{type(e).__name__}: {e}"
+            print(f"官方管线对照失败（不影响其余产物）: {official_error}")
 
     except Exception as e:
         # 不吞异常、不伪装成功：记录类型与信息，由末尾JSON如实落盘run_status=skipped
@@ -362,17 +513,56 @@ results_summary = {
     "guidance_scale": GUIDANCE_SCALE,
     "seed": SEED,
     "num_inference_steps": NUM_INFERENCE_STEPS,
-    "加噪起点": "int(50*0.8)=40, t_start=50-40=10, 起始timestep=799, alpha_bar=0.037, 实际逆向去噪40步（初始潜变量信号幅值约19%）",
+    "加噪起点": (
+        f"实际起始timestep={actual_start_t}, alpha_bar={actual_alpha_bar:.4f}, "
+        f"逆向去噪{actual_denoise_steps}步（timestep取整/offset随diffusers版本略有差异，以本次实测为准）"
+    ) if generation_ok else "int(50*0.8)=40, t_start=10, 实际timestep以scheduler运行时为准",
     "CFG实现": "显式uncond/cond拼接 + 线性混合 eps_uncond+s*(eps_cond-eps_uncond)，与diffusers官方StableDiffusionImg2ImgPipeline逐项等价",
+    "随机源": "VAE latent采样与加噪均传入同一个generator，同环境同版本下结果可复现",
+    "依赖版本": dep_versions,
 }
 if generation_ok:
     results_summary["generated_at"] = datetime.now().isoformat(timespec="seconds")
     results_summary["存档图"] = os.path.basename(compare_path)
+    results_summary["output_stats"] = output_stats
+    results_summary["seed扫描配置"] = {
+        "seeds": SEED_SCAN,
+        "strength": STRENGTH,
+        "guidance_scale": GUIDANCE_SCALE,
+        "其余配置": "与主对比图完全一致，仅换种子",
+        "输出图": os.path.basename(sweep_path) if os.path.exists(sweep_path) else None,
+    }
+    results_summary["seed扫描"] = {
+        "状态": "ok" if sweep_ok else "partial",
+        "成功数": len(sweep_results),
+        "总数": len(SEED_SCAN),
+        "逐种子stats": sweep_results,
+        "error": sweep_error,
+    }
+    results_summary["官方管线对照"] = {
+        "目的": "同一diffusers环境、同一权重、同一seed下用官方StableDiffusionImg2ImgPipeline对照，"
+                "判别山脉缺失是手写实现问题还是该库版本的模型行为",
+        "状态": "ok" if official_ok else "failed",
+        "输出图": os.path.basename(official_path) if os.path.exists(official_path) else None,
+        "官方stats": official_stats,
+        "手写vs官方_MAE(0-255)": official_mae,
+        "手写vs官方_相关系数": official_corr,
+        "判读": (
+            "MAE很小（个位数/255）且corr接近1：手写实现在该版本下数值等价，可排除实现bug，"
+            "山脉缺失应归因于库版本/模型行为（下一步可pin diffusers==0.27.2对照）；"
+            "MAE明显大：需逐环节排查手写管线与官方在当前版本的API差异；"
+            "无论MAE大小，若官方输出同样无山脉，则与手写实现无关。"
+        ) if official_ok else None,
+        "error": official_error,
+    }
     results_summary["观察"] = (
-        "应逐面板对照存档图核实：输出在紫色天空下生成暗色山脉剪影，"
-        "prompt中mountains语义达成、初始紫色调保留，sunset仅弱体现（右侧微暖）；"
-        "画面整体平滑与prompt含gradient、平滑渐变初始图以及strength=0.8高噪声起点有关，"
-        "不能仅凭单次seed采样外推为img2img的固有上界。"
+        "output_stats与seed扫描stats均由图像自动计算，语义/结构达成度（如prompt中mountains是否可见）"
+        "必须逐面板对照两张存档图人工判读，脚本不替代人工结论。"
+        "判读要点：①主图与4个种子面板应一起看，若有的种子出山脉、有的只有平滑渐变，"
+        "说明该配置下结果存在采样方差，单一样本不能外推为算法固有上界；"
+        "②若所有种子都无山脉，再考虑diffusers版本（本文件记录版本号与实际timestep）、"
+        "prompt措辞或初始图信息量，不能靠反复挑种子掩盖；"
+        "③ridge_grad_min仅为横贯边缘的线索指标，grain_std低只说明画面平滑。"
     )
 else:
     results_summary["skip_reason"] = skip_reason or "模型加载或采样过程中抛出异常"

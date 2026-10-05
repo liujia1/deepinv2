@@ -1,0 +1,155 @@
+{
+  "run_status": "generated",
+  "note": "定性视觉对比实验（无量化指标）。run_status=skipped表示本次运行环境不具备条件或加载/采样抛错，存档图须在具备依赖的环境（推荐GPU）实际生成；只有run_status=generated时下列观察才与本次运行对应。",
+  "模型": "CompVis/stable-diffusion-v1-4 (自定义CustomImg2ImgPipeline + DDIMScheduler)",
+  "device": "cuda",
+  "初始图": "代码内numpy生成的512x512蓝紫渐变（无外部图片依赖）",
+  "prompt": "purple gradient sunset over mountains, high quality",
+  "strength": 0.8,
+  "guidance_scale": 7.5,
+  "seed": 42,
+  "num_inference_steps": 50,
+  "加噪起点": "实际起始timestep=781, alpha_bar=0.0435, 逆向去噪40步（timestep取整/offset随diffusers版本略有差异，以本次实测为准）",
+  "CFG实现": "显式uncond/cond拼接 + 线性混合 eps_uncond+s*(eps_cond-eps_uncond)，与diffusers官方StableDiffusionImg2ImgPipeline逐项等价",
+  "随机源": "VAE latent采样与加噪均传入同一个generator，同环境同版本下结果可复现",
+  "依赖版本": {
+    "diffusers": "0.40.0",
+    "transformers": "5.17.0",
+    "torch": "2.11.0+cu130",
+    "accelerate": "1.15.0"
+  },
+  "generated_at": "2026-10-05T07:00:11",
+  "存档图": "img2img对比.png",
+  "output_stats": {
+    "mean_RGB": [
+      120.59,
+      53.14,
+      162.19
+    ],
+    "grain_std": 0.744,
+    "edge_y_mean": 0.428,
+    "ridge_grad_min": -0.083,
+    "dark_frac(<110)_top_mid_bottom": [
+      0.789,
+      0.351,
+      0.246
+    ]
+  },
+  "seed扫描配置": {
+    "seeds": [
+      42,
+      7,
+      123,
+      2024
+    ],
+    "strength": 0.8,
+    "guidance_scale": 7.5,
+    "其余配置": "与主对比图完全一致，仅换种子",
+    "输出图": "img2img_seed扫描.png"
+  },
+  "seed扫描": {
+    "状态": "ok",
+    "成功数": 4,
+    "总数": 4,
+    "逐种子stats": [
+      {
+        "seed": 42,
+        "stats": {
+          "mean_RGB": [
+            120.59,
+            53.14,
+            162.19
+          ],
+          "grain_std": 0.744,
+          "edge_y_mean": 0.428,
+          "ridge_grad_min": -0.083,
+          "dark_frac(<110)_top_mid_bottom": [
+            0.789,
+            0.351,
+            0.246
+          ]
+        }
+      },
+      {
+        "seed": 7,
+        "stats": {
+          "mean_RGB": [
+            119.56,
+            52.97,
+            170.21
+          ],
+          "grain_std": 1.005,
+          "edge_y_mean": 0.436,
+          "ridge_grad_min": -0.161,
+          "dark_frac(<110)_top_mid_bottom": [
+            0.171,
+            0.384,
+            0.403
+          ]
+        }
+      },
+      {
+        "seed": 123,
+        "stats": {
+          "mean_RGB": [
+            125.15,
+            58.24,
+            168.84
+          ],
+          "grain_std": 0.715,
+          "edge_y_mean": 0.375,
+          "ridge_grad_min": -0.057,
+          "dark_frac(<110)_top_mid_bottom": [
+            0.495,
+            0.037,
+            0.0
+          ]
+        }
+      },
+      {
+        "seed": 2024,
+        "stats": {
+          "mean_RGB": [
+            117.91,
+            47.22,
+            174.84
+          ],
+          "grain_std": 0.755,
+          "edge_y_mean": 0.412,
+          "ridge_grad_min": -0.129,
+          "dark_frac(<110)_top_mid_bottom": [
+            0.64,
+            0.096,
+            0.264
+          ]
+        }
+      }
+    ],
+    "error": ""
+  },
+  "官方管线对照": {
+    "目的": "同一diffusers环境、同一权重、同一seed下用官方StableDiffusionImg2ImgPipeline对照，判别山脉缺失是手写实现问题还是该库版本的模型行为",
+    "状态": "ok",
+    "输出图": "img2img_官方管线对照.png",
+    "官方stats": {
+      "mean_RGB": [
+        121.08,
+        53.64,
+        162.67
+      ],
+      "grain_std": 0.746,
+      "edge_y_mean": 0.429,
+      "ridge_grad_min": -0.105,
+      "dark_frac(<110)_top_mid_bottom": [
+        0.763,
+        0.331,
+        0.233
+      ]
+    },
+    "手写vs官方_MAE(0-255)": 0.501,
+    "手写vs官方_相关系数": 0.9999,
+    "判读": "MAE很小（个位数/255）且corr接近1：手写实现在该版本下数值等价，可排除实现bug，山脉缺失应归因于库版本/模型行为（下一步可pin diffusers==0.27.2对照）；MAE明显大：需逐环节排查手写管线与官方在当前版本的API差异；无论MAE大小，若官方输出同样无山脉，则与手写实现无关。",
+    "error": ""
+  },
+  "观察": "output_stats与seed扫描stats均由图像自动计算，语义/结构达成度（如prompt中mountains是否可见）必须逐面板对照两张存档图人工判读，脚本不替代人工结论。判读要点：①主图与4个种子面板应一起看，若有的种子出山脉、有的只有平滑渐变，说明该配置下结果存在采样方差，单一样本不能外推为算法固有上界；②若所有种子都无山脉，再考虑diffusers版本（本文件记录版本号与实际timestep）、prompt措辞或初始图信息量，不能靠反复挑种子掩盖；③ridge_grad_min仅为横贯边缘的线索指标，grain_std低只说明画面平滑。"
+}

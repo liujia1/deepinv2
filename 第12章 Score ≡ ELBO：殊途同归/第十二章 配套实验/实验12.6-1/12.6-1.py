@@ -299,7 +299,9 @@ def train_model(label, seed, checkpoint_path):
             print(f"  训练轮数: {checkpoint['epoch']+1}")
             print(f"  最终损失: {checkpoint['loss']:.6f}")
             model.load_state_dict(checkpoint['model_state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            # 成品checkpoint不再保存优化器状态; 兼容旧版(含优化器状态)时跳过加载
+            if 'optimizer_state_dict' in checkpoint:
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             train_losses = checkpoint.get('train_losses', [])
             start_epoch = checkpoint['epoch'] + 1
             is_final = True
@@ -369,12 +371,11 @@ def train_model(label, seed, checkpoint_path):
             t_elapsed = time.time() - t_start
             print(f"  [{label}] 训练完成, 最终损失: {train_losses[-1]:.6f}, 耗时: {t_elapsed:.1f} 秒")
 
-        # 保存最终checkpoint
+        # 保存最终checkpoint (成品: 仅存模型权重与损失曲线, 不存优化器状态)
         if train_losses:
             torch.save({
                 'epoch': _num_epochs - 1,
                 'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
                 'loss': train_losses[-1],
                 'train_losses': train_losses,
                 'is_final': True
