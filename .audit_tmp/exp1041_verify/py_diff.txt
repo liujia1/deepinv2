@@ -1,0 +1,60 @@
+﻿diff --git a/绗?0绔?灞傜骇VAE涓庢墿鏁ｇ殑鍙樺垎鎺ㄥ/绗崄绔?閰嶅瀹為獙/瀹為獙10.4-1/10.4-1.py b/绗?0绔?灞傜骇VAE涓庢墿鏁ｇ殑鍙樺垎鎺ㄥ/绗崄绔?閰嶅瀹為獙/瀹為獙10.4-1/10.4-1.py
+index ce8bc8c..5e9826c 100644
+--- a/绗?0绔?灞傜骇VAE涓庢墿鏁ｇ殑鍙樺垎鎺ㄥ/绗崄绔?閰嶅瀹為獙/瀹為獙10.4-1/10.4-1.py	
++++ b/绗?0绔?灞傜骇VAE涓庢墿鏁ｇ殑鍙樺垎鎺ㄥ/绗崄绔?閰嶅瀹為獙/瀹為獙10.4-1/10.4-1.py	
+@@ -120,13 +120,13 @@ print("  杈归檯鍒嗗竷: q(x_t|x_0) = N(x_t; sqrt(ab(t)) x_0, (1-ab(t))I)")
+ print("  鍏朵腑 ab(t) = exp(-int_0^t beta(s) ds)")
+ 
+ print("\n[閫嗗悜SDE]")
+-print("  閫嗗悜SDE: dx = [beta(t)/2 路 x - beta(t) 路 s_theta(x,t)] dt + sqrt(beta(t)) dW_bar")
+-print("  鎴栫敤eps-prediction鍙傛暟鍖?")
+-print("  dx = [beta(t)/2 路 x + beta(t)/sqrt(1-ab(t)) 路 hat_eps_theta(x,t)] dt + sqrt(beta(t)) dW_bar")
++print("  閫嗗悜SDE: dx = [-beta(t)/2 路 x - beta(t) 路 s_theta(x,t)] dt + sqrt(beta(t)) dW_bar")
++print("  鎴栫敤eps-prediction鍙傛暟鍖?(s_theta = -hat_eps/sqrt(1-ab)):")
++print("  dx = [-beta(t)/2 路 x + beta(t)/(2路sqrt(1-ab(t))) 路 hat_eps_theta(x,t)] dt + sqrt(beta(t)) dW_bar")
+ 
+ print("\n[ODE褰㈠紡 (Probability Flow ODE)]")
+ print("  鍘婚櫎闅忔満椤瑰悗寰楀埌纭畾鎬DE:")
+-print("  dx = [beta(t)/2 路 x - beta(t)/2 路 s_theta(x,t)] dt")
++print("  dx = [-beta(t)/2 路 x - beta(t)/2 路 s_theta(x,t)] dt")
+ print("  鐢ㄤ簬纭畾鎬ч噰鏍峰拰浼肩劧璁＄畻")
+ 
+ 
+@@ -159,7 +159,7 @@ np.random.seed(42)
+ x0_gmm = np.vstack([np.random.randn(500, 2) * 0.5 + [1, 0],
+                      np.random.randn(500, 2) * 0.5 + [-1, 0]])
+ 
+-print("\n[鏁板€奸獙璇乚 杈归檯鍒嗗竷婕斿寲: KL(q(x_t|x_0) || N(0,I))鐨勭Н鍒嗘敹鏁?)
++print("\n[鏁板€奸獙璇乚 杈归檯鍒嗗竷婕斿寲: 鈭獽L(q_t || N(0,I))dt 鐨勭Н鍒嗘敹鏁?(q_t鍙栧崟楂樻柉杩戜技)")
+ print("  璇存槑: 杩欒　閲忔瘡涓€灞傝竟闄呭垎甯冨埌鏍囧噯姝ｆ€佸厛楠岀殑璺濈")
+ print("       L澧炲ぇ鈫掔Н鍒嗘敹鏁涳紝浣撶幇绂绘暎鍒拌繛缁瀬闄愮殑鏁板€肩ǔ瀹氭€?)
+ print("\n涓嶅悓灞傜骇鏁癓涓嬬殑KL绉垎浼拌锛?D楂樻柉娣峰悎, beta_total=1.0锛?")
+@@ -175,11 +175,14 @@ for L in [5, 10, 50, 100]:
+     total_kl = 0
+     for t in range(1, L + 1):
+         ab_t = alpha_step ** t
+-        # KL(N(sqrt(ab_t)路mu0, ab_t路sigma0^2+(1-ab_t)) || N(0,I))
+-        # 瀵瑰悇鍚戝悓鎬х畝鍖? KL 鈮?0.5*(ab_t*(mu0^2+sigma0^2) - 1 - log(ab_t*sigma0^2+(1-ab_t)))
++        # 鍗曢珮鏂繎浼间笅鐨勮竟闄匥L: KL(N(0, E[x_t虏]) || N(0,I)) = 0.5*(E[x_t虏] - 1 - ln E[x_t虏])
++        # 娉? 杩欓噷鐢ㄤ簩闃剁煩 E[x_t虏] = ab_t路(mu0虏+sigma0虏) + (1-ab_t) 浣滀负杩戜技楂樻柉鐨勬柟宸?+        #   锛堝潎鍊间负0鐨勮繎浼? 鍙屽嘲鍒嗗竷鐨勫绉版€т娇涓€闃剁煩鎶垫秷, 浜岄樁鐭╂槸鑷劧鐭╁尮閰嶉噺锛?+        #   鑰岄潪閫愭牱鏈潯浠跺垎甯?KL(N(sqrt(ab)x_0, var)||N(0,I)) 鐨勫潎鍊硷紙鍚庤€呰繕鍚?(1-ab)路mu0虏 椤? 鏀舵暃鍒扳増0.50锛?+        #   涓ょ鍙栨硶閮介殢 L鈫掆垶 鏀舵暃, 鏈疄楠岄獙璇佺殑鏄€滈粠鏇煎拰鈫掔Н鍒嗏€濈殑鏀舵暃鎬ф湰韬? 涓庡彇娉曟棤鍏?         mu2 = 1.0  # E[mu0^2] 瀵瑰弻妯℃€佺害1
+         sigma2 = 0.25  # sigma0^2
+-        mean_sq = ab_t * (mu2 + sigma2) + (1 - ab_t)
++        mean_sq = ab_t * (mu2 + sigma2) + (1 - ab_t)  # E[x_t虏] 鐭╁尮閰嶆柟宸?         log_var = np.log(ab_t * sigma2 + (1 - ab_t))
+         kl_t = 0.5 * (mean_sq - 1 - log_var)
+         # 鍏抽敭淇锛氭坊鍔犳闀縟t褰掍竴鍖栵紝褰㈡垚榛庢浖鍜岄€艰繎绉垎
+@@ -190,6 +193,15 @@ for L in [5, 10, 50, 100]:
+ print("\n鈫?L澧炲ぇ鏃禟L绉垎閫愭笎鏀舵暃锛屼綋鐜扮鏁ｆ眰鍜屸啋杩炵画绉垎鐨勬暟鍊肩ǔ瀹氭€?)
+ print("  杩欓獙璇佷簡绂绘暎灞傜骇杩囩▼鈫扸P-SDE杩炵画鏋侀檺鐨勬暟瀛﹀悎鐞嗘€?)
+ 
++# 闂紡瀵圭収: L鈫掆垶 鏃堕粠鏇煎拰鈫掔Н鍒?鈭玙0^1 0.5*(m(t) - 1 - ln v(t))dt, 鍏朵腑 ab=e^{-t}, m = ab路(mu2+sigma2)+(1-ab) = 1-0.25ab, v = ab路sigma2+(1-ab) = 1-0.75ab
++try:
++    from scipy.integrate import quad
++    _mu2, _s2 = 1.0, 0.25
++    _kl_lim, _ = quad(lambda t: 0.5*((lambda ab: ab*(_mu2+_s2)+(1-ab) - 1 - np.log(ab*_s2+(1-ab)))(np.exp(-t))), 0, 1)
++    print(f"  闂紡鏋侀檺瀵圭収 (scipy.quad): 鈭玙0^1 kl(t) dt = {_kl_lim:.4f}锛屼笂琛ㄥ€间互 O(1/L) 鍚戝叾鏀舵暃")
++except ImportError:
++    pass
++
+ 
+ # ============================================================
+ # 鍙鍖?

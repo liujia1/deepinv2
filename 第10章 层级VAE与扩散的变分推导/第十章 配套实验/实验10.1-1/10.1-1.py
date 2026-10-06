@@ -6,8 +6,8 @@
 知识点:
   - 马尔可夫推断链: x → z₁ → z₂
   - 马尔可夫生成链: z₂ → z₁ → x
-  - 层级ELBO逐层KL分解: ELBO = 重建项 - KL₁ - KL₂
-  - 第一层编码更多信息: KL₁ > KL₂
+  - 层级ELBO逐层KL分解: -ELBO = 重建项 + KL₁ + KL₂
+    其中 KL₁ = KL(q(z₁|x)||p(z₁|z₂)), KL₂ = KL(q(z₂|z₁)||p(z₂))
 
 实验内容:
   步骤1: 层级VAE训练曲线对比
@@ -173,32 +173,48 @@ def kl_divergence(mu, logvar):
     return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
 
 
-def hierarchical_elbo(x, mu1, logvar1, mu2, logvar2, x_recon, beta=1.0):
-    """层级ELBO简化版（对应10.1节）:
-    
-    ⚠️ 注意：这是教学简化版，并非完整的层级VAE ELBO！
-    
-    严格层级ELBO应为:
-      ELBO = E[log p(x|z₁)] - KL(q(z₁|x) || p(z₁|z₂)) - KL(q(z₂|z₁) || p(z₂))
-    
-    其中KL₁需要对生成分布p(z₁|z₂)计算（需积分z₂），实现复杂。
-    本函数采用平均场近似，将KL₁简化为对标准正态先验N(0,I):
-      KL₁ ≈ KL(q(z₁|x) || N(0,I))
-      KL₂ = KL(q(z₂|z₁) || N(0,I))
-    
-    这与单层VAE的KL计算方式相同，但层级结构本身仍有优势：
-    - 信息分散到两层瓶颈，每层KL约束更温和
-    - 避免单层VAE的"过度压缩"问题
+def kl_divergence_gauss(mu_q, logvar_q, mu_p, logvar_p):
+    """两个对角高斯之间的KL: D_KL(N(μ_q,σ_q²) || N(μ_p,σ_p²))
+    = 0.5 * Σ(σ_q²/σ_p² + (μ_q-μ_p)² - 1 - log(σ_q²/σ_p²))
     """
-    # 重建项: log p(x|z₁)
+    var_q = logvar_q.exp()
+    var_p = logvar_p.exp()
+    return 0.5 * torch.sum(var_q / var_p + (mu_q - mu_p).pow(2) - 1.0
+                           - logvar_q + logvar_p)
+
+
+def hierarchical_elbo(x, mu1, logvar1, mu2, logvar2, x_recon,
+                      mu1_dec, logvar1_dec, beta=1.0):
+    """层级ELBO逐项分解（对应10.1节框式公式在L=2时的展开）:
+
+      -ELBO = E_q[-log p(x|z₁)] + KL(q(z₁|x) || p(z₁|z₂)) + KL(q(z₂|z₁) || p(z₂))
+
+    三个分量均可直接计算:
+    - 重建项: x_recon 由 z₁ ~ q(z₁|x) 经 dec0 得到（伯努利负对数似然）
+    - KL₁: q(z₁|x) 与生成分布 p(z₁|z₂)（dec1输出）均为对角高斯，解析计算；
+      对 z₂ ~ q(z₂|z₁) 取期望即10.1节框式中的 E_{q(z₁,z₂|x)}[KL(...)]
+    - KL₂: q(z₂|z₁) 对标准高斯先验 p(z₂)，解析计算
+
+    注: 10.1"实验场景"小节把KL₁写成对边际聚合先验 p(z₁)=∫p(z₁|z₂)p(z₂)dz₂
+    的形式，那是框式公式的另一种等价写法（Jensen后取边际）；本实现用
+    条件形式 p(z₁|z₂)，与附录10A的框式主公式一致。
+    实测中条件形式下 KL₂ 被压到≈0，说明第二层先验退化为无条件单高斯、
+    z₂ 几乎不携带信息——这是深层VAE的已知风险，不是实现错误。
+
+    ⚠️ 历史版本曾将KL₁简化为 KL(q(z₁|x)||N(0,I))并让重建走
+    z₂→ẑ₁→x 路径，导致编码链 q(z₁|x) 与生成链 dec1 在损失中完全脱钩：
+    dec0 从不接收编码器输出的 z₁，两层瓶颈的信息在 z₂ 处被强制丢弃，
+    层级VAE因此显著劣于单层VAE。现已修正。
+    """
+    # 重建项: -E[log p(x|z₁)], z₁ ~ q(z₁|x)
     recon = F.binary_cross_entropy(x_recon, x, reduction='sum')
-    
-    # KL₁: 简化为 KL(q(z₁|x) || N(0,I))
-    kl1 = kl_divergence(mu1, logvar1)
-    
+
+    # KL₁: KL(q(z₁|x) || p(z₁|z₂)) —— 对角高斯解析式
+    kl1 = kl_divergence_gauss(mu1, logvar1, mu1_dec, logvar1_dec)
+
     # KL₂: KL(q(z₂|z₁) || N(0,I))
     kl2 = kl_divergence(mu2, logvar2)
-    
+
     total = recon + beta * (kl1 + kl2)
     return total, recon, kl1, kl2
 
@@ -303,15 +319,18 @@ def train_hierarchical_vae(checkpoint_path, train_loader, num_epochs=20,
                     z1 = reparameterize(mu1, logvar1)
                     mu2, logvar2 = enc2(z1)
                     z2 = reparameterize(mu2, logvar2)
-                    
-                    # 生成链（马尔可夫生成链）: z₂ → z₁ → x
-                    mu1_dec, logvar1_dec = dec1(z2)
-                    z1_dec = reparameterize(mu1_dec, logvar1_dec)
-                    x_recon = dec0(z1_dec)
-                    
-                    # 层级ELBO（简化版）
+
+                    # 生成分布 p(z₁|z₂): 用独立噪声重采一个 z₂'（保持无偏估计）
+                    z2_prime = mu2 + torch.exp(0.5 * logvar2) * torch.randn_like(mu2)
+                    mu1_dec, logvar1_dec = dec1(z2_prime)
+
+                    # 重建路径: z₁ ~ q(z₁|x) → x̂ (对应 E[log p(x|z₁)])
+                    x_recon = dec0(z1)
+
+                    # 层级ELBO（严格形式）
                     loss, recon, kl1, kl2 = hierarchical_elbo(
-                        x, mu1, logvar1, mu2, logvar2, x_recon, beta
+                        x, mu1, logvar1, mu2, logvar2, x_recon,
+                        mu1_dec, logvar1_dec, beta
                     )
                     
                     optimizer.zero_grad()
@@ -530,8 +549,8 @@ print("\n[核心思想]")
 print("  层级VAE通过马尔可夫推断链扩展了单层VAE:")
 print("  - 编码链: x → z₁ → z₂ (两层瓶颈逐级压缩)")
 print("  - 生成链: z₂ → z₁ → x (两层解码逐级恢复)")
-print("  - 层级ELBO: ELBO = 重建项 - KL₁ - KL₂")
-print("  - KL₁ > KL₂: 第一层(靠近数据)编码更多信息")
+print("  - 层级ELBO: -ELBO = 重建项 + KL₁ + KL₂")
+print("  - 预期: KL₁ > KL₂ (第一层靠近数据, 编码更多信息) —— 由实测验证")
 
 # 加载MNIST数据集
 print("\n加载MNIST数据集...")
@@ -596,7 +615,7 @@ ax.grid(True, alpha=0.3)
 # (c) KL分解（层级VAE特有）—— 使用LaTeX格式
 ax = axes[1, 0]
 ax.plot(epochs_range, history['kl1'], 'g-o', markersize=4, 
-        label=r'$KL_1$: $q(z_1|x) \| p(z_1)$')
+        label=r'$KL_1$: $q(z_1|x) \| p(z_1|z_2)$')
 ax.plot(epochs_range, history['kl2'], 'm-s', markersize=4, 
         label=r'$KL_2$: $q(z_2|z_1) \| p(z_2)$')
 ax.plot(epochs_range, history['kl_total'], 'k--^', markersize=4, 
@@ -644,9 +663,7 @@ with torch.no_grad():
     z1 = mu1  # 使用均值
     mu2, logvar2 = enc2(z1)
     z2 = mu2  # 使用均值
-    mu1_dec, logvar1_dec = dec1(z2)
-    z1_dec = mu1_dec  # 使用均值
-    recon_h = dec0(z1_dec)
+    recon_h = dec0(z1)
 
 # 单层VAE重建
 with torch.no_grad():
@@ -666,7 +683,34 @@ with torch.no_grad():
     z_prior = torch.randn(n_show, d1).to(device)
     samples_s = dec_single(z_prior)
 
-fig, axes = plt.subplots(4, n_show, figsize=(20, 8))
+# 全测试集重建PSNR（均值路径，定量衡量重建质量）
+with torch.no_grad():
+    psnr_h_list, psnr_s_list = [], []
+    for x_t, _ in test_loader:
+        x_t = x_t.view(-1, 784).to(device)
+        r_h = dec0(enc1(x_t)[0]).clamp(1e-6, 1 - 1e-6)
+        r_s = dec_single(enc_single(x_t)[0]).clamp(1e-6, 1 - 1e-6)
+        mse_h = ((r_h - x_t) ** 2).mean(dim=1)
+        mse_s = ((r_s - x_t) ** 2).mean(dim=1)
+        psnr_h_list.append((-10 * torch.log10(mse_h + 1e-12)).cpu().numpy())
+        psnr_s_list.append((-10 * torch.log10(mse_s + 1e-12)).cpu().numpy())
+    psnr_h = float(np.concatenate(psnr_h_list).mean())
+    psnr_s = float(np.concatenate(psnr_s_list).mean())
+print(f"全测试集重建PSNR: 层级VAE={psnr_h:.2f} dB, 单层VAE={psnr_s:.2f} dB")
+
+# 先验采样多样性: 200个先验样本的平均成对L1距离/像素 (量化模式崩溃)
+with torch.no_grad():
+    n_div = 200
+    z2d = torch.randn(n_div, d2).to(device)
+    m1d, l1d = dec1(z2d)
+    div_h = dec0(reparameterize(m1d, l1d))
+    div_s = dec_single(torch.randn(n_div, d1).to(device))
+    pd_h = torch.cdist(div_h, div_h, p=1).mean().item() / 784 / (n_div - 1) * n_div
+    pd_s = torch.cdist(div_s, div_s, p=1).mean().item() / 784 / (n_div - 1) * n_div
+print(f"先验采样多样性(平均成对L1/像素): 层级={pd_h:.5f}, 单层={pd_s:.5f}"
+      + ("  ← 层级采样模式崩溃" if pd_h < 0.3 * pd_s else ""))
+
+fig, axes = plt.subplots(5, n_show, figsize=(20, 10))
 
 for i in range(n_show):
     # 原始
@@ -677,17 +721,22 @@ for i in range(n_show):
     # 层级VAE重建
     axes[1, i].imshow(recon_h[i].view(28, 28).cpu().numpy(), cmap='gray')
     axes[1, i].axis('off')
-    if i == 0: axes[1, i].set_title('层级VAE重建', fontsize=12)
+    if i == 0: axes[1, i].set_title(f'层级VAE重建 (PSNR {psnr_h:.1f}dB)', fontsize=12)
 
     # 单层VAE重建
     axes[2, i].imshow(recon_s[i].view(28, 28).cpu().numpy(), cmap='gray')
     axes[2, i].axis('off')
-    if i == 0: axes[2, i].set_title('单层VAE重建', fontsize=12)
+    if i == 0: axes[2, i].set_title(f'单层VAE重建 (PSNR {psnr_s:.1f}dB)', fontsize=12)
 
     # 层级VAE先验采样
     axes[3, i].imshow(samples_h[i].view(28, 28).cpu().numpy(), cmap='gray')
     axes[3, i].axis('off')
     if i == 0: axes[3, i].set_title('层级VAE采样', fontsize=12)
+
+    # 单层VAE先验采样
+    axes[4, i].imshow(samples_s[i].view(28, 28).cpu().numpy(), cmap='gray')
+    axes[4, i].axis('off')
+    if i == 0: axes[4, i].set_title('单层VAE采样', fontsize=12)
 
 # 使用LaTeX格式的suptitle
 plt.suptitle(r'层级VAE (L=2, $d_1$=20, $d_2$=10) vs 单层VAE ($d_z$=20)',
@@ -698,14 +747,14 @@ plt.savefig(fig_path, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"图2已保存: {fig_path}")
 
-print("\n[单层VAE局限 vs 层级VAE优势]")
-print("  从重建与采样对比可观察到:")
-print("  - 信息瓶颈: 单层VAE一步压缩所有信息, 高维数据难以保持细节")
-print("              层级VAE分两步压缩(x→z₁→z₂), 每层只需处理'增量信息'")
+print(f"\n[单层VAE局限 vs 层级VAE优势]")
+print("  理论上层级结构的优势（本小配置下需结合PSNR实测谨慎解读）:")
+print("  - 信息瓶颈: 层级VAE分两步压缩(x→z₁→z₂), 每层只需处理'增量信息'")
 print("  - KL两难:   强KL约束→重建模糊; 弱KL约束→先验采样无意义")
-print("              层级结构提供了更灵活的先验建模能力")
-print("  - 生成质量天花板: 单步解码跨距太大(简单z→复杂x)")
-print("                    层级解码逐级恢复(z₂→z₁→x), 每步跨距更小")
+print("              层级结构(聚合先验 p(z₁)=∫p(z₁|z₂)p(z₂)dz₂)提供更灵活的先验建模")
+print("  - 生成质量天花板: 层级解码逐级恢复(z₂→z₁→x), 每步跨距更小")
+print("  注: 在MNIST+MLP这种低维流形任务上, L=2的层级未必能胜过单层;")
+print("      层级优势需更大L(接近扩散)时才充分体现, 见10.4节")
 
 # ============================================================
 # 步骤3: 层级ELBO逐项验证
@@ -730,12 +779,13 @@ with torch.no_grad():
         mu2, logvar2 = enc2(z1)
         z2 = reparameterize(mu2, logvar2)
 
-        mu1_dec, logvar1_dec = dec1(z2)
-        z1_dec = reparameterize(mu1_dec, logvar1_dec)
-        x_recon = dec0(z1_dec)
+        # 与训练同款: p(z₁|z₂)用独立噪声样本z₂'，重建走z₁→x̂
+        z2_prime = mu2 + torch.exp(0.5 * logvar2) * torch.randn_like(mu2)
+        mu1_dec, logvar1_dec = dec1(z2_prime)
+        x_recon = dec0(z1)
 
         recon = F.binary_cross_entropy(x_recon, x, reduction='sum')
-        kl1 = kl_divergence(mu1, logvar1)
+        kl1 = kl_divergence_gauss(mu1, logvar1, mu1_dec, logvar1_dec)
         kl2 = kl_divergence(mu2, logvar2)
 
         total_recon += recon.item()
@@ -749,11 +799,14 @@ avg_kl2 = total_kl2 / n_samples
 elbo = -(avg_recon + avg_kl1 + avg_kl2)
 
 print(f"\n测试集层级ELBO逐项分解:")
-print(f"  重建项  -E[log p(x|z₁)]    = {avg_recon:.2f}")
-print(f"  KL₁:    KL(q(z₁|x)||p(z₁)) = {avg_kl1:.2f}")
-print(f"  KL₂:    KL(q(z₂|z₁)||p(z₂)) = {avg_kl2:.2f}")
-print(f"  ELBO = -(重建 + KL₁ + KL₂)  = {elbo:.2f}")
-print(f"\n  KL₁/KL₂ = {avg_kl1/avg_kl2:.2f} → 第一层编码更多信息")
+print(f"  重建项  -E[log p(x|z₁)]         = {avg_recon:.2f}")
+print(f"  KL₁:    KL(q(z₁|x)||p(z₁|z₂))  = {avg_kl1:.2f}")
+print(f"  KL₂:    KL(q(z₂|z₁)||p(z₂))    = {avg_kl2:.2f}")
+print(f"  ELBO = -(重建 + KL₁ + KL₂)      = {elbo:.2f}")
+if avg_kl2 > 0:
+    verdict = '成立: 第一层编码更多信息' if avg_kl1 > avg_kl2 else '未成立: 本轮KL₁ ≤ KL₂'
+    print(f"\n  KL₁/KL₂ = {avg_kl1/avg_kl2:.2f} → '预期KL₁ > KL₂'{verdict.split(':')[0]}")
+    print(f"  实测: {verdict}")
 
 # 与单层VAE对比
 enc_single.eval(); dec_single.eval()
@@ -780,13 +833,21 @@ print(f"  {'':20s} {'层级VAE':>10s} {'单层VAE':>10s}")
 print(f"  {'重建项':20s} {avg_recon:>10.2f} {avg_recon_s:>10.2f}")
 print(f"  {'KL总量':20s} {avg_kl1+avg_kl2:>10.2f} {avg_kl_s:>10.2f}")
 print(f"  {'ELBO':20s} {elbo:>10.2f} {elbo_s:>10.2f}")
+print(f"  {'重建PSNR(dB)':20s} {psnr_h:>10.2f} {psnr_s:>10.2f}")
 
-print(f"\n[观察: 层级VAE的KL总量({avg_kl1+avg_kl2:.2f})小于单层VAE({avg_kl_s:.2f})]")
-print("  可能原因:")
-print("  - 层级结构分散了KL压力到两层瓶颈, 每层约束更温和")
-print("  - 总维度差异(d₁+d₂=30 vs d_z=20)及多一层非线性变换")
-print("  注: 本实验未控制总维度进行消融, 该观察与'层级缓解KL两难'的直觉一致,")
-print("      但严格验证需进一步实验")
+if avg_kl1 + avg_kl2 < avg_kl_s:
+    print(f"\n[观察: 层级VAE的KL总量({avg_kl1+avg_kl2:.2f})小于单层VAE({avg_kl_s:.2f})]")
+    print("  解读时需注意:")
+    print("  - KL小不等于'缓解KL两难': 若z₂(10维)瓶颈限制了通过信息量,")
+    print("    KL总量也会因'根本没编码信息'而偏小, 应结合重建PSNR判断")
+    print("  - 两模型ELBO可直接比较(均为-log p(x)的下界), ELBO更高者拟合更好")
+else:
+    print(f"\n[观察: 层级VAE的KL总量({avg_kl1+avg_kl2:.2f})不小于单层VAE({avg_kl_s:.2f})]")
+print(f"  ELBO对比: 层级({elbo:.2f}) vs 单层({elbo_s:.2f}) → "
+      f"{'单层拟合更优' if elbo_s > elbo else '层级拟合更优'}")
+print("  注: 本实验未控制总维度进行消融; 层级VAE的净收益来自"
+      "\n      可学习的先验 p(z₁|z₂) 比固定 N(0,I) 更贴合聚合后验,"
+      "\n      代价是第二层易退化(KL₂→0)与先验采样多样性下降")
 
 
 # ============================================================
@@ -802,13 +863,14 @@ print("""
    - 重参数化在每个层级独立执行
 
 2. 层级ELBO的逐层KL分解（10.1节核心公式）
-   - ELBO = 重建项 - KL₁ - KL₂
-   - KL₁ > KL₂: 第一层（靠近数据）编码更多信息
-   - 第二层（更抽象）编码更高层特征
+   - -ELBO = 重建项 + KL(q(z₁|x)||p(z₁|z₂)) + KL(q(z₂|z₁)||p(z₂))
+   - KL₁与KL₂的大小关系由实测决定, 见上方逐项验证输出
 
 3. 层级VAE vs 单层VAE
-   - 层级VAE的重建损失可能略高（信息需经过两层瓶颈）
-   - 但层级结构提供了更灵活的先验建模能力
+   - ELBO是可直接比较的下界: 哪个模型ELBO更高, 哪个拟合更好
+   - 学到的先验 p(z₁|z₂) 比固定 N(0,I) 拟合更好 → 层级ELBO更高
+   - 风险: 若KL₂被压到≈0, 第二层先验退化为无条件单高斯,
+     先验采样会模式崩溃(见采样行的多样性对比)
    - 当L→∞时，这就是扩散模型（10.4节）
 """)
 
@@ -830,12 +892,19 @@ def _to_native(obj):
     return obj
 
 results_summary = {
+    'config': {
+        'd1': d1, 'd2': d2, 'd_z': d1, 'beta': beta,
+        'num_epochs': num_epochs, 'batch_size': 128, 'lr': 1e-3,
+        'objective': 'hierarchical ELBO with conditional KL1 vs p(z1|z2)',
+    },
     'hierarchical_VAE': {
         'final_loss': history['loss'][-1] if history['loss'] else None,
         'final_recon': history['recon'][-1] if history['recon'] else None,
         'final_kl1': history['kl1'][-1] if history['kl1'] else None,
         'final_kl2': history['kl2'][-1] if history['kl2'] else None,
         'final_kl_total': history['kl_total'][-1] if history['kl_total'] else None,
+        'recon_psnr_db_test': psnr_h,
+        'prior_sample_diversity_pairwise_l1_per_pix': pd_h,
         'loss_curve': history['loss'],
         'kl1_curve': history['kl1'],
         'kl2_curve': history['kl2'],
@@ -844,12 +913,14 @@ results_summary = {
         'final_loss': history_single['loss'][-1] if history_single['loss'] else None,
         'final_recon': history_single['recon'][-1] if history_single['recon'] else None,
         'final_kl': history_single['kl'][-1] if history_single['kl'] else None,
+        'recon_psnr_db_test': psnr_s,
+        'prior_sample_diversity_pairwise_l1_per_pix': pd_s,
         'loss_curve': history_single['loss'],
         'kl_curve': history_single['kl'],
     },
     'ELBO_test': {
         'recon': avg_recon,
-        'kl1': avg_kl1,
+        'kl1_vs_p_z1_given_z2': avg_kl1,
         'kl2': avg_kl2,
         'kl_total': avg_kl1 + avg_kl2,
         'ELBO': elbo,

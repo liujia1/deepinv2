@@ -106,7 +106,8 @@ sqrt_one_minus_alpha_bars = torch.sqrt(1 - alpha_bars)
 # 后验方差 (用于采样)
 posterior_var = betas * (1 - alpha_bars_prev) / (1 - alpha_bars)
 # 注: posterior_log_var保留用于展示DDPM原论文的方差选项(fixed small vs fixed large)
-# 但本实验采用学习到的方差(posterior_var)，故log_var仅作备用
+# 本实验采样使用固定的后验小方差 β̃_t = betas*(1-ᾱ_{t-1})/(1-ᾱ_t)（即DDPM的fixed-small选项），
+# 并未学习方差； Improved DDPM 才会插值学习方差。故log_var仅作备用
 posterior_log_var = torch.log(posterior_var.clamp(min=1e-20))
 sqrt_recip_alphas = 1.0 / torch.sqrt(alphas)
 beta_over_sqrt_1m_ab = betas / sqrt_one_minus_alpha_bars
@@ -235,10 +236,16 @@ class SmallUNet(nn.Module):
 # DDPM采样算法（11.4节）
 # ============================================================
 @torch.no_grad()
-def ddpm_sample(model, shape, pred_type='epsilon'):
-    """DDPM反向采样 x_T→x_0, shape=[B,1,28,28]"""
+def ddpm_sample(model, shape, pred_type='epsilon', x_init=None, noise_seq=None):
+    """DDPM反向采样 x_T→x_0, shape=[B,1,28,28]
+
+    x_init:   可选的起始噪声x_T。
+    noise_seq: 可选的逐步反向噪声序列(list, 长度T, 按t_idx索引)。
+    配对(paired)比较时，两种参数化传入【同一个x_T与同一整条z_t序列】，
+    使上下两排轨迹的唯一差异只剩参数化(均值更新)本身，而非随机注入。
+    """
     model.eval()
-    x = torch.randn(shape, device=device)
+    x = torch.randn(shape, device=device) if x_init is None else x_init.clone()
 
     for t_idx in reversed(range(T)):
         t = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
@@ -263,7 +270,7 @@ def ddpm_sample(model, shape, pred_type='epsilon'):
         if t_idx == 0:
             x = model_mean
         else:
-            noise = torch.randn_like(x)
+            noise = torch.randn_like(x) if noise_seq is None else noise_seq[t_idx]
             x = model_mean + torch.sqrt(posterior_var[t_idx]) * noise
 
     return x
@@ -439,7 +446,9 @@ print("\n[核心思想]")
 print("  DDPM的训练目标: L_simple = E[||ε - ε̂_θ(x_t,t)||²]")
 print("  - ε-prediction: 网络预测噪声ε，从x_t中估计添加的噪声")
 print("  - x₀-prediction: 网络预测原始图像x₀，从x_t直接恢复原图")
-print("  两种参数化数学等价，但ε-prediction训练更稳定（11.4节）")
+print("  注意: 两者参数化同一个后验均值(完整VLB下仅差时间权重，11.3节)，")
+print("  但各自的简化目标监督信号尺度不同(ε方差≈1，x₀方差≈0.35)，")
+print("  训练曲线的损失数值不能直接比较大小，需换算到统一尺度(见后续评估)。")
 
 model_eps, history_eps = train_ddpm(EPS_CHECKPOINT_PATH, 'epsilon', num_epochs)
 
@@ -447,20 +456,99 @@ model_x0, history_x0 = train_ddpm(X0_CHECKPOINT_PATH, 'x0', num_epochs)
 
 
 # ============================================================
+# 统一尺度评估
+# 原生 L_simple 两条曲线的监督信号尺度不同(ε方差≈1 vs x₀方差≈0.35)，
+# 损失数值不能直接比较。这里在同一批 (x_0, t, ε) 上，把两种预测互相
+# 换算后再比较。换算关系:
+#   x̂₀ = (x_t - √(1-ᾱ_t)·ε̂) / √ᾱ_t
+#   ε̂  = (x_t - √ᾱ_t·x̂₀) / √(1-ᾱ_t)
+# ============================================================
+@torch.no_grad()
+def evaluate_common_scale(m_eps, m_x0, n_bins=20, batch_size=128):
+    """在测试集上按时间步分箱，评估两种模型换算到统一尺度后的MSE"""
+    m_eps.eval(); m_x0.eval()
+    torch.manual_seed(2024)  # 固定t与噪声，保证评估结果可复现(且两模型共享同一批数据)
+    # 收集 n_bins*batch_size 张测试图像(顺序取，固定t/噪声种子，可复现)
+    imgs = []
+    for xb, _ in test_loader:
+        imgs.append(xb)
+        if sum(z.shape[0] for z in imgs) >= n_bins * batch_size:
+            break
+    imgs = torch.cat(imgs, dim=0)[:n_bins * batch_size].to(device)
+
+    edges = np.linspace(1, T, n_bins + 1)  # 避开t=0，箱覆盖 t∈[1,199]
+    t_centers = []
+    res = {'eps_model': {'eps_mse': [], 'x0_mse': []},
+           'x0_model':  {'eps_mse': [], 'x0_mse': []}}
+    g = torch.Generator(device='cpu').manual_seed(2024)
+
+    for b in range(n_bins):
+        x0 = imgs[b * batch_size:(b + 1) * batch_size]
+        lo, hi = int(np.ceil(edges[b])), int(np.floor(edges[b + 1]))
+        hi = max(hi, lo + 1)
+        t_cpu = torch.randint(lo, hi, (batch_size,), generator=g)
+        t = t_cpu.to(device)
+        eps = torch.randn(batch_size, 1, 28, 28, device=device)
+        xt = (sqrt_alpha_bars[t][:, None, None, None] * x0 +
+              sqrt_one_minus_alpha_bars[t][:, None, None, None] * eps)
+        sab = sqrt_alpha_bars[t][:, None, None, None]
+        s1m = sqrt_one_minus_alpha_bars[t][:, None, None, None]
+
+        # ε-prediction 分支
+        pe = m_eps(xt, t)
+        x0_from_eps = (xt - s1m * pe) / sab
+        res['eps_model']['eps_mse'].append(F.mse_loss(pe, eps).item())
+        res['eps_model']['x0_mse'].append(F.mse_loss(x0_from_eps, x0).item())
+
+        # x₀-prediction 分支
+        px = m_x0(xt, t)
+        eps_from_x0 = (xt - sab * px) / s1m
+        res['x0_model']['x0_mse'].append(F.mse_loss(px, x0).item())
+        res['x0_model']['eps_mse'].append(F.mse_loss(eps_from_x0, eps).item())
+
+        t_centers.append(float(0.5 * (lo + min(hi, T))))
+
+    return t_centers, res
+
+
+print("\n在测试集上进行统一尺度评估(按时间步分箱)...")
+t_centers, common_scale = evaluate_common_scale(model_eps, model_x0)
+_global_eps_x0 = float(np.mean(common_scale['eps_model']['x0_mse']))
+_global_x0_x0 = float(np.mean(common_scale['x0_model']['x0_mse']))
+print(f"  全时间步平均的 x₀ 重建MSE:  ε-prediction={_global_eps_x0:.4f}, "
+      f"x₀-prediction={_global_x0_x0:.4f}")
+
+
+# ============================================================
 # 可视化1: 训练曲线 + 加噪过程
 # ============================================================
 print("\n生成训练曲线与加噪过程图...")
 
-fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+fig, (ax, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+
+# (a) 原生训练曲线：仅展示各自收敛趋势，数值不可跨曲线比较
 ax.plot(range(1, len(history_eps['loss'])+1), history_eps['loss'], 'b-o', markersize=4,
-        label=r'$\varepsilon$-prediction')
+        label=r'$\varepsilon$-prediction (目标: $\varepsilon$, 方差≈1)')
 ax.plot(range(1, len(history_x0['loss'])+1), history_x0['loss'], 'r-s', markersize=4,
-        label=r'$x_0$-prediction')
+        label=r'$x_0$-prediction (目标: $x_0$, 方差≈0.35)')
 ax.set_xlabel('Epoch', fontsize=12)
-ax.set_ylabel(r'$L_{\mathrm{simple}}$损失', fontsize=12)
-ax.set_title('(a) 两种参数化的训练曲线', fontsize=13)
-ax.legend(fontsize=11)
+ax.set_ylabel(r'$L_{\mathrm{simple}}$损失(各自原生尺度)', fontsize=12)
+ax.set_title('(a) 原生训练曲线：均稳定收敛\n注：监督信号尺度不同，损失数值不可直接比较', fontsize=12)
+ax.legend(fontsize=10, loc='upper right')
 ax.grid(True, alpha=0.3)
+
+# (b) 统一尺度：两种预测都换算为 x̂₀ 重建误差后比较
+ax2.plot(t_centers, common_scale['eps_model']['x0_mse'], 'b-o', markersize=4,
+         label=r'$\varepsilon$-prediction (换算为 $\hat{x}_0$ 误差)')
+ax2.plot(t_centers, common_scale['x0_model']['x0_mse'], 'r-s', markersize=4,
+         label=r'$x_0$-prediction')
+ax2.set_xlabel('时间步 t', fontsize=12)
+ax2.set_ylabel(r'$\|x_0-\hat{x}_0\|^2$ (测试集, 统一尺度)', fontsize=12)
+ax2.set_title('(b) 统一尺度对比：同一批数据换算为 $x_0$ 重建误差', fontsize=12)
+ax2.legend(fontsize=10)
+ax2.grid(True, alpha=0.3)
+
+plt.tight_layout()
 fig_path1a = os.path.join(SAVE_DIR, '步骤1a_训练曲线.png')
 plt.savefig(fig_path1a, dpi=150, bbox_inches='tight')
 plt.close()
@@ -495,9 +583,10 @@ plt.close()
 print(f"图1b已保存: {fig_path1b}")
 
 print("\n[观察]")
-print("  - 两种参数化的训练曲线收敛速度相近")
-print("  - ε-prediction是DDPM的标准选择（训练稳定性更好）")
-print("  - 前向加噪过程展示: 随着t增大，图像逐渐变为纯噪声")
+print("  - 两种参数化的原生训练损失都稳定收敛(左图)，但二者尺度不同，不可直接比数值")
+print("  - 换算到统一尺度后(右图)才能公平比较：两条曲线总体接近，印证后验参数化的等价性")
+print("  - ε-prediction是DDPM的标准选择(文献经验，Ho et al. 2020)；本实验两种方案均训练稳定")
+print("  - 前向加噪过程展示: 随着t增大，信号系数√ᾱ_t衰减，图像信息逐步被噪声淹没")
 
 
 # ============================================================
@@ -508,13 +597,19 @@ print("\n步骤2: DDPM采样...")
 n_samples = 8
 sample_shape = (n_samples, 1, 28, 28)
 
+# 配对(paired)采样：两种参数化共享【同一x_T + 同一整条逐步噪声z_t】，
+# 使上下两排轨迹的唯一差异只剩参数化(均值更新)本身，实现真正的一一对应比较
+torch.manual_seed(2024)
+x_shared = torch.randn(sample_shape, device=device)
+noise_seq = [torch.randn(sample_shape, device=device) for _ in range(T)]
+
 # ε-prediction采样
 print("  ε-prediction采样中...")
-samples_eps = ddpm_sample(model_eps, sample_shape, 'epsilon')
+samples_eps = ddpm_sample(model_eps, sample_shape, 'epsilon', x_init=x_shared, noise_seq=noise_seq)
 
-# x₀-prediction采样
-print("  x₀-prediction采样中...")
-samples_x0 = ddpm_sample(model_x0, sample_shape, 'x0')
+# x₀-prediction采样（同一x_T与同一噪声序列）
+print("  x₀-prediction采样中(与上排共享x_T与整条z_t, 配对比较)...")
+samples_x0 = ddpm_sample(model_x0, sample_shape, 'x0', x_init=x_shared, noise_seq=noise_seq)
 
 fig, axes = plt.subplots(2, n_samples, figsize=(16, 4))
 
@@ -535,7 +630,7 @@ for i in range(n_samples):
     if i == 0:
         axes[1, i].set_ylabel(r'$x_0$-prediction', fontsize=12, rotation=0, labelpad=60)
 
-plt.suptitle(f'DDPM采样 (T={T}, {num_epochs} epochs, UNet)', fontsize=14, y=1.02)
+plt.suptitle(f'DDPM配对采样：上下排共享同一$x_T$与整条逐步噪声$z_t$ (T={T}, {num_epochs} epochs, UNet)', fontsize=13, y=1.02)
 plt.tight_layout()
 fig_path2 = os.path.join(SAVE_DIR, '步骤2_DDPM采样对比.png')
 plt.savefig(fig_path2, dpi=150, bbox_inches='tight')
@@ -543,8 +638,9 @@ plt.close()
 print(f"图2已保存: {fig_path2}")
 
 print("\n[关键结论]")
-print("  - 两种参数化都能生成合理的数字图像")
-print("  - DDPM采样从纯噪声x_T~N(0,I)开始，逐步去噪恢复图像")
+print("  - 配对采样共享同一x_T与整条z_t，上下排唯一差异来自参数化(ε̂ vs x₀)本身")
+print("    (小规模UNet+50轮训练，个别样本仍会畸形，属教学规模下的正常现象)")
+print("  - DDPM采样从x_T~N(0,I)开始，逐步去噪恢复图像")
 
 
 # ============================================================
@@ -620,8 +716,9 @@ print(f"""
    - 简化目标 $L_{{simple}} = E[||ε - ε̂_θ(x_t,t)||²]$ 忽略时间权重但训练稳定
 
 2. ε-prediction vs x₀-prediction（11.3节）
-   - 两者训练曲线收敛速度相近
-   - ε-prediction是DDPM标准选择（11.4节）
+   - 原生L_simple损失尺度不同(ε方差≈1, x₀方差≈0.35)，曲线数值不可直接比较
+   - 换算到统一尺度(x₀重建MSE)后两者总体接近，采样质量也相近
+   - ε-prediction是DDPM标准选择（Ho et al. 2020的文献经验，本实验未做稳定性对照）
 
 3. DDPM采样算法（11.4节）
    - 从$x_T$~N(0,I)开始，逐步去噪: $x_{{t-1}} = μ_θ(x_t,t) + σ_t·z$
@@ -657,10 +754,29 @@ results_summary = {
     'epsilon_prediction': {
         'final_loss': history_eps['loss'][-1] if history_eps['loss'] else None,
         'loss_curve': history_eps['loss'],
+        'note': '原生L_simple损失，监督目标为ε(方差≈1)，与x0_prediction尺度不同，不可直接比较',
     },
     'x0_prediction': {
         'final_loss': history_x0['loss'][-1] if history_x0['loss'] else None,
         'loss_curve': history_x0['loss'],
+        'note': '原生L_simple损失，监督目标为x0([-1,1]图像，方差≈0.35)，与epsilon_prediction尺度不同',
+    },
+    # 统一尺度评估：同一批测试数据(x0,t,eps)，两种预测互相换算后的MSE（按t分箱）
+    'common_scale_evaluation': {
+        't_centers': t_centers,
+        'epsilon_model': common_scale['eps_model'],
+        'x0_model': common_scale['x0_model'],
+        'global_mean_x0_mse': {
+            'epsilon_prediction': _global_eps_x0,
+            'x0_prediction': _global_x0_x0,
+        },
+        'n_bins': len(t_centers),
+        'bin_batch_size': 128,
+        'seed': 2024,
+    },
+    'sampling': {
+        'paired': True,
+        'note': '步骤2两种参数化共享同一个x_T(种子2024)，上下排同列样本可配对比较',
     },
     'T': T,
     'num_epochs': num_epochs,

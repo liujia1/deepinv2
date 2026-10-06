@@ -478,13 +478,13 @@ for i in range(n_samples):
     axes[1, i].imshow(samples_b_img[i, 0].cpu().numpy(), cmap='gray')
     axes[1, i].axis('off')
 
-fig.text(0.02, 0.70, '采样路径\n(DSM→Score→SDE)', fontsize=10, ha='left', va='center', rotation=0)
-fig.text(0.02, 0.30, '变分路径\n(VLB→μ_θ→DDPM)', fontsize=10, ha='left', va='center', rotation=0)
+fig.text(0.02, 0.70, '训练解释视角\n采样路径(DSM)', fontsize=10, ha='left', va='center')
+fig.text(0.02, 0.30, '训练解释视角\n变分路径(VLB)', fontsize=10, ha='left', va='center')
 
 fig_path2 = os.path.join(SAVE_DIR, '步骤2_采样结果对比.png')
 fig.suptitle('两条路径的采样结果对比', fontsize=14, y=0.98)
 fig.text(0.5, 0.02,
-         '注：两个模型由完全相同的代码与损失训练，仅随机种子不同（并非两种算法的独立对比）',
+         '注：两个模型由完全相同的代码与损失训练，仅随机种子不同；两行均使用同一个 DDPM(μ_θ) 采样器，并非两种算法的独立对比',
          ha='center', fontsize=10, color='dimgray')
 plt.savefig(fig_path2, dpi=150)
 plt.close()

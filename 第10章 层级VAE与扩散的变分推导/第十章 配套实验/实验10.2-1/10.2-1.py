@@ -206,18 +206,28 @@ print("  t=T:   tilde_beta_T = " + str(round(posterior_var[999].item(), 6)))
 
 # 验证后验方差与前向方差的相对误差 (DDPM简化为tilde_beta_t≈beta_t的关键依据)
 rel_err = (posterior_var - betas) / betas
+abs_err = (posterior_var - betas).abs()
 # t=1是边界点: alpha_bars_prev[0]=1导致后验方差公式分子为0 (1-ab_0=0)
 # 故tilde_beta_1=0, 相对误差为-100%, 仅在t=1发生
 # 实际分析相对误差时应从t=2开始
 rel_err_t2_onwards = rel_err[1:]
+# 注意: β̃_t < β_t 恒成立, 相对误差全为负, 故"最大相对误差"须按绝对值(最负)取, 即 .min()
+worst_rel = rel_err_t2_onwards.min()
+worst_rel_t = int(rel_err_t2_onwards.argmin().item()) + 2
+max_abs_err = abs_err[1:].max()
+max_abs_err_t = int(abs_err[1:].argmax().item()) + 2
+_lt01 = (rel_err_t2_onwards.abs() < 1e-3).nonzero(as_tuple=True)[0]
+t_cross_01pct = int(_lt01[0].item()) + 2 if len(_lt01) else None
 print("\n  关键观察: 相对误差 (tilde_beta_t - beta_t) / beta_t")
 print("    t=1:     -100%   (边界: tilde_beta_1=0, 因ab_0=1使公式分子为0)")
 print("    t=2:     " + str(round(rel_err_t2_onwards[0].item() * 100, 4)) + "%")
 print("    t=500:   " + str(round(rel_err_t2_onwards[498].item() * 100, 4)) + "%")
 print("    t=T-1:   " + str(round(rel_err_t2_onwards[-2].item() * 100, 4)) + "%")
 print("    t=T:     " + str(round(rel_err_t2_onwards[-1].item() * 100, 4)) + "%")
-print("    最大值(忽略t=1):  " + str(round(rel_err_t2_onwards.max().item() * 100, 4)) + "% (在t=" + str(int(rel_err_t2_onwards.argmax().item()) + 2) + ")")
-print("  → 实际 t>=2 时, tilde_beta_t 与 beta_t 相对误差 < 0.1%, 证明 DDPM 简化方差估计是合理的")
+print("    最大相对误差(按绝对值, 忽略t=1): " + str(round(worst_rel.item() * 100, 4)) + "% (在t=" + str(worst_rel_t) + ")")
+print("    最大绝对误差 |β̃_t-β_t| (忽略t=1): " + str(round(max_abs_err.item(), 6)) + " (在t=" + str(max_abs_err_t) + ")")
+print("  → 相对误差在 t>=2 并非都 < 0.1%: 小 t 处偏差极大 (t=2 约 -54.5%), 直到 t≈" + str(t_cross_01pct) + " 才降到 0.1% 以内")
+print("    但绝对误差 |β̃_t-β_t| 始终极小 (最大约 " + str(round(max_abs_err.item(), 6)) + "), 故 DDPM 用 σ_t²=β_t 近似 β̃_t 在实践中仍成立")
 
 # 验证后验均值公式 (10.2节)
 print("\n后验均值系数 (10.2节):")
@@ -432,7 +442,10 @@ results_summary = {
         'tilde_beta_500': posterior_var[499].item(),
         'tilde_beta_T': posterior_var[999].item(),
     },
-    'relative_error_max_pct': (rel_err[1:].max().item() * 100),
+    'relative_error_worst_pct': (rel_err[1:].min().item() * 100),  # 按绝对值取最大(最负)的相对误差, 在t=2
+    'relative_error_worst_t': 2,
+    'relative_error_first_below_0p1pct_t': t_cross_01pct,            # 相对误差首次降到0.1%以内的步数
+    'abs_error_max': (abs_err[1:].max().item()),                     # 最大绝对误差(极小), 支撑DDPM β_t近似
     'SNR': {
         f't_{t+1}': {'alpha_bar': alpha_bars[t].item(), 'SNR': (alpha_bars[t] / (1 - alpha_bars[t])).item()}
         for t in [0, 99, 249, 499, 749, 999]

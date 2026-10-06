@@ -1,0 +1,52 @@
+{
+  "discrete_to_continuous_limit": {
+    "L_5": {
+      "alpha_bar_discrete": 0.3276800000000001,
+      "alpha_bar_continuous": 0.36787944117144233,
+      "relative_error": 0.10927341045053986
+    },
+    "L_10": {
+      "alpha_bar_discrete": 0.3486784401000001,
+      "alpha_bar_continuous": 0.36787944117144233,
+      "relative_error": 0.052193732300724084
+    },
+    "L_50": {
+      "alpha_bar_discrete": 0.36416968008711675,
+      "alpha_bar_continuous": 0.36787944117144233,
+      "relative_error": 0.010084176143446748
+    },
+    "L_100": {
+      "alpha_bar_discrete": 0.3660323412732292,
+      "alpha_bar_continuous": 0.36787944117144233,
+      "relative_error": 0.0050209380886613135
+    },
+    "L_500": {
+      "alpha_bar_discrete": 0.3675112548571586,
+      "alpha_bar_continuous": 0.36787944117144233,
+      "relative_error": 0.001000834167604851
+    },
+    "L_1000": {
+      "alpha_bar_discrete": 0.36769542477096373,
+      "alpha_bar_continuous": 0.36787944117144233,
+      "relative_error": 0.000500208437559431
+    }
+  },
+  "KL_integral_estimates": {
+    "L_5": {
+      "KL_integral": 0.33761040956977195,
+      "beta_step": 0.2
+    },
+    "L_10": {
+      "KL_integral": 0.37836799164771256,
+      "beta_step": 0.1
+    },
+    "L_50": {
+      "KL_integral": 0.4111681706001602,
+      "beta_step": 0.02
+    },
+    "L_100": {
+      "KL_integral": 0.4152788546421496,
+      "beta_step": 0.01
+    }
+  }
+}

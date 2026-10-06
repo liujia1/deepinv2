@@ -1,7 +1,7 @@
 {
   "DSM_VLB_equivalence": {
-    "max_relative_error": 2.3080075095549546e-07,
-    "note": "lambda(t)/[2(1-ab_t)] = w_t 精确成立"
+    "max_pointwise_relative_error": 2.3080075095549546e-07,
+    "note": "lambda(t)/[2(1-ab_t)] = w_t 精确成立(数值为逐点|差|/w_t的最大值, float32精度)"
   },
   "lambda_equivalent": {
     "t_1": 0.00026374112349003553,

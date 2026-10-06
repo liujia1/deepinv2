@@ -9,7 +9,7 @@
   - 11.3节 三种参数化：ε预测、得分预测与x₀预测
 
 实验内容:
-  步骤1: VLB三项分解数值计算
+  步骤1: VLB三项结构与一致性项权重数值分析
   步骤2: KL散度→均值匹配等价性验证
   步骤3: 三种参数化互推与权重分析
   步骤4: VLB与DSM的结构对比
@@ -87,17 +87,15 @@ alphas = 1.0 - betas
 alpha_bars = torch.cumprod(alphas, dim=0)
 alpha_bars_prev = torch.cat([torch.ones(1), alpha_bars[:-1]])
 
-# 后验方差
+# 后验方差 \tilde{\beta}_t；t=1时退化为0，对应确定性后验/L0项，需单独处理
 posterior_var = betas * (1 - alpha_bars_prev) / (1 - alpha_bars)
-# 用于L_simple的固定方差: σ_t² = β_t
-posterior_log_var = torch.log(posterior_var)
 
 
 # ============================================================
-# 步骤1：VLB三项分解数值计算（11.1节）
+# 步骤1：VLB三项结构与一致性项权重数值分析（11.1节）
 # ============================================================
 print("\n" + "="*60)
-print("步骤1：VLB三项分解数值计算（11.1节）")
+print("步骤1：VLB三项结构与一致性项权重数值分析（11.1节）")
 print("="*60)
 
 print("\n[核心思想]")
@@ -110,16 +108,19 @@ print("  对于DDPM的噪声调度，L_T≈0，训练重点是L_{t-1}和L_0")
 # L_T = D_KL(q(x_T|x_0) || p(x_T))
 # q(x_T|x_0) = N(√ᾱ_T x_0, (1-ᾱ_T)I)
 # p(x_T) = N(0, I)
-# L_T = 0.5 * (ᾱ_T * (μ₀² + tr(Σ₀)) + (1-ᾱ_T) + d * log(ᾱ_T*σ₀² + (1-ᾱ_T)) - d)
-# 对单位高斯数据 x_0 ~ N(0,I): L_T = 0.5 * (ᾱ_T + (1-ᾱ_T) + d*log(1) - d) ≈ 0
+# 固定x0时: L_T/d = 0.5 * (ᾱ_T·||x0||²/d + (1-ᾱ_T) - 1 - log(1-ᾱ_T))
+# 对单位高斯数据 x_0 ~ N(0,I)，有E||x0||²/d=1，因此 E[L_T]/d = -0.5*log(1-ᾱ_T) ≈ 0
 
 print("L_T (先验匹配项):")
 ab_T = alpha_bars[-1]
+# 若 x0~N(0,I)，按维平均的期望KL：-0.5*log(1-\bar\alpha_T)
+lt_per_dim_standard_gaussian = -0.5 * torch.log1p(-ab_T)
 print(f"  ᾱ_T = {ab_T:.8f}")
 print(f"  √ᾱ_T = {torch.sqrt(ab_T):.6f} ≈ 0")
-print(f"  1-ᾱ_T = {1-ab_T:.6f} ≈ 1")
+print(f"  1-ᾱ_T = {1-ab_T:.8f} ≈ 1")
+print(f"  x0~N(0,I)时，E[L_T]/d = -0.5·log(1-ᾱ_T) = {lt_per_dim_standard_gaussian.item():.8f}")
 print(f"  → q(x_T|x_0) ≈ N(0, I) = p(x_T)")
-print(f"  → L_T ≈ 0 (无需优化)")
+print(f"  → L_T是模型无关的近似零常数项，因此不作为训练优化重点")
 
 # L_{t-1}: 一致性项 (11.2节均值匹配)
 # L_{t-1} = E_q[1/(2σ_t²) * ||μ̃_t - μ_θ||²] + C
@@ -131,6 +132,17 @@ wt_eps = betas**2 / (2 * posterior_var * alphas * (1 - alpha_bars))
 wt_x0 = alpha_bars_prev * betas**2 / (2 * posterior_var * (1 - alpha_bars)**2)
 wt_score = betas**2 / (2 * posterior_var * alphas)
 
+# 普通高斯一致性项仅适用于t>=2；t=1是确定性后验，对应单独的L0项
+valid_idx = torch.arange(1, T, dtype=torch.long)
+valid_t = valid_idx + 1
+wt_eps_valid = wt_eps[valid_idx]
+wt_x0_valid = wt_x0[valid_idx]
+wt_score_valid = wt_score[valid_idx]
+
+eps_min_idx = int(torch.argmin(wt_eps_valid).item())
+score_increasing_from_t3 = bool(torch.all(wt_score[3:] > wt_score[2:-1]).item())
+x0_decreasing_valid = bool(torch.all(wt_x0_valid[1:] < wt_x0_valid[:-1]).item())
+
 print(f"{'t':>5s}  {'w_t(ε)':>12s}  {'w_t(x₀)':>12s}  {'w_t(s)':>12s}  {'w_t(ε)/w_t(s)':>14s}")
 print("-" * 60)
 # 注意：t=1时后验方差退化为0（alpha_bars_prev[0]=1导致分母为0），权重为inf，故从t=2开始采样
@@ -140,9 +152,10 @@ for t_idx in [2, 50, 100, 250, 500, 750, 999]:
           f"{wt_score[idx].item():12.6f}  {wt_eps[idx].item()/max(wt_score[idx].item(),1e-30):14.6f}")
 
 print(f"\n[观察]")
-print(f"  w_t(ε) = β_t²/(2σ_t²α_t(1-ᾱ_t)): U形曲线，小t时大(~0.6)，中间t最小(~0.005)，大t时回升(~0.01)")
-print(f"  w_t(x₀) = ᾱ_{{t-1}}β_t²/(2σ_t²(1-ᾱ_t)²): 单调递减，t小时极大(~10³)，t大时趋于0")
+print(f"  w_t(ε) = β_t²/(2σ_t²α_t(1-ᾱ_t)): U形曲线，小t时大(~0.6)，t={int(valid_t[eps_min_idx].item())}附近最小(~{wt_eps_valid[eps_min_idx].item():.5f})，大t时回升(~0.01)")
+print(f"  w_t(x₀) = ᾱ_{{t-1}}β_t²/(2σ_t²(1-ᾱ_t)²): t>=2时单调递减，t小时极大(~10³)，t大时趋于0")
 print(f"  w_t(ε)/w_t(s) = 1/(1-ᾱ_t): ε-prediction的权重比score-prediction多1/(1-ᾱ_t)因子")
+print(f"  score权重在t=2→3处有轻微下降({wt_score[1].item():.8f}→{wt_score[2].item():.8f})，自t=3起严格递增")
 
 # ★ 自检：验证三种权重的理论恒等式(避免注释里的"~0.6, ~0.005"等手算值与代码脱节)
 # 理论关系(由权重定义直接推导):
@@ -151,6 +164,7 @@ print(f"  w_t(ε)/w_t(s) = 1/(1-ᾱ_t): ε-prediction的权重比score-predictio
 # 验证规则: 相对误差 < 1e-3 即认为公式实现正确
 print(f"[权重自检] 三种VLB权重的理论恒等式(实际运行, 非手算):")
 _t_check = [2, 50, 100, 500, 999]
+weight_identity_checks = []
 for _t in _t_check:
     _i = _t - 1
     _ratio_eps_score = wt_eps[_i].item() / max(wt_score[_i].item(), 1e-30)
@@ -161,8 +175,21 @@ for _t in _t_check:
     _err2 = abs(_ratio_x0_eps - _theory_x0_eps) / max(abs(_theory_x0_eps), 1e-30)
     _flag1 = "OK" if _err1 < 1e-3 else "FAIL"
     _flag2 = "OK" if _err2 < 1e-3 else "FAIL"
+    weight_identity_checks.append({
+        't': _t,
+        'eps_over_score_ratio': _ratio_eps_score,
+        'eps_over_score_theory': _theory_eps_score,
+        'eps_over_score_relative_error': _err1,
+        'x0_over_eps_ratio': _ratio_x0_eps,
+        'x0_over_eps_theory': _theory_x0_eps,
+        'x0_over_eps_relative_error': _err2,
+        'passed': _flag1 == "OK" and _flag2 == "OK",
+    })
     print(f"  t={_t:4d}: R1(w_ε/w_s)={_ratio_eps_score:.4f} vs 1/(1-ᾱ_t)={_theory_eps_score:.4f} [{_flag1}]; "
-          f"R2(w_x0/w_ε)={_ratio_x0_eps:.4f} vs ᾱ_{{t-1}}/[(1-ᾱ_t)·α_t]={_theory_x0_eps:.4f} [{_flag2}]")
+          f"R2(w_x0/w_ε)={_ratio_x0_eps:.4f} vs ᾱ_t/(1-ᾱ_t)={_theory_x0_eps:.4f} [{_flag2}]")
+
+if not all(item['passed'] for item in weight_identity_checks):
+    raise AssertionError("VLB权重理论恒等式自检失败，请检查三种参数化权重公式")
 
 # L_0: 重建项
 print(f"\nL_0 (重建项): 对高斯解码器, -E[log p(x_0|x_1)] ∝ ||x_0 - μ_θ(x_1,1)||²")
@@ -196,15 +223,20 @@ sigma2 = 0.5  # 方差
 z = mu1.unsqueeze(0) + torch.sqrt(torch.tensor(sigma2)) * torch.randn(n_mc, d)
 log_q = -0.5 * ((z - mu1.unsqueeze(0))**2).sum(dim=1) / sigma2
 log_p = -0.5 * ((z - mu2.unsqueeze(0))**2).sum(dim=1) / sigma2
-kl_mc = (log_q - log_p).mean().item()
+kl_samples = log_q - log_p
+kl_mc = kl_samples.mean().item()
+kl_mc_standard_error = (kl_samples.std(unbiased=True) / np.sqrt(n_mc)).item()
 
 # 均值匹配公式
 kl_formula = 0.5 * torch.sum((mu1 - mu2)**2).item() / sigma2
+kl_abs_error = abs(kl_mc - kl_formula)
+kl_relative_error = kl_abs_error / max(abs(kl_formula), 1e-30)
 
 print(f"\n验证结果:")
 print(f"  MC估计 KL = {kl_mc:.6f}")
+print(f"  MC标准误 = {kl_mc_standard_error:.6f}")
 print(f"  均值匹配公式 1/(2σ²)||μ₁-μ₂||² = {kl_formula:.6f}")
-print(f"  误差 = {abs(kl_mc - kl_formula):.6f}")
+print(f"  绝对误差 = {kl_abs_error:.6f}，相对误差 = {kl_relative_error:.4%}")
 
 print(f"\n[关键结论]")
 print(f"  11.2节等价性精确成立: KL散度 = 均值匹配（相同方差时）")
@@ -237,6 +269,7 @@ eps_test = torch.randn_like(x0_test)
 print(f"\n互推验证: ε̂ → x̂₀ → ε̂ (闭环) 和 ε̂ → ŝ → ε̂ (闭环)")
 print(f"{'t':>5s}  {'ε̂→x̂₀→ε̂ 误差':>15s}  {'ε̂→ŝ→ε̂ 误差':>15s}")
 print("-" * 45)
+parametrization_conversion_checks = []
 
 for t_idx in [10, 100, 500, 900]:
     idx = t_idx - 1  # 数组下标idx对应物理时间步t=idx+1
@@ -259,8 +292,17 @@ for t_idx in [10, 100, 500, 900]:
 
     err_x0 = (eps_hat - eps_recovered).abs().max().item()
     err_score = (eps_hat - eps_from_score).abs().max().item()
+    parametrization_conversion_checks.append({
+        't': t_idx,
+        'eps_x0_eps_max_abs_error': err_x0,
+        'eps_score_eps_max_abs_error': err_score,
+        'passed': err_x0 < 1e-5 and err_score < 1e-5,
+    })
 
     print(f"{t_idx:5d}  {err_x0:15.2e}  {err_score:15.2e}")
+
+if not all(item['passed'] for item in parametrization_conversion_checks):
+    raise AssertionError("三种参数化闭环换算自检失败")
 
 print(f"\n[关键结论]")
 print(f"  三种参数化互推精确成立（误差<浮点精度）")
@@ -279,9 +321,9 @@ for t_idx in [2, 10, 50, 100, 250, 500, 750, 999]:
     print(f"{t_idx:5d}  {we:12.6f}  {wx:12.6f}  {ws:12.6f}  {we/max(wx,1e-30):8.4f}")
 
 print(f"\n[观察]")
-print(f"  - ε-pred权重: U形曲线，小t时大(~0.6)，中间t最小(~0.005，约t=350)，大t时回升(~0.01)")
-print(f"  - x₀-pred权重: 单调递减，t小时极大(~10³)，t大时趋于0")
-print(f"  - score-pred权重: 单调递增，小t时极小(~10⁻⁴)，大t时较大(~10⁻²)")
+print(f"  - ε-pred权重: U形曲线，小t时大(~0.6)，t={int(valid_t[eps_min_idx].item())}附近最小(~{wt_eps_valid[eps_min_idx].item():.5f})，大t时回升(~0.01)")
+print(f"  - x₀-pred权重: t>=2时单调递减，t小时极大(~10³)，t大时趋于0")
+print(f"  - score-pred权重: 整体随时长增大，但t=2→3轻微下降；自t=3起严格递增")
 
 
 # ============================================================
@@ -294,35 +336,40 @@ print("=" * 60)
 fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 t_range = range(1, T + 1)
 
-# (a) VLB三项的量级分析
+# (a) VLB一致性项的权重分析（t=1的确定性L0项不纳入普通高斯权重）
 ax = axes[0, 0]
-# L_T≈0
-# L_{t-1}的权重随t变化
-ax.semilogy(t_range, wt_eps.numpy(), 'b-', linewidth=1.5, label=r'$w_t^{(\varepsilon)}$ ($\varepsilon$-pred权重)')
+ax.semilogy(valid_t.numpy(), wt_eps_valid.numpy(), 'b-', linewidth=1.5,
+            label=r'$w_t^{(\varepsilon)}$ ($\varepsilon$-pred权重)')
 ax.axhline(1, color='r', linestyle='--', linewidth=1.5, label=r'$L_{simple}$权重 (=1)')
-ax.set_xlabel('时间步 $t$', fontsize=12)
+ax.set_xlabel('时间步 $t$（$t\geq2$）', fontsize=12)
 ax.set_ylabel('权重 (对数尺度)', fontsize=12)
 ax.set_title('(a) $\\varepsilon$-prediction的VLB权重 vs $L_{simple}$', fontsize=13)
+ax.set_xlim(1.5, T + 0.5)
+ax.set_xticks([2, 200, 400, 600, 800, 1000])
 ax.legend(fontsize=10)
 ax.grid(True, alpha=0.3)
 
 # (b) 三种参数化权重对比
 ax = axes[0, 1]
-ax.semilogy(t_range, wt_eps.numpy(), 'b-', linewidth=1.5, label=r'$w_t^{(\varepsilon)}$')
-ax.semilogy(t_range, wt_x0.numpy(), 'r-', linewidth=1.5, label=r'$w_t^{(x_0)}$')
-ax.semilogy(t_range, wt_score.numpy(), 'g-', linewidth=1.5, label=r'$w_t^{(s)}$')
-ax.set_xlabel('时间步 $t$', fontsize=12)
+ax.semilogy(valid_t.numpy(), wt_eps_valid.numpy(), 'b-', linewidth=1.5, label=r'$w_t^{(\varepsilon)}$')
+ax.semilogy(valid_t.numpy(), wt_x0_valid.numpy(), 'r-', linewidth=1.5, label=r'$w_t^{(x_0)}$')
+ax.semilogy(valid_t.numpy(), wt_score_valid.numpy(), 'g-', linewidth=1.5, label=r'$w_t^{(s)}$')
+ax.set_xlabel('时间步 $t$（$t\geq2$）', fontsize=12)
 ax.set_ylabel('权重 (对数尺度)', fontsize=12)
 ax.set_title('(b) 三种参数化的VLB权重对比', fontsize=13)
+ax.set_xlim(1.5, T + 0.5)
+ax.set_xticks([2, 200, 400, 600, 800, 1000])
 ax.legend(fontsize=10)
 ax.grid(True, alpha=0.3)
-ax.annotate('$x_0$-pred权重单调递减\n$\\varepsilon$-pred权重U形，score-pred权重单调递增',
+ax.annotate('$x_0$-pred权重自t=2递减\n$\\varepsilon$-pred权重U形；score权重自t=3递增',
             xy=(0.35, 0.75), xycoords='axes fraction', fontsize=9,
             bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffeaa7', alpha=0.8))
 
 # (c) 前向过程后验均值系数（11.1节）
 coeff_x0 = torch.sqrt(alpha_bars_prev) * betas / (1 - alpha_bars)
 coeff_xt = torch.sqrt(alphas) * (1 - alpha_bars_prev) / (1 - alpha_bars)
+coeff_sum = coeff_x0 + coeff_xt
+coeff_sum_valid = coeff_sum[valid_idx]
 
 ax = axes[1, 0]
 ax.plot(t_range, coeff_x0.numpy(), 'r-', linewidth=2, label=r'$x_0$系数')
@@ -334,27 +381,27 @@ ax.set_title('(c) 后验均值 $\\tilde{\\mu}_t$ 的系数（11.1节）', fontsi
 ax.legend(fontsize=10)
 ax.grid(True, alpha=0.3)
 
-# (d) ★ 原创设计: VLB vs L_simple的有效梯度分析
-# 模拟: 当ε预测有固定误差时，VLB和L_simple对各时间步的梯度大小
+# (d) VLB vs L_simple的时间步损失占比（均匀采样t时的归一化尺度，不是网络参数梯度）
 ax = axes[1, 1]
-eps_error = 0.1  # 固定预测误差
-# VLB梯度 ∝ w_t * ε_error
-# L_simple梯度 ∝ 1 * ε_error (等权重)
-vlb_grad = wt_eps.numpy() * eps_error
-simple_grad = np.ones(T) * eps_error
+vlb_uniform_share = wt_eps_valid / wt_eps_valid.sum()
+simple_uniform_share = torch.full_like(wt_eps_valid, 1.0 / len(wt_eps_valid))
 
-ax.semilogy(t_range, vlb_grad + 1e-30, 'b-', linewidth=2, label=r'VLB梯度 $\propto w_t$')
-ax.semilogy(t_range, simple_grad, 'r--', linewidth=2, label=r'$L_{simple}$梯度 $\propto 1$')
-ax.set_xlabel('时间步 $t$', fontsize=12)
-ax.set_ylabel('有效梯度 (对数尺度)', fontsize=12)
-ax.set_title('(d) VLB vs $L_{simple}$ 有效梯度（★ 原创设计）', fontsize=13)
+ax.semilogy(valid_t.numpy(), vlb_uniform_share.numpy(), 'b-', linewidth=2,
+            label=r'VLB归一化时间步占比 $w_t/\sum w$')
+ax.semilogy(valid_t.numpy(), simple_uniform_share.numpy(), 'r--', linewidth=2,
+            label=r'$L_{simple}$占比 $=1/(T-1)$')
+ax.set_xlabel('时间步 $t$（$t\geq2$）', fontsize=12)
+ax.set_ylabel('归一化损失占比 (对数尺度)', fontsize=12)
+ax.set_title('(d) VLB vs $L_{simple}$ 的时间步贡献尺度', fontsize=13)
+ax.set_xlim(1.5, T + 0.5)
+ax.set_xticks([2, 200, 400, 600, 800, 1000])
 ax.legend(fontsize=10)
 ax.grid(True, alpha=0.3)
-ax.annotate('VLB: 小$t$梯度极大，大$t$梯度极小\n→ 训练不稳定',
-            xy=(0.3, 0.7), xycoords='axes fraction', fontsize=9, color='blue',
+ax.annotate('VLB: 小$t$占比高，中间$t$占比低\n→ 各时间步损失尺度不均衡',
+            xy=(0.32, 0.70), xycoords='axes fraction', fontsize=9, color='blue',
             bbox=dict(boxstyle='round,pad=0.3', facecolor='#dfe6e9', alpha=0.8))
-ax.annotate('$L_{simple}$: 均匀梯度\n→ 训练稳定',
-            xy=(0.6, 0.3), xycoords='axes fraction', fontsize=9, color='red',
+ax.annotate('$L_{simple}$: 均匀采样下每步占比相同\n→ 避免权重跨数量级',
+            xy=(0.56, 0.22), xycoords='axes fraction', fontsize=9, color='red',
             bbox=dict(boxstyle='round,pad=0.3', facecolor='#fdecea', alpha=0.8))
 
 plt.tight_layout()
@@ -378,22 +425,23 @@ print("")
 print("  VLB (ε-prediction):  L = Σ_t w_t · E[||ε - ε̂_θ(x_t,t)||²]")
 print("  DSM (第6章):          L = Σ_t λ(σ_t) · E[||s_θ(x_t,σ_t) + ε/σ_t||²]")
 print("")
-print("  利用 ε̂_θ = -√(1-ᾱ_t) · s_θ 的转换:")
-print("    ||ε - ε̂_θ||² = (1-ᾱ_t) · ||-ε/√(1-ᾱ_t) - s_θ||²")
-print("                 = (1-ᾱ_t) · ||ε/√(1-ᾱ_t) + s_θ||²")
+print("  令 σ_t² = 1-ᾱ_t，利用 ε̂_θ = -σ_t·s_θ 的转换:")
+print("    ||s_θ + ε/σ_t||² = 1/σ_t² · ||ε - ε̂_θ||²")
+print("    λ(σ_t)·||s_θ + ε/σ_t||² = λ(σ_t)/σ_t² · ||ε - ε̂_θ||²")
 print("")
-print("  因此:  VLB权重 w_t = (1-ᾱ_t) · λ(σ_t)/(σ_t²) (经适当变换)")
-print("         → 当 λ(σ_t) = σ_t² 时, VLB权重 = (1-ᾱ_t) → DSM简化目标")
-print("         → 当 λ(σ_t) = σ_t²/(1-ᾱ_t) · w_t 时, DSM = VLB (精确等价)")
+print("  因此:")
+print("         → 当 λ(σ_t)=σ_t² 时, DSM目标化为等权重的 ||ε-ε̂_θ||²，即L_simple形式")
+print("         → 当 λ(σ_t)=σ_t²·w_t^(ε)=w_t^(s) 时, DSM = ε-prediction VLB (精确等价)")
 
 # 数值验证: ε-prediction VLB 与 score-prediction 的损失关系
 np.random.seed(42)
 x0_v = torch.randn(100, 2)
 eps_v = torch.randn_like(x0_v)
 
-print(f"\n数值验证: ||ε-ε̂||² ≈ (1-ᾱ_t)·||ŝ-s*||²")
-print(f"{'t':>5s}  {'||ε-ε̂||²':>12s}  {'(1-ᾱ_t)·||s+s*||²':>18s}  {'比值':>8s}")
+print(f"\n数值验证: ||ε-ε̂||² = (1-ᾱ_t)·||ŝ-s*||²，其中s*=-ε/√(1-ᾱ_t)")
+print(f"{'t':>5s}  {'||ε-ε̂||²':>12s}  {'(1-ᾱ_t)·||ŝ-s*||²':>18s}  {'比值':>8s}")
 print("-" * 50)
+dsm_equivalence_checks = []
 
 for t_idx in [10, 100, 500, 900]:
     idx = t_idx - 1  # 数组下标idx对应物理时间步t=idx+1
@@ -410,12 +458,25 @@ for t_idx in [10, 100, 500, 900]:
     s_target = -eps_v / torch.sqrt(1 - ab)
     loss_score = ((s_hat - s_target)**2).mean().item()
 
-    ratio = loss_eps / max(loss_score * (1 - ab.item()), 1e-30)
-    print(f"{t_idx:5d}  {loss_eps:12.8f}  {loss_score*(1-ab.item()):18.8f}  {ratio:8.4f}")
+    scaled_loss_score = loss_score * (1 - ab.item())
+    ratio = loss_eps / max(scaled_loss_score, 1e-30)
+    ratio_error = abs(ratio - 1.0)
+    dsm_equivalence_checks.append({
+        't': t_idx,
+        'epsilon_loss': loss_eps,
+        'scaled_score_loss': scaled_loss_score,
+        'epsilon_over_scaled_score': ratio,
+        'relative_error': ratio_error,
+        'passed': ratio_error < 1e-6,
+    })
+    print(f"{t_idx:5d}  {loss_eps:12.8f}  {scaled_loss_score:18.8f}  {ratio:8.4f}")
+
+if not all(item['passed'] for item in dsm_equivalence_checks):
+    raise AssertionError("epsilon-MSE与score-MSE换算自检失败")
 
 print(f"\n[关键结论]")
-print(f"  ||ε-ε̂||² ≈ (1-ᾱ_t)·||ŝ-s*||² 精确成立")
-print(f"  这是11.5节Score≡VLB等价性的数值验证")
+print(f"  ||ε-ε̂||² = (1-ᾱ_t)·||ŝ-s*||² 在数值上精确成立")
+print(f"  这是第12章Score≡ELBO等价性的数值基础")
 
 
 # ============================================================
@@ -427,8 +488,8 @@ print("=" * 60)
 print("""
 关键结论:
 1. VLB三项分解（11.1节）
-   - L_T≈0 (先验自动匹配), L_{t-1} (一致性项), L_0 (重建项)
-   - 后验均值μ̃_t是x_t和x_0的线性组合，系数和≈1
+   - L_T是模型无关的近似零常数项，L_{t-1}是一致性项，L_0是重建项
+   - 后验均值μ̃_t是x_t和x_0的线性组合，系数和≈1；t=1的确定性后验需单独处理
 
 2. 均值匹配等价性（11.2节）
    - KL散度 = 1/(2σ²)||μ̃_t-μ_θ||²（同方差高斯时）
@@ -436,11 +497,11 @@ print("""
 
 3. 三种参数化（11.3节）
    - ε/x₀/score三种参数化互推精确成立
-   - VLB权重: ε-pred呈U形曲线, x₀-pred单调递减, score-pred单调递增
+   - VLB权重: ε-pred呈U形曲线，x₀-pred自t=2递减，score-pred自t=3递增
 
 4. VLB vs L_simple（11.4节）
-   - VLB权重跨越多个数量级→训练不稳定
-   - L_simple等权重1→训练稳定（11.4节Ho et al. 2020的关键简化）
+   - 本实验验证的是时间步损失尺度：VLB权重跨越多个数量级，各时间步贡献不均衡
+   - L_simple在均匀采样t时给予等权重，可避免该尺度差异；实际训练稳定性需另行训练验证
 
 5. VLB与DSM的结构等价性（11.5节预览）
    - ||ε-ε̂||² = (1-ᾱ_t)·||ŝ-s*||²
@@ -465,13 +526,35 @@ def _to_native(obj):
     return obj
 
 results_summary = {
+    'metadata': {
+        'experiment': '11.3-1 VLB数值计算与三种参数化',
+        'T': T,
+        'beta_min': beta_min,
+        'beta_max': beta_max,
+        'schedule': 'DDPM linear beta schedule',
+        'numpy_seed': 42,
+        'torch_seed': 42,
+        'torch_version': torch.__version__,
+        'gaussian_consistency_terms': 't=2,...,T; t=1 is deterministic and is treated as L0',
+    },
     'L_T_prior_matching': {
         'alpha_bar_T': alpha_bars[-1].item(),
+        'sqrt_alpha_bar_T': torch.sqrt(alpha_bars[-1]).item(),
+        'one_minus_alpha_bar_T': (1.0 - alpha_bars[-1]).item(),
+        'expected_LT_per_dim_for_standard_gaussian_x0': lt_per_dim_standard_gaussian.item(),
+        'interpretation': 'model-independent near-zero constant for the DDPM schedule',
     },
     'KL_mean_matching_verification': {
+        'dimension': d,
+        'n_monte_carlo': n_mc,
+        'sigma_squared': sigma2,
         'KL_MC_estimate': kl_mc,
+        'KL_MC_standard_error': kl_mc_standard_error,
         'KL_formula': kl_formula,
-        'error': abs(kl_mc - kl_formula),
+        'absolute_error': kl_abs_error,
+        'relative_error': kl_relative_error,
+        'error': kl_abs_error,
+        'passed': kl_abs_error < 3.0 * kl_mc_standard_error,
     },
     'VLB_weights_sampled': {
         f't_{t}': {
@@ -481,6 +564,35 @@ results_summary = {
         }
         for t in [2, 50, 100, 250, 500, 750, 999]
     },
+    'VLB_weight_statistics': {
+        'eps_prediction': {
+            'minimum_weight': wt_eps_valid[eps_min_idx].item(),
+            'minimum_t': int(valid_t[eps_min_idx].item()),
+            't_2_weight': wt_eps[1].item(),
+            't_1000_weight': wt_eps[-1].item(),
+            'shape': 'U-shaped for t>=2',
+        },
+        'x0_prediction': {
+            't_2_weight': wt_x0[1].item(),
+            't_1000_weight': wt_x0[-1].item(),
+            'strictly_decreasing_for_t_ge_2': x0_decreasing_valid,
+        },
+        'score_prediction': {
+            't_2_weight': wt_score[1].item(),
+            't_3_weight': wt_score[2].item(),
+            't_1000_weight': wt_score[-1].item(),
+            'strictly_increasing_from_t_3': score_increasing_from_t3,
+            'monotonicity_note': 'linear DDPM schedule has a small decrease from t=2 to t=3',
+        },
+    },
+    'weight_identity_checks': weight_identity_checks,
+    'posterior_mean_coefficients': {
+        'coefficient_sum_min_t_ge_2': float(coeff_sum_valid.min().item()),
+        'coefficient_sum_max_t_ge_2': float(coeff_sum_valid.max().item()),
+        'coefficient_sum_t_1': float(coeff_sum[0].item()),
+    },
+    'parametrization_conversion_checks': parametrization_conversion_checks,
+    'DSM_equivalence_checks': dsm_equivalence_checks,
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

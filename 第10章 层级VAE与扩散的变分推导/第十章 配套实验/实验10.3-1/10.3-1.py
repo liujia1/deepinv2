@@ -331,11 +331,10 @@ results_summary = {
     },
     'conversion_coefficients': {
         'note': 'eps_to_x0: 1/sqrt(ab_t), score_to_eps: sqrt(1-ab_t)',
-        f't_{t}': {
+        **{f't_{t}': {
             'eps_to_x0': (1.0 / torch.sqrt(alpha_bars[t-1])).item(),
             'score_to_eps': torch.sqrt(1 - alpha_bars[t-1]).item(),
-        }
-        for t in [10, 100, 500, 900]
+        } for t in [10, 100, 500, 900]}
     },
 }
 results_summary = _to_native(results_summary)
