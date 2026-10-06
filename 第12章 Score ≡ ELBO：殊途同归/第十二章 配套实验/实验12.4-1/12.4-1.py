@@ -147,23 +147,30 @@ for t_idx in [1, 10, 50, 100, 250, 500, 750, 999]:
 # 全局验证（跳过t=0，因ᾱ_0=1导致分母为零）
 wt_from_lambda_valid = wt_from_lambda[valid_mask]
 wt_vlb_valid = wt_vlb[valid_mask]
-max_ratio_err = torch.max(torch.abs(wt_from_lambda_valid - wt_vlb_valid) / torch.max(wt_vlb_valid, torch.tensor(1e-30)))
-print(f"\n全时间步(t≥1)最大相对误差: {max_ratio_err.item():.2e}")
+# 逐点相对误差: 每个时间步 |DSM权重-VLB权重|/w_t 后取最大值
+# （注: 分母是逐点w_t而非全局max(w_t)，在权重最小的t处同样要求匹配）
+max_rel_err = torch.max(torch.abs(wt_from_lambda_valid - wt_vlb_valid)
+                        / torch.clamp(wt_vlb_valid, min=1e-30))
+print(f"\n全时间步(t≥1)逐点最大相对误差: {max_rel_err.item():.2e}")
 print("→ 所有时间步比值≈1.0000，DSM≡VLB权重匹配精确成立！")
 print("  这就是12.4节定理的数值验证。")
 
 # ★ 自检：验证12.4节λ(t)解出公式的边界行为与极值
 # 公式: λ(t) = β_t·(1-ᾱ_t) / [(1-ᾱ_{t-1})·α_t]
 # 理论性质:
-#   P1: t=1时ᾱ_0=1, 故分母(1-ᾱ_0)=0, λ(1)→∞ (注意: L_T项在t=1无意义, 公式仅对t≥2成立)
+#   P1: t=1时ᾱ_0=1, 故分母(1-ᾱ_0)=0, λ(1)→∞ (注意: VLB中对应的L_1项在DDPM
+#       惯例下由解码器项L_0处理，闭式权重公式仅对t≥2成立)
 #   P2: t=T时ᾱ_T→0, 1-ᾱ_T→1, λ(T)≈β_T/α_T (因为ᾱ_{T-1}≈0, 1-ᾱ_{T-1}→1)
-#   P3: λ(t)随t单调递增（t≥3），因为β_t线性增, 1-ᾱ_t递增, 1-ᾱ_{t-1}递减
-#       (注: t=2→3时λ可能小幅下降, 之后才稳定递增, 这是t很小时的数值波动)
+#   P3: λ(t)在数组下标≥3（即数学t≥4）后严格递增；数组下标1→2（数学t=2→3）
+#       有一次解析性的小幅下降（非数值噪声）：由恒等变形
+#       λ(t)=β_t+β_t²/[α_t·(1-ᾱ_{t-1})] 可见，t很小时分母(1-ᾱ_{t-1})
+#       近似线性增长，第二项β_t²/(1-ᾱ_{t-1})∝1/t递减并占主导；
+#       之后β_t线性增长占主导，λ(t)转为严格递增
 # 检验规则: 边界值在量级上正确, 整体单调性成立
 print(f"[λ(t)自检] 边界行为与单调性验证(实际运行, 非手算):")
 print(f"  P1: λ(1)={lambda_equiv[0].item():.2e} (应→∞, 因分母1-ᾱ_0=0)")
 print(f"  P2: λ(T)={lambda_equiv[-1].item():.6f} (应≈β_T/α_T={betas[-1].item()/alphas[-1].item():.6f})")
-print(f"  P3: 单调性(t≥3严格递增): {'OK' if (lambda_equiv[3:] > lambda_equiv[2:-1]).all().item() else 'FAIL'}")
+print(f"  P3: 单调性(数组下标t≥3, 即数学t≥4, 严格递增): {'OK' if (lambda_equiv[3:] > lambda_equiv[2:-1]).all().item() else 'FAIL'}")
 # 典型t处的λ值
 for _t in [10, 100, 500, 999]:
     print(f"  λ(t={_t+1})={lambda_equiv[_t].item():.6f}, 对应β·(1-ᾱ)/[(1-ᾱ_prev)·α]={betas[_t].item() * (1-alpha_bars[_t].item()) / ((1-alpha_bars_prev[_t].item()) * alphas[_t].item()):.6f}")
@@ -185,11 +192,14 @@ print("""
 """)
 
 # NCSN默认 λ(σ) = σ² 时的DSM权重
-lambda_ncsn = sigma_t**2  # λ(σ_t) = σ_t² = (1-ᾱ_t)
+# 口径说明: 本实验在VP内部取 σ_t² = 1-ᾱ_t（见前文定义），故 λ=σ² 给出均匀权重1/2；
+#           严格VE→VP翻译为 σ²=(1-ᾱ_t)/ᾱ_t，对应权重1/(2ᾱ_t)（见本节末推论），
+#           两种口径勿混，此处按VP内部口径验证
+lambda_ncsn = sigma_t**2  # VP口径: λ(σ_t) = σ_t² = (1-ᾱ_t)
 wt_ncsn = lambda_ncsn / (2 * sigma_t**2)  # = 1/2
 
 print("NCSN默认权重 λ(σ)=σ² 时:")
-print(f"  DSM权重 = λ(σ)/[2σ²] = σ²/[2σ²] = 1/2 (均匀权重)")
+print(f"  DSM权重 = λ(σ)/[2σ²] = σ²/[2σ²] = 1/2 (VP口径σ²=1-ᾱ_t, 均匀权重)")
 print(f"  简化VLB权重 = 1 (均匀权重)")
 print(f"  两者仅差常数因子2，训练行为完全一致")
 
@@ -252,7 +262,7 @@ for t_idx in [10, 100, 500, 900]:
     x0_hat = (x_t - sqrt_1mab * eps_hat) / sqrt_ab
     loss_x0 = (ab / (1 - ab)).item() * ((x0_test - x0_hat)**2).mean().item()
 
-    # score-prediction损失: (1-ᾱ_t) · ||s + s_θ||²
+    # score-prediction损失: (1-ᾱ_t) · ||s - s_θ||²
     # s = -ε/σ_t, s_θ = -ε̂/σ_t  →  ||s - s_θ||² = ||ε̂-ε||²/σ_t²
     # (1-ᾱ_t) · ||s - s_θ||² = (1-ᾱ_t) · ||ε̂-ε||²/(1-ᾱ_t) = ||ε̂-ε||²
     s_hat = -eps_hat / sqrt_1mab
@@ -602,8 +612,8 @@ def _to_native(obj):
 
 results_summary = {
     'DSM_VLB_equivalence': {
-        'max_relative_error': max_ratio_err.item(),
-        'note': 'lambda(t)/[2(1-ab_t)] = w_t 精确成立',
+        'max_pointwise_relative_error': max_rel_err.item(),
+        'note': 'lambda(t)/[2(1-ab_t)] = w_t 精确成立(数值为逐点|差|/w_t的最大值, float32精度)',
     },
     'lambda_equivalent': {
         # 与步骤1控制台表格一致：直接取数组下标 t 处（下标0因1-ᾱ_0=0发散，不列入）

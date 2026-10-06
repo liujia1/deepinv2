@@ -6,7 +6,7 @@
 知识点:
   - 简化DSM目标与简化VLB目标在代码层面完全相同
   - 采样路径(DSM)和变分路径(VLB)的训练目标都是 ||ε - ε̂_θ||²
-  - 两条路径产生相同的训练动态和采样结果
+  - 两条路径的训练动态总体趋势相近、采样质量相当（细节差异来自不同随机种子）
   - 同一个网络输出 ε̂_θ 同时承载得分函数、逆向均值、x₀估计三种信息
 
 实验内容:
@@ -26,6 +26,7 @@ import matplotlib.pyplot as plt
 import os
 import sys
 import io
+import math
 import time
 import warnings
 import logging
@@ -97,11 +98,18 @@ else:
 
 
 # ============================================================
-# 噪声调度: DDPM线性调度
+# 噪声调度: cosine调度 (Nichol & Dhariwal 2021)
+# 说明: 线性调度(1e-4, 0.02)是为T=1000设计的; 若直接用于T=200,
+# 终端 √ᾱ_T≈0.36 仍残留信号, 与采样起点 x_T~N(0,I) 分布失配,
+# 导致样本模糊/畸变。cosine调度在短T下终端SNR自然衰减到≈0。
 # ============================================================
 T = 200
-beta_min, beta_max = 1e-4, 0.02
-betas = torch.linspace(beta_min, beta_max, T).to(device)
+_s = 0.008
+SCHEDULE_TAG = f'cosine_s{_s}_T{T}'  # 写入checkpoint的调度指纹, 防止旧调度的ckpt被新代码误用
+_steps = torch.arange(T + 1, dtype=torch.float64)
+_ac = torch.cos((_steps / T + _s) / (1 + _s) * math.pi / 2) ** 2
+_ac = _ac / _ac[0]
+betas = (1 - _ac[1:] / _ac[:-1]).clamp(max=0.999).float().to(device)
 alphas = 1.0 - betas
 alpha_bars = torch.cumprod(alphas, dim=0)
 alpha_bars_prev = torch.cat([torch.ones(1, device=device), alpha_bars[:-1]])
@@ -111,7 +119,7 @@ posterior_var = betas * (1 - alpha_bars_prev) / (1 - alpha_bars)
 sqrt_recip_alphas = 1.0 / torch.sqrt(alphas)
 beta_over_sqrt_1m_ab = betas / sqrt_one_minus_alpha_bars
 
-print(f"\n噪声调度: T={T}, β_min={beta_min}, β_max={beta_max} (DDPM线性调度)")
+print(f"\n噪声调度: T={T} (cosine调度, s={_s}), 终端√ᾱ_T={sqrt_alpha_bars[-1].item():.4f} (采样起点N(0,I)与终端分布匹配)")
 
 
 # ============================================================
@@ -294,6 +302,13 @@ def train_model(label, seed, checkpoint_path):
                 f"  {checkpoint_path}\n"
                 f"请删除该文件后重新训练."
             )
+        if checkpoint.get('schedule') != SCHEDULE_TAG:
+            raise RuntimeError(
+                f"checkpoint 的噪声调度 ({checkpoint.get('schedule', '未标记, 疑为旧线性调度版本')}) "
+                f"与当前代码 ({SCHEDULE_TAG}) 不匹配:\n"
+                f"  {checkpoint_path}\n"
+                f"用旧调度的权重跑新调度采样会产生分布失配, 请删除该文件后重新训练."
+            )
         if checkpoint.get('is_final', False):
             print(f"✓ 这是最终训练完成的模型, 直接加载, 跳过训练过程")
             print(f"  训练轮数: {checkpoint['epoch']+1}")
@@ -365,6 +380,7 @@ def train_model(label, seed, checkpoint_path):
                         'optimizer_state_dict': optimizer.state_dict(),
                         'loss': avg_loss,
                         'train_losses': train_losses,
+                        'schedule': SCHEDULE_TAG,
                         'is_final': False
                     }, checkpoint_path)
 
@@ -378,6 +394,7 @@ def train_model(label, seed, checkpoint_path):
                 'model_state_dict': model.state_dict(),
                 'loss': train_losses[-1],
                 'train_losses': train_losses,
+                'schedule': SCHEDULE_TAG,
                 'is_final': True
             }, checkpoint_path)
             print(f"✓ [{label}] 模型已保存: {checkpoint_path}")
@@ -422,6 +439,9 @@ if losses_a and losses_b:
     ax.set_title('两条路径的训练曲线对比', fontsize=13)
     ax.legend(fontsize=11)
     ax.grid(True, alpha=0.3)
+    fig.text(0.5, -0.02,
+             '注：两条曲线来自完全相同的代码与损失函数，仅随机种子不同（并非两种算法的独立对比；权重等价性见实验12.4-1）',
+             ha='center', fontsize=9, color='dimgray')
     fig_path1 = os.path.join(SAVE_DIR, '步骤1_训练曲线对比.png')
     plt.savefig(fig_path1, dpi=150, bbox_inches='tight')
     plt.close()
@@ -451,7 +471,7 @@ samples_b_img = (samples_b + 1) / 2
 samples_b_img = samples_b_img.clamp(0, 1)
 
 fig, axes = plt.subplots(2, n_samples, figsize=(16, 4))
-fig.subplots_adjust(left=0.10, right=0.98, top=0.85, bottom=0.05)
+fig.subplots_adjust(left=0.10, right=0.98, top=0.85, bottom=0.10)
 for i in range(n_samples):
     axes[0, i].imshow(samples_a_img[i, 0].cpu().numpy(), cmap='gray')
     axes[0, i].axis('off')
@@ -463,6 +483,9 @@ fig.text(0.02, 0.30, '变分路径\n(VLB→μ_θ→DDPM)', fontsize=10, ha='left
 
 fig_path2 = os.path.join(SAVE_DIR, '步骤2_采样结果对比.png')
 fig.suptitle('两条路径的采样结果对比', fontsize=14, y=0.98)
+fig.text(0.5, 0.02,
+         '注：两个模型由完全相同的代码与损失训练，仅随机种子不同（并非两种算法的独立对比）',
+         ha='center', fontsize=10, color='dimgray')
 plt.savefig(fig_path2, dpi=150)
 plt.close()
 print(f"图表已保存: 步骤2_采样结果对比.png")
