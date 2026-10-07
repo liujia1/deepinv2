@@ -151,14 +151,17 @@ print("\n" + "=" * 60)
 print("步骤1：Jensen不等式验证——ELBO ≤ log p(x)")
 print("=" * 60)
 
+def sample_mixture(q_weights, q_means, q_stds, n_samples):
+    """从高斯混合 q(z) 采样：用 multinomial 严格按权重分配各分量样本数"""
+    counts = np.random.multinomial(n_samples, q_weights)
+    z_parts = [np.random.randn(n_k) * s + m
+               for n_k, m, s in zip(counts, q_means, q_stds) if n_k > 0]
+    return np.concatenate(z_parts) if z_parts else np.array([])
+
 def compute_elbo(x, q_means, q_stds, q_weights, prior_weights, prior_means, prior_stds, sigma_obs, n_samples=100000):
     """数值计算ELBO = E_q[log p(x,z)] - E_q[log q(z)]"""
     # 从q采样
-    z_samples = []
-    for w, m, s in zip(q_weights, q_means, q_stds):
-        n_k = int(w * n_samples)
-        z_samples.extend(np.random.randn(n_k) * s + m)
-    z_samples = np.array(z_samples)
+    z_samples = sample_mixture(q_weights, q_means, q_stds, n_samples)
 
     # log p(x,z) = log p(x|z) + log p(z)
     log_pxz = -0.5 * np.log(2 * np.pi) - np.log(sigma_obs) - 0.5 * ((x - z_samples) / sigma_obs)**2  # log p(x|z)
@@ -168,9 +171,11 @@ def compute_elbo(x, q_means, q_stds, q_weights, prior_weights, prior_means, prio
         log_pz = np.logaddexp(log_pz, log_comp)
     log_joint = log_pxz + log_pz
 
-    # log q(z)
+    # log q(z)（跳过零权重分量）
     log_qz = np.full_like(z_samples, -1e30)
     for w, m, s in zip(q_weights, q_means, q_stds):
+        if w <= 0.0:
+            continue
         log_comp = np.log(w) - 0.5 * np.log(2 * np.pi) - np.log(s) - 0.5 * ((z_samples - m) / s)**2
         log_qz = np.logaddexp(log_qz, log_comp)
 
@@ -212,13 +217,9 @@ print("=" * 60)
 
 for name, q_w, q_m, q_s in test_qs[:3]:  # 取前3个q
     np.random.seed(42)
-    
-    # 采样
-    z_samples = []
-    for w, m, s in zip(q_w, q_m, q_s):
-        n_k = int(w * 100000)
-        z_samples.extend(np.random.randn(n_k) * s + m)
-    z_samples = np.array(z_samples)
+
+    # 采样（multinomial 严格按权重分配各分量样本数）
+    z_samples = sample_mixture(q_w, q_m, q_s, 100000)
 
     # log p(x,z)
     log_pxz = -0.5 * np.log(2 * np.pi) - np.log(sigma_obs) - 0.5 * ((x_obs - z_samples) / sigma_obs)**2
@@ -228,9 +229,11 @@ for name, q_w, q_m, q_s in test_qs[:3]:  # 取前3个q
         log_pz = np.logaddexp(log_pz, log_comp)
     log_joint = log_pxz + log_pz
 
-    # log q(z)
+    # log q(z)（跳过零权重分量）
     log_qz = np.full_like(z_samples, -1e30)
     for w, m, s in zip(q_w, q_m, q_s):
+        if w <= 0.0:
+            continue
         log_comp = np.log(w) - 0.5 * np.log(2 * np.pi) - np.log(s) - 0.5 * ((z_samples - m) / s)**2
         log_qz = np.logaddexp(log_qz, log_comp)
 
@@ -248,13 +251,15 @@ for name, q_w, q_m, q_s in test_qs[:3]:  # 取前3个q
     # 直接计算
     elbo_direct = np.mean(log_joint - log_qz)
 
-    print(f"\n  q = {name}:")
+    print(f"\n  {name}:")
     print(f"    分解一（联合-熵）:  E[log p(x,z)]={eq_log_joint:.4f} + H(q)={H_q:.4f} = {elbo_decomp1:.4f}")
     print(f"    分解二（重建+正则）: E[log p(x|z)]={eq_log_pxz_cond:.4f} - KL(q||p)={kl_qp:.4f} = {elbo_decomp2:.4f}")
     print(f"    直接计算:           ELBO = {elbo_direct:.4f}")
-    # 三种分解本质上是同一组蒙特卡罗样本的代数重组，理论误差应为机器精度级别（<1e-10）
+    # 三种写法使用同一批蒙特卡罗样本、只做代数重组，差异仅来自浮点求和顺序（~1e-16~1e-15）；
+    # 这验证的是代码实现与恒等式一致，并非对恒等式的独立数值验证
+    # （若三种写法各自独立采样，彼此会有~1e-3量级的蒙特卡罗误差）
     tol = 1e-9
-    print(f"    三者一致（容差{tol}）: {abs(elbo_decomp1 - elbo_decomp2) < tol and abs(elbo_decomp1 - elbo_direct) < tol}")
+    print(f"    三者一致（同一批样本，容差{tol}）: {abs(elbo_decomp1 - elbo_decomp2) < tol and abs(elbo_decomp1 - elbo_direct) < tol}")
 
 
 # ============================================================
@@ -266,23 +271,25 @@ print("步骤3：变分间隙随q接近后验的变化")
 print("=" * 60)
 
 # 参数化：q_α = (1-α)·p(z) + α·p(z|x)
+# 这是真正的分布混合：先验的2个分量与后验的2个分量共4个高斯分量，
+# 权重随α此消彼长，各分量的均值/标准差不变
 # α=0: q=先验, α=1: q=后验
 alphas = np.linspace(0, 1, 50)
 elbos = []
 gaps = []
 
 for alpha in alphas:
-    # 混合q_α
-    q_w_alpha = [(1 - alpha) * prior_weights[0] + alpha * post_w[0],
-                 (1 - alpha) * prior_weights[1] + alpha * post_w[1]]
-    q_m_alpha = [(1 - alpha) * prior_means[0] + alpha * post_m[0],
-                 (1 - alpha) * prior_means[1] + alpha * post_m[1]]
-    q_s_alpha = [np.sqrt((1 - alpha) * prior_stds[0]**2 + alpha * post_s[0]**2),
-                 np.sqrt((1 - alpha) * prior_stds[1]**2 + alpha * post_s[1]**2)]
+    # 混合q_α（4个高斯分量；端点α=0/1处零权重分量在采样与求值时自动跳过）
+    q_w_alpha = [(1 - alpha) * prior_weights[0],
+                 (1 - alpha) * prior_weights[1],
+                 alpha * post_w[0],
+                 alpha * post_w[1]]
+    q_m_alpha = [prior_means[0], prior_means[1], post_m[0], post_m[1]]
+    q_s_alpha = [prior_stds[0], prior_stds[1], post_s[0], post_s[1]]
 
     np.random.seed(42)
     elbo = compute_elbo(x_obs, q_m_alpha, q_s_alpha, q_w_alpha,
-                        prior_weights, prior_means, prior_stds, sigma_obs, n_samples=50000)
+                        prior_weights, prior_means, prior_stds, sigma_obs, n_samples=200000)
     elbos.append(elbo)
     gaps.append(log_px - elbo)
 

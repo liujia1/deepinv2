@@ -167,9 +167,9 @@ print(f"训练集: {len(train_dataset)} 样本, 测试集: {len(test_dataset)} �
 # ============================================================
 # 训练函数（支持checkpoint resume）
 # ============================================================
-def train_vae_with_checkpoint(beta, train_loader, num_epochs=15, latent_dim=20):
-    """训练一个VAE模型，支持checkpoint保存和加载"""
-    checkpoint_path = CHECKPOINT_TEMPLATE.format(beta=beta)
+def train_vae_with_checkpoint(beta, train_loader, num_epochs=15, latent_dim=20, ckpt_path=None):
+    """训练一个VAE模型，支持checkpoint保存和加载；ckpt_path可覆盖默认文件名（供d_z=2对照用）"""
+    checkpoint_path = ckpt_path if ckpt_path is not None else CHECKPOINT_TEMPLATE.format(beta=beta)
     
     encoder = Encoder(latent_dim=latent_dim).to(device)
     decoder = Decoder(latent_dim=latent_dim).to(device)
@@ -442,10 +442,10 @@ x1 = imgs1[idx1].view(-1, 784).to(device)
 x2 = imgs2[idx2].view(-1, 784).to(device)
 print(f"\n插值: 数字 {labels1[idx1].item()} → 数字 {labels2[idx2].item()}")
 
-n_interp = 10
+n_interp = 11
 alphas = np.linspace(0, 1, n_interp)
 
-fig, axes = plt.subplots(2, n_interp + 2, figsize=(24, 5))
+fig, axes = plt.subplots(2, n_interp + 2, figsize=(26, 5))
 
 for row, (enc, dec, name) in enumerate([
     (encoder_ae, decoder_ae, '$\\beta=0$ (AE)'),
@@ -484,6 +484,42 @@ plt.savefig(fig_path, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"图2已保存: {fig_path}")
 
+# ---- 量化核验：插值中点是否落在数据邻域（对应9.5节"实测分析（诚实版）"）----
+# 对30对不同数字的测试样本，计算插值中点到最近训练编码的距离，
+# 与两个端点到最近训练编码距离的均值之比；比值~1说明中点仍在数据邻域内。
+from sklearn.neighbors import NearestNeighbors
+
+def _encode_loader(encoder, loader):
+    encoder.eval()
+    zs, ys = [], []
+    with torch.no_grad():
+        for x, y in loader:
+            zs.append(encoder(x.view(-1, 784).to(device))[0].cpu())
+            ys.append(y)
+    return torch.cat(zs).numpy(), torch.cat(ys).numpy()
+
+midpoint_ratios = {}
+print("\n[量化核验] 30对不同数字样本: 插值中点最近邻距离 / 端点最近邻距离均值")
+for beta_q, name_print_q in [(0, 'beta=0 (AE)'), (1, 'beta=1 (VAE)')]:
+    enc_q = models[beta_q]['encoder']
+    z_train, _ = _encode_loader(enc_q, train_loader)
+    z_test, y_test = _encode_loader(enc_q, test_loader)
+    nbrs = NearestNeighbors(n_neighbors=1).fit(z_train)
+    rng = np.random.RandomState(0)
+    ratios = []
+    while len(ratios) < 30:
+        i, j = rng.randint(len(z_test)), rng.randint(len(z_test))
+        if y_test[i] == y_test[j]:
+            continue
+        z_mid = 0.5 * (z_test[i] + z_test[j])
+        d_mid = nbrs.kneighbors(z_mid[None, :])[0][0, 0]
+        d_end = 0.5 * (nbrs.kneighbors(z_test[i][None, :])[0][0, 0]
+                       + nbrs.kneighbors(z_test[j][None, :])[0][0, 0])
+        ratios.append(d_mid / d_end)
+    midpoint_ratios[beta_q] = float(np.mean(ratios))
+    print(f"  {name_print_q}: 比值={midpoint_ratios[beta_q]:.2f} (越接近1说明中点越贴近数据邻域)")
+print("  → 两者同一量级，即 d_z=20 下AE插值路径并未系统性穿过远邻域空洞，与图2两行均平滑一致")
+
 
 # ============================================================
 # 步骤3: 活跃维度与训练对比
@@ -505,8 +541,8 @@ for beta, name in zip(betas, beta_names):
     h = models[beta]['history']
     ax.plot(h['loss'], label=name, marker='o', markersize=3)
 ax.set_xlabel('Epoch', fontsize=12)
-ax.set_ylabel('ELBO损失', fontsize=12)
-ax.set_title('(a) 训练损失对比', fontsize=13)
+ax.set_ylabel(r'总损失 $= \mathrm{BCE} + \beta\cdot\mathrm{KL}$（每样本）', fontsize=12)
+ax.set_title('(a) 训练损失对比（含β·KL项，勿直接当作重建质量）', fontsize=13)
 ax.legend(fontsize=10)
 ax.grid(True, alpha=0.3)
 
@@ -567,6 +603,30 @@ plt.savefig(fig_path, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"图3已保存: {fig_path}")
 
+# ---- 测试集重建质量（BCE 与 PSNR，供9.3节跨实验对照引用）----
+# 评测口径与实验9.3-1完全一致：固定种子的重参数采样 z、逐图MSE→逐图PSNR→平均
+test_metrics = {}
+print("\n[测试集重建质量]（采样z评测，口径同实验9.3-1）")
+for beta, name_print in zip(betas, beta_names_print):
+    enc_q, dec_q = models[beta]['encoder'], models[beta]['decoder']
+    enc_q.eval(); dec_q.eval()
+    torch.manual_seed(0)  # 每个模型用同一组固定采样噪声，公平且可复现
+    bce_sum = 0
+    mse_list = []
+    with torch.no_grad():
+        for x, _ in test_loader:
+            x = x.view(-1, 784).to(device)
+            mu, logvar = enc_q(x)
+            z = reparameterize(mu, logvar)
+            x_recon = dec_q(z)
+            bce_sum += F.binary_cross_entropy(x_recon, x, reduction='sum').item()
+            mse_list.append(((x_recon - x) ** 2).mean(dim=1))  # 逐图784像素MSE
+    mse_all = torch.cat(mse_list)
+    psnr = (10 * torch.log10(1.0 / mse_all.clamp(min=1e-12))).mean().item()
+    test_bce = bce_sum / len(test_loader.dataset)
+    test_metrics[beta] = {'test_bce': test_bce, 'test_psnr_db': float(psnr)}
+    print(f"  {name_print}: 测试BCE={test_bce:.2f}, PSNR={psnr:.1f} dB")
+
 
 # ============================================================
 # 步骤4: 先验采样对比
@@ -585,19 +645,25 @@ print("    解码结果大概率是乱码/明显崩坏（而非'更清晰但不�
 n_gen = 10
 fig, axes = plt.subplots(3, n_gen, figsize=(20, 6))
 
+# 固定先验采样种子：加载checkpoint重绘与从零训练得到的图4保持一致、可复现
+prior_gen = torch.Generator().manual_seed(2024)
+
 for row, (beta, name) in enumerate(zip(betas, beta_names)):
     decoder = models[beta]['decoder']
     decoder.eval()
     
     with torch.no_grad():
-        z_prior = torch.randn(n_gen, 20).to(device)
+        z_prior = torch.randn(n_gen, 20, generator=prior_gen).to(device)
         samples = decoder(z_prior)
     
     for i in range(n_gen):
-        axes[row, i].imshow(samples[i].view(28, 28).cpu().numpy(), cmap='gray')
-        axes[row, i].axis('off')
+        ax_cell = axes[row, i]
+        ax_cell.imshow(samples[i].view(28, 28).cpu().numpy(), cmap='gray')
+        ax_cell.axis('off')
         if i == 0:
-            axes[row, i].set_ylabel(name, fontsize=12, rotation=0, labelpad=50)
+            # 行标签放在轴内部左上角（ylabel+大labelpad 会被 axis('off')/tight bbox 隐去）
+            ax_cell.text(0.02, 1.06, name, transform=ax_cell.transAxes, fontsize=12,
+                         ha='left', va='bottom')
 
 plt.suptitle('先验采样: $z \\sim \\mathcal{N}(0,I)$, $x = \\text{Decoder}(z)$', 
              fontsize=14, y=1.02)
@@ -606,6 +672,110 @@ fig_path = os.path.join(SAVE_DIR, '步骤4_先验采样对比.png')
 plt.savefig(fig_path, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"图4已保存: {fig_path}")
+
+
+# ============================================================
+# 步骤2b: 低维隐空间 (d_z=2) 插值对照
+# ============================================================
+# 说明: 本块物理上放在步骤4之后，是为了让d_z=2的训练不消耗全局RNG，
+#       从而不改变图1~4的逐位可复现性；块内独立重设种子保证自身确定性。
+print(f"\n{'='*60}")
+print("步骤2b: 低维隐空间 (d_z=2) 插值对照")
+print(f"{'='*60}")
+print("\n[设计意图]")
+print("  步骤2在d_z=20下未复现AE插值崩坏。此处仅把隐空间降到d_z=2（编码器/")
+print("  解码器结构不变，唯一变量是隐空间维度），检验'空洞致插值畸变'是否随维度降低而显现。")
+
+torch.manual_seed(42)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(42)
+
+models_dz2 = {}
+for beta, name_print in [(0, 'beta=0 (AE)'), (1, 'beta=1 (VAE)')]:
+    ck_dz2 = os.path.join(SAVE_DIR, f'vae_beta{beta}_dz2_checkpoint.pth')
+    print(f"\n{'='*60}")
+    print(f"训练 d_z=2 {name_print} ...")
+    print(f"{'='*60}")
+    enc, dec, hist = train_vae_with_checkpoint(beta, train_loader, num_epochs=15,
+                                               latent_dim=2, ckpt_path=ck_dz2)
+    models_dz2[beta] = {'encoder': enc, 'decoder': dec, 'history': hist}
+
+
+def _pick_test_sample(digit):
+    """从测试集取指定数字的第一张样本，返回(显示用[28,28]numpy, 编码用[1,784]tensor)"""
+    for x, y in test_loader:
+        hit = (y == digit).nonzero(as_tuple=True)[0]
+        if len(hit) > 0:
+            return x[hit[0], 0].numpy(), x[hit[0]].view(1, 784).to(device)
+    return None, None
+
+
+pairs_dz2 = [(0, 1), (3, 7)]
+n_interp2 = 11
+alphas2 = np.linspace(0, 1, n_interp2)
+fig, axes = plt.subplots(4, n_interp2 + 2, figsize=(26, 10))
+
+row = 0
+for (da, db) in pairs_dz2:
+    disp_a, xa = _pick_test_sample(da)
+    disp_b, xb = _pick_test_sample(db)
+    for beta, tag in [(0, '$\\beta=0$ (AE)'), (1, '$\\beta=1$ (VAE)')]:
+        enc = models_dz2[beta]['encoder']
+        dec = models_dz2[beta]['decoder']
+        enc.eval(); dec.eval()
+        with torch.no_grad():
+            mu1 = enc(xa)[0]
+            mu2 = enc(xb)[0]
+        # 端点A
+        axes[row, 0].imshow(disp_a, cmap='gray')
+        axes[row, 0].axis('off')
+        axes[row, 0].text(0.02, 1.06, f'{tag}, ${da}\\to{db}$', transform=axes[row, 0].transAxes,
+                          fontsize=12, ha='left', va='bottom')
+        # 插值
+        for i, alpha in enumerate(alphas2):
+            z_interp = (1 - alpha) * mu1 + alpha * mu2
+            with torch.no_grad():
+                x_interp = dec(z_interp)
+            axes[row, i + 1].imshow(x_interp.view(28, 28).cpu().numpy(), cmap='gray')
+            axes[row, i + 1].axis('off')
+            if row == 0:
+                axes[row, i + 1].set_title(f'$\\alpha={alpha:.1f}$', fontsize=10)
+        # 端点B
+        axes[row, -1].imshow(disp_b, cmap='gray')
+        axes[row, -1].axis('off')
+        row += 1
+
+plt.suptitle('低维隐空间插值对照 ($d_z=2$): AE 中段更易畸变 vs VAE 平滑', fontsize=14, y=1.0)
+plt.tight_layout()
+fig_path = os.path.join(SAVE_DIR, '步骤2b_插值维度对照_dz2.png')
+plt.savefig(fig_path, dpi=150, bbox_inches='tight')
+plt.close()
+print(f"图2b已保存: {fig_path}")
+
+# ---- 量化核验：d_z=2下插值中点是否落入空洞（与d_z=20对照）----
+print("\n[量化核验] d_z=2: 30对不同数字样本 插值中点最近邻距离/端点最近邻距离")
+dz2_ratios = {}
+for beta_q, name_q in [(0, 'AE'), (1, 'VAE')]:
+    enc_q = models_dz2[beta_q]['encoder']
+    z_train, _ = _encode_loader(enc_q, train_loader)
+    z_test, y_test = _encode_loader(enc_q, test_loader)
+    nbrs = NearestNeighbors(n_neighbors=1).fit(z_train)
+    rng = np.random.RandomState(0)
+    ratios = []
+    while len(ratios) < 30:
+        i, j = rng.randint(len(z_test)), rng.randint(len(z_test))
+        if y_test[i] == y_test[j]:
+            continue
+        z_mid = 0.5 * (z_test[i] + z_test[j])
+        d_mid = nbrs.kneighbors(z_mid[None, :])[0][0, 0]
+        d_end = 0.5 * (nbrs.kneighbors(z_test[i][None, :])[0][0, 0]
+                       + nbrs.kneighbors(z_test[j][None, :])[0][0, 0])
+        ratios.append(d_mid / d_end)
+    dz2_ratios[beta_q] = float(np.mean(ratios))
+    print(f"  d_z=2 {name_q}: 比值={dz2_ratios[beta_q]:.2f}")
+print(f"  → d_z=2下AE比值({dz2_ratios[0]:.2f})高于VAE({dz2_ratios[1]:.2f})但差距温和，几何空洞差异有限；")
+print("    视觉上AE仅在部分数字对(0→1)中段出现多余笔画/畸变、VAE更平滑，3→7对两者相近；")
+print("    方向与理论一致但非剧烈崩坏，说明'空洞致崩坏'随维度降低而增强、但被平滑MLP解码器掩盖")
 
 
 # ============================================================
@@ -630,11 +800,14 @@ print("   - β过大时，q(z|x)≈p(z)，隐变量不携带信息")
 print("   ✓ 实验验证: β=4时活跃维度明显少于β=1")
 print("\n3. 隐空间连续性（9.5节可视化）：")
 print("   - KL正则化使隐空间连续，插值平滑过渡")
-print("   实测：本设置(d_z=20)下AE与VAE的7→8插值均平滑，未出现AE崩坏；")
-print("   AE的'空洞'问题在步骤4先验采样中体现（生成乱码），需低维隐空间才能复现插值差异")
+print("   实测：d_z=20下AE与VAE插值均平滑(步骤2, 中点距同量级)，未出现AE崩坏；")
+print("   降至d_z=2后(步骤2b)AE在部分数字对中段出现畸变、VAE更平滑，方向与理论一致但非剧烈崩坏")
+print("   AE相对VAE的稳定缺陷在d_z=20下体现于步骤4先验采样（生成乱码）")
 print("\n4. t-SNE隐空间结构（9.5节可视化）：")
-print("   - KL正则化使隐空间有结构、可区分")
-print("   ✓ 实验验证: β=1/4时隐空间呈现聚类结构")
+print("   - 三个β下数字类别均呈现可分簇（β=0同样分簇，并非β=1/4独有）")
+print("   - 注意: t-SNE会归一化全局尺度并倾向把任意流形拉成簇，无法直接展示")
+print("     '空洞/重叠'；β增大使编码云向原点收缩的证据应看图3的每维KL与步骤4采样")
+print("   ✓ 实测: β=0/1/4 均可分簇；β=1各簇重叠更多、过渡更连续")
 
 print(f"\n{'='*60}")
 print("第九章配套实验 9.5-1 完成!")
@@ -668,8 +841,16 @@ for beta in betas:
         'bce_curve': h['bce'],
         'kld_curve': h['kld'],
         'active_curve': h['active'],
+        # 测试集重建质量（采样z评测，口径同9.3-1）；插值实验仅对比β=0/1，β=4为null
+        'test_bce': test_metrics[beta]['test_bce'],
+        'test_psnr_db': test_metrics[beta]['test_psnr_db'],
+        'interp_mid_dist_ratio': midpoint_ratios.get(beta),
     }
 results_summary = _to_native(results_summary)
+# 追加 d_z=2 对照实验的插值中点距比值（步骤2b）
+results_summary['dz2_interp_mid_dist_ratio'] = {
+    'beta_0_AE': dz2_ratios[0], 'beta_1_VAE': dz2_ratios[1],
+}
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
     json.dump(results_summary, f, ensure_ascii=False, indent=2)
 print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

@@ -1,0 +1,123 @@
+{
+  "model": {
+    "prior_weights": [
+      0.5,
+      0.5
+    ],
+    "prior_means": [
+      -2.0,
+      2.0
+    ],
+    "prior_stds": [
+      1.0,
+      1.0
+    ],
+    "sigma_obs": 1.0,
+    "x_obs": 0.0,
+    "latent_variables": "c ~ Cat(pi); z | c=k ~ N(mu_k,tau_k^2); x | z ~ N(z,sigma_obs^2)"
+  },
+  "true_posterior": {
+    "weights": [
+      0.5,
+      0.5
+    ],
+    "means": [
+      -1.0,
+      1.0
+    ],
+    "stds": [
+      0.7071067811865476,
+      0.7071067811865476
+    ],
+    "log_marginal_log_px": -2.265512123484645
+  },
+  "step1_step2_CAVI_mean_field": {
+    "family": "q(z,c) = q(z) q(c), q(z)=N(m,s^2), q(c)=Cat(r)",
+    "closed_form_updates": {
+      "s2": "1 / (1/sigma_obs^2 + sum_k r_k/tau_k^2)",
+      "m": "s2 * (x/sigma_obs^2 + sum_k r_k mu_k/tau_k^2)",
+      "r": "softmax_k { log pi_k - 0.5 log(2 pi tau_k^2) - [(m-mu_k)^2+s2]/(2 tau_k^2) }"
+    },
+    "runs": {
+      "symmetric": {
+        "r_init": [
+          0.5,
+          0.5
+        ],
+        "m": 0.0,
+        "s": 0.7071067811865476,
+        "r": [
+          0.5,
+          0.5
+        ],
+        "elbo": -3.265512123484645,
+        "gap": 1.0,
+        "kl_quad": 1.0000000000000007,
+        "n_iter": 2,
+        "monotone": true
+      },
+      "perturb_left": {
+        "r_init": [
+          0.501,
+          0.499
+        ],
+        "m": -0.9575025183491179,
+        "s": 0.7071067811865476,
+        "r": [
+          0.9787518867827051,
+          0.021248113217294803
+        ],
+        "elbo": -2.938988236059611,
+        "gap": 0.6734761125749662,
+        "kl_quad": 0.6734761125749663,
+        "n_iter": 17,
+        "monotone": true
+      },
+      "biased_right": {
+        "r_init": [
+          0.1,
+          0.9
+        ],
+        "m": 0.9575031975248911,
+        "s": 0.7071067811865476,
+        "r": [
+          0.02124805671909682,
+          0.9787519432809031
+        ],
+        "elbo": -2.938988236058291,
+        "gap": 0.6734761125736459,
+        "kl_quad": 0.6734761125736458,
+        "n_iter": 8,
+        "monotone": true
+      }
+    },
+    "elbo_monotone_all_runs": true,
+    "interpretation": [
+      "对称解 m=0,s=0.7071,r=(0.5,0.5) 是不稳定驻点：它到两个等权后验分量 N(±1,0.7071²) 的平均KL恰为 1²/(2·0.5)=1（同方差均值漂移），故 gap=1.000；任意微扰即自发对称破缺",
+      "破缺后两个镜像局部最优等优（ELBO=-2.93899，gap=0.6735），锁左峰或右峰由初始化决定",
+      "gap=0.6735 来自 q(z)⊥q(c) 的独立性约束（mode-seeking / zero-avoiding）"
+    ]
+  },
+  "step3_family_capacity": {
+    "single_gaussian_free_family": {
+      "note": "只有标量z，无因子分解，无独立性约束；间隙纯为高斯族容量不足",
+      "best_mu": 0.0,
+      "best_sigma": 1.1723633473345383,
+      "ELBO": -2.323211313892254,
+      "gap": 0.05769919040760918,
+      "KL_quadrature_independent_check": 0.05769926262075592,
+      "all_multistart_converge_same_point": true,
+      "behavior": "居中摊平，mode-covering，抬高两峰间凹陷"
+    },
+    "two_component_mixture_family": {
+      "note": "真实后验本身是2分量高斯混合，q*=p(z|x) 属于该族，gap恒为0",
+      "ELBO_quadrature_check": -2.265512123484646,
+      "gap": 8.881784197001252e-16
+    }
+  },
+  "figures": [
+    "步骤2_CAVI平均场vs真实后验.png",
+    "步骤3_变分族容量对比.png"
+  ],
+  "note": "变分间隙有两个不同来源，本实验分开验证：(1) 平均场独立性间隙 q(z)⊥q(c)，CAVI闭式坐标上升，ELBO严格非降；严格对称初始化停在不稳定驻点(gap=1.000，等于 q(z) 到两个等权后验分量的平均高斯KL)，微扰后对称破缺、锁单峰，局部最优 gap=0.6735；(2) 族容量间隙：对单标量z无独立性可言，最优单高斯居中摊平 gap=0.0577，换2分量混合族(仍无独立性结构)即gap=0。所有 gap 均用独立 scipy quad 的 KL 积分交叉核对到 1e-6 量级一致。ELBO 求积采用 128 节点 Gauss-Hermite（求积误差<1e-9、无MC噪声）。"
+}

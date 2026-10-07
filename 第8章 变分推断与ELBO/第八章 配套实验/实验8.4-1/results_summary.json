@@ -1,0 +1,61 @@
+{
+  "model": {
+    "posterior_weights": [
+      0.35,
+      0.65
+    ],
+    "posterior_means": [
+      -2.5,
+      2.0
+    ],
+    "posterior_stds": [
+      0.6,
+      0.6
+    ]
+  },
+  "variational_family": "single Gaussian N(mu, sigma^2)",
+  "integration": {
+    "method": "Gauss-Hermite (probabilists' Hermite polynomial)",
+    "nodes": 64,
+    "note": "对整条实轴求积，无有限网格截断；z_grid 仅用于绘图"
+  },
+  "optimizer": {
+    "method": "Nelder-Mead",
+    "maxiter": 2000,
+    "xatol": 1e-08,
+    "fatol": 1e-08
+  },
+  "step1_kl_comparison": {
+    "forward_kl": {
+      "mu": 0.42499998787855786,
+      "sigma": 2.228648698342026,
+      "kl": 0.6650211909176811
+    },
+    "reverse_kl_mode_lock_inits": [
+      {
+        "init_mu": -2.5,
+        "mu": -2.499128786542494,
+        "sigma": 0.6016020590888577,
+        "kl": 1.0494550863054557
+      },
+      {
+        "init_mu": 2.0,
+        "mu": 1.9995375776931676,
+        "sigma": 0.6008825216793803,
+        "kl": 0.4305942572434046
+      }
+    ],
+    "reverse_kl_center_init": {
+      "mu": -0.24170881521082344,
+      "sigma": 1.9855164704735633,
+      "kl": 1.5819938061267038
+    },
+    "reverse_kl_global_optimum": {
+      "mu": 1.9995375776931676,
+      "sigma": 0.6008825216793803,
+      "kl": 0.4305942572434046,
+      "type": "锁定单峰"
+    }
+  },
+  "note": "前向KL(p||q)在高斯族下的最优解为矩匹配(mu=E_p[z], sigma=sd_p[z]); 逆向KL(q||p)关于参数非凸，存在锁定单峰的局部最优；本例全局最优锁定65%重峰(KL≈0.431)，数值小于前向KL最小值(≈0.665)，但两种KL是不同泛函，数值一般不可直接比较；全程确定性求积与优化，无随机种子"
+}

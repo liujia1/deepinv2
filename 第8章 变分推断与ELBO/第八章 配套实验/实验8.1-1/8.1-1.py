@@ -27,6 +27,8 @@ import os
 import sys
 import io
 import time
+import json
+from scipy.optimize import minimize  # ★ 必须在所有计时段之前导入，否则 scipy 首次 import 开销（~秒级）会被计入策略耗时
 
 # 设置控制台输出为 UTF-8 (Windows 下避免中文乱码)
 if sys.platform == 'win32':
@@ -134,8 +136,8 @@ print("步骤1：后验不可解演示——归一化常数Z的计算困难")
 print("=" * 60)
 
 print("\n[核心困难]")
-print("  后验分布 p(x|y) = p(y|x)·p(x) / Z")
-print("  其中 Z = ∫p(y|x)·p(x)dx 是高维积分")
+print("  后验分布 p(z|x) = p(x|z)·p(z) / Z")
+print("  其中 Z = ∫p(x|z)·p(z)dz 是高维积分（即证据 p(x)）")
 print("  对于复杂先验（如深度学习先验），Z 不可解析计算")
 
 # 1D情况：Z可计算
@@ -151,14 +153,14 @@ print(f"  1D高斯混合: Z = {z_1d:.6f}（解析可算）")
 print("\n[高维情况：维数诅咒]")
 print("  假设 d 维独立高斯混合，Z 需要 d 维积分")
 print("  数值积分需要 O(N^d) 个网格点，N=10, d=100 时:")
-print(f"    网格点数: 10^100 ≈ 10^100（宇宙原子数约 10^80）")
+print(f"    网格点数: N^d = 10^100 ≈ {10.0**100:.1e}（宇宙原子数约 10^80）")
 print("  → 高维积分在计算上不可行")
 
 # 蒙特卡罗估计Z（重要性采样）
 print("\n[蒙特卡罗估计Z]")
 n_mc = 1000000
-proposal_std = 3.0
-z_samples = np.random.randn(n_mc) * proposal_std  # 从提议分布 q(z)=N(0, proposal_std²) 采样
+is_proposal_std = 3.0  # 重要性采样提议分布宽度（与后面 MCMC 提议步长区分命名）
+z_samples = np.random.randn(n_mc) * is_proposal_std  # 从提议分布 q(z)=N(0, is_proposal_std²) 采样
 # 计算 log p(x,z)
 log_pz = np.full(n_mc, -1e30)
 for w, mu, tau in zip(prior_weights, prior_means, prior_stds):
@@ -167,7 +169,7 @@ for w, mu, tau in zip(prior_weights, prior_means, prior_stds):
 log_pxz = -0.5 * np.log(2 * np.pi) - np.log(sigma_obs) - 0.5 * ((x_obs - z_samples) / sigma_obs)**2
 log_joint = log_pxz + log_pz
 # 重要性采样：Z = E_q[p(x,z)/q(z)]，需要除以提议分布密度 q(z)
-log_q = -0.5 * np.log(2 * np.pi) - np.log(proposal_std) - 0.5 * (z_samples / proposal_std)**2
+log_q = -0.5 * np.log(2 * np.pi) - np.log(is_proposal_std) - 0.5 * (z_samples / is_proposal_std)**2
 log_weights = log_joint - log_q  # log[p(x,z)/q(z)]
 z_mc = np.mean(np.exp(log_weights - np.max(log_weights))) * np.exp(np.max(log_weights))
 print(f"  蒙特卡罗估计 (N={n_mc}, 重要性采样): Z ≈ {z_mc:.6f}")
@@ -204,12 +206,6 @@ def log_unnormalized_posterior(z):
         log_pz = np.logaddexp(log_pz, log_comp)
     return log_pxz + log_pz
 
-def grad_log_unnormalized_posterior(z):
-    """未归一化后验的梯度（用于Langevin动力学）"""
-    # 数值梯度
-    eps = 1e-5
-    return (log_unnormalized_posterior(z + eps) - log_unnormalized_posterior(z - eps)) / (2 * eps)
-
 # 真实后验PDF（用于评估）
 def true_posterior_pdf(z):
     """真实后验的PDF"""
@@ -217,20 +213,27 @@ def true_posterior_pdf(z):
     return unnorm / z_1d
 
 # 计算KL散度（近似后验 vs 真实后验）
-def compute_kl(q_samples, log_q, true_pdf_func, n_bins=100):
+# 实现要点：p 必须在直方图各箱的【箱中心】评估、积分步长用【箱宽】。
+#   早期版本误用 np.linspace(-5,5,n_bins)（n_bins个点、间距10/99）对齐
+#   n_bins 个箱（箱宽10/100），半格错位+步长失配，即使 q=p 也产生 ≈0.012 的
+#   系统性地板值。对齐后残余地板 ≈0.002，才是直方图插件估计固有的有限样本
+#   正偏置（经验分布的多项噪声 + x·log(x) 的凸性，箱数越多偏置越大），
+#   不可消除但不影响策略间相对比较。
+def compute_kl(q_samples, true_pdf_func, n_bins=100):
     """近似计算KL(q||p)"""
     z_min, z_max = -5, 5
-    z_grid = np.linspace(z_min, z_max, n_bins)
-    dz = z_grid[1] - z_grid[0]
-    
-    # 真实后验
-    p_vals = true_pdf_func(z_grid)
+    bin_edges = np.linspace(z_min, z_max, n_bins + 1)
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    dz = bin_edges[1] - bin_edges[0]  # 箱宽 = 10/n_bins
+
+    # 真实后验（在箱中心评估，与直方图逐箱对齐）
+    p_vals = true_pdf_func(bin_centers)
     p_vals = np.maximum(p_vals, 1e-10)  # 避免log(0)
-    
+
     # 近似后验（直方图估计）
-    q_hist, _ = np.histogram(q_samples, bins=n_bins, range=(z_min, z_max), density=True)
+    q_hist, _ = np.histogram(q_samples, bins=bin_edges, density=True)
     q_vals = np.maximum(q_hist, 1e-10)
-    
+
     # KL散度
     kl = np.sum(q_vals * np.log(q_vals / p_vals) * dz)
     return kl
@@ -278,7 +281,6 @@ print("\n[策略2] Laplace近似（单高斯近似后验）")
 t_start = time.time()
 
 # 找到后验众数（MAP）
-from scipy.optimize import minimize
 neg_log_post = lambda z: -log_unnormalized_posterior(z)
 result = minimize(neg_log_post, x0=0.0, method='Nelder-Mead')
 z_map = result.x[0]
@@ -323,33 +325,38 @@ t_start = time.time()
 # 目标：最小化 KL(q||p(z|x))
 # 等价于：最大化 ELBO = E_q[log p(x,z)] - E_q[log q(z)]
 
-# 使用公共随机数（common random numbers）消除蒙特卡罗噪声
-# 固定一组ε ~ N(0,1)，通过重参数化 z = μ + σ·ε 评估不同(μ,σ)
-n_vi_samples = 10000
-vi_eps = np.random.randn(n_vi_samples)  # 固定的基础噪声
+# 期望的数值计算：本案例是1D教学模型，用 Gauss-Hermite 求积（概率学家版本，
+# 权函数 e^{-ε²/2}）计算 E_q[f(z)]。固定求积点 ε_i 与权重 w_i 后，
+# 仍走重参数化 z = μ + σ·ε_i 评估不同(μ,σ)，目标函数确定性、无蒙特卡罗噪声；
+# 高维场景下求积不可行，应替换为重参数化蒙特卡罗（固定公共随机数 ε~N(0,I)）。
+# 节点数说明：双峰混合的 log p(z) 在复平面距实轴仅≈0.20处有奇点，GH收敛慢，
+# 64点时ELBO有≈8e-4系统偏差（logZ−ELBO 会虚高0.0008）；256点后偏差<1e-6
+# （节点数不宜超过~300，numpy hermegauss 在大n下会数值溢出）。
+n_vi_quad = 256
+vi_eps, vi_quad_w = np.polynomial.hermite_e.hermegauss(n_vi_quad)
+vi_quad_w = vi_quad_w / vi_quad_w.sum()  # 归一化为概率权重
 
 def compute_elbo_single_gaussian(mu, sigma):
-    """计算单高斯变分族的ELBO（使用公共随机数）"""
-    # 重参数化：z = μ + σ·ε，ε固定
+    """计算单高斯变分族的ELBO（Gauss-Hermite求积，重参数化 z=μ+σ·ε）"""
+    # 重参数化：z = μ + σ·ε_i，ε_i 为固定求积点
     z_samples = mu + sigma * vi_eps
-    
+
     # log p(x,z)
     log_pxz = -0.5 * np.log(2 * np.pi) - np.log(sigma_obs) - 0.5 * ((x_obs - z_samples) / sigma_obs)**2
-    log_pz = np.full(n_vi_samples, -1e30)
+    log_pz = np.full(n_vi_quad, -1e30)
     for w, mu_prior, tau in zip(prior_weights, prior_means, prior_stds):
         log_comp = np.log(w) - 0.5 * np.log(2 * np.pi) - np.log(tau) - 0.5 * ((z_samples - mu_prior) / tau)**2
         log_pz = np.logaddexp(log_pz, log_comp)
     log_joint = log_pxz + log_pz
-    
+
     # log q(z)
     log_qz = -0.5 * np.log(2 * np.pi) - np.log(sigma) - 0.5 * ((z_samples - mu) / sigma)**2
-    
-    # ELBO
-    elbo = np.mean(log_joint - log_qz)
+
+    # ELBO（求积加权和）
+    elbo = np.sum(vi_quad_w * (log_joint - log_qz))
     return elbo
 
 # 优化ELBO
-from scipy.optimize import minimize
 neg_elbo = lambda params: -compute_elbo_single_gaussian(params[0], np.exp(params[1]))
 result = minimize(neg_elbo, x0=[0.0, 0.0], method='Nelder-Mead')
 mu_vi = result.x[0]
@@ -371,9 +378,9 @@ print("策略对比总结")
 print("=" * 60)
 
 # 计算各策略的KL散度
-kl_mcmc = compute_kl(mcmc_samples, None, true_posterior_pdf)
-kl_laplace = compute_kl(np.random.randn(10000) * sigma_laplace + z_map, None, true_posterior_pdf)
-kl_vi = compute_kl(np.random.randn(10000) * sigma_vi + mu_vi, None, true_posterior_pdf)
+kl_mcmc = compute_kl(mcmc_samples, true_posterior_pdf)
+kl_laplace = compute_kl(np.random.randn(10000) * sigma_laplace + z_map, true_posterior_pdf)
+kl_vi = compute_kl(np.random.randn(10000) * sigma_vi + mu_vi, true_posterior_pdf)
 
 print(f"\n{'策略':<20s} | {'计算时间(秒)':<15s} | {'KL散度':<12s} | {'分布信息':<10s}")
 print("-" * 70)
@@ -514,6 +521,49 @@ print("4. 两条路径的分野：")
 print("   - 采样路径（Part II）：追求精确，计算慢")
 print("   - 变分路径（Part III）：追求高效，计算快")
 print("5. 下一章预告：ELBO是变分推断的优化目标")
+
+# ============================================================
+# 结果归档 results_summary.json
+# ============================================================
+results = {
+    "model": {
+        "prior_weights": prior_weights,
+        "prior_means": prior_means,
+        "prior_stds": prior_stds,
+        "sigma_obs": sigma_obs,
+        "x_obs": x_obs,
+    },
+    "true_posterior": {
+        "weights": [float(w) for w in post_w],
+        "means": [float(m) for m in post_m],
+        "stds": [float(s) for s in post_s],
+    },
+    "step1_Z": {
+        "Z_analytic": float(z_1d),
+        "Z_importance_sampling": float(z_mc),
+        "relative_error_pct": float(abs(z_mc - z_1d) / z_1d * 100),
+    },
+    "step2_strategies": {
+        "MCMC": {"time_s": float(t_mcmc), "KL": float(kl_mcmc),
+                 "accept_rate": float(n_accept / (n_mcmc + burn_in)),
+                 "sample_mean": float(np.mean(mcmc_samples)),
+                 "sample_std": float(np.std(mcmc_samples))},
+        "Laplace": {"time_s": float(t_laplace), "KL": float(kl_laplace),
+                    "z_map": float(z_map), "sigma": float(sigma_laplace)},
+        "MAP": {"time_s": float(t_map), "z_map": float(z_map_estimate)},
+        "VI": {"time_s": float(t_vi), "KL": float(kl_vi),
+               "mu": float(mu_vi), "sigma": float(sigma_vi),
+               "ELBO": float(-result.fun)},
+    },
+    "consistency_check": {
+        "logZ_minus_ELBO_equals_true_KL": float(np.log(z_1d) - (-result.fun)),
+        "note": "logZ - ELBO = KL(q||p) 理论恒等；Gauss-Hermite 256点求积下该值≈精确KL 0.2546，与直方图 KL 估计量（含约0.002的有限样本正偏置）略有差异",
+    },
+    "note": "KL为直方图插件估计：已修正网格对齐（p在箱中心评估、dz取箱宽），残余正偏置≈0.002（n=10000、100箱下的有限样本固有偏置，即使q=p也不为0；箱数越多偏置越大），仅供策略间相对比较；VI的期望用256点Gauss-Hermite求积（1D教学模型，高维应换重参数化MC）；计算时间依赖机器，量级上MCMC（串行迭代采样）≫ Laplace/MAP/VI（优化类，毫秒级），scipy首次import开销已在计时段外",
+}
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results, f, ensure_ascii=False, indent=2)
+print(f"\n结果已归档: results_summary.json")
 
 print(f"\n{'='*60}")
 print("第八章配套实验8.1-1完成！")
