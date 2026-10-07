@@ -122,23 +122,29 @@ print("  → q(x_t|x_0) = N(x_t; sqrt(ab_t) x_0, (1-ab_t)I)")
 N = 5000  # 大样本量确保统计显著性
 torch.manual_seed(42)
 x0 = torch.randn(N, 2)  # N个2D样本
-n_steps_list = [1, 50, 200, 500, 999]
+n_steps_list = [1, 50, 200, 500, 1000]  # 1-indexed 时间步 (与步骤3、JSON 的 t 记法一致; t=T 即 x_T)
 
 print("\n直接采样 vs 逐步加噪 (" + str(N) + "个样本, 2维):")
-print("    t      均值差(max)    标准差差(max)    条件期望    理论标准差")
-print("-" * 75)
+print("    t      均值差(max)    标准差差(max)    MC误差尺度    条件期望    理论标准差")
+print("-" * 90)
+
+step1_stats = {}  # 步骤1统计量 (写入 results_summary.json)
 
 # 为每个t创建独立的Generator，确保可复现性（跨版本稳定）
 base_seed = 42
 
-for t_idx in n_steps_list:
-    t = t_idx  # 0-indexed
+for t_1idx in n_steps_list:
+    t = t_1idx - 1  # alpha_bars 数组的 0-indexed 位置: alpha_bars[t] = ᾱ_{t_1idx}
     sqrt_ab = torch.sqrt(alpha_bars[t])
     sqrt_1mab = torch.sqrt(1 - alpha_bars[t])
 
+    # 均值差的蒙特卡洛误差尺度: Var(mean_direct - mean_step) = 2(1-ab_t)/N (每维; 两链噪声独立)
+    # mean_diff 与 mc_scale 同量级即说明两过程统计不可区分
+    mc_scale = float(torch.sqrt(2 * (1 - alpha_bars[t]) / N))
+
     # 为当前t创建两个独立的Generator
-    g_direct = torch.Generator().manual_seed(base_seed + t_idx * 1000)
-    g_step = torch.Generator().manual_seed(base_seed + t_idx * 1000 + 1)
+    g_direct = torch.Generator().manual_seed(base_seed + t_1idx * 1000)
+    g_step = torch.Generator().manual_seed(base_seed + t_1idx * 1000 + 1)
 
     # 直接采样: x_t = sqrt(ab_t) * x_0 + sqrt(1-ab_t) * eps
     eps_direct = torch.randn_like(x0, generator=g_direct)
@@ -146,7 +152,7 @@ for t_idx in n_steps_list:
 
     # 逐步加噪 (独立随机性，与直接采样解耦)
     x_t_step = x0.clone()
-    for s in range(t + 1):
+    for s in range(t_1idx):  # t_1idx 次转移: x_0 → x_{t_1idx}
         noise = torch.randn_like(x_t_step, generator=g_step)
         x_t_step = torch.sqrt(alphas[s]) * x_t_step + torch.sqrt(betas[s]) * noise
 
@@ -159,15 +165,23 @@ for t_idx in n_steps_list:
     mean_diff = (mean_direct - mean_step).abs().max().item()
     std_diff = (std_direct - std_step).abs().max().item()
 
+    step1_stats["t_" + str(t_1idx)] = {
+        'mean_diff_max': mean_diff,
+        'std_diff_max': std_diff,
+        'mc_error_scale': mc_scale,
+    }
+
     # 条件期望值 (以当前x0样本为条件，而非绝对理论期望0)
     mean_conditional = sqrt_ab * x0.mean(dim=0)
     std_theory = sqrt_1mab
 
-    print(str(t_idx).rjust(5) + "  " + str(round(mean_diff, 6)).rjust(14) + "  " + str(round(std_diff, 6)).rjust(14) +
+    print(str(t_1idx).rjust(5) + "  " + str(round(mean_diff, 6)).rjust(14) + "  " + str(round(std_diff, 6)).rjust(14) +
+          "  " + str(round(mc_scale, 6)).rjust(14) +
           "  " + str(round(mean_conditional[0].item(), 6)).rjust(14) + "  " + str(round(std_theory.item(), 6)).rjust(14))
 
-print("\n→ 两条独立采样链的统计量趋于一致，验证了闭式边际分布成立:")
-print("  q(x_t|x_0) = N(sqrt(ab_t)x_0, (1-ab_t)I) 精确成立")
+print("\n→ 各时间步上, 均值差与'MC误差尺度'同量级 → 差异纯属有限样本噪声, 两过程统计不可区分:")
+print("  支持闭式边际分布 q(x_t|x_0) = N(sqrt(ab_t)x_0, (1-ab_t)I)")
+print("  注: 该式代数上精确成立; 数值实验受蒙特卡洛精度 O(1/sqrt(N)) 限制, 验证的是统计不可区分性")
 print("  这是10.2节的核心结论：高斯马尔可夫链的闭式边际分布")
 print("\n  注：标准差差异是更强的判别指标——")
 print("     均值本身因 E[x_0]≈0 而趋于0，判别力弱；")
@@ -187,12 +201,18 @@ print("  - L_T: 先验匹配项 D_KL(q(x_T|x_0) || p(x_T))")
 print("  - L_{t-1}: 一致性项 D_KL(q(x_{t-1}|x_t,x_0) || p_theta(x_{t-1}|x_t))")
 print("  - L_0: 重建项 -E[log p_theta(x_0|x_1)]")
 
-# L_T: 先验匹配项
+# L_T: 先验匹配项 (两端均为已知高斯, 闭式KL可直接数值计算)
+s2_T = (1 - alpha_bars[-1]).item()            # q 的方差 s^2 = 1-ab_T
+mean_x0_sq = (x0 ** 2).mean().item()          # 经验 E[x_0^2] (标准正态数据 ≈ 1)
+# KL(N(m, s^2·I) || N(0, I)) 每维 = 0.5*[m^2 + s^2 - 1 - ln(s^2)], 其中 m^2 的样本均值 = ab_T·E[x_0^2]
+L_T_per_dim = 0.5 * (alpha_bars[-1].item() * mean_x0_sq + (s2_T - 1 - float(np.log(s2_T))))
 print("\nL_T (先验匹配项):")
 print("  q(x_T|x_0) = N(sqrt(ab_T)x_0, (1-ab_T)I)")
 print("  p(x_T) = N(0, I)")
 print("  ab_T = " + str(round(alpha_bars[-1].item(), 8)) + " → sqrt(ab_T) ≈ 0, 1-ab_T ≈ 1")
-print("  → q(x_T|x_0) ≈ N(0, I) → L_T ≈ 0")
+print("  闭式KL (每维): L_T = 0.5*[ab_T*E[x_0^2] + (s^2 - 1 - ln s^2)], s^2 = 1-ab_T")
+print("    E[x_0^2]=" + str(round(mean_x0_sq, 4)) + " → L_T ≈ " + "{:.3e}".format(L_T_per_dim) +
+      " nats/维 → 确实≈0 (该性质固有于线性调度 ab_T≈e^{-Σβ}≈4e-5, 非近似口号)")
 
 # 前向过程后验 (10.2节闭式解)
 alpha_bars_prev = torch.cat([torch.ones(1), alpha_bars[:-1]])
@@ -227,7 +247,11 @@ print("    t=T:     " + str(round(rel_err_t2_onwards[-1].item() * 100, 4)) + "%"
 print("    最大相对误差(按绝对值, 忽略t=1): " + str(round(worst_rel.item() * 100, 4)) + "% (在t=" + str(worst_rel_t) + ")")
 print("    最大绝对误差 |β̃_t-β_t| (忽略t=1): " + str(round(max_abs_err.item(), 6)) + " (在t=" + str(max_abs_err_t) + ")")
 print("  → 相对误差在 t>=2 并非都 < 0.1%: 小 t 处偏差极大 (t=2 约 -54.5%), 直到 t≈" + str(t_cross_01pct) + " 才降到 0.1% 以内")
-print("    但绝对误差 |β̃_t-β_t| 始终极小 (最大约 " + str(round(max_abs_err.item(), 6)) + "), 故 DDPM 用 σ_t²=β_t 近似 β̃_t 在实践中仍成立")
+print("  → 为何 DDPM 仍可用 σ_t²=β_t 近似 β̃_t (三条独立理由, 而非仅凭'绝对误差小'):")
+print("    (1) 训练不受影响: 简化目标 L_simple=||ε-ε_θ||² 不含 σ_t², 该选择只作用于采样阶段")
+print("    (2) 采样影响可忽略: t≈" + str(t_cross_01pct) + " 之后两方差几乎重合; 小 t 处二者同为 1e-4 量级 (绝对差 ≤" +
+      str(round(max_abs_err.item(), 6)) + "), 对末段采样的随机性扰动可忽略")
+print("    (3) 实证支持: Improved DDPM (Nichol & Dhariwal 2021) 表明 σ 的具体取值对样本质量不敏感, 且可学习")
 
 # 验证后验均值公式 (10.2节)
 print("\n后验均值系数 (10.2节):")
@@ -243,6 +267,12 @@ for t_idx in [0, 99, 499, 999]:
     coeff_x0 = torch.sqrt(ab_prev) * (1 - a_t) / (1 - ab_t)
 
     print("  t=" + str(t+1).rjust(4) + ": x_t系数=" + str(round(coeff_xt.item(), 4)) + ", x_0系数=" + str(round(coeff_x0.item(), 4)) + ", 和=" + str(round((coeff_xt+coeff_x0).item(), 4)))
+
+# 三项的数值可评估性说明 (为何本实验只直接计算 L_T)
+print("\n三项分解的数值可评估性:")
+print("  - L_T    : 两端均为已知高斯 → 闭式KL直接计算 (见上, ≈" + "{:.1e}".format(L_T_per_dim) + " nats/维)")
+print("  - L_{t-1}: 当 p_theta 取前向真后验时 KL≡0, 验证重点即后验闭式解本身 (已由上方 β̃_t 与均值系数完成)")
+print("  - L_0    : 需要训练好的解码器 p_theta(x_0|x_1), 无模型实验无法数值评估 (固有限制, 留待10.3节训练后评估)")
 
 # L_0: 重建项
 print("\nL_0 (重建项): 离散解码器或高斯解码器的负对数似然")
@@ -278,7 +308,7 @@ print("="*60)
 
 fig = plt.figure(figsize=(14, 11))
 gs_outer = fig.add_gridspec(2, 2, hspace=0.35, wspace=0.28)
-gs_c = gs_outer[1, 0].subgridspec(2, 1, hspace=0.45)
+gs_c = gs_outer[1, 0].subgridspec(2, 1, hspace=0.62)
 
 # (a) 噪声调度与ab_t
 ax = fig.add_subplot(gs_outer[0, 0])
@@ -319,31 +349,30 @@ ax.set_title(r'(c-上) 前向过程后验方差 vs 前向方差 ($\tilde{\beta}_
 ax.legend(fontsize=10)
 ax.grid(True, alpha=0.3)
 
-# (c-下) 相对误差: 放大显示二者的微小差异
+# (c-下) 相对误差: 对数轴放大显示二者的微小差异 (线性轴下 t>50 后曲线贴 0 无法分辨)
 ax = fig.add_subplot(gs_c[1])
-rel_err_pct = rel_err[1:].numpy() * 100  # 从t=2开始 (跳过t=1的-100%退化点)
-ax.plot(t_range[1:], rel_err_pct, 'b-', linewidth=2)
-ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
+rel_err_pct = np.abs(rel_err[1:].numpy()) * 100  # |相对误差|, 从t=2开始 (跳过t=1的-100%退化点)
+ax.semilogy(t_range[1:], rel_err_pct, 'b-', linewidth=2)
 # 标注: t=2 误差最大 (最不近似处), t=T 误差最小 (最近似处)
-worst_idx = 0  # rel_err_pct[0] 对应 t=2, 是最负的值
+worst_idx = 0  # rel_err_pct[0] 对应 t=2, 是最大的|相对误差|
 worst_t = worst_idx + 2
 worst_val = rel_err_pct[worst_idx]
 ax.annotate(r'最大误差 $t=2$: ' + f'{worst_val:.2f}%',
-            xy=(worst_t, worst_val), xytext=(0.40, 0.30),
+            xy=(worst_t, worst_val), xytext=(0.40, 0.55),
             textcoords='axes fraction',
             fontsize=10, color='red', fontweight='bold',
             arrowprops=dict(arrowstyle='->', color='red', alpha=0.6))
 # 在曲线右端标注最小值
 best_val = rel_err_pct[-1]
-ax.annotate(r'$t=T$: ' + f'{best_val:.4f}%',
-            xy=(T, best_val), xytext=(0.65, 0.75),
+ax.annotate(r'$t=T$: ' + f'{best_val:.2e}%',
+            xy=(T, best_val), xytext=(0.60, 0.15),
             textcoords='axes fraction',
             fontsize=10, color='blue', fontweight='bold',
             arrowprops=dict(arrowstyle='->', color='blue', alpha=0.6))
 ax.set_xlabel('时间步 $t$', fontsize=12)
-ax.set_ylabel('相对误差 (%)', fontsize=12)
-ax.set_title(r'(c-下) 相对误差 $\frac{\tilde{\beta}_t - \beta_t}{\beta_t} \times 100\%$', fontsize=13)
-ax.grid(True, alpha=0.3)
+ax.set_ylabel('|相对误差| (%)', fontsize=12)
+ax.set_title(r'(c-下) 相对误差幅值 $\left|\frac{\tilde{\beta}_t - \beta_t}{\beta_t}\right|$ (对数轴)', fontsize=13)
+ax.grid(True, alpha=0.3, which='both')
 
 # (d) 2D扩散过程可视化
 ax = fig.add_subplot(gs_outer[1, 1])
@@ -355,10 +384,10 @@ mode2 = np.random.randn(n_pts // 2, 2) * 0.3 + np.array([-1.0, 0.0])
 x0_2d = np.vstack([mode1, mode2])
 
 colors = np.array([0] * (n_pts // 2) + [1] * (n_pts // 2))
-t_show = [0, 50, 200, 500, 999]
+t_show = [0, 50, 200, 500, 1000]  # 1-indexed 时间步 (t=0 表示原始数据 x_0)
 
 for i, t_idx in enumerate(t_show):
-    ab = alpha_bars[t_idx].item()
+    ab = 1.0 if t_idx == 0 else alpha_bars[t_idx - 1].item()  # ᾱ_t (1-indexed)
     noise = np.random.randn(n_pts, 2)
     x_t = np.sqrt(ab) * x0_2d + np.sqrt(1 - ab) * noise
     offset_x = i * 4
@@ -393,7 +422,7 @@ print("\n1. 高斯编码器=加噪过程 (步骤1)")
 print("   - 马尔可夫高斯链的闭式边际分布: q(x_t|x_0) = N(sqrt(ab_t)x_0, (1-ab_t)I)")
 print("   - 直接采样公式允许高效地从任意时间步采样")
 print("\n2. VLB三项分解 (步骤2)")
-print("   - L_T≈0: 先验匹配项，当ab_T≈0时自动满足")
+print("   - L_T≈0: 先验匹配项，当ab_T≈0时自动满足 (闭式KL数值验证: ≈" + "{:.1e}".format(L_T_per_dim) + " nats/维)")
 print("   - L_{t-1}: 一致性项，核心优化目标")
 print("   - L_0: 重建项")
 print("\n3. 前向过程后验闭式解 (步骤2)")
@@ -432,10 +461,13 @@ results_summary = {
         'alpha_bar_500': alpha_bars[499].item(),
         'alpha_bar_T': alpha_bars[-1].item(),
     },
+    'step1_closed_form_check': step1_stats,
     'L_T_prior_matching': {
         'alpha_bar_T': alpha_bars[-1].item(),
         'sqrt_alpha_bar_T': torch.sqrt(alpha_bars[-1]).item(),
         'one_minus_alpha_bar_T': (1 - alpha_bars[-1]).item(),
+        'per_dim_KL_nats': L_T_per_dim,
+        'empirical_mean_x0_sq': mean_x0_sq,
     },
     'posterior_variance': {
         'tilde_beta_1': posterior_var[0].item(),

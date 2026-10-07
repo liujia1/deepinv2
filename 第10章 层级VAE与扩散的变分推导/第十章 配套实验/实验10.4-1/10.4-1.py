@@ -84,7 +84,8 @@ print("步骤1：离散→连续极限验证")
 print("="*60)
 print("\n[核心思想]")
 print("  当层级数L→∞时，离散乘积收敛到连续指数:")
-print("  ab_L = prod_{i=1}^L (1 - beta/L) → exp(-beta t)")
+print("  一般t:  ab(t) = (1 - beta/L)^(L·t) → exp(-beta·t)")
+print("  t=1端点: ab_L = prod_{i=1}^L (1 - beta/L) → exp(-beta)")
 print("  其中 t = i/L 为归一化时间")
 
 beta_total = 1.0  # 总扩散量
@@ -122,7 +123,7 @@ print("  其中 ab(t) = exp(-int_0^t beta(s) ds)")
 print("\n[逆向SDE]")
 print("  逆向SDE: dx = [-beta(t)/2 · x - beta(t) · s_theta(x,t)] dt + sqrt(beta(t)) dW_bar")
 print("  或用eps-prediction参数化 (s_theta = -hat_eps/sqrt(1-ab)):")
-print("  dx = [-beta(t)/2 · x + beta(t)/(2·sqrt(1-ab(t))) · hat_eps_theta(x,t)] dt + sqrt(beta(t)) dW_bar")
+print("  dx = [-beta(t)/2 · x + beta(t)/sqrt(1-ab(t)) · hat_eps_theta(x,t)] dt + sqrt(beta(t)) dW_bar")
 
 print("\n[ODE形式 (Probability Flow ODE)]")
 print("  去除随机项后得到确定性ODE:")
@@ -154,53 +155,54 @@ ELBO                   →  VLB
 """)
 
 # 数值验证: 不同L下的边际分布到先验KL距离积分
-np.random.seed(42)
-# 简化的2D高斯混合数据
-x0_gmm = np.vstack([np.random.randn(500, 2) * 0.5 + [1, 0],
-                     np.random.randn(500, 2) * 0.5 + [-1, 0]])
+# 2D高斯混合: 分量 N([±1,0], 0.25·I) 等权 → 各维二阶矩为解析常数(无需采样):
+#   E[x0,1²] = mu2 + sigma2 = 1.25,  E[x0,2²] = sigma2 = 0.25 (dim2均值本为0)
+# 边际 q_t 由对称性均值为0, 矩匹配单高斯为 N(0, diag(v1, v2)):
+#   v1 = ab·(mu2+sigma2) + (1-ab) = 1 + 0.25ab   (dim1)
+#   v2 = ab·sigma2 + (1-ab)      = 1 - 0.75ab   (dim2)
+# 精确2D矩匹配KL: KL(q_t‖N(0,I)) = 0.5·[(v1-1-ln v1) + (v2-1-ln v2)]
+# 注: v1/v2 对 ab 的一阶偏离在迹项与 -ln det 项中恰好相消,
+#   故该 KL 为 O(ab²) 量级 —— 数值偏小是数据二阶矩接近先验的固有属性, 非计算错误
+#   (若把 dim1 二阶矩与 dim2 方差混搭进同一公式, 一阶项不消, 会虚高约4倍)
 
-print("\n[数值验证] 边际分布演化: ∫KL(q_t || N(0,I))dt 的积分收敛 (q_t取单高斯近似)")
-print("  说明: 这衡量每一层边际分布到标准正态先验的距离")
+print("\n[数值验证] 边际分布演化: ∫KL(q_t || N(0,I))dt 的积分收敛 (q_t取2D矩匹配单高斯近似)")
+print("  说明: 这衡量每一层边际分布到标准正态先验的距离(矩匹配意义下)")
 print("       L增大→积分收敛，体现离散到连续极限的数值稳定性")
 print("\n不同层级数L下的KL积分估计（2D高斯混合, beta_total=1.0）:")
 print("     L      KL积分估计      每步beta")
 print("-" * 40)
+
+mu2 = 1.0      # 双模态均值平方 E[mu0²]
+sigma2 = 0.25  # 单分量方差 sigma0²
+
+def kl_marginal_2d(ab):
+    """2D矩匹配单高斯近似下的 KL(q_t ‖ N(0,I)), ab可标量或数组"""
+    v1 = ab * (mu2 + sigma2) + (1 - ab)
+    v2 = ab * sigma2 + (1 - ab)
+    return 0.5 * ((v1 - 1 - np.log(v1)) + (v2 - 1 - np.log(v2)))
 
 for L in [5, 10, 50, 100]:
     dt = 1.0 / L
     beta_step = dt
     alpha_step = 1 - beta_step
 
-    # 简单估计: 边际分布到先验的KL距离积分（黎曼和形式）
+    # 黎曼和: 在离散 ᾱ_t=(1-1/L)^t 处取KL, 以步长dt加权求和逼近积分
     total_kl = 0
     for t in range(1, L + 1):
         ab_t = alpha_step ** t
-        # 单高斯近似下的边际KL: KL(N(0, E[x_t²]) || N(0,I)) = 0.5*(E[x_t²] - 1 - ln E[x_t²])
-        # 注: 这里用二阶矩 E[x_t²] = ab_t·(mu0²+sigma0²) + (1-ab_t) 作为近似高斯的方差
-        #   （均值为0的近似: 双峰分布的对称性使一阶矩抵消, 二阶矩是自然矩匹配量）
-        #   而非逐样本条件分布 KL(N(sqrt(ab)x_0, var)||N(0,I)) 的均值（后者还含 (1-ab)·mu0² 项, 收敛到≈0.50）
-        #   两种取法都随 L→∞ 收敛, 本实验验证的是“黎曼和→积分”的收敛性本身, 与取法无关
-        mu2 = 1.0  # E[mu0^2] 对双模态约1
-        sigma2 = 0.25  # sigma0^2
-        mean_sq = ab_t * (mu2 + sigma2) + (1 - ab_t)  # E[x_t²] 矩匹配方差
-        log_var = np.log(ab_t * sigma2 + (1 - ab_t))
-        kl_t = 0.5 * (mean_sq - 1 - log_var)
-        # 关键修正：添加步长dt归一化，形成黎曼和逼近积分
-        total_kl += kl_t * dt
+        total_kl += kl_marginal_2d(ab_t) * dt
 
     print(str(L).rjust(6) + "        " + str(round(total_kl, 4)).rjust(12) + "        " + str(round(beta_step, 6)).rjust(10))
 
 print("\n→ L增大时KL积分逐渐收敛，体现离散求和→连续积分的数值稳定性")
 print("  这验证了离散层级过程→VP-SDE连续极限的数学合理性")
 
-# 闭式对照: L→∞ 时黎曼和→积分 ∫_0^1 0.5*(m(t) - 1 - ln v(t))dt, 其中 ab=e^{-t}, m = ab·(mu2+sigma2)+(1-ab) = 1-0.25ab, v = ab·sigma2+(1-ab) = 1-0.75ab
-try:
-    from scipy.integrate import quad
-    _mu2, _s2 = 1.0, 0.25
-    _kl_lim, _ = quad(lambda t: 0.5*((lambda ab: ab*(_mu2+_s2)+(1-ab) - 1 - np.log(ab*_s2+(1-ab)))(np.exp(-t))), 0, 1)
-    print(f"  闭式极限对照 (scipy.quad): ∫_0^1 kl(t) dt = {_kl_lim:.4f}，上表值以 O(1/L) 向其收敛")
-except ImportError:
-    pass
+# 闭式对照: L→∞ 时黎曼和→积分 ∫_0^1 kl(t)dt, 其中 ab(t)=e^{-t}
+# 用细网格梯形积分作确定性基准(无需scipy)
+_t_fine = np.linspace(0.0, 1.0, 200001)
+_f_kl = kl_marginal_2d(np.exp(-_t_fine))
+_kl_lim = float(np.sum(0.5 * (_f_kl[1:] + _f_kl[:-1]) * np.diff(_t_fine)))
+print(f"  连续极限对照 (20万点梯形积分): ∫_0^1 kl(t) dt ≈ {_kl_lim:.6f}，上表值以 O(1/L) 向其收敛")
 
 
 # ============================================================
@@ -387,7 +389,7 @@ for L in [5, 10, 50, 100, 500, 1000]:
         'alpha_bar_continuous': alpha_bar_cont,
         'relative_error': rel_err,
     }
-# KL integral estimates
+# KL integral estimates (与步骤3打印共用 kl_marginal_2d)
 for L in [5, 10, 50, 100]:
     dt = 1.0 / L
     beta_step = dt
@@ -395,16 +397,12 @@ for L in [5, 10, 50, 100]:
     total_kl = 0
     for t in range(1, L + 1):
         ab_t = alpha_step ** t
-        mu2 = 1.0
-        sigma2 = 0.25
-        mean_sq = ab_t * (mu2 + sigma2) + (1 - ab_t)
-        log_var = np.log(ab_t * sigma2 + (1 - ab_t))
-        kl_t = 0.5 * (mean_sq - 1 - log_var)
-        total_kl += kl_t * dt
+        total_kl += kl_marginal_2d(ab_t) * dt
     results_summary['KL_integral_estimates'][f'L_{L}'] = {
         'KL_integral': total_kl,
         'beta_step': beta_step,
     }
+results_summary['KL_continuous_limit'] = _kl_lim
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
     json.dump(results_summary, f, ensure_ascii=False, indent=2)

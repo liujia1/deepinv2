@@ -175,11 +175,11 @@ def kl_divergence(mu, logvar):
 
 def kl_divergence_gauss(mu_q, logvar_q, mu_p, logvar_p):
     """两个对角高斯之间的KL: D_KL(N(μ_q,σ_q²) || N(μ_p,σ_p²))
-    = 0.5 * Σ(σ_q²/σ_p² + (μ_q-μ_p)² - 1 - log(σ_q²/σ_p²))
+    = 0.5 * Σ(σ_q²/σ_p² + (μ_q-μ_p)²/σ_p² - 1 - log(σ_q²/σ_p²))
     """
     var_q = logvar_q.exp()
     var_p = logvar_p.exp()
-    return 0.5 * torch.sum(var_q / var_p + (mu_q - mu_p).pow(2) - 1.0
+    return 0.5 * torch.sum(var_q / var_p + (mu_q - mu_p).pow(2) / var_p - 1.0
                            - logvar_q + logvar_p)
 
 
@@ -198,13 +198,14 @@ def hierarchical_elbo(x, mu1, logvar1, mu2, logvar2, x_recon,
     注: 10.1"实验场景"小节把KL₁写成对边际聚合先验 p(z₁)=∫p(z₁|z₂)p(z₂)dz₂
     的形式，那是框式公式的另一种等价写法（Jensen后取边际）；本实现用
     条件形式 p(z₁|z₂)，与附录10A的框式主公式一致。
-    实测中条件形式下 KL₂ 被压到≈0，说明第二层先验退化为无条件单高斯、
-    z₂ 几乎不携带信息——这是深层VAE的已知风险，不是实现错误。
 
     ⚠️ 历史版本曾将KL₁简化为 KL(q(z₁|x)||N(0,I))并让重建走
-    z₂→ẑ₁→x 路径，导致编码链 q(z₁|x) 与生成链 dec1 在损失中完全脱钩：
-    dec0 从不接收编码器输出的 z₁，两层瓶颈的信息在 z₂ 处被强制丢弃，
-    层级VAE因此显著劣于单层VAE。现已修正。
+    z₂→ẑ₁→x 路径，导致编码链 q(z₁|x) 与生成链 dec1 在损失中完全脱钩；
+    后续版本虽改回条件形式，但 kl_divergence_gauss 的均值项漏除了 var_p，
+    使得 σp²→0 时 KL₁ 被大幅低估，模型退化为"z₁无噪直通编码 + 先验
+    采样模式崩溃"的作弊解（表现为 recon 虚低、报告KL₁≈1、KL₂≈0）。
+    现已修正（均值项除以 var_p）。修正后信息必须经 z₂ 传递（付出KL₂），
+    或如实计入 z₁ 通道的真实KL代价。
     """
     # 重建项: -E[log p(x|z₁)], z₁ ~ q(z₁|x)
     recon = F.binary_cross_entropy(x_recon, x, reduction='sum')
@@ -846,8 +847,16 @@ else:
 print(f"  ELBO对比: 层级({elbo:.2f}) vs 单层({elbo_s:.2f}) → "
       f"{'单层拟合更优' if elbo_s > elbo else '层级拟合更优'}")
 print("  注: 本实验未控制总维度进行消融; 层级VAE的净收益来自"
-      "\n      可学习的先验 p(z₁|z₂) 比固定 N(0,I) 更贴合聚合后验,"
-      "\n      代价是第二层易退化(KL₂→0)与先验采样多样性下降")
+      "\n      可学习的先验 p(z₁|z₂) 比固定 N(0,I) 更贴合聚合后验。")
+# 第二层退化与采样多样性是否发生, 由本次实测判定(而非固有免责结论)
+if avg_kl2 < 0.5:
+    print(f"      风险已发生: KL₂={avg_kl2:.3f}≈0, 第二层退化, z₂几乎不携带信息")
+else:
+    print(f"      风险未发生: KL₂={avg_kl2:.2f}(未塌缩), 第二层实际携带了信息")
+if pd_h < 0.7 * pd_s:
+    print(f"      且先验采样多样性下降(层级{pd_h:.4f} vs 单层{pd_s:.4f}), 见采样行")
+else:
+    print(f"      先验采样多样性未下降(层级{pd_h:.4f} vs 单层{pd_s:.4f})")
 
 
 # ============================================================

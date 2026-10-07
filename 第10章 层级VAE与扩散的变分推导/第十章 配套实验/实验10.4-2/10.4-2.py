@@ -183,7 +183,8 @@ def bias_compound_factor(L, eps, beta_total=1.0):
     """乘性偏差沿链复合的总压缩因子 B_L = Π_{t=1}^{L} [1 - eps·beta/(1-ab_t)]。
 
     这是"每步偏差沿链相乘"的解析表达(无需随机模拟);
-    渐近 B_L ~ L^{-eps}/Gamma(1-eps), 即 log B_L vs log L 为直线, 斜率 ≈ -eps。
+    渐近 B_L ~ C(eps)·L^{-eps} (幂律; log B_L vs log L 为直线, 斜率 ≈ -eps)。
+    本实验只检验幂指数 -eps; 前置常数 C(eps) 依赖 eps, 不在此标定。
     """
     beta = beta_total / L
     alpha = 1.0 - beta
@@ -214,7 +215,9 @@ print("末态值 =", round(states_5[-1], 3), "(单条链在 t=L 处的一次噪�
 print("\n同一 x0=1.5 出发, 不同 L 下前向链的末态(随机种子相同, L=5/50/500):")
 print("  注意: beta_total=1.0 是固定总量, 只是被切分成 L 层,")
 print("  sqrt(ab_L)=(1-1/L)^{L/2} 随 L→∞ 收敛到 sqrt(e^{-1})≈0.607, 并非 0,")
-print("  即末态分布收敛到稳态 N(sqrt(e^{-1})x0, 1-e^{-1}), 而不是标准高斯 N(0,1)。")
+print("  即末态分布收敛到终端边际 N(sqrt(e^{-1})x0, 1-e^{-1}), 而不是标准高斯 N(0,1)。")
+print("  [术语] 终端边际 = 固定噪声预算下 L→∞ 的末态极限, 并非链的平稳分布;")
+print("         若保持逐步 beta 不变无限加噪下去, 链的平稳分布其实是 N(0,1)。")
 for L in [5, 50, 500]:
     rng_l = np.random.default_rng(L)
     states, beta = forward_chain(x0, L=L, beta_total=beta_total, rng=rng_l)
@@ -222,7 +225,7 @@ for L in [5, 50, 500]:
     print("  L=" + str(L).rjust(4) + ": 末态=" + str(round(states[-1], 3)).rjust(8) +
           ", sqrt(ab_L)=" + str(round(np.sqrt(bar_alpha_L), 4)) + " (信号残留系数)")
 print("\n→ 每步乘 sqrt(alpha) 让信号指数衰减, 加 sqrt(beta) 让噪声累积。")
-print("  但 L 增大只让离散链逼近其连续极限对应的稳态分布 (固定 beta_total 的饱和点),")
+print("  但 L 增大只让离散链逼近其连续极限对应的终端边际 (固定 beta_total 的饱和点),")
 print("  要真正达到先验 p(x_T)=N(0,I) 需 beta_total→∞ —— 这属于 10.4-1 连续极限的范畴。")
 
 
@@ -359,8 +362,10 @@ print("\n→ 每步乘性偏差的系统误差随 L 增长, 而单次有偏恒 �
       round(-eps_bias * x0_bias, 3), "(与 L 无关)。")
 print("  原因: 每步偏差方向一致, 沿逆向链逐层相乘 → 总压缩因子 B_L ~ L^{-eps},")
 print("  log B_L vs log L 为直线, 斜率 ≈ -eps (幂律复合, 见下图 ii)。")
-print("  → 这与 10.3 真实去噪网络一致: 网络在不同 t 的 x0 估计带方向一致的系统偏差,")
-print("    且不满足'同一变量不同置信度观测'的线性自洽前提, 误差才会沿链累积。")
+print("  → 这与 10.3 真实去噪网络的情形定性对应: 若网络在不同 t 的 x0 估计带方向一致")
+print("    的系统偏差、且不满足'同一变量不同置信度观测'的线性自洽前提, 误差就会沿链累积。")
+print("  [说明] 此处的乘性偏差是为演示复合机制而构造的误差模型, 并非对真实网络偏差的测量;")
+print("         实验只验证'非自洽的方向一致偏差 → 误差沿链幂律复合'这一机制本身。")
 
 # 幂律斜率验证 (解析乘积, 无需随机模拟)
 L_slope = [20, 100, 500, 2000]
@@ -387,8 +392,8 @@ ax.plot(range(len(states_a)), states_a, 'b-', linewidth=1.5, label='前向链 $x
 ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
 ax.axhline(x0, color='red', linestyle='--', alpha=0.6, label='干净信号 $x_0=' + str(x0) + '$')
 ax.annotate('$x_0$', xy=(0, x0), xytext=(8, x0 + 0.25), fontsize=10, color='red')
-# 右上角标注真实去向: 固定 beta_total 时末态趋于稳态分布 (非 N(0,1))
-ax.annotate('$\\to$ 稳态分布 (非 $N(0,1)$)', xy=(0.85, 0.92), xycoords='axes fraction',
+# 右上角标注真实去向: 固定 beta_total 时末态趋于终端边际 (非 N(0,1))
+ax.annotate('$\\to$ 终端边际 (非 $N(0,1)$)', xy=(0.85, 0.92), xycoords='axes fraction',
             fontsize=11, color='blue', fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8, edgecolor='blue'))
 ax.set_xlabel('编码步数 $t$', fontsize=12)
@@ -412,7 +417,7 @@ ax.set_title('(b) 理想解码器: 逐层去噪精确洗回信号', fontsize=13)
 ax.legend(fontsize=9)
 ax.grid(True, alpha=0.3)
 
-# (c) 末态分布: 固定 beta_total 时收敛到非标准稳态分布 (不是 N(0,1))
+# (c) 末态分布: 固定 beta_total 时收敛到终端边际 (不是 N(0,1))
 ax = axes[1, 0]
 n_pts = 500
 x0_c = 1.5
@@ -425,15 +430,15 @@ for L, color in [(5, '#1f77b4'), (50, '#ff7f0e'), (500, '#2ca02c')]:
     ax.hist(finals, bins=40, alpha=0.45, color=color, label='$L=' + str(L) + '$', density=True)
 xs = np.linspace(-4, 4, 300)
 # 参照1: 标准高斯 N(0,1) —— 末态并不会收敛到这里
-ax.plot(xs, np.exp(-xs ** 2 / 2) / np.sqrt(2 * np.pi), 'k--', linewidth=2, label='$N(0,1)$ (非稳态)')
-# 参照2: 固定 beta_total 下的真实稳态 N(sqrt(e^{-beta_total})x0, 1-e^{-beta_total})
+ax.plot(xs, np.exp(-xs ** 2 / 2) / np.sqrt(2 * np.pi), 'k--', linewidth=2, label='$N(0,1)$ (非终端边际)')
+# 参照2: 固定 beta_total 下的终端边际 N(sqrt(e^{-beta_total})x0, 1-e^{-beta_total})
 mu_ss = np.sqrt(np.exp(-beta_total)) * x0_c
 var_ss = 1.0 - np.exp(-beta_total)
 ax.plot(xs, np.exp(-(xs - mu_ss) ** 2 / (2 * var_ss)) / np.sqrt(2 * np.pi * var_ss),
-        'r--', linewidth=2, label='稳态 $N(\\sqrt{e^{-1}}x_0,\\,1-e^{-1})$')
+        'r--', linewidth=2, label='终端边际 $N(\\sqrt{e^{-1}}x_0,\\,1-e^{-1})$')
 ax.set_xlabel('前向末态 $x_L$', fontsize=12)
 ax.set_ylabel('概率密度', fontsize=12)
-ax.set_title('(c) 末态分布: 固定 $\\beta_{total}$ 收敛到非标准稳态 (非 $N(0,1)$)', fontsize=13)
+ax.set_title('(c) 末态分布: 固定 $\\beta_{total}$ 收敛到终端边际 (非 $N(0,1)$)', fontsize=13)
 ax.legend(fontsize=10)
 ax.grid(True, alpha=0.3)
 
@@ -518,8 +523,9 @@ print("\n关键结论:")
 print("\n1. 层级VAE编码器 = 逐层加噪 (步骤1)")
 print("   - x_t = sqrt(alpha) x_{t-1} + sqrt(beta) eps")
 print("   - 每步乘 sqrt(alpha) 缩放 + 加 sqrt(beta) 噪声")
-print("   - beta_total 固定时, 末态收敛到稳态 N(sqrt(e^{-beta_total})x0, 1-e^{-beta_total}),")
-print("     而非 N(0,1); 要真正趋于 N(0,1) 需 beta_total→∞ (10.4-1 连续极限范畴)")
+print("   - beta_total 固定时, 末态收敛到终端边际 N(sqrt(e^{-beta_total})x0, 1-e^{-beta_total}),")
+print("     而非 N(0,1); 终端边际不是链的平稳分布(固定逐步 beta 的平稳分布是 N(0,1)),")
+print("     要真正趋于 N(0,1) 需 beta_total→∞ (10.4-1 连续极限范畴)")
 print("\n2. 理想解码器 = 后验均值, 往返精确可逆 (步骤2)")
 print("   - 若知道 x0, 逐层用 tilde_mu_t 去噪, 误差精确为 0 与 L 无关")
 print("   - 难点不在层数, 而在解码器现实里不知道 x0")
@@ -528,7 +534,8 @@ print("   - t=1 处后验坍缩: 任何 x0_used 在首步都被原样复现")
 print("   - 线性重估会伸缩坍缩: '每步重估' ≡ '末态估一次', 误差不沿链累积")
 print("   - 打破自洽(乘性系统偏差): 总压缩因子 B_L ~ L^{-eps}, 系统误差随 L 幂律增长,")
 print("     而单次有偏误差 = -eps·x0 与 L 无关 (见 步骤3_系统偏差复合.png)")
-print("   - 真实去噪网络跨步估计非自洽、带方向一致偏差 → 误差才累积 = 10.3 网络的意义")
+print("   - 乘性偏差为构造性误差模型: 若真实网络跨步估计非自洽、偏差方向一致,")
+print("     误差才会沿链累积 —— 这即 10.3 学习去噪器的意义")
 print("\n4. 与扩散模型的对应 (10.4 节)")
 print("   - 前向加噪 = 编码器, 逆向去噪 = 解码器")
 print("   - 本实验聚焦离散层级链的机理; 连续极限 (L→∞→SDE) 见实验10.4-1")
@@ -565,8 +572,8 @@ results_summary = {
     'bias_systematic_error_singleshot_vs_L': {k: float(v) for k, v in bias_once.items()},
     'bias_compound_factor_BL_vs_L': {k: float(v) for k, v in bias_BL.items()},
     'bias_loglog_slope_fit': float(slope_fit),
-    'steady_state_sqrt_bar_alpha_L_inf': float(np.sqrt(np.exp(-beta_total))),
-    'steady_state_variance_1_minus_e_beta_total': float(1.0 - np.exp(-beta_total)),
+    'terminal_marginal_sqrt_bar_alpha_L_inf': float(np.sqrt(np.exp(-beta_total))),
+    'terminal_marginal_variance_1_minus_e_beta_total': float(1.0 - np.exp(-beta_total)),
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

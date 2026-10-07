@@ -7,10 +7,39 @@
     "alpha_bar_500": 0.07858724892139435,
     "alpha_bar_T": 4.0358307160204276e-05
   },
+  "step1_closed_form_check": {
+    "t_1": {
+      "mean_diff_max": 0.00012666871771216393,
+      "std_diff_max": 0.0003021359443664551,
+      "mc_error_scale": 0.00020001658413093537
+    },
+    "t_50": {
+      "mean_diff_max": 0.003724293317645788,
+      "std_diff_max": 0.00567936897277832,
+      "mc_error_scale": 0.003404962597414851
+    },
+    "t_200": {
+      "mean_diff_max": 0.00842971634119749,
+      "std_diff_max": 0.00950634479522705,
+      "mc_error_scale": 0.011678380891680717
+    },
+    "t_500": {
+      "mean_diff_max": 0.02585538849234581,
+      "std_diff_max": 0.006344437599182129,
+      "mc_error_scale": 0.01919805072247982
+    },
+    "t_1000": {
+      "mean_diff_max": 0.011625437065958977,
+      "std_diff_max": 0.023539483547210693,
+      "mc_error_scale": 0.01999959722161293
+    }
+  },
   "L_T_prior_matching": {
     "alpha_bar_T": 4.0358307160204276e-05,
     "sqrt_alpha_bar_T": 0.006352819036692381,
-    "one_minus_alpha_bar_T": 0.9999596476554871
+    "one_minus_alpha_bar_T": 0.9999596476554871,
+    "per_dim_KL_nats": 2.0358730290084804e-05,
+    "empirical_mean_x0_sq": 1.0088789463043213
   },
   "posterior_variance": {
     "tilde_beta_1": 0.0,

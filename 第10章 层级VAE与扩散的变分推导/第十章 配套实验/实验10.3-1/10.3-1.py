@@ -111,6 +111,8 @@ print("\n验证三种参数化对后验均值 tilde_mu_t 的等价性:")
 print("    t      真实mu_t      x0-pred      eps-pred       score")
 print("-" * 70)
 
+equivalence_errors = {}
+
 for t_idx in [10, 100, 500, 900]:
     # 注意：Python索引从0开始，时间步t从1开始，所以索引为t-1
     idx = t_idx - 1
@@ -126,23 +128,32 @@ for t_idx in [10, 100, 500, 900]:
     mu_true = (torch.sqrt(a) * (1 - ab_prev) / (1 - ab)) * x_t + \
               (torch.sqrt(ab_prev) * (1 - a) / (1 - ab)) * x0_test
 
-    # (1) x₀-prediction: 若知道x_0, 直接计算
-    mu_x0 = mu_true  # 完美预测时相同
+    # (1) x₀-prediction: 先由(x_t, eps)恢复x0_hat(前向过程一致性)，再代入后验均值公式
+    x0_hat = (x_t - torch.sqrt(1 - ab) * eps_test) / torch.sqrt(ab)
+    err_x0rec = (x0_hat - x0_test).abs().max().item()
+    mu_x0 = (torch.sqrt(a) * (1 - ab_prev) / (1 - ab)) * x_t + \
+            (torch.sqrt(ab_prev) * (1 - a) / (1 - ab)) * x0_hat
 
     # (2) ε-prediction: eps → mu = (1/sqrt(a))(x_t - (1-a)/sqrt(1-ab)·eps)
     mu_eps = (1.0 / torch.sqrt(a)) * (x_t - (1 - a) / torch.sqrt(1 - ab) * eps_test)
 
-    # (3) score prediction: s → eps = -sqrt(1-ab)·s → 代入eps-prediction
+    # (3) score prediction: 直接形式 mu = (x_t + beta_t·s)/sqrt(alpha_t)，其中 s = -eps/sqrt(1-ab)
     score_hat = -eps_test / torch.sqrt(1 - ab)  # 完美预测
-    eps_from_score = -torch.sqrt(1 - ab) * score_hat
-    mu_score = (1.0 / torch.sqrt(a)) * (x_t - (1 - a) / torch.sqrt(1 - ab) * eps_from_score)
+    mu_score = (x_t + b * score_hat) / torch.sqrt(a)
 
     err_x0 = (mu_true - mu_x0).abs().max().item()
     err_eps = (mu_true - mu_eps).abs().max().item()
     err_score = (mu_true - mu_score).abs().max().item()
 
+    equivalence_errors['t_%d' % t_idx] = {
+        'x0_recovery': err_x0rec,
+        'mu_via_x0': err_x0,
+        'mu_via_eps': err_eps,
+        'mu_via_score_direct': err_score,
+    }
+
     print(str(t_idx).rjust(5) + "  " + str(round(mu_true[0,0].item(), 8)).rjust(15) + "  " + str(round(mu_x0[0,0].item(), 8)).rjust(15) + "  " + str(round(mu_eps[0,0].item(), 8)).rjust(15) + "  " + str(round(mu_score[0,0].item(), 8)).rjust(15))
-    print("       误差: x0-pred=" + str(round(err_x0, 10)) + ", eps-pred=" + str(round(err_eps, 10)) + ", score=" + str(round(err_score, 10)))
+    print("       误差: x0恢复=" + "%.3e" % err_x0rec + ", x0路径=" + "%.3e" % err_x0 + ", eps路径=" + "%.3e" % err_eps + ", score直接=" + "%.3e" % err_score)
 
 print("\n→ 三种参数化在完美预测下给出完全相同的后验均值")
 print("  这是10.3节的核心结论: x0-prediction ≡ eps-prediction ≡ score prediction")
@@ -150,6 +161,28 @@ print("\n三种参数化的转换关系:")
 print("  - x0 ↔ epsilon: x0 = (x_t - sqrt(1-ab_t)·eps) / sqrt(ab_t)")
 print("  - epsilon ↔ score: s = -eps / sqrt(1-ab_t)")
 print("  - score ↔ x0: x0 = (x_t + (1-ab_t)·s) / sqrt(ab_t)")
+
+# 补充验证: 不完美预测下三者不再等价 —— "完美预测"限定词是必要的
+print("\n[补充] 不完美预测下的分化: 同一0.01输出误差诱导的后验均值误差")
+print("    t      经x0_hat      经eps_hat      经score       (x0/eps)")
+print("-" * 62)
+
+imperfect_divergence = {}
+d_err = 0.01
+for t_idx in [10, 100, 500, 900]:
+    idx = t_idx - 1
+    ab = alpha_bars[idx]
+    a = alphas[idx]
+    ab_prev = alpha_bars_prev[idx]
+    b = betas[idx]
+    e_x0 = (torch.sqrt(ab_prev) * b / (1 - ab) * d_err).item()
+    e_eps = (b / (torch.sqrt(a) * torch.sqrt(1 - ab)) * d_err).item()
+    e_s = (b / torch.sqrt(a) * d_err).item()
+    imperfect_divergence['t_%d' % t_idx] = {'x0': e_x0, 'eps': e_eps, 'score': e_s}
+    print(str(t_idx).rjust(5) + "  " + ("%.6f" % e_x0).rjust(12) + "  " + ("%.6f" % e_eps).rjust(12) + "  " + ("%.6f" % e_s).rjust(12) + "  " + ("%.1f" % (e_x0 / e_eps)).rjust(10))
+
+print("→ 不完美预测时三者诱导的均值误差按t依赖的权重分化(小t时x0误差影响大, 大t反之)")
+print("  这正是VLB加权与L_simple等权差异的本质, 也是'完美预测'限定词必要性的来源")
 
 
 # ============================================================
@@ -187,10 +220,14 @@ for t_idx in [1, 10, 50, 100, 300, 500, 700, 900, 999]:
 
     print(str(t_idx).rjust(5) + "  " + str(round(ab.item(), 6)).rjust(10) + "  " + str(round(weight_vlb.item(), 6)).rjust(12) + "       1.000000      " + str(round(ratio_to_t1.item(), 4)).rjust(8))
 
+# 精确定位谷值
+w_all = (betas / (2 * alphas * (1 - alpha_bars))).numpy()
+t_min = int(np.argmin(w_all)) + 1
+
 print("\n关键观察:")
-print("  - t小(1-100): 权重随t增大而急剧下降(约100倍)，早期时间步主导VLB目标")
-print("  - t中段(t≈300附近): 权重达到谷值，对VLB贡献最小")
-print("  - t大(500+): 权重缓慢回升，但整体仍远小于t=1时的水平")
+print("  - t小(1-100): 权重随t增大而急剧下降(约50倍)，早期时间步主导VLB目标")
+print("  - t中段(t≈" + str(t_min) + "): 权重达到谷值(约" + str(round(float(w_all[t_min - 1]), 5)) + ")，相对t=1下降约100倍，对VLB贡献最小")
+print("  - t大(500+): 权重缓慢回升(t=999约" + str(round(float(w_all[-1]), 4)) + ")，但整体仍远小于t=1时的水平")
 print("  - L_simple对所有t赋等权重1，这是Ho et al. 2020的关键简化")
 print("  - 实际效果: L_simple忽略权重差异，但训练更稳定（10.3节）")
 
@@ -224,9 +261,9 @@ for t_idx in [10, 100, 500, 900]:
     print(str(t_idx).rjust(5) + "           " + str(round(err_x0.item(), 4)).rjust(15) + "           " + str(round(err_eps, 4)).rjust(15))
 
 print("\n关键发现:")
-print("  - t小(ab_t大): x0-prediction误差小，eps-prediction误差放大")
-print("  - t大(ab_t小): x0-prediction误差极大，eps-prediction保持稳定")
-print("  → eps-prediction在所有时间步都有稳定的数值范围")
+print("  - t小(ab_t大): 转换系数≈1，两种参数化的误差尺度相当")
+print("  - t大(ab_t小): 同样的eps误差映射到x0空间被1/sqrt(ab_t)急剧放大(t=900约60倍)")
+print("  → eps-prediction在所有时间步误差尺度一致，x0-prediction在大t数值敏感")
 
 
 # ============================================================
@@ -249,7 +286,7 @@ ax.set_ylabel('损失权重 (对数尺度)', fontsize=12)
 ax.set_title('(a) VLB损失权重 vs $L_{simple}$', fontsize=13)
 ax.legend(fontsize=11)
 ax.grid(True, alpha=0.3)
-ax.annotate('VLB权重: 小t占主导, t≈300后小幅回升', xy=(0.3, 0.8), xycoords='axes fraction',
+ax.annotate('VLB权重: 小t占主导, t≈' + str(t_min) + '谷值后回升', xy=(0.3, 0.8), xycoords='axes fraction',
             fontsize=10, color='blue',
             bbox=dict(boxstyle='round,pad=0.3', facecolor='#dfe6e9', alpha=0.8))
 
@@ -265,11 +302,12 @@ coeff_score_to_eps = torch.sqrt(1 - alpha_bars)
 ax.plot(t_range, coeff_eps_to_x0.numpy(), 'b-', linewidth=2, label=r'$\epsilon \to x_0$: $1/\sqrt{\bar{\alpha}_t}$')
 ax.plot(t_range, coeff_score_to_eps.numpy(), 'g-', linewidth=2, label=r'$s \to \epsilon$: $\sqrt{1-\bar{\alpha}_t}$')
 ax.set_xlabel('时间步 $t$', fontsize=12)
-ax.set_ylabel('转换系数', fontsize=12)
+ax.set_ylabel('转换系数 (对数尺度)', fontsize=12)
 ax.set_title('(b) 三种参数化的转换系数', fontsize=13)
 ax.legend(fontsize=11)
 ax.grid(True, alpha=0.3)
-ax.set_ylim(0, 20)
+ax.set_yscale('log')
+ax.set_ylim(5e-3, 3e2)
 
 plt.tight_layout()
 fig_path = os.path.join(SAVE_DIR, '步骤1_参数化等价性与损失权重.png')
@@ -287,12 +325,13 @@ print("="*60)
 print("\n关键结论:")
 print("\n1. 三种参数化等价性 (步骤1)")
 print("   - x0-prediction, eps-prediction, score prediction在完美预测下给出相同后验均值")
+print("   - 不完美预测下三者按t依赖的权重分化，等价性仅在最优处成立")
 print("   - 转换关系:")
 print("     x0 = (x_t - sqrt(1-ab_t)·eps) / sqrt(ab_t)")
 print("     s = -eps / sqrt(1-ab_t)")
 print("\n2. VLB权重分析 (步骤2)")
 print("   - VLB权重 w_t = β_t / (2α_t(1-ᾱ_t))  (使用σ_t²=β_t归一化)")
-print("   - 权重呈U形: t小急剧下降，t≈300谷值，t大缓慢回升")
+print("   - 权重呈U形: t小急剧下降，t≈" + str(t_min) + "谷值，t大缓慢回升")
 print("   - L_simple对所有t赋等权重1")
 print("\n3. eps-prediction的优势 (步骤3)")
 print("   - 目标函数简单: ||eps - hat_eps||^2")
@@ -323,11 +362,17 @@ def _to_native(obj):
 weights_vlb = (betas / (2 * alphas * (1 - alpha_bars))).numpy()
 results_summary = {
     'parameterization_equivalence': {
-        'note': '三种参数化在完美预测下给出完全相同的后验均值',
+        'note': '三种参数化在完美预测下给出完全相同的后验均值 (误差为float32精度量级)',
+        **equivalence_errors,
+    },
+    'imperfect_prediction_divergence': {
+        'note': '同一0.01输出误差诱导的后验均值误差: 三者随t分化, 等价性仅在完美预测(最优)处成立',
+        **imperfect_divergence,
     },
     'VLB_weights': {
-        f't_{t}': weights_vlb[t-1]
-        for t in [1, 10, 50, 100, 300, 500, 700, 900, 999]
+        'argmin_t': t_min,
+        **{f't_{t}': weights_vlb[t-1]
+           for t in [1, 10, 50, 100, 300, 500, 700, 900, 999]},
     },
     'conversion_coefficients': {
         'note': 'eps_to_x0: 1/sqrt(ab_t), score_to_eps: sqrt(1-ab_t)',

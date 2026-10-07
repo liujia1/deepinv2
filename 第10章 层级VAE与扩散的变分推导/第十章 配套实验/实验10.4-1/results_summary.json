@@ -33,20 +33,21 @@
   },
   "KL_integral_estimates": {
     "L_5": {
-      "KL_integral": 0.33761040956977195,
+      "KL_integral": 0.07317295188949827,
       "beta_step": 0.2
     },
     "L_10": {
-      "KL_integral": 0.37836799164771256,
+      "KL_integral": 0.09053352957445633,
       "beta_step": 0.1
     },
     "L_50": {
-      "KL_integral": 0.4111681706001602,
+      "KL_integral": 0.10549020446238462,
       "beta_step": 0.02
     },
     "L_100": {
-      "KL_integral": 0.4152788546421496,
+      "KL_integral": 0.10742113499241406,
       "beta_step": 0.01
     }
-  }
+  },
+  "KL_continuous_limit": 0.10936491619282744
 }

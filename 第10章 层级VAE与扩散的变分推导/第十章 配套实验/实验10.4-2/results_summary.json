@@ -50,6 +50,6 @@
     "100": 0.30792407335962757
   },
   "bias_loglog_slope_fit": -0.20228233838794563,
-  "steady_state_sqrt_bar_alpha_L_inf": 0.6065306597126334,
-  "steady_state_variance_1_minus_e_beta_total": 0.6321205588285577
+  "terminal_marginal_sqrt_bar_alpha_L_inf": 0.6065306597126334,
+  "terminal_marginal_variance_1_minus_e_beta_total": 0.6321205588285577
 }
