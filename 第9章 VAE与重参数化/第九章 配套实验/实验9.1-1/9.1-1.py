@@ -9,8 +9,10 @@
   - KL正则化使隐空间连续有规律
 
 实验内容:
-  步骤1: VAE与AE训练（MNIST）
-  步骤2: 重建与先验采样对比
+  训练阶段: VAE与AE训练（MNIST）
+  步骤1: VAE重建与先验采样
+  步骤2: VAE与AE重建对比
+  步骤3: AE无法生成对比
 
 素材来源:
   - 实验9.1.py
@@ -177,129 +179,122 @@ def train_model(beta, checkpoint_path, train_loader, num_epochs=20, model_name='
     start_epoch = 0
     is_final = False
     train_losses = []
-    
+
+    # 快速验证模式（必须在加载checkpoint之前判定）：
+    # 否则QUICK_TEST的3轮速成模型会被标记为is_final，
+    # 导致之后的正式运行也静默加载欠拟合模型、永久跳过训练
+    quick = os.environ.get('QUICK_TEST', '') == '1'
+    if quick:
+        num_epochs = 3
+        print(f"\n[快速验证模式] 仅训练 {num_epochs} 轮")
+
     # Checkpoint加载逻辑
     # weights_only=False用于加载optimizer state等非tensor对象
     # 在本地训练场景下安全，若checkpoint来自可信来源则风险可控
     if os.path.exists(checkpoint_path):
         print(f"\n检测到已保存的模型 ({model_name}): {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-        
-        if checkpoint.get('is_final', False):
-            print(f"✓ 这是最终训练完成的模型, 直接加载, 跳过训练过程")
-            print(f"  训练轮数: {checkpoint['epoch']+1}")
-            print(f"  最终损失: {checkpoint['loss']:.6f}")
-            try:
-                encoder.load_state_dict(checkpoint['encoder_state_dict'])
-                decoder.load_state_dict(checkpoint['decoder_state_dict'])
-            except RuntimeError as e:
-                print(f"警告: checkpoint 与当前模型架构不兼容, 删除后重新训练")
-                print(f"  错误信息: {e}")
-                os.remove(checkpoint_path)
-                start_epoch = 0
-                is_final = False
-            else:
-                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                train_losses = checkpoint.get('train_losses', [])
-                start_epoch = checkpoint['epoch'] + 1
-                is_final = True
+        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        try:
+            encoder.load_state_dict(ckpt['encoder_state_dict'])
+            decoder.load_state_dict(ckpt['decoder_state_dict'])
+        except RuntimeError as e:
+            print(f"警告: checkpoint 与当前模型架构不兼容, 删除后重新训练")
+            print(f"  错误信息: {e}")
+            os.remove(checkpoint_path)
         else:
-            print(f"检测到未完成的训练, 从第 {checkpoint['epoch']+1} 轮继续")
-            try:
-                encoder.load_state_dict(checkpoint['encoder_state_dict'])
-                decoder.load_state_dict(checkpoint['decoder_state_dict'])
-            except RuntimeError as e:
-                print(f"警告: checkpoint 与当前模型架构不兼容, 删除后重新训练")
-                print(f"  错误信息: {e}")
-                os.remove(checkpoint_path)
-                start_epoch = 0
-                is_final = False
+            ckpt_epochs = ckpt['epoch'] + 1
+            same_cfg = (abs(ckpt.get('beta', beta) - beta) < 1e-12
+                        and bool(ckpt.get('quick', False)) == quick)
+            is_final_ckpt = ckpt.get('is_final', False)
+            if same_cfg and ckpt_epochs >= num_epochs:
+                print(f"✓ 这是最终训练完成的模型, 直接加载, 跳过训练过程")
+                print(f"  训练轮数: {ckpt_epochs}")
+                print(f"  最终损失: {ckpt['loss']:.6f}")
+                optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+                train_losses = ckpt.get('train_losses', [])
+                start_epoch = ckpt_epochs
+                is_final = True
+            elif (not is_final_ckpt) and same_cfg:
+                print(f"检测到未完成的训练, 从第 {ckpt_epochs} 轮继续")
+                optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+                train_losses = ckpt.get('train_losses', [])
+                start_epoch = ckpt_epochs
             else:
-                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                train_losses = checkpoint.get('train_losses', [])
-                start_epoch = checkpoint['epoch'] + 1
-    
-    # 训练循环
+                # 最终模型但轮数/β/快速模式不匹配，或断点配置不一致 → 重新训练
+                print(f"  checkpoint配置不匹配 (已训练{ckpt_epochs}轮, 目标{num_epochs}轮, "
+                      f"quick={ckpt.get('quick', False)}→{quick}), 重新训练")
+
+    # 训练循环（start_epoch>=num_epochs时range为空，循环结束后会补存最终checkpoint）
     if not is_final:
         print(f"\n开始训练 {model_name} (epochs={num_epochs}, beta={beta}, d_z=20)...")
-        
-        # 快速验证模式
-        import os as _os
-        if _os.environ.get('QUICK_TEST', '') == '1':
-            num_epochs = 3
-            print(f"\n[快速验证模式] 仅训练 {num_epochs} 轮")
-        
-        # 边界保护
-        if start_epoch >= num_epochs:
-            print(f"  注意: start_epoch({start_epoch}) >= num_epochs({num_epochs}), 无需继续训练")
-            is_final = True
-        
-        if not is_final:
-            import time
-            t_start = time.time()
-            
-            for epoch in range(start_epoch, num_epochs):
-                encoder.train()
-                decoder.train()
-                total_loss = 0
-                
-                from tqdm import tqdm
-                pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{num_epochs}', 
-                            leave=False, unit='batch')
-                
-                for x, _ in pbar:
-                    x = x.view(-1, 784).to(device)
-                    
-                    # 前向传播
-                    mu, logvar = encoder(x)
-                    z = reparameterize(mu, logvar)
-                    x_recon = decoder(z)
-                    
-                    # ELBO损失
-                    loss, bce, kld = loss_function(x, x_recon, mu, logvar, beta)
-                    
-                    # 反向传播
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-                    
-                    total_loss += loss.item()
-                    pbar.set_postfix(loss=f'{loss.item():.4f}')
-                
-                avg_loss = total_loss / len(train_loader.dataset)
-                train_losses.append(avg_loss)
-                
-                if (epoch + 1) % 5 == 0 or epoch == 0:
-                    print(f"  Epoch {epoch+1:3d}/{num_epochs}: Loss = {avg_loss:.4f}")
-                
-                # 每个epoch保存checkpoint（而非每5轮），避免丢失进度
-                torch.save({
-                    'epoch': epoch,
-                    'beta': beta,
-                    'encoder_state_dict': encoder.state_dict(),
-                    'decoder_state_dict': decoder.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': avg_loss,
-                    'train_losses': train_losses,
-                    'is_final': False
-                }, checkpoint_path)
-            
-            t_elapsed = time.time() - t_start
-            print(f"\n训练完成, 最终损失: {train_losses[-1]:.6f}, 耗时: {t_elapsed:.1f} 秒")
-            
-            # 保存最终checkpoint
-            if train_losses:
-                torch.save({
-                    'epoch': num_epochs - 1,
-                    'beta': beta,
-                    'encoder_state_dict': encoder.state_dict(),
-                    'decoder_state_dict': decoder.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': train_losses[-1],
-                    'train_losses': train_losses,
-                    'is_final': True
-                }, checkpoint_path)
-                print(f"✓ 训练完成, 模型已保存: {checkpoint_path}")
+
+        import time
+        t_start = time.time()
+
+        for epoch in range(start_epoch, num_epochs):
+            encoder.train()
+            decoder.train()
+            total_loss = 0
+
+            from tqdm import tqdm
+            pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{num_epochs}',
+                        leave=False, unit='batch')
+
+            for x, _ in pbar:
+                x = x.view(-1, 784).to(device)
+
+                # 前向传播
+                mu, logvar = encoder(x)
+                z = reparameterize(mu, logvar)
+                x_recon = decoder(z)
+
+                # ELBO损失
+                loss, bce, kld = loss_function(x, x_recon, mu, logvar, beta)
+
+                # 反向传播
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                total_loss += loss.item()
+                pbar.set_postfix(loss=f'{loss.item():.4f}')
+
+            avg_loss = total_loss / len(train_loader.dataset)
+            train_losses.append(avg_loss)
+
+            if (epoch + 1) % 5 == 0 or epoch == 0:
+                print(f"  Epoch {epoch+1:3d}/{num_epochs}: Loss = {avg_loss:.4f}")
+
+            # 每个epoch保存checkpoint（而非每5轮），避免丢失进度
+            torch.save({
+                'epoch': epoch,
+                'beta': beta,
+                'quick': quick,
+                'encoder_state_dict': encoder.state_dict(),
+                'decoder_state_dict': decoder.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': avg_loss,
+                'train_losses': train_losses,
+                'is_final': False
+            }, checkpoint_path)
+
+        t_elapsed = time.time() - t_start
+        print(f"\n训练完成, 最终损失: {train_losses[-1]:.6f}, 耗时: {t_elapsed:.1f} 秒")
+
+        # 保存最终checkpoint
+        if train_losses:
+            torch.save({
+                'epoch': num_epochs - 1,
+                'beta': beta,
+                'quick': quick,
+                'encoder_state_dict': encoder.state_dict(),
+                'decoder_state_dict': decoder.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': train_losses[-1],
+                'train_losses': train_losses,
+                'is_final': True
+            }, checkpoint_path)
+            print(f"✓ 训练完成, 模型已保存: {checkpoint_path}")
     else:
         print(f"\n使用已训练完成的 {model_name} 模型, 跳过训练过程")
     
@@ -307,10 +302,10 @@ def train_model(beta, checkpoint_path, train_loader, num_epochs=20, model_name='
 
 
 # ============================================================
-# 步骤1: VAE与AE训练（MNIST）
+# 训练阶段: VAE与AE训练（MNIST）
 # ============================================================
 print(f"\n{'='*60}")
-print("步骤1: VAE与AE训练（MNIST）")
+print("训练阶段: VAE与AE训练（MNIST）")
 print(f"{'='*60}")
 print("\n[核心思想]")
 print("  VAE建模的是分布而非确定性映射：")
@@ -364,15 +359,11 @@ ae_encoder, ae_decoder, ae_losses = train_model(
 
 
 # ============================================================
-# 步骤2: 重建与先验采样对比（VAE vs AE）
+# 步骤1: VAE重建与先验采样
 # ============================================================
 print(f"\n{'='*60}")
-print("步骤2: 重建与先验采样对比（VAE vs AE）")
+print("步骤1: VAE重建与先验采样")
 print(f"{'='*60}")
-print("\n[核心对比]")
-print("  VAE vs AE 的本质区别：")
-print("  - VAE: 编码分布经KL正则化，隐空间连续有规律 → 可生成")
-print("  - AE:  隐空间无约束，存在空洞区域 → 无法生成")
 print("\n[可视化说明]")
 print("  重建使用 μ（后验均值）而非随机采样，展示确定性最佳重建")
 print("  先验采样使用 z ~ N(0,I)，展示生成能力")
@@ -383,10 +374,8 @@ ae_encoder.eval()
 ae_decoder.eval()
 
 # 重建测试（使用μ而非随机采样）
-print("\n生成重建与采样对比图...")
+print("\n计算重建与先验采样...")
 n_show = 10
-
-fig, axes = plt.subplots(4, n_show, figsize=(20, 10))
 
 with torch.no_grad():
     test_imgs, test_labels = next(iter(test_loader))
@@ -407,6 +396,45 @@ with torch.no_grad():
     # AE先验采样: z ~ N(0, I)（理论上AE隐空间无此约束，采样结果无意义）
     ae_z_prior = torch.randn(n_show, 20).to(device)
     ae_samples = ae_decoder(ae_z_prior)
+
+# --- 步骤1图: 原始 / VAE重建 / VAE先验采样 (3行) ---
+fig, axes = plt.subplots(3, n_show, figsize=(20, 7))
+for i in range(n_show):
+    axes[0, i].imshow(test_imgs[i, 0].numpy(), cmap='gray')
+    axes[0, i].axis('off')
+    if i == 0:
+        axes[0, i].set_title('原始图像', fontsize=12)
+    
+    axes[1, i].imshow(vae_recon[i].view(28, 28).cpu().numpy(), cmap='gray')
+    axes[1, i].axis('off')
+    if i == 0:
+        axes[1, i].set_title('VAE重建', fontsize=12)
+    
+    axes[2, i].imshow(vae_samples[i].view(28, 28).cpu().numpy(), cmap='gray')
+    axes[2, i].axis('off')
+    if i == 0:
+        axes[2, i].set_title('VAE先验采样', fontsize=12)
+
+plt.suptitle('步骤1: VAE重建与生成 ($\\beta=1$, $d_z=20$, 20 epochs)',
+             fontsize=14, y=1.02)
+plt.tight_layout()
+fig_path = os.path.join(SAVE_DIR, '步骤1_VAE重建与采样.png')
+plt.savefig(fig_path, dpi=150, bbox_inches='tight')
+plt.close()
+print(f"图表已保存: {fig_path}")
+
+# ============================================================
+# 步骤2: VAE与AE重建对比（VAE vs AE）
+# ============================================================
+print(f"\n{'='*60}")
+print("步骤2: VAE与AE重建对比（VAE vs AE）")
+print(f"{'='*60}")
+print("\n[核心对比]")
+print("  VAE vs AE 的本质区别：")
+print("  - VAE: 编码分布经KL正则化，隐空间连续有规律 → 可生成")
+print("  - AE:  隐空间无约束，存在空洞区域 → 无法生成")
+
+fig, axes = plt.subplots(4, n_show, figsize=(20, 10))
 
 for i in range(n_show):
     # 第一行：原始图像
@@ -441,6 +469,12 @@ plt.savefig(fig_path, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"图表已保存: {fig_path}")
 
+# ============================================================
+# 步骤3: AE无法生成对比（先验采样）
+# ============================================================
+print(f"\n{'='*60}")
+print("步骤3: AE无法生成对比（先验采样）")
+print(f"{'='*60}")
 # AE先验采样单独展示（证明AE无法生成）
 print("\n生成AE先验采样对比图...")
 fig, axes = plt.subplots(2, n_show, figsize=(20, 6))
@@ -495,9 +529,11 @@ print("   - AE 隐空间无 KL 约束，编码自由度高 → 重建更清晰")
 print("   - 但隐空间存在大量空洞，从 N(0,I) 采样解码无意义")
 print("   ✓ 实验验证: AE重建清晰（第三行），但AE先验采样为噪声（见对比图）")
 print("   [实现细节说明] 本实验AE为β=0的VAE退化形式（Encoder仍输出(μ, logσ²)），")
-print("                 故AE先验采样图像呈现'有结构但无语义'的特征而非完全随机噪声；")
-print("                 真正的纯AE（确定性编码，无方差分支）采样结果会更杂乱。")
-print("                 此实现选择便于复用同一套代码框架，不影响VAE/AE核心差异的展示。")
+print("                 实测训练后logσ²均值约-22、σ≈3e-4，方差分支已自动塌缩，")
+print("                 训练终态等价于确定性AE。先验采样'有结构但无语义'来自")
+print("                 ReLU+sigmoid解码器在数据流形外的平滑映射，是无KL约束AE的")
+print("                 固有现象——另训一个真正的单头确定性AE做对照，其先验采样")
+print("                 同样无语义，结论不变。此实现选择仅为复用同一套代码框架。")
 print("\n5. VAE vs AE核心差异：")
 print("   - VAE: KL正则化牺牲部分重建精度，换取隐空间规律性 → 可生成")
 print("   - AE:  无KL约束，重建更清晰，但隐空间无保证 → 无法生成")
@@ -529,9 +565,42 @@ def _to_native(obj):
     except: pass
     return obj
 
+def _eval_test_metrics(encoder, decoder):
+    """在测试集上核算指标（均用后验均值μ解码，与重建图口径一致）"""
+    encoder.eval()
+    decoder.eval()
+    bce_sum = kl_sum = 0
+    n = 0
+    with torch.no_grad():
+        for x, _ in test_loader:
+            x = x.view(-1, 784).to(device)
+            mu, logvar = encoder(x)
+            x_recon = decoder(mu)
+            bce_sum += F.binary_cross_entropy(x_recon, x, reduction='sum').item()
+            kl_sum += (-0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())).item()
+            n += x.size(0)
+    return bce_sum / n, kl_sum / n
+
+vae_test_bce, vae_test_kl = _eval_test_metrics(vae_encoder, vae_decoder)
+ae_test_bce, ae_test_kl = _eval_test_metrics(ae_encoder, ae_decoder)
+print(f"\n测试集指标（每样本，μ解码）:")
+print(f"  VAE: 重建BCE = {vae_test_bce:.4f}, KL = {vae_test_kl:.4f}")
+print(f"  AE:  重建BCE = {ae_test_bce:.4f}, 后验对N(0,I)的KL = {ae_test_kl:.4f}（仅诊断用，非AE优化目标）")
+
 results_summary = {
-    'VAE_final_loss': vae_losses[-1] if vae_losses else None,
-    'AE_final_loss': ae_losses[-1] if ae_losses else None,
+    # 训练超参
+    'epochs': 20,
+    'latent_dim': 20,
+    'batch_size': 128,
+    # 训练末期损失（每样本均值；VAE为BCE+KL，AE仅BCE，口径不同，勿直接比较）
+    'VAE_train_loss_last': vae_losses[-1] if vae_losses else None,
+    'AE_train_loss_last': ae_losses[-1] if ae_losses else None,
+    # 测试集指标（每样本，后验均值μ解码）
+    'VAE_test_recon_BCE': vae_test_bce,
+    'VAE_test_KL': vae_test_kl,
+    'AE_test_recon_BCE': ae_test_bce,
+    'AE_posterior_KL_to_prior_diagnostic': ae_test_kl,
+    'note': '训练损失VAE含KL项而AE不含，不可直接比较；重建质量请比较两者的test_recon_BCE',
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

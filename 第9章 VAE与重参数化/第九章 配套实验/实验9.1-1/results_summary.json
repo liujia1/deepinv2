@@ -1,0 +1,12 @@
+{
+  "epochs": 20,
+  "latent_dim": 20,
+  "batch_size": 128,
+  "VAE_train_loss_last": 103.94363522135417,
+  "AE_train_loss_last": 65.13363780924479,
+  "VAE_test_recon_BCE": 69.67841563720702,
+  "VAE_test_KL": 26.07359638366699,
+  "AE_test_recon_BCE": 65.50261477050782,
+  "AE_posterior_KL_to_prior_diagnostic": 403.95048583984374,
+  "note": "训练损失VAE含KL项而AE不含，不可直接比较；重建质量请比较两者的test_recon_BCE"
+}

@@ -411,8 +411,12 @@ print("步骤2: 隐空间插值对比 (AE vs VAE)")
 print(f"{'='*60}")
 print("\n[核心对比]")
 print("  隐空间连续性验证（对应9.5节）：")
-print("  - AE (β=0): 隐空间无KL约束，存在空洞 → 插值经过空洞产生模糊")
+print("  - AE (β=0): 无KL约束，隐空间确有空洞；但 d_z=20、6万训练样本下，两样本")
+print("    连线大多落在数据邻域内，本设置实测插值同样平滑（'空洞致插值崩坏'需 d_z=2")
+print("    等低维隐空间才会显现，下文给出中点距离的量化核验）")
 print("  - VAE (β=1): KL正则化使隐空间连续 → 插值平滑过渡")
+print("  - 注意: 本图两行视觉差异不明显，AE相对于VAE的真正缺陷体现在步骤4——")
+print("    隐空间与先验N(0,I)失配，直接先验采样会得到乱码")
 
 encoder_ae = models[0]['encoder']
 decoder_ae = models[0]['decoder']
@@ -447,6 +451,7 @@ for row, (enc, dec, name) in enumerate([
     (encoder_ae, decoder_ae, '$\\beta=0$ (AE)'),
     (encoder_vae, decoder_vae, '$\\beta=1$ (VAE)')
 ]):
+    ax = axes[row, 0]
     with torch.no_grad():
         mu1, _ = enc(x1)
         mu2, _ = enc(x2)
@@ -454,7 +459,9 @@ for row, (enc, dec, name) in enumerate([
     # 端点
     axes[row, 0].imshow(imgs1[idx1, 0].numpy(), cmap='gray')
     axes[row, 0].axis('off')
-    axes[row, 0].set_ylabel(name, fontsize=12, rotation=0, labelpad=50)
+    # 行标签放在轴内部左上角（原 ylabel+大labelpad 在 bbox_inches='tight' 下会被裁掉）
+    ax.text(0.02, 1.06, name, transform=ax.transAxes, fontsize=12,
+            ha='left', va='bottom')
     
     # 插值
     for i, alpha in enumerate(alphas):
@@ -623,7 +630,8 @@ print("   - β过大时，q(z|x)≈p(z)，隐变量不携带信息")
 print("   ✓ 实验验证: β=4时活跃维度明显少于β=1")
 print("\n3. 隐空间连续性（9.5节可视化）：")
 print("   - KL正则化使隐空间连续，插值平滑过渡")
-print("   ✓ 实验验证: VAE插值质量优于AE")
+print("   实测：本设置(d_z=20)下AE与VAE的7→8插值均平滑，未出现AE崩坏；")
+print("   AE的'空洞'问题在步骤4先验采样中体现（生成乱码），需低维隐空间才能复现插值差异")
 print("\n4. t-SNE隐空间结构（9.5节可视化）：")
 print("   - KL正则化使隐空间有结构、可区分")
 print("   ✓ 实验验证: β=1/4时隐空间呈现聚类结构")
