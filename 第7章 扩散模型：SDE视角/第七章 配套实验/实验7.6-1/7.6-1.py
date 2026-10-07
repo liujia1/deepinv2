@@ -202,15 +202,16 @@ print("三种噪声调度的SNR范围（dB）：")
 print(f"  线性调度(VP): SNR从{snr_lin_db[0]:.1f}dB到{snr_lin_db[-1]:.1f}dB")
 print(f"  余弦调度(VP): SNR从{snr_cos_db[0]:.1f}dB到{snr_cos_db[-1]:.1f}dB")
 print(f"  几何调度(VE): SNR从{snr_ve_db[0]:.1f}dB到{snr_ve_db[-1]:.1f}dB")
-print(f"\nSNR变化率的均匀性（标准差越小越均匀）：")
-print(f"  线性调度: std={np.std(snr_rate_lin):.2f} dB/单位时间")
-print(f"  余弦调度: std={np.std(snr_rate_cos):.2f} dB/单位时间")
-print(f"  几何调度: std={np.std(snr_rate_ve):.2f} dB/单位时间 (精确为0，对数尺度严格均匀)")
-# 稳健性提示：VP两条调度的SNR在两端发散，dB尺度std被端点裁剪(1e-10~1e10)主导
+# 内部区间（剔除端点；VP调度SNR在t→0/t→1发散，全区间dB变化率被裁剪主导，无参考意义）
 _interior = (t_grid > 0.05) & (t_grid < 0.98)
-print(f"  注：VP调度SNR在t→0/t→1端点发散，上述std被端点裁剪主导；"
-      f"剔除端点后内部区间std: 线性={np.std(snr_rate_lin[_interior]):.1f}, "
-      f"余弦={np.std(snr_rate_cos[_interior]):.1f}（'余弦更均匀'仅为全区间定性结论）")
+print(f"\nSNR变化率的均匀性（内部区间 t∈(0.05,0.98)，标准差越小越均匀）：")
+print(f"  线性调度: std={np.std(snr_rate_lin[_interior]):.2f} dB/单位时间")
+print(f"  余弦调度: std={np.std(snr_rate_cos[_interior]):.2f} dB/单位时间")
+print(f"  几何调度: std={np.std(snr_rate_ve[_interior]):.2f} dB/单位时间 (精确为0，对数尺度严格均匀)")
+print(f"  注：几何调度dB尺度严格均匀是其定义使然；余弦调度的设计目标是ᾱ空间两端平滑")
+print(f"      （避免t→0/t→1处信噪比剧变），并非dB-SNR变化率均匀，故其内部区间波动反而更大；")
+print(f"      全区间std（线性{np.std(snr_rate_lin):.0f}/余弦{np.std(snr_rate_cos):.0f}）"
+      f"由端点裁剪(1e-10~1e10)主导，不作为结论依据")
 
 
 # ============================================================
@@ -477,7 +478,7 @@ print(f"    但20-seed对照显示两者无系统差异（改善率7~10/20, p>0.
 print(f"    单seed的小幅改善属抽样噪声，不构成'随机性稳定有益'的证据")
 
 print(f"\n理论背景：")
-print(f"  - DDIM/DPM-Solver作为确定性ODE求解器，理论上应比DDPM（随机SDE求解器）更高效")
+print(f"  - DDIM/DPM-Solver作为确定性ODE求解器，在图像任务中通常比DDPM（随机SDE求解器）更省步数")
 print(f"  - DPM-Solver原论文(Lu et al. 2022)在图像生成任务中实现了20步高质量采样")
 print(f"  - 本实验使用解析得分函数（完美训练），是验证数值方法的理想场景")
 
@@ -486,8 +487,10 @@ print(f"\n观察（单seed=42，趋势性结论；多seed严格检验见DIAGNOSE
 print(f"  - 小步数(5-10步)：DDPM最优（已接近KS基线≈0.020），DDIM(一阶确定性)显著最差，")
 print(f"    DPM-Solver(二阶)明显优于DDIM但不敌DDPM")
 print(f"  - 中大步数(≥20步)：三者均收敛到基线附近，差异不显著")
-print(f"  - 本实验用解析得分（完美训练），DDPM离散化误差已被噪声项补偿，")
-print(f"    故文献中'ODE求解器省步数'的优势在此场景不显现（真实学习得分下才成立）")
+print(f"  - 本实验用解析得分（完美训练），DDPM每步注入的噪声恰好补偿一阶离散化偏差")
+print(f"    （DDIM存在系统性方差收缩，见DIAGNOSE）；这是'低维1D+极少步数'场景的特性，")
+print(f"    并非'ODE求解器只有在学习得分下才有优势'——精确得分反而是ODE求解器的理想情形。")
+print(f"    图像实验中DDIM/DPM-Solver的省步优势来自高阶收敛及与过离散化(千步)DDPM的对比")
 
 if DIAGNOSE:
     # ====== 基线噪声诊断：KS统计量的固有噪声水平 ======
@@ -678,13 +681,13 @@ axes[0].set_title('SNR曲线对比')
 axes[0].legend()
 axes[0].grid(alpha=0.3)
 
-# SNR变化率
-axes[1].plot(t_grid, snr_rate_lin, 'b-', lw=2, label='线性调度')
-axes[1].plot(t_grid, snr_rate_cos, 'r-', lw=2, label='余弦调度')
-axes[1].plot(t_grid, snr_rate_ve, 'g-', lw=2, label='几何调度')
+# SNR变化率（仅绘内部区间；两端SNR发散产生裁剪伪影，全区间图无参考价值）
+axes[1].plot(t_grid[_interior], snr_rate_lin[_interior], 'b-', lw=2, label='线性调度')
+axes[1].plot(t_grid[_interior], snr_rate_cos[_interior], 'r-', lw=2, label='余弦调度')
+axes[1].plot(t_grid[_interior], snr_rate_ve[_interior], 'g-', lw=2, label='几何调度')
 axes[1].set_xlabel('$t$')
 axes[1].set_ylabel('$|d\\mathrm{SNR}/dt|~\\mathrm{(dB)}$')
-axes[1].set_title('SNR变化率（越均匀越好）')
+axes[1].set_title('SNR变化率（内部区间，越均匀越好）')
 axes[1].legend()
 axes[1].grid(alpha=0.3)
 
@@ -725,8 +728,8 @@ fig.tight_layout()
 fig.savefig(os.path.join(SAVE_DIR, '步骤3_采样器对比.png'), dpi=150, bbox_inches='tight')
 plt.close(fig)
 
-# 图4：采样轨迹可视化（1×4：3个快照 + GT）
-fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+# 图4：采样轨迹可视化（1×5：4个快照[含采样器终样] + Ground Truth对照）
+fig, axes = plt.subplots(1, 5, figsize=(25, 5))
 vis_steps = [0, 50, 150, 200]
 
 for i, step in enumerate(vis_steps):
@@ -735,19 +738,21 @@ for i, step in enumerate(vis_steps):
         t_val = max(1.0 - step / N_steps_vis, 0)
         axes[i].hist(data, bins=50, density=True, alpha=0.6, color='steelblue')
         axes[i].plot(x_grid, gm1d_pdf(x_grid), 'r--', lw=2, label='Target')
-        axes[i].set_title(f'step {step} ($t={t_val:.2f}$)')
+        title = f'step {step} ($t={t_val:.2f}$)' + ('，采样器终样' if step == 200 else '')
+        axes[i].set_title(title)
         axes[i].set_xlim(-6, 6)
         axes[i].legend(fontsize=8)
         axes[i].grid(alpha=0.3)
 
-# 第4个位置展示目标分布（Ground Truth）作为参考
+# 第5个位置展示目标分布（Ground Truth）作为参考
+np.random.seed(42)
 x0_gt = gm1d_sample(5000)
-axes[3].hist(x0_gt, bins=50, density=True, alpha=0.6, color='steelblue')
-axes[3].plot(x_grid, gm1d_pdf(x_grid), 'r--', lw=2, label='Target')
-axes[3].set_title('Ground Truth ($x_0 \\sim p_{\\mathrm{data}}$)')
-axes[3].set_xlim(-6, 6)
-axes[3].legend(fontsize=8)
-axes[3].grid(alpha=0.3)
+axes[4].hist(x0_gt, bins=50, density=True, alpha=0.6, color='steelblue')
+axes[4].plot(x_grid, gm1d_pdf(x_grid), 'r--', lw=2, label='Target')
+axes[4].set_title('Ground Truth ($x_0 \\sim p_{\\mathrm{data}}$)')
+axes[4].set_xlim(-6, 6)
+axes[4].legend(fontsize=8)
+axes[4].grid(alpha=0.3)
 
 fig.suptitle('DDIM采样轨迹：从噪声到数据', fontsize=14)
 fig.tight_layout()
@@ -767,14 +772,16 @@ print(f"  - 步骤4_采样轨迹.png")
 print("\n" + "=" * 60)
 print("实验7.6-1 总结")
 print("=" * 60)
-print(f"1. 噪声调度设计：几何调度对数尺度严格均匀(std=0)；VP线性/余弦的dB均匀性受端点")
-print(f"   发散裁剪影响，全区间std余弦({np.std(snr_rate_cos):.0f})略小于线性({np.std(snr_rate_lin):.0f})，仅为定性结论")
+print(f"1. 噪声调度设计：几何调度dB尺度严格均匀(std=0，定义使然)；余弦调度设计目标是ᾱ空间")
+print(f"   两端平滑而非dB-SNR均匀；内部区间变化率std: 线性({np.std(snr_rate_lin[_interior]):.1f})")
+print(f"   小于余弦({np.std(snr_rate_cos[_interior]):.1f})；全区间std受端点裁剪主导，不作依据")
 print("2. 训练目标：ε-prediction的预测目标ε~N(0,I)量级不随t变化，训练更稳定；")
 print("   loss随t变化反映Var[ε|x_t]的差异（由SNR决定），余弦调度损失更均匀")
 print("3. 采样器对比（DDPM/DDIM/DPM-Solver步数-质量曲线）：")
 print("   - 小步数：DDPM最优（接近KS基线），DPM-Solver(二阶)明显优于DDIM(一阶)但不敌DDPM")
 print("   - 大步数：三者均收敛，差异不显著")
-print("   - 解析得分理想设定下DDPM 5步即收敛；文献'ODE求解器省步数'优势需学习得分场景才显现")
+print("   - 解析得分理想设定下DDPM 5步即收敛；少步数下DDPM噪声注入恰好补偿一阶离散偏差，")
+print("     是'低维+极少步数'的场景特性；图像任务中ODE求解器的省步优势来自高阶收敛")
 print("   - 多seed严格统计检验见DIAGNOSE=True（默认关闭）")
 print("4. 采样轨迹：从纯噪声→模糊轮廓→清晰结构，得分函数逐步将噪声'引导'到数据分布")
 print("5. 从PnP-ULA到扩散SDE的演化路径：")

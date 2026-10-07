@@ -210,7 +210,7 @@ def ode_euler_order1(xT, ts):
 
 
 def ode_dpmpp2(xT, ts):
-    """DPM-Solver++(2阶, multistep)。数据预测器 xθ。复用上一步求值, ~1 次求值/步。"""
+    """DPM-Solver++(2阶, multistep)。数据预测器 xθ。n步恰 n 次NFE（初始点1次+中间n-1次）。"""
     n = len(ts) - 1
     x = xT.copy()
     x0_prev2 = None
@@ -230,7 +230,8 @@ def ode_dpmpp2(xT, ts):
         x = (s_c / s_prev) * x - a_c * (np.exp(-h) - 1.0) * D
         prev_h = h
         x0_prev2 = x0_prev1
-        x0_prev1 = dpm_data_prediction(x, t_cur)   # 在新点求值, 供下一步使用
+        if i < n:   # 末步无需再为下一步预求值 -> 全程恰 n 次NFE, 与DDIM口径一致
+            x0_prev1 = dpm_data_prediction(x, t_cur)
     return x
 
 
@@ -335,10 +336,13 @@ def step2(xT):
     ab1 = alpha_bar(t1)
     eps = np.random.randn(n_pairs, DIM)
     x_t1 = np.sqrt(ab1)[:, None] * x0 + np.sqrt(1 - ab1)[:, None] * eps
-    score = forward_score(x_t1, t1)
-    beta = B_MIN + t1 * (B_MAX - B_MIN)
-    vel = -0.5 * beta[:, None] * (x_t1 + score)
-    x_t2 = x_t1 + vel * (t2 - t1)[:, None]
+    # 单步ODE连接改用 Heun（改进Euler, Song et al. 2023 原版所用求解器, 二阶精度）
+    beta1 = B_MIN + t1 * (B_MAX - B_MIN)
+    v1 = -0.5 * beta1[:, None] * (x_t1 + forward_score(x_t1, t1))
+    x_euler = x_t1 + v1 * (t2 - t1)[:, None]
+    beta2 = B_MIN + t2 * (B_MAX - B_MIN)
+    v2 = -0.5 * beta2[:, None] * (x_euler + forward_score(x_euler, t2))
+    x_t2 = x_t1 + 0.5 * (v1 + v2) * (t2 - t1)[:, None]
 
     # ---- 训练极小 MLP (自一致性 + EMA 停梯度) ----
     model = TinyMLP(h=128, seed=1)
@@ -368,7 +372,7 @@ def step2(xT):
         pred = cs_b[:, None] * x_b + co_b[:, None] * F
         diff = pred - with_ema
         loss = np.mean(np.sum(diff * diff, axis=-1))
-        grad = 2.0 * diff * co_b[:, None]
+        grad = (2.0 / batch) * diff * co_b[:, None]
         gw2, gb2p, gw1, gb1p = model.backward(z, a1, grad)
         for g, m_, v_, w in [(gw1, mW1, vW1, model.W1), (gb1p, mb1, vb1, model.b1),
                              (gw2, mW2, vW2, model.W2), (gb2p, mb2, vb2, model.b2)]:
@@ -419,7 +423,8 @@ def step2(xT):
     for ax, (title, pts) in zip(axes, subs.items()):
         s = pts[:1500]
         ax.scatter(s[:, 0], s[:, 1], s=2, alpha=0.35)
-        ax.set_title("%s\nNLL=%.3f" % (title, np.mean(neg_loglik0(s))))
+        # NLL按全量点计算, 与console输出/正文引用同一口径（散点仅显示前1500个）
+        ax.set_title("%s\nNLL=%.3f" % (title, np.mean(neg_loglik0(pts))))
         ax.set_xlim(-5, 5); ax.set_ylim(-5, 5)
         ax.set_xticks([]); ax.set_yticks([])
         ax.set_aspect('equal')

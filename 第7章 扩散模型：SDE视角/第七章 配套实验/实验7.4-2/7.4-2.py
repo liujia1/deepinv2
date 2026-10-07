@@ -299,7 +299,7 @@ ax3.plot(x_plot, p_target, 'b-', linewidth=2, label=r'Target $p_0(x)$')
 ax3.scatter(interpolation_results, [gmm_1d_pdf(np.array([x]))[0] for x in interpolation_results],
             c=alpha_values, cmap='viridis', s=100, edgecolor='black', linewidth=1.5, 
             label='Interpolation points', zorder=5)
-ax3.colorbar = plt.colorbar(ax3.collections[0], ax=ax3, label=r'$\alpha$')
+plt.colorbar(ax3.collections[0], ax=ax3, label=r'$\alpha$')
 
 ax3.set_xlabel(r'$x$', fontsize=14)
 ax3.set_ylabel(r'$p_0(x)$', fontsize=14)
@@ -432,8 +432,10 @@ def vp_gmm_2d_score(x, y, t):
         gauss = w * np.exp(-0.5 * diff.T @ cov_inv @ diff) / (2 * np.pi * np.sqrt(det))
         
         pdf += gauss
-        grad += w * gauss * (-cov_inv @ diff)
-    
+        # 注意：gauss 内已含权重 w（pdf 与 grad 必须用同一口径），
+        # 此处不能再乘一次 w，否则 score 会被额外缩放（权重0.5时恰好减半）导致PF-ODE发散。
+        grad += gauss * (-cov_inv @ diff)
+
     return grad / (pdf + 1e-30)
 
 def pf_ode_sample_2d(z_init, N_steps=500):
@@ -470,6 +472,13 @@ for alpha in np.linspace(0, 1, 11):
     traj = pf_ode_sample_2d(z_interp, N_steps=500)
     interpolation_2d.append(traj[-1])
 
+# 端点诊断输出：确认PF-ODE把噪声端点映射到数据空间的合理位置（不再发散）
+p_start_2d = interpolation_2d[0]   # α=0，对应 z_B_2d
+p_end_2d = interpolation_2d[-1]    # α=1，对应 z_A_2d
+print("\n2D数据空间端点（PF-ODE输出）：")
+print(f"  α=0: T(z_B={tuple(z_B_2d.tolist())}) = ({p_start_2d[0]:+.3f}, {p_start_2d[1]:+.3f})")
+print(f"  α=1: T(z_A={tuple(z_A_2d.tolist())}) = ({p_end_2d[0]:+.3f}, {p_end_2d[1]:+.3f})")
+
 # 可视化2D插值
 fig, ax = plt.subplots(figsize=(10, 10))
 
@@ -499,11 +508,12 @@ y_interp = [p[1] for p in interpolation_2d]
 ax.plot(x_interp, y_interp, 'r-o', linewidth=2.5, markersize=10, 
         label=r'Semantic interpolation path')
 
-# 标记起点和终点
-ax.scatter([z_A_2d[0]], [z_A_2d[1]], c='red', s=150, marker='*', 
-           edgecolor='black', linewidth=2, label=r'$z_A$ (start)', zorder=5)
-ax.scatter([z_B_2d[0]], [z_B_2d[1]], c='blue', s=150, marker='*', 
-           edgecolor='black', linewidth=2, label=r'$z_B$ (end)', zorder=5)
+# 标记数据空间路径的起点和终点（注意：画的是PF-ODE的输出 T(z)，不是原始噪声 z；
+# 原始噪声属于另一空间，不能与数据平面混画）
+ax.scatter([p_start_2d[0]], [p_start_2d[1]], c='blue', s=200, marker='*',
+           edgecolor='black', linewidth=2, label=r'$T(z_B)$ (start, $\alpha=0$)', zorder=6)
+ax.scatter([p_end_2d[0]], [p_end_2d[1]], c='red', s=200, marker='*',
+           edgecolor='black', linewidth=2, label=r'$T(z_A)$ (end, $\alpha=1$)', zorder=6)
 
 # 标记目标分布的分量中心
 for idx, m in enumerate(gmm_means_2d):
@@ -526,8 +536,8 @@ plt.close()
 print(f"\n图像已保存: {save_path}")
 
 print("\n观察要点：")
-print("  1. 插值路径从z_A（左下）平滑过渡到z_B（右上）")
-print("  2. 路径经过两个高斯分量之间")
+print("  1. 数据空间路径从 T(z_B)（右上, α=0）平滑过渡到 T(z_A)（左下, α=1）")
+print("  2. 路径依次贴近右模 (2,1) 与左模 (-2,-1)，而非直穿低密度谷底")
 print("  3. 这是PF-ODE在图像生成中做语义插值的基础")
 
 

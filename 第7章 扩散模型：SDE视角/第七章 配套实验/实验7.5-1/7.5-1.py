@@ -140,10 +140,17 @@ def target_ppf(u):
     return np.interp(u, _FG, _XG)
 
 def ks_vs_cdf(samples, cdf_fn):
-    """单样本 KS：经验 CDF 与指定解析 CDF 的最大偏离（无参考样本噪声）"""
+    """单样本 KS（双侧，与 scipy.stats.kstest 口径一致）：
+    经验 CDF 与指定解析 CDF 的最大偏离（无参考样本噪声）。
+    D = max( sup[F_n(x)-F(x)], sup[F(x)-F_n(x)] )，两侧都必须取，
+    只取 i/n - F(x_i) 在离散化误差很小（接近MC地板）时会系统性偏小。
+    """
     xs = np.sort(np.asarray(samples))
     n = len(xs)
-    return float(np.max(np.abs(np.arange(1, n + 1) / n - cdf_fn(xs))))
+    fvals = cdf_fn(xs)
+    d_plus = np.max(np.arange(1, n + 1) / n - fvals)
+    d_minus = np.max(fvals - np.arange(0, n) / n)
+    return float(max(d_plus, d_minus))
 
 def ks_vs_target(samples):
     return ks_vs_cdf(samples, target_cdf)
@@ -484,9 +491,12 @@ print("步骤4：步数对采样质量的影响")
 print("=" * 60)
 
 step_counts = [10, 25, 50, 100, 200, 500, 1000]
-vp_errors = []      # 单样本 KS（对解析 p_0 的 CDF）
-vp_errors_w2 = []   # W2 距离（平滑辅助度量）
-vp_errors_2samp = []  # 旧指标：两样本 KS，只用来展示它为何不可用
+vp_errors = []        # 单样本 KS（对解析 p_0 的 CDF），多种子均值
+vp_errors_ks_std = []  # 对应的多种子标准差（误差棒与JSON共用）
+vp_errors_w2 = []     # W2 距离（平滑辅助度量），多种子均值
+vp_errors_w2_std = []
+vp_errors_2samp = []    # 旧指标：两样本 KS，只用来展示它为何不可用
+vp_errors_2samp_std = []
 
 # 粒子数要足够大：单样本 KS 的 MC 地板约 0.87/sqrt(N)
 # （旧版用 N=20000 与参考样本 x0(N=10000) 做两样本 KS，地板高达≈0.012，
@@ -511,11 +521,18 @@ for n_steps in step_counts:
         w2_vals.append(w2_vs_target(final))
         k2_vals.append(sp_stats.ks_2samp(final, x0).statistic)
     ks_mean = float(np.mean(ks_vals))
+    ks_std = float(np.std(ks_vals))
+    w2_mean, w2_std = float(np.mean(w2_vals)), float(np.std(w2_vals))
+    k2_mean, k2_std = float(np.mean(k2_vals)), float(np.std(k2_vals))
     vp_errors.append(ks_mean)
-    vp_errors_w2.append(float(np.mean(w2_vals)))
-    vp_errors_2samp.append(float(np.mean(k2_vals)))
-    print(f"  DDPM N_steps={n_steps}: KS={ks_mean:.5f} (std={np.std(ks_vals):.5f}), "
-          f"W2={np.mean(w2_vals):.5f}, 旧两样本KS={np.mean(k2_vals):.5f}")
+    vp_errors_ks_std.append(ks_std)
+    vp_errors_w2.append(w2_mean)
+    vp_errors_w2_std.append(w2_std)
+    vp_errors_2samp.append(k2_mean)
+    vp_errors_2samp_std.append(k2_std)
+    print(f"  DDPM N_steps={n_steps}: KS={ks_mean:.5f} (std={ks_std:.5f}), "
+          f"W2={w2_mean:.5f} (std={w2_std:.5f}), "
+          f"旧两样本KS={k2_mean:.5f} (std={k2_std:.5f})")
 
 print("\n结论：在可分辨区间（步数≲100）步数增加→离散化误差减小→质量提升；")
 print("      步数足够多后误差降到 MC 地板以下，曲线变平并只余抽样涨落（这不是算法失效）")

@@ -22,6 +22,7 @@ matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
 import os
 import sys
+import json
 import warnings
 import logging
 
@@ -328,6 +329,24 @@ plt.savefig(os.path.join(SAVE_DIR, '步骤3_Vincent定理验证.png'), dpi=150, 
 plt.close()
 print(f"\n图表已保存: 步骤3_Vincent定理验证.png")
 
+# ---- 结果归档: results_summary.json (数值与两张配图对应) ----
+results = {
+    'experiment': '实验6.3-1',
+    'config': {'sigma': float(sigma), 'N_train': int(N_train), 'N_mc': int(N_mc),
+               'epochs': 500, 'lr': 1e-3, 'seed': 42},
+    'step1_final_dsm_loss_no_half_factor': float(train_losses[-1]),
+    'step2_corr_learned_vs_true_score': float(np.corrcoef(learned_score, true_score_noisy)[0, 1]),
+    'step3_j_dsm_trained': float(j_dsm),
+    'step3_j_esm_trained': float(j_esm),
+    'step3_c_sigma_mc': float(c_sigma),
+    'step3_c_sigma_theory': float(c_theory),
+    'step3_c_sigma_random_init': float(c_random),
+    'step3_esm_loss_before_mc': float(esm_loss_before_mc),
+}
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results, f, ensure_ascii=False, indent=2)
+print(f"结果已保存: results_summary.json")
+
 # ============================================================
 # 实验总结
 # ============================================================
@@ -347,7 +366,7 @@ print("   - σ小: 得分精细,关注局部细节")
 print("   - 这为后续多尺度得分匹配(NCSN)奠定基础")
 print("\n4. DSM训练目标:")
 print("   - s_θ(x+σz) ≈ -z/σ")
-print("   - 完全可计算,无需∇log p(x)")
+print("   - 完全可计算,无需未知的真实得分(监督标签解析已知)")
 print("   - 等价于去噪任务")
 
 print(f"\n{'='*60}")
