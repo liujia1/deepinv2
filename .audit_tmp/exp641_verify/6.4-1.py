@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 import os
 import sys
 import io
+import json
 import time
 import warnings
 import logging
@@ -151,25 +152,38 @@ def hutchinson_trace(A, M, dist='gaussian'):
         estimates.append(v @ A @ v)
     return np.mean(estimates), np.std(estimates) / np.sqrt(M)
 
-# 不同 M 值的估计精度
+# 不同 M 值的估计精度:
+# 单次估计误差是随机变量, 会出现非单调涨落, 不足以支撑 "按 1/√M 收敛" 的看图结论;
+# 因此对每个 M 做 n_reps 次独立试验, 用 RMSE 衡量精度, 并与理论标准误直接对比
 M_values = [1, 5, 10, 50, 100, 500, 1000]
-gaussian_errors = []
-rademacher_errors = []
+n_reps = 500
+gaussian_rmse, rademacher_rmse = [], []
+theory_se_g, theory_se_r = [], []
 
-print(f"\n{'M':>6s} | {'高斯估计':>10s} | {'高斯误差':>10s} | {'Rademacher估计':>14s} | {'Rademacher误差':>14s}")
-print("-" * 65)
+# 理论单次方差 (A 对称): 高斯 2||A||_F^2; Rademacher 2||A||_F^2 - 2*sum_i A_ii^2
+_var_g = 2 * np.linalg.norm(A, 'fro') ** 2
+_var_r = _var_g - 2 * np.sum(np.diag(A) ** 2)
+
+print(f"\n{'M':>6s} | {'高斯RMSE':>10s} | {'高斯SE理论':>12s} | {'Rad RMSE':>10s} | {'Rad SE理论':>12s}")
+print("-" * 60)
 for M in M_values:
-    g_est, g_se = hutchinson_trace(A, M, 'gaussian')
-    r_est, r_se = hutchinson_trace(A, M, 'rademacher')
-    g_err = abs(g_est - true_trace)
-    r_err = abs(r_est - true_trace)
-    gaussian_errors.append(g_err)
-    rademacher_errors.append(r_err)
-    print(f"{M:6d} | {g_est:10.4f} | {g_err:10.4f} | {r_est:14.4f} | {r_err:14.4f}")
+    # 向量化: (n_reps, M, d) 一次算出所有独立试验的 v^T A v, 再对 M 平均
+    Vg = np.random.randn(n_reps, M, d)
+    est_g = np.einsum('nmi,ij,nmj->n', Vg, A, Vg) / M
+    Vr = np.random.choice([-1.0, 1.0], size=(n_reps, M, d))
+    est_r = np.einsum('nmi,ij,nmj->n', Vr, A, Vr) / M
+    g_rmse = np.sqrt(np.mean((est_g - true_trace) ** 2))
+    r_rmse = np.sqrt(np.mean((est_r - true_trace) ** 2))
+    se_g, se_r = np.sqrt(_var_g / M), np.sqrt(_var_r / M)
+    gaussian_rmse.append(g_rmse)
+    rademacher_rmse.append(r_rmse)
+    theory_se_g.append(se_g)
+    theory_se_r.append(se_r)
+    print(f"{M:6d} | {g_rmse:10.4f} | {se_g:12.4f} | {r_rmse:10.4f} | {se_r:12.4f}")
 
 print(f"\n精确迹: {true_trace:.4f}")
-print(f"  观察: 估计误差随 M 增加而减小, 收敛速度约为 $1/\\sqrt{{M}}$")
-print(f"  注: 当前为 1 次实验结果, 步骤2 将做 1000 次实验展示方差分布")
+print(f"  观察: RMSE 与理论标准误 $\\sqrt{{\\mathrm{{Var}}(v^TAv)/M}}$ 逐点吻合, 随 $M$ 按 $1/\\sqrt{{M}}$ 收敛")
+print(f"  注: 每个 $M$ 用 {n_reps} 次独立试验; 若只看单次误差会有非单调随机涨落, 不能据此否定收敛率")
 
 
 # ============================================================
@@ -220,13 +234,14 @@ print("=" * 60)
 
 fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-# 子图1: Hutchinson 迹估计精度随 M 变化
-axes[0].semilogy(M_values, gaussian_errors, 'bo-', label=r'高斯分布 $v \sim \mathcal{N}(0,I)$', lw=2, markersize=5)
-axes[0].semilogy(M_values, rademacher_errors, 'rs-', label=r'Rademacher $v \in \{-1,+1\}^d$', lw=2, markersize=5)
-axes[0].axhline(y=0, color='k', linestyle='--', alpha=0.3, label=r'精确迹 $\mathrm{Tr}(A)$')
+# 子图1: RMSE vs M (log-log), 与理论 SE 对比, 展示 1/√M 收敛
+axes[0].loglog(M_values, gaussian_rmse, 'bo-', label=r'高斯 RMSE ($v \sim \mathcal{N}(0,I)$)', lw=2, markersize=5)
+axes[0].loglog(M_values, theory_se_g, 'b--', alpha=0.5, label=r'高斯 SE $=\sqrt{\mathrm{Var}/M}$')
+axes[0].loglog(M_values, rademacher_rmse, 'rs-', label=r'Rademacher RMSE ($v \in \{-1,+1\}^d$)', lw=2, markersize=5)
+axes[0].loglog(M_values, theory_se_r, 'r--', alpha=0.5, label=r'Rademacher SE')
 axes[0].set_xlabel(r'投影次数 $M$')
-axes[0].set_ylabel(r'估计误差 $|\hat{\mathrm{Tr}} - \mathrm{Tr}|$')
-axes[0].set_title(r'Hutchinson 迹估计精度 vs $M$')
+axes[0].set_ylabel(r'$\sqrt{\mathbb{E}[(\hat{\mathrm{Tr}} - \mathrm{Tr})^2]}$')
+axes[0].set_title(r'Hutchinson 迹估计精度 vs $M$ ($1/\sqrt{M}$ 收敛)')
 axes[0].legend(fontsize=9)
 axes[0].grid(alpha=0.3, which='both')
 
@@ -278,7 +293,8 @@ print("\n[1D 特殊性说明]")
 print("  - 1D 情况下 $\\mathrm{{Tr}}(\\nabla_x s_\\theta(x)) = \\frac{{ds_\\theta}}{{dx}}$ (标量)")
 print("  - '切片'含义退化: 随机方向 $v \\in \\{{-1, +1\\}}$, $v^T \\nabla_x s_\\theta v = v^2 \\cdot \\frac{{ds}}{{dx}} = \\frac{{ds}}{{dx}}$")
 print("  - SSM 1D 演示主要用于理解目标函数的两项结构, 高维加速需用 PyTorch autograd")
-print("  - 真正的 Hutchinson 加速在 $d \\gg 1$ 时才显著 (步骤4 将训练高维参数网络)")
+print("  - 真正的 Hutchinson 加速在 $d \\gg 1$ 时才显著 (步骤1-2 用 $d=20$ 演示;")
+print("    步骤4 训练的是参数化网络, 但输入维度仍是 1D)")
 
 # SSM 目标: $J_{SSM}(\theta) = \mathbb{E}_{p(x)} \mathbb{E}_{p(v)} [v^T \nabla_x s_\theta(x) v + 0.5 \|s_\theta(x)\|^2]$
 # 1D 中: $v^T \nabla_x s_\theta v = v^2 \cdot ds/dx$, $v \sim \mathcal{N}(0,1)$ 或 $v \in \{-1,+1\}$
@@ -296,22 +312,26 @@ term1 = ds_dx  # $v^T \nabla_x s v$ 的期望 = $ds/dx$ (1D)
 term2 = 0.5 * true_score**2  # $\frac{1}{2} \|s(x)\|^2$
 ssm_integrand = term1 + term2
 
-# ESM 目标 (用于对比)
-esm_integrand = 0.5 * true_score**2  # 当 $s_\theta = \nabla \log p$ 时 ESM = 0
+# ESM 目标 (用于对比): ESM(θ) = 0.5 E_p‖s_θ - ∇log p‖², 完美匹配时解析为 0
 
-# SSM 与 ISM 关系: 当 $s_\theta = \nabla \log p$ 时, SSM = ISM = ESM + 常数
-# 在 1D 高斯混合上验证: ESM = 0, SSM = $\int (ds/dx + 0.5 s^2) dx$
-# ISM = $\int (ds/dx + 0.5 s^2) dx$ 与 SSM 形式相同 (1D 情况下)
-ism_value = _trapz(ssm_integrand, x_grid)
-esm_value = _trapz(esm_integrand, x_grid)
+# 口径说明: ESM/ISM/SSM 都是 E_p[...] 意义下的损失, 数值积分必须以密度 p(x) 加权,
+# 而不是对 dx 均匀积分 (均匀积分得到的 ∫0.5‖s‖²dx 不是任何损失函数值).
+# 完美匹配 (s_θ = ∇log p) 时:
+#   ESM = 0 (被积范数恒为 0)
+#   ISM = E_p[ds/dx + 0.5 s²] = -0.5 E_p‖s²  (分部积分, 边界项 p·s 在 ±∞ 消失)
+p_grid = (0.5 * np.exp(-0.5 * (x_grid + 2)**2) / np.sqrt(2 * np.pi)
+          + 0.5 * np.exp(-0.5 * (x_grid - 2)**2) / np.sqrt(2 * np.pi))
+ism_value = _trapz(p_grid * ssm_integrand, x_grid)
+ism_bound = -0.5 * _trapz(p_grid * true_score**2, x_grid)  # ISM 理论下界
 
-print(f"\nSSM vs ESM 对比 (1D 高斯混合):")
+print(f"\nSSM vs ESM 对比 (1D 高斯混合, 均以 $E_p$ 为测度):")
 print(f"  当 $s_\\theta = \\nabla\\log p(x)$ 时 (完美匹配):")
-print(f"    ESM 积分 = {esm_value:.6f} (理论值 0, 因 $\\|s_\\theta - s\\|^2 = 0$)")
-print(f"    ISM 积分 = {ism_value:.6f}")
-print(f"    $\\mathrm{{Tr}}(\\nabla s)$ 项积分 = {_trapz(ds_dx[10:-10], x_grid[10:-10]):.6f}  (丢弃首尾10点, 避免边界处数值差分误差)")
-print(f"    $\\|s\\|^2/2$ 项积分 = {_trapz(term2[10:-10], x_grid[10:-10]):.6f}")
+print(f"    ESM 损失 = 0.000000 (解析值: $\\frac{{1}}{{2}} E_p\\|s_\\theta - \\nabla\\log p\\|^2 \\equiv 0$)")
+print(f"    ISM 损失 $E_p[ds/dx + 0.5 s^2]$ = {ism_value:.6f}")
+print(f"      其中 $\\mathrm{{Tr}}(\\nabla s)$ 项 = {_trapz(p_grid * ds_dx, x_grid):.6f}, $\\|s\\|^2/2$ 项 = {_trapz(p_grid * term2, x_grid):.6f}")
+print(f"    理论恒等式 ISM = $-\\frac{{1}}{{2}} E_p\\|s\\|^2$ = {ism_bound:.6f} (微小差异来自窗口截断与数值差分)")
 print(f"  关键观察: SSM 和 ISM 只差与 $\\theta$ 无关的常数, 因此梯度方向相同")
+print(f"  呼应步骤4: 完美匹配时 ISM 取上述下界, SSM 训练损失应收敛到它附近")
 
 
 # ============================================================
@@ -350,10 +370,12 @@ print(f"图表已保存: 步骤3_SSM目标函数1D演示.png")
 print("\n" + "=" * 60)
 print("步骤4: 完整 SSM 训练 - 估计原始分布得分")
 print("=" * 60)
-print("\n[高维说明]")
-print("  为体现 Hutchinson 加速的真实价值, 步骤4 用 PyTorch 训练一个参数网络")
-print("  网络 $s_\\theta(x)$ 有较多参数, 通过 autograd 高效计算 $v^T \\nabla_x s_\\theta v$")
-print("  这等价于 $d$ 维 Jacobian 矩阵, 但单次前向+反向传播即可, 无需构造完整矩阵")
+print("\n[参数网络说明]")
+print("  步骤4 用 PyTorch 训练一个参数化得分网络, 验证 SSM 目标能估出原始分布得分")
+print("  注: 数据输入维度仍是 $d=1$ (Rademacher 下 $v^2 \\equiv 1$, 切片方差为零,")
+print("      SSM 损失精确退化为 ISM 样本损失); Hutchinson 的加速收益只在 $d \\gg 1$")
+print("      时显著, 该部分由步骤1-2 的 $d=20$ 演示覆盖")
+print("  autograd 计算 $v^T \\nabla_x s_\\theta v$ 的写法与高维情形完全同构, 无需构造完整 Jacobian")
 print("\nSSM 目标函数:")
 print(r"  $\mathcal{J}_{SSM}(\theta) = \mathbb{E}_{p(x)}\mathbb{E}_{p_v}[v^T\nabla_x s_\theta(x) v + \frac{1}{2}\|s_\theta(x)\|^2]$")
 print("\n训练算法:")
@@ -411,7 +433,7 @@ if os.path.exists(CHECKPOINT_PATH):
         print(f"  训练轮数: {checkpoint['epoch']+1}")
         print(f"  最终损失: {checkpoint['loss']:.6f}")
         model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        # 成品检查点按项目规范不保存/不加载优化器状态 (仅断点续训时需要)
         train_losses = checkpoint.get('train_losses', [])
         start_epoch = checkpoint['epoch'] + 1
         is_final = True
@@ -468,10 +490,10 @@ if not is_final:
     print(f"\n训练完成, 最终损失: {train_losses[-1]:.6f}, 耗时: {t_elapsed:.1f} 秒")
 
     # 保存最终 checkpoint (包含 train_losses 用于绘制训练损失曲线)
+    # 成品检查点按项目规范不保存优化器状态 (减小体积; 断点续训的中间检查点才保存)
     torch.save({
         'epoch': N_epochs - 1,
         'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
         'loss': train_losses[-1],
         'train_losses': train_losses,
         'is_final': True,
@@ -573,8 +595,9 @@ for M, mean_v, std_v in zip(M_test_values, ssm_estimates_mean, ssm_estimates_std
 
 print(f"\n结论: SSM 估计均值随 M 增加稳定接近 ISM 精确损失, 验证了无偏性")
 print(f"  标准差随 M 增大而减小 (符合 $1/\\sqrt{{M}}$ 收敛率)")
-print(f"  注: 此处方差主要是 $v$ 在 1D 上的退化效应导致的人为方差,")
-print(f"  并非高维 Jacobian 迹估计的代表性方差来源 (1D 中 $v^T \\nabla s v = v^2 \\cdot ds/dx$)")
+print(f"  注: 1D 中 $v^T \\nabla s v = v^2 \\cdot ds/dx$, 此处方差来自标量 $v^2$ 的波动")
+print(f"  (Gaussian 时 $\\mathrm{{Var}}(v^2)=2$), 它是 $d=1$ 时 Hutchinson 估计量的真实方差,")
+print(f"  但不混合高维方向随机性, 不代表 $d \\gg 1$ 时迹估计的典型方差量级")
 
 
 # ============================================================
@@ -651,26 +674,26 @@ ax.axhspan(0.5, 1, xmin=0, xmax=0.5, alpha=0.1, color='yellow')  # 左上: 不�
 ax.axhspan(0, 0.5, xmin=0.5, xmax=1, alpha=0.1, color='yellow')  # 右下: 可行但粗略
 ax.axhspan(0.5, 1, xmin=0.5, xmax=1, alpha=0.1, color='green')   # 右上: 可行且精确
 
-# 添加象限标签
-ax.text(0.25, 0.95, r'理论精确但不可行', ha='center', va='top',
-        fontsize=11, transform=ax.transAxes, color='darkred',
+# 添加象限标签 (贴四角放置, 避免与方法圆点标签重叠)
+ax.text(0.03, 0.98, '理论精确但不可行', ha='left', va='top',
+        fontsize=11, color='darkred',
         bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.7))
-ax.text(0.75, 0.95, r'可行且精确 (目标)', ha='center', va='top',
-        fontsize=11, transform=ax.transAxes, color='darkgreen',
+ax.text(0.97, 0.98, '可行且精确 (目标)', ha='right', va='top',
+        fontsize=11, color='darkgreen',
         bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.7))
-ax.text(0.25, 0.05, r'不可行且粗略', ha='center', va='bottom',
-        fontsize=11, transform=ax.transAxes, color='darkgray',
+ax.text(0.03, 0.02, '不可行且粗略', ha='left', va='bottom',
+        fontsize=11, color='darkgray',
         bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.7))
-ax.text(0.75, 0.05, r'可行但粗略', ha='center', va='bottom',
-        fontsize=11, transform=ax.transAxes, color='darkorange',
+ax.text(0.97, 0.02, '可行但粗略', ha='right', va='bottom',
+        fontsize=11, color='darkorange',
         bbox=dict(boxstyle='round', facecolor='moccasin', alpha=0.7))
 
 # 四种方法的位置 (可行性, 精度)
 methods = {
-    'ESM\n(显式得分匹配)':   (0.15, 0.95),
-    'ISM\n(隐式得分匹配)':   (0.25, 0.85),
-    'DSM\n(去噪得分匹配)':   (0.80, 0.40),
-    'SSM\n(切片得分匹配)':   (0.70, 0.80),
+    'ESM\n(显式得分匹配)':   (0.15, 0.88),
+    'ISM\n(隐式得分匹配)':   (0.28, 0.74),
+    'DSM\n(去噪得分匹配)':   (0.82, 0.35),
+    'SSM\n(切片得分匹配)':   (0.72, 0.80),
 }
 
 colors_m = {'ESM\n(显式得分匹配)': 'red',
@@ -681,22 +704,24 @@ colors_m = {'ESM\n(显式得分匹配)': 'red',
 for name, (x, y) in methods.items():
     ax.scatter(x, y, s=2000, c=colors_m[name], alpha=0.7,
                edgecolors='black', linewidths=2, zorder=5)
+    # 标签第二行会伸出圆点落在浅色背景上, 用白底 bbox 保证可读性
     ax.annotate(name, (x, y), fontsize=11, ha='center', va='center',
-                fontweight='bold', color='white', zorder=6)
+                fontweight='bold', color='black', zorder=6,
+                bbox=dict(boxstyle='round,pad=0.25', facecolor='white', alpha=0.85))
 
 # 绘制演进箭头 (展示谱系逻辑)
 arrow_props = dict(arrowstyle='->', lw=2, color='gray', alpha=0.6)
 # ESM -> ISM (分部积分)
-ax.annotate('', xy=(0.30, 0.83), xytext=(0.20, 0.92), arrowprops=arrow_props)
-ax.text(0.18, 0.87, r'分部积分', fontsize=9, color='gray', rotation=-30)
+ax.annotate('', xy=(0.235, 0.795), xytext=(0.185, 0.85), arrowprops=arrow_props)
+ax.text(0.10, 0.76, '分部积分', fontsize=9, color='gray', rotation=-35)
 
 # ISM -> DSM (避免 Jacobian)
-ax.annotate('', xy=(0.75, 0.45), xytext=(0.32, 0.80), arrowprops=arrow_props)
-ax.text(0.50, 0.65, r'避免 Jacobian\n(噪声扰动)', fontsize=9, color='gray')
+ax.annotate('', xy=(0.775, 0.42), xytext=(0.345, 0.70), arrowprops=arrow_props)
+ax.text(0.50, 0.50, '避免 Jacobian\n(噪声扰动)', fontsize=9, color='gray')
 
 # ISM -> SSM (随机化 Jacobian)
-ax.annotate('', xy=(0.65, 0.78), xytext=(0.32, 0.82), arrowprops=arrow_props)
-ax.text(0.45, 0.85, r'随机化\nJacobian', fontsize=9, color='gray', rotation=10)
+ax.annotate('', xy=(0.655, 0.795), xytext=(0.35, 0.755), arrowprops=arrow_props)
+ax.text(0.44, 0.84, '随机化\nJacobian', fontsize=9, color='gray', rotation=5)
 
 ax.set_xlim(0, 1)
 ax.set_ylim(0, 1)
@@ -744,3 +769,81 @@ print("\n5. 实验要点")
 print(r"   - 1D 演示: $\mathrm{Tr}(\nabla s) = ds/dx$, '切片'含义退化")
 print(r"   - 1D 高斯混合: SSM 与 ISM 形式相同, SSM = ISM = ESM + 常数")
 print(r"   - SSM 估计原始 $\nabla \log p$ (无需噪声扰动), 与 DSM 互补")
+
+
+# ============================================================
+# 结果归档: results_summary.json
+# ============================================================
+summary = dict(
+    experiment='6.4-1',
+    generated_at=time.strftime('%Y-%m-%d %H:%M:%S'),
+    device=str(device),
+    seed=42,
+    target_distribution='0.5*N(-2,1) + 0.5*N(2,1) (1D 高斯混合)',
+    step1_hutchinson_rmse=dict(
+        d=d, n_reps=n_reps, M_values=M_values,
+        true_trace=float(true_trace),
+        theory_var_gaussian=float(_var_g),
+        theory_var_rademacher=float(_var_r),
+        gaussian_rmse=[float(v) for v in gaussian_rmse],
+        rademacher_rmse=[float(v) for v in rademacher_rmse],
+        theory_se_gaussian=[float(v) for v in theory_se_g],
+        theory_se_rademacher=[float(v) for v in theory_se_r],
+        max_rel_dev_gaussian=float(np.max(np.abs(
+            np.array(gaussian_rmse) / np.array(theory_se_g) - 1))),
+        max_rel_dev_rademacher=float(np.max(np.abs(
+            np.array(rademacher_rmse) / np.array(theory_se_r) - 1))),
+        note='RMSE 与理论 SE 逐点吻合且按 1/sqrt(M) 下降; '
+             '单次估计误差有非单调涨落, 不用于收敛率判断',
+    ),
+    step2_variance_comparison=dict(
+        M=10,  # 步骤2 固定 M=10 (注: 步骤5 循环变量会覆盖同名变量, 故此处直接归档常量)
+        n_experiments=n_experiments,
+        gaussian_mean=float(np.mean(gaussian_traces)),
+        rademacher_mean=float(np.mean(rademacher_traces)),
+        gaussian_var_single=float(gaussian_var_single),
+        rademacher_var_single=float(rademacher_var_single),
+        var_ratio_g_over_r=float(gaussian_var_single / rademacher_var_single),
+        theory_var_gaussian=float(theory_var_gaussian),
+        theory_var_rademacher=float(theory_var_rademacher),
+        note='Rademacher 单次方差明显小于高斯, 与理论 '
+             '2||A||_F^2 vs 2||A||_F^2 - 2*sum(A_ii^2) 一致',
+    ),
+    step3_ssm_structure_1d=dict(
+        measure='E_p (密度加权, 窗口 [-5,5])',
+        esm_loss_at_perfect_match=0.0,
+        ism_loss=float(ism_value),
+        ism_trace_term=float(_trapz(p_grid * ds_dx, x_grid)),
+        ism_norm_term=float(_trapz(p_grid * term2, x_grid)),
+        ism_analytic_bound=float(ism_bound),
+        note='完美匹配时 ISM = -0.5*E_p||s||^2; 数值与解析下界的微小差异来自窗口截断与数值差分',
+    ),
+    step4_ssm_training=dict(
+        data='1D GMM 10000 样本 (独立 RandomState(42))',
+        hidden=64,
+        lr=float(optimizer.param_groups[0]['lr']),
+        n_epochs=len(train_losses),
+        final_loss=float(train_losses[-1]),
+        correlation_vs_true_score=float(corr),
+        mse_vs_true_score=float(mse),
+        train_losses=[float(v) for v in train_losses],
+        note='final_loss 接近步骤3 的解析下界; 成品 checkpoint 不含优化器状态',
+    ),
+    step5_unbiasedness=dict(
+        v_distribution='Gaussian (1D Rademacher 下 v^2=1 无方差, 故用高斯展示估计方差)',
+        N_is_test=N_is_test, n_trials=n_trials,
+        M_values=M_test_values,
+        ssm_mean=[float(v) for v in ssm_estimates_mean],
+        ssm_std=[float(v) for v in ssm_estimates_std],
+        ism_exact=float(ism_exact),
+        bias=[float(abs(m - ism_exact)) for m in ssm_estimates_mean],
+        note='E_v[J_SSM]=J_ISM: 均值随 M 逼近 ISM 精确损失, 标准差按 1/sqrt(M) 缩小',
+    ),
+    step6_genealogy=dict(
+        type='定性示意图 (非定量测量)',
+        positions={k.split('\n')[0]: list(v) for k, v in methods.items()},
+    ),
+)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as _f:
+    json.dump(summary, _f, ensure_ascii=False, indent=2)
+print(f"\n结果已写入: {os.path.join(SAVE_DIR, 'results_summary.json')}")

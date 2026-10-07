@@ -9,6 +9,7 @@
     "seed": 42
   },
   "step1_final_dsm_loss_no_half_factor": 0.7243118286132812,
+  "step1_loss_floor_theory_2C": 0.7311281888199366,
   "step2_corr_learned_vs_true_score": 0.9999811344823146,
   "step3_j_dsm_trained": 0.3632550273175675,
   "step3_j_esm_trained": 0.0001339636840527953,

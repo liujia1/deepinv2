@@ -1,0 +1,36 @@
+{
+  "experiment": "5.1-1",
+  "title": "ULA采样与步长敏感性分析",
+  "step1_ula_sampling": {
+    "niter": 100000,
+    "delta": 0.1,
+    "empirical_var": 1.071742,
+    "theoretical_var": 1.052632,
+    "acf_mix_lag": 30
+  },
+  "step2_step_size_sensitivity": {
+    "niter": 50000,
+    "results": [
+      {
+        "delta": 0.01,
+        "empirical_var": 0.901213,
+        "theoretical_var": 1.005025
+      },
+      {
+        "delta": 0.1,
+        "empirical_var": 1.047082,
+        "theoretical_var": 1.052632
+      },
+      {
+        "delta": 0.5,
+        "empirical_var": 1.334192,
+        "theoretical_var": 1.333333
+      },
+      {
+        "delta": 1.0,
+        "empirical_var": 1.997706,
+        "theoretical_var": 2.0
+      }
+    ]
+  }
+}

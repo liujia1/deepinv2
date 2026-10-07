@@ -142,6 +142,10 @@ def compute_acf(x, nlags=50):
     return acf_vals
 
 acf_values = compute_acf(samples, nlags=50)
+# 自相关首次衰减到 0.05 以下所需的滞后阶数（链混合/近独立的经验判断）
+_acf_below = np.where(acf_values[1:] < 0.05)[0]
+acf_mix_lag = int(_acf_below[0] + 1) if len(_acf_below) > 0 else None
+print(f"自相关首次<0.05的滞后阶数: {acf_mix_lag}")
 plt.subplot(1, 3, 3)
 plt.plot(acf_values, 'r-o')
 plt.xlabel('滞后阶数')
@@ -155,7 +159,8 @@ plt.savefig(os.path.join(SAVE_DIR, '步骤1_ULA采样验证.png'), dpi=150)
 plt.close()
 
 # 计算统计量
-print(f"采样方差: {np.var(samples):.4f}")
+step1_empirical_var = float(np.var(samples))
+print(f"采样方差: {step1_empirical_var:.4f}")
 # ULA平稳分布方差公式推导：
 # 递推式 X_{m+1} = (1-δ)X_m + √(2δ)Z，平稳时 σ² = (1-δ)²σ² + 2δ
 # 解得 σ² = 2δ / [1-(1-δ)²] = 2δ / (2δ-δ²) = 1 / (1-δ/2)
@@ -175,6 +180,7 @@ print("=" * 60)
 deltas = [0.01, 0.1, 0.5, 1.0]
 niter = 50000
 x0 = 0  # 初始值
+step2_records = []
 
 plt.figure(figsize=(15, 4))
 
@@ -183,6 +189,11 @@ for i, delta in enumerate(deltas):
     empirical_var = np.var(samples)
     # ULA平稳分布方差公式：σ² = 1 / (1 - δ/2)，δ<2时有限
     theoretical_var = 1 / (1 - delta / 2)
+    step2_records.append({
+        'delta': float(delta),
+        'empirical_var': float(round(empirical_var, 6)),
+        'theoretical_var': float(round(theoretical_var, 6)),
+    })
 
     plt.subplot(1, len(deltas), i+1)
     x = np.linspace(-4, 4, 100)
@@ -251,14 +262,13 @@ results_summary = {
     'step1_ula_sampling': {
         'niter': 100000,
         'delta': 0.1,
+        'empirical_var': round(step1_empirical_var, 6),
         'theoretical_var': float(round(1 / (1 - 0.1 / 2), 6)),  # 公式: 1/(1-δ/2)
+        'acf_mix_lag': acf_mix_lag,  # 自相关首次衰减到0.05以下的滞后阶数
     },
     'step2_step_size_sensitivity': {
-        'deltas': deltas,
         'niter': 50000,
-        'last_delta': float(delta),  # 末次迭代的步长（变量在循环中被覆盖）
-        'last_empirical_var': float(round(empirical_var, 6)),
-        'last_theoretical_var': float(round(theoretical_var, 6)),
+        'results': step2_records,  # 逐个步长的实测/理论方差
     }
 }
 

@@ -1,0 +1,41 @@
+{
+  "noise5": {
+    "sigma": 0.019608,
+    "eps": 0.000384468,
+    "resid_rms": 0.015424,
+    "score_rms": 40.117,
+    "score_mean_abs": 30.874,
+    "score_edge_mean": 21.678,
+    "score_flat_mean": 35.897,
+    "edge_over_flat": 0.604,
+    "psnr_noisy": 34.162,
+    "psnr_denoised": 38.004,
+    "psnr_gain": 3.842
+  },
+  "noise15": {
+    "sigma": 0.058824,
+    "eps": 0.003460208,
+    "resid_rms": 0.05384,
+    "score_rms": 15.56,
+    "score_mean_abs": 12.351,
+    "score_edge_mean": 10.942,
+    "score_flat_mean": 12.979,
+    "edge_over_flat": 0.843,
+    "psnr_noisy": 24.574,
+    "psnr_denoised": 31.869,
+    "psnr_gain": 7.295
+  },
+  "noise40": {
+    "sigma": 0.156863,
+    "eps": 0.024605921,
+    "resid_rms": 0.15234,
+    "score_rms": 6.191,
+    "score_mean_abs": 4.936,
+    "score_edge_mean": 4.708,
+    "score_flat_mean": 4.983,
+    "edge_over_flat": 0.945,
+    "psnr_noisy": 16.111,
+    "psnr_denoised": 27.503,
+    "psnr_gain": 11.392
+  }
+}

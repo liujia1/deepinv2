@@ -1,0 +1,106 @@
+{
+  "步骤1-2_线性模型": {
+    "N_samples": 50000,
+    "E_x2_empirical": 4.995081259300215,
+    "E_x2_population_ref": 4.999999999999998,
+    "theta_star_theory": -0.2,
+    "theta_star_analytical": -0.20019694337066596,
+    "theta_star_esm_grid": -0.20707070707070696,
+    "theta_star_ism_grid": -0.20707070707070696,
+    "grid_step": 0.02020202020202011,
+    "esm_minus_ism_mean_sample": 0.3634319677740832,
+    "esm_minus_ism_slope_sample": -0.002182733180081105,
+    "esm_minus_ism_constant_population_ref": 0.3628051824185222,
+    "note": "差曲线的微小残余斜率来自有限样本MC误差（总体层面严格为常数0.5E[|score|^2]）"
+  },
+  "步骤3_MLP等价性": {
+    "N_EPOCHS": 200,
+    "BATCH_SIZE": 256,
+    "LR": 0.001,
+    "HIDDEN_DIM": 64,
+    "protocol": "ESM/ISM 同初始化、同 minibatch 顺序（训练前均重置 seed=42）；报告 final 与 best",
+    "esm_val_final": 5.0742513849399984e-05,
+    "ism_val_final": 0.009579848498106003,
+    "esm_val_best": 2.221061549789738e-06,
+    "esm_best_epoch": 157,
+    "ism_val_best": 0.001544010709039867,
+    "ism_best_epoch": 29,
+    "esm_grid_loss_uniform": 0.000277164966002741,
+    "ism_grid_loss_uniform": 0.05850744780824975,
+    "esm_grid_loss_p_weighted": 1.5283238094370778e-06,
+    "ism_grid_loss_p_weighted": 0.0013711468318867999,
+    "esm_train_loss_final": 5.78234970970974e-06,
+    "ism_train_loss_final": -0.3644774226070959,
+    "note": "val 为验证集采样口径(≈p(x)加权)；uniform 网格额外惩罚谷底/尾部低密度区；ISM 原始损失含迹项可为负，与 ESM 不可比，故验证统一用 ESM 口径"
+  },
+  "步骤4_等价性证据链": {
+    "epochs_per_config": 100,
+    "configs": [
+      {
+        "name": "Shallow MLP (1->8->1)",
+        "hidden": 8,
+        "n_hidden": 1,
+        "esm_loss_uniform": 0.011406924077002984,
+        "ism_loss_uniform": 0.1001436930126103,
+        "esm_ism_rmse_uniform": 0.31074607372283936,
+        "esm_loss_p_weighted": 0.0001230261265093377,
+        "ism_loss_p_weighted": 0.0025691540174429374,
+        "esm_ism_rmse_p_weighted": 0.06825501425004135
+      },
+      {
+        "name": "Medium MLP (1->32->1)",
+        "hidden": 32,
+        "n_hidden": 1,
+        "esm_loss_uniform": 0.0010891455532056075,
+        "ism_loss_uniform": 0.021600352115313824,
+        "esm_ism_rmse_uniform": 0.1714886873960495,
+        "esm_loss_p_weighted": 8.231722581187118e-06,
+        "ism_loss_p_weighted": 0.0004944919088205406,
+        "esm_ism_rmse_p_weighted": 0.03044573380833711
+      },
+      {
+        "name": "Deep MLP (1->64->64->1)",
+        "hidden": 64,
+        "n_hidden": 2,
+        "esm_loss_uniform": 0.0004982235919486312,
+        "ism_loss_uniform": 0.0651479266032415,
+        "esm_ism_rmse_uniform": 0.3348153233528137,
+        "esm_loss_p_weighted": 2.567228665199533e-06,
+        "ism_loss_p_weighted": 0.005267601245781629,
+        "esm_ism_rmse_p_weighted": 0.10269916004070297
+      }
+    ],
+    "diff_monotone_decreasing_uniform": false,
+    "diff_monotone_decreasing_p_weighted": false,
+    "jacobian_cost_table": {
+      "dims": [
+        1,
+        2,
+        5,
+        10,
+        50,
+        100,
+        256,
+        512,
+        1024,
+        4096,
+        16384,
+        65536
+      ],
+      "full_jacobian_ops": [
+        1,
+        4,
+        25,
+        100,
+        2500,
+        10000,
+        65536,
+        262144,
+        1048576,
+        16777216,
+        268435456,
+        4294967296
+      ]
+    }
+  }
+}

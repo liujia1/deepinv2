@@ -643,10 +643,11 @@ plt.close()
 fig, axes = plt.subplots(1, 2, figsize=(15, 5.2))
 axes[0].axhline(mc_floor_ks, color='gray', ls='--', lw=1.5,
                 label=f'MC floor (single-sample KS) ≈ {mc_floor_ks:.4f}')
-axes[0].errorbar(step_counts, vp_errors, yerr=[0.0] * len(step_counts), fmt='bo-',
-                 lw=2, markersize=8, label='单样本 KS vs 解析 $p_0$')
-axes[0].plot(step_counts, vp_errors_2samp, 'rs--', lw=1.5, markersize=6, alpha=0.8,
-             label='旧指标：两样本 KS vs $x_0$ 样本')
+axes[0].errorbar(step_counts, vp_errors, yerr=vp_errors_ks_std, fmt='bo-',
+                 lw=2, markersize=8, capsize=4, label='单样本 KS vs 解析 $p_0$')
+axes[0].errorbar(step_counts, vp_errors_2samp, yerr=vp_errors_2samp_std, fmt='rs--',
+                 lw=1.5, markersize=6, alpha=0.8, capsize=3,
+                 label='旧指标：两样本 KS vs $x_0$ 样本')
 axes[0].axhline(mc_floor_2samp, color='salmon', ls=':', lw=1.5,
                 label=f'MC floor (two-sample KS) ≈ {mc_floor_2samp:.4f}')
 axes[0].set_xlabel('采样步数')
@@ -659,8 +660,9 @@ axes[0].grid(alpha=0.3, which='both')
 
 axes[1].axhline(mc_floor_w2, color='gray', ls='--', lw=1.5,
                 label=f'MC floor ($W_2$) ≈ {mc_floor_w2:.4f}')
-axes[1].plot(step_counts, vp_errors_w2, 'g^-', lw=2, markersize=8,
-             label=' $W_2$ vs 解析 $p_0$ 分位数')
+axes[1].errorbar(step_counts, vp_errors_w2, yerr=vp_errors_w2_std, fmt='g^-',
+                 lw=2, markersize=8, capsize=4,
+                 label=' $W_2$ vs 解析 $p_0$ 分位数')
 axes[1].set_xlabel('采样步数')
 axes[1].set_ylabel('$W_2$ 距离（越小越好）')
 axes[1].set_title('$W_2$：比 KS 更平滑的辅助度量')
@@ -704,8 +706,12 @@ summary = dict(
     step4_steps_vs_quality=dict(N_eval=N_eval, N_seeds=N_seeds,
                                 step_counts=step_counts,
                                 ks_single=vp_errors,
+                                ks_single_std=vp_errors_ks_std,
                                 w2=vp_errors_w2,
+                                w2_std=vp_errors_w2_std,
                                 ks_two_sample_legacy=vp_errors_2samp,
+                                ks_two_sample_legacy_std=vp_errors_2samp_std,
+                                note='std 为 N_seeds 个独立种子的跨种子标准差（图中误差棒）',
                                 mc_floor_ks=mc_floor_ks,
                                 mc_floor_w2=mc_floor_w2,
                                 mc_floor_2samp=mc_floor_2samp),

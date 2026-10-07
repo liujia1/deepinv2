@@ -170,12 +170,12 @@ if not (_has_gpu and _has_sampling_tools and _has_model):
 
 
 # ============================================================
-# 步骤1：显式先验（TV）vs 隐式先验（学习去噪器）对比
+# 步骤1：观测模型与先验准备
 # 对应5.4节第5小节"结构对偶"
 # ============================================================
 if _has_gpu and _has_sampling_tools and _has_model:
     print("\n" + "=" * 60)
-    print("步骤1：显式先验（TV）vs 隐式先验（学习去噪器）对比")
+    print("步骤1：观测模型与先验准备")
     print("=" * 60)
 
     # 加载图像
@@ -269,12 +269,12 @@ if _has_gpu and _has_sampling_tools and _has_model:
             # 似然梯度
             grad_likelihood = gradf(X, A, AT)
 
-            # 先验得分（Tweedie替换）
+            # 先验得分（Tweedie替换）：$s_\varepsilon(x)=\nabla\log p_\varepsilon(x)=(D_\varepsilon(x)-x)/\varepsilon$
             score_prior = (denoiser(X) - X) / eps  # $\nabla\log p_\varepsilon(x)$
 
-            # ULA更新
+            # ULA更新：漂移=∇log p(x|y)=-∇f+s，故 X - delta*(∇f - s)（与TV-ULA的 ∇f+∇R 同构）
             noise = torch.randn_like(X) * math.sqrt(2 * delta)
-            X = X - delta * (grad_likelihood + score_prior) + noise
+            X = X - delta * (grad_likelihood - score_prior) + noise
 
             # 投影到[0,1]
             X = projbox(X)
@@ -293,9 +293,9 @@ if _has_gpu and _has_sampling_tools and _has_model:
 
 
     # ============================================================
-    # 运行对比实验
+    # 步骤2：TV-ULA 与 PnP-ULA 采样
     # ============================================================
-    niter = 500    # 演示模式，结果仅供参考；正式实验请使用 niter=2000-5000
+    niter = 2000   # 正式运行值；若需快速预览可临时调小（如 500）
     lambda_tv = 0.05
 
     # PnP-ULA步长
@@ -317,10 +317,10 @@ if _has_gpu and _has_sampling_tools and _has_model:
 
 
     # ============================================================
-    # 步骤2：显式先验（TV）vs 隐式先验（学习去噪器）可视化对比
+    # 步骤3：显式先验（TV）vs 隐式先验（学习去噪器）可视化对比
     # ============================================================
     print("\n" + "=" * 60)
-    print("步骤2：显式先验（TV）vs 隐式先验（学习去噪器）对比")
+    print("步骤3：显式先验（TV）vs 隐式先验（学习去噪器）可视化对比")
     print("=" * 60)
 
     fig, axes = plt.subplots(3, 4, figsize=(20, 15))
@@ -368,7 +368,7 @@ if _has_gpu and _has_sampling_tools and _has_model:
 
     fig.suptitle('实验5.4-2 显式先验(TV) vs 隐式先验(学习去噪器)', fontsize=14, y=1.01)
     plt.tight_layout()
-    plt.savefig(os.path.join(SAVE_DIR, '步骤2_显式vs隐式先验.png'), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(SAVE_DIR, '步骤3_显式vs隐式先验.png'), dpi=150, bbox_inches='tight')
     plt.close()
 
     # 对比统计
@@ -382,11 +382,11 @@ if _has_gpu and _has_sampling_tools and _has_model:
 
 
     # ============================================================
-    # 步骤3：近端算子 vs 去噪器的结构对偶性展示
+    # 步骤4：近端算子 vs 去噪器的结构对偶性展示
     # 对应5.4节第5小节"结构对偶"和第6小节"温度参数"
     # ============================================================
     print("\n" + "=" * 60)
-    print("步骤3：近端算子 vs 去噪器的结构对偶性")
+    print("步骤4：近端算子 vs 去噪器的结构对偶性")
     print("=" * 60)
 
     # 在含噪图像上分别应用TV近端算子和去噪器
@@ -414,8 +414,8 @@ if _has_gpu and _has_sampling_tools and _has_model:
     axes[0][2].axis('off')
 
     # 残差对比：y - prox vs y - denoiser
-    residual_prox = y - prox_result  # $\lambda\cdot\nabla R_\lambda(y)$ (Moreau包络梯度方向)
-    residual_denoise = y - denoise_result  # $\varepsilon\cdot\nabla\log p_\varepsilon(y)$ (Tweedie得分方向)
+    residual_prox = y - prox_result  # $=\lambda\cdot\nabla R_\lambda(y)$ (Moreau包络梯度方向)
+    residual_denoise = y - denoise_result  # $=\varepsilon\cdot\nabla\bar{R}_\varepsilon(y)=-\varepsilon\cdot\nabla\log p_\varepsilon(y)$ (软下卷积梯度方向)
 
     axes[1][0].axis('off')
 
@@ -424,12 +424,12 @@ if _has_gpu and _has_sampling_tools and _has_model:
     axes[1][1].axis('off')
 
     axes[1][2].imshow(residual_denoise.cpu().numpy(), cmap='RdBu_r')
-    axes[1][2].set_title(r'$y - D_\varepsilon(y)$' + '\n' + r'$= \varepsilon\cdot\nabla\log p_\varepsilon(y)$ (Tweedie得分)')
+    axes[1][2].set_title(r'$y - D_\varepsilon(y)$' + '\n' + r'$= \varepsilon\cdot\nabla\bar{R}_\varepsilon(y)$ (软下卷积梯度)')
     axes[1][2].axis('off')
 
     fig.suptitle('近端算子 vs 去噪器：结构对偶性', fontsize=14, y=1.01)
     plt.tight_layout()
-    plt.savefig(os.path.join(SAVE_DIR, '步骤3_结构对偶性.png'), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(SAVE_DIR, '步骤4_结构对偶性.png'), dpi=150, bbox_inches='tight')
     plt.close()
 
 
@@ -479,7 +479,13 @@ if _has_gpu and _has_sampling_tools and _has_model:
     print(r"   MMSE（PnP-ULA）：输出后验均值，对应$T=1$（满温度）")
     print(r"   温度参数$T$控制从众数到均值的过渡")
     print("\n4. 性能对比：")
-    print(r"   PnP-ULA的PSNR显著高于TV-ULA，验证学习先验的表达能力优势")
+    _psnr_tv = float(PSNR(x_tv_mean, x))
+    _psnr_pnp = float(PSNR(x_pnp_mean, x))
+    if _psnr_pnp > _psnr_tv:
+        print(rf"   本例 PnP-ULA({_psnr_pnp:.2f} dB) > TV-ULA({_psnr_tv:.2f} dB)，学习先验表达更强")
+    else:
+        print(rf"   本例 TV-ULA({_psnr_tv:.2f} dB) ≥ PnP-ULA({_psnr_pnp:.2f} dB)；"
+              r"   去噪器按固定噪声水平(5/255)训练，与当前'去模糊+低噪'迭代点存在噪声水平/任务错配")
 
 
 # ===== 保存数值结果 =====
