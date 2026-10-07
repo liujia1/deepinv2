@@ -185,13 +185,19 @@ print("="*60)
 
 print("\n理论背景：")
 print("  Anderson (1982) 逆时随机微分方程定理指出：")
-print("  对于正向SDE dx = f(x,t)dt + g(t)dW")
-print("  其逆向SDE dx = [f(x,t) - g(t)²∇log p_t(x)]dτ + g(t)dW̃")
-print("  在相同的边际分布p_t(x)上等价。")
+print("  正向SDE:  dx = f(x,t)dt + g(t)dW,   t 由 0→1")
+print("  逆向SDE有两种等价写法（下式中 t 仍表示当前噪声水平）：")
+print("    (a) t-约定（沿物理时间反向，dt<0）：")
+print("        dx = [ f(x,t) - g(t)²∇log p_t(x)]dt + g(t)dW̃")
+print("    (b) τ-约定（令 τ=1-t，则 dτ=-dt>0；本实验采用）：")
+print("        dx = [-f(x,t) + g(t)²∇log p_t(x)]dτ + g(t)dW̃")
+print("  对VP-SDE（f(x,t)=-β(t)/2·x, g(t)²=β(t)），τ-约定下逆向drift为：")
+print("        drift_rev(x,t) = -f + g²·∇log p_t = β(t)/2·x + β(t)·∇log p_t(x)")
+print("  逆向SDE与正向SDE在相同的边际分布p_t(x)上等价。")
 print("\n  验证方法：检验p_t(x)同时满足正向和逆向的Fokker-Planck方程")
-print("  正向VP-SDE FP方程：")
+print("  正向VP-SDE FP方程（对物理时间 t 求导）：")
 print("    ∂p_t/∂t = β(t)/2 · ∇·(x·p_t) + β(t)/2 · ∇²p_t")
-print("  逆向VP-SDE FP方程（τ=1-t）：")
+print("  逆向VP-SDE FP方程（对逆时间 τ=1-t 求导）：")
 print("    ∂p_t/∂τ = -β(t)/2 · ∇·(x·p_t) - β(t)/2 · ∇²p_t")
 print("  （注意：逆向FP中两项符号均为负，因为时间反向后所有流方向反转）")
 print("  若p_t(x)同时满足两个FP方程，则正向与逆向SDE边际分布等价")
@@ -344,7 +350,10 @@ print("    rms_rel_err < 0.01、rel_max_err < 0.015（t=0.9 边界略高，")
 print("    因为此时分布接近平稳态、LHS 整体量级变小，相对误差被放大；")
 print("    但 max|err| 绝对量级仍 < 10⁻³），p_t(x) 在数值精度内")
 print("    同时满足正向与逆向Fokker-Planck方程。")
-print("  ✓ 这证明正向SDE与逆向SDE产生相同的边际分布p_t(x)")
+print("  ✓ 这证明解析边际 p_t(x) 确实求解了 Fokker-Planck 方程")
+print("  ✓ 注意：逆向FP算子恰为正向FP算子的相反数（逆向drift由Anderson公式构造），")
+print("    故本步骤的『正向/逆向』两列在数值上恒等，本质是同一次一致性检验；")
+print("    对逆方向的独立数值验证由步骤3（解析score驱动的逆向采样）给出")
 print("  ✓ 这是Anderson定理的解析验证，不依赖采样")
 
 
@@ -359,7 +368,7 @@ print("步骤2：逆向Drift向量场可视化")
 print("="*60)
 
 print("\n理论基础：")
-print("  逆向VP-SDE的drift项：")
+print("  逆向VP-SDE（τ-约定，与步骤1公式(b)一致）的drift项：")
 print("    drift_rev(x,t) = β(t)/2·x + β(t)·∇log p_t(x)")
 print("  第二项 β(t)·∇log p_t(x) 指向高概率密度区域")
 print("  这正是逆向SDE能够从噪声生成数据的几何解释")
@@ -435,7 +444,7 @@ print(f"\n图像已保存: {save_path}")
 print("\n观察要点：")
 print("  1. 箭头方向指向高密度区域（蓝色区域中心）")
 print("  2. 在低密度区域，drift更强（箭头更长）")
-print("  3. t接近1时（纯噪声），drift方向混乱；t接近0时，drift清晰指向各模态中心")
+print("  3. t接近1时（纯噪声），边际p_t→N(0,I)，score→-x，drift退化为干净的径向线性收缩场 -β/2·x（处处指向原点，并非随机）；t接近0时，drift清晰指向各模态中心")
 print("  4. 这解释了逆向SDE如何将随机噪声推回数据分布")
 
 
@@ -462,7 +471,9 @@ x_particles = np.random.randn(N_particles)
 snapshots = {1.0: x_particles.copy()}
 snapshot_times = [0.8, 0.6, 0.4, 0.2, 0.0]
 
-# 逆向VP-SDE采样
+# 逆向VP-SDE采样（τ-约定）：
+#   循环变量 t 为当前噪声水平（1→0），每步的正增量 dt 实际是 Δτ=1/N_steps；
+#   在噪声水平 t 处评估 drift_rev = β(t)/2·x + β(t)·score。
 for i in range(N_steps):
     t = 1.0 - i * dt
     beta_t = vp_beta(t)
@@ -470,7 +481,7 @@ for i in range(N_steps):
     # 计算score
     score = vp_gmm_1d_score(x_particles, t)
     
-    # Euler-Maruyama更新
+    # Euler-Maruyama更新：x ← x + drift_rev·Δτ + √(β(t)·Δτ)·ξ, ξ~N(0,I)
     x_particles = x_particles + beta_t * dt * (0.5 * x_particles + score) + \
                   np.sqrt(beta_t * dt) * np.random.randn(N_particles)
     

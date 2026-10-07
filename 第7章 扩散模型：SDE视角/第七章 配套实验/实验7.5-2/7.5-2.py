@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-实验7.4-1 概率流ODE与DDIM加速采样
+实验7.5-2 概率流ODE与DDIM加速采样
 对应章节：7.4（概率流ODE：随机采样的确定性等价）、7.5（数值离散化）
 
 说明：
@@ -19,7 +19,7 @@
   - 7.4节PF-ODE推导、DDIM=PF-ODE离散化
   - 02-ddpm.ipynb的DDIM采样代码
   - ★ 原创设计：温度参数η在DDPM↔DDIM间连续插值
-  - ★ 原创设计：Fokker-Planck方程验证PF-ODE与SDE边际分布等价
+  - （原计划在本实验实现的Fokker-Planck边际等价验证，已迁移至实验7.4-1完成）
 
 实验内容：
   步骤1：PF-ODE采样——确定性等价
@@ -63,7 +63,7 @@ if _IN_COLAB:
     if not os.path.isdir(_gdrive):
         print("正在挂载 Google Drive...")
         drive.mount('/content/drive')
-    SAVE_DIR = os.path.join(_gdrive, '实验7.4-1')
+    SAVE_DIR = os.path.join(_gdrive, '实验7.5-2')
     _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 else:
     try:
@@ -358,41 +358,45 @@ print("步骤4：DDPM vs DDIM采样质量与速度对比")
 print("=" * 60)
 
 import time
+from scipy.special import erf
+
+def target_cdf(x):
+    """解析目标分布CDF：0.3·N(-2,1) + 0.7·N(1,1)"""
+    z1 = 0.5 * (1 + erf((x + 2) / np.sqrt(2)))
+    z2 = 0.5 * (1 + erf((x - 1) / np.sqrt(2)))
+    return 0.3 * z1 + 0.7 * z2
 
 step_counts = [10, 20, 50, 100, 200, 500]
+n_seeds = 10
 results = {'DDPM': [], 'DDIM': [], 'DDPM_time': [], 'DDIM_time': []}
 
+# 指标口径说明：3000粒子的两样本KS噪声底约0.02（真样本 vs 参考样本也有≈0.024），
+# 单种子排序不可靠。此处改为对解析目标CDF做一样本KS，并取10个种子平均
+# （与7.5-1步骤4的多种子口径一致）。同一(n_steps, seed)下DDPM与DDIM共享seed
+# → 相同初始噪声x_T，控制变量公平对比。
 for n_steps in step_counts:
-    # DDPM (η=1)
-    # 注：DDPM和DDIM使用相同的seed(42)和相同初始噪声，这是控制变量法
-    # 确保两者从相同的初始点出发，公平对比生成质量
-    np.random.seed(42)
-    t0 = time.time()
-    traj_ddpm = ddim_sample_vp(vp_score_analytic, 3000, n_steps, eta=1.0)
-    t_ddpm = time.time() - t0
+    ks_acc = {'DDPM': [], 'DDIM': []}
+    time_acc = {'DDPM': [], 'DDIM': []}
+    for seed in range(n_seeds):
+        for eta, name in [(1.0, 'DDPM'), (0.0, 'DDIM')]:
+            np.random.seed(seed * 1000 + n_steps)
+            t0 = time.time()
+            traj = ddim_sample_vp(vp_score_analytic, 3000, n_steps, eta=eta)
+            time_acc[name].append(time.time() - t0)
+            ks_acc[name].append(sp_stats.kstest(traj[-1], target_cdf).statistic)
 
-    # DDIM (η=0)
-    np.random.seed(42)  # 重置seed，确保与DDPM使用相同的初始噪声
-    t0 = time.time()
-    traj_ddim = ddim_sample_vp(vp_score_analytic, 3000, n_steps, eta=0.0)
-    t_ddim = time.time() - t0
+    ks_mean = {k: float(np.mean(v)) for k, v in ks_acc.items()}
+    t_mean = {k: float(np.mean(v)) for k, v in time_acc.items()}
+    results['DDPM'].append(ks_mean['DDPM'])
+    results['DDIM'].append(ks_mean['DDIM'])
+    results['DDPM_time'].append(t_mean['DDPM'])
+    results['DDIM_time'].append(t_mean['DDIM'])
 
-    try:
-        ks_ddpm, _ = sp_stats.ks_2samp(traj_ddpm[-1], x0_ref[:3000])
-        ks_ddim, _ = sp_stats.ks_2samp(traj_ddim[-1], x0_ref[:3000])
-    except:
-        ks_ddpm = abs(np.mean(traj_ddpm[-1]) - np.mean(x0_ref[:3000]))
-        ks_ddim = abs(np.mean(traj_ddim[-1]) - np.mean(x0_ref[:3000]))
+    print(f"  N={n_steps:4d}: DDPM KS={ks_mean['DDPM']:.4f} ({t_mean['DDPM']:.3f}s), "
+          f"DDIM KS={ks_mean['DDIM']:.4f} ({t_mean['DDIM']:.3f}s)  [10种子均值]")
 
-    results['DDPM'].append(ks_ddpm)
-    results['DDIM'].append(ks_ddim)
-    results['DDPM_time'].append(t_ddpm)
-    results['DDIM_time'].append(t_ddim)
-
-    print(f"  N={n_steps:4d}: DDPM KS={ks_ddpm:.4f} ({t_ddpm:.3f}s), DDIM KS={ks_ddim:.4f} ({t_ddim:.3f}s)")
-
-print(f"\n关键发现：")
-print(f"  1. DDIM在少步数时质量优于DDPM（ODE vs SDE离散化误差）")
+print(f"\n关键发现（10种子平均，对解析目标CDF的KS）：")
+print(f"  1. DDIM在各测试步数下质量均优于DDPM，少步数(10-20)优势最大（ODE vs SDE离散化误差）")
 print(f"  2. DDIM确定性：相同初始噪声→相同输出（可复现）")
 print(f"  3. DDIM可做语义插值：在潜空间插值→中间结果有意义")
 
@@ -433,7 +437,7 @@ for i, eta in enumerate(eta_values):
     axes[i].legend(fontsize=8)
     axes[i].grid(alpha=0.3)
 
-fig.suptitle('温度参数η：DDIM(η=0) ↔ DDPM(η=1) 连续插值', fontsize=13)
+fig.suptitle('温度参数η：DDIM(η=0) $\\leftrightarrow$ DDPM(η=1) 连续插值', fontsize=13)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤3_η插值.png'), dpi=150, bbox_inches='tight')
 plt.close()
@@ -444,7 +448,7 @@ fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 ax1.plot(step_counts, results['DDPM'], 'bo-', lw=2, markersize=8, label='DDPM (η=1)')
 ax1.plot(step_counts, results['DDIM'], 'gs-', lw=2, markersize=8, label='DDIM (η=0)')
 ax1.set_xlabel('采样步数')
-ax1.set_ylabel('KS统计量（越小越好）')
+ax1.set_ylabel('KS统计量（10种子均值，越小越好）')
 ax1.set_title('DDPM vs DDIM 采样质量')
 ax1.legend()
 ax1.grid(alpha=0.3)
@@ -483,7 +487,7 @@ print("注：带*的步数需求为文献中的典型经验值，本实验步骤
 # 实验总结
 # ============================================================
 print("\n" + "=" * 60)
-print("实验7.4-1 总结")
+print("实验7.5-2 总结")
 print("=" * 60)
 print("1. PF-ODE: dx/dt = f(x,t) - ½g(t)²∇log p_t(x)")
 print("   - 确定性ODE，与逆向SDE边际分布相同（Fokker-Planck保证）")
@@ -493,5 +497,5 @@ print("   - η=0时为确定性DDIM，η=1时退化为DDPM")
 print("3. 温度参数η在DDPM↔DDIM间连续插值")
 print("   - η↓: 更确定性、更少步数、更适合可控生成")
 print("   - η↑: 更随机、更多样性、但需要更多步数")
-print("4. 实践中：DDIM 50步 ≈ DDPM 1000步质量")
+print("4. 实践中（文献典型经验值，本实验最多测到500步）：DDIM 50步 ≈ DDPM 1000步质量")
 print("5. 高阶求解器（DPM-Solver等）进一步加速：20步即可")

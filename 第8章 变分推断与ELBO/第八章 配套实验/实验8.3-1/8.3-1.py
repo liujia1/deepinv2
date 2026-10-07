@@ -300,27 +300,26 @@ fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
 # 左图：真实后验 vs 平均场 q*(z)
 axes[0].fill_between(z_grid, posterior_pdf, alpha=0.25, color='blue',
-                     label=r'True posterior $p(z|x)$ (bimodal)')
+                     label=r'真实后验 $p(z|x)$（双峰）')
 axes[0].plot(z_grid, posterior_pdf, 'b-', lw=2)
 axes[0].plot(z_grid, mf_pdf_left, 'g-', lw=2,
-             label=rf'Mean-field $q^*(z)=\mathcal{{N}}({mf["m"]:.2f},{mf["s"]:.2f}^2)$, '
-                   rf'lock left, gap={mf["gap"]:.3f}')
+             label=rf'平均场 $q^*(z)=\mathcal{{N}}({mf["m"]:.2f},{mf["s"]:.2f}^2)$，'
+                   rf'锁定左峰，间隙={mf["gap"]:.3f}')
 axes[0].plot(z_grid, mf_pdf_right, 'g--', lw=1.5, alpha=0.7,
-             label=r'mirror solution (lock right, same ELBO)')
-axes[0].plot(z_grid, prior_pdf, 'k:', lw=1, alpha=0.5, label=r'Prior $p(z)$')
+             label=r'镜像等优解（锁定右峰，ELBO 相同）')
+axes[0].plot(z_grid, prior_pdf, 'k:', lw=1, alpha=0.5, label=r'先验 $p(z)$')
 axes[0].set_xlabel(r'$z$')
-axes[0].set_ylabel(r'density')
-axes[0].set_title('Mean-field CAVI vs true posterior:\n'
-                  'independence gap forces mode-seeking')
+axes[0].set_ylabel(r'概率密度')
+axes[0].set_title('平均场 CAVI vs 真实后验：\n独立性间隙导致锁单峰（mode-seeking）')
 axes[0].legend(fontsize=9)
 axes[0].grid(alpha=0.3)
 
 # 右图：三种初始化的 ELBO 收敛轨迹
 colors = {'symmetric': 'gray', 'perturb_left': 'green', 'biased_right': 'orange'}
 labels = {
-    'symmetric': r'symmetric init: unstable stationary point, gap=1.000',
-    'perturb_left': r'tiny perturbation $\to$ slowly break to left peak',
-    'biased_right': r'strong bias $\to$ fast converge to right peak',
+    'symmetric': r'对称初始化：不稳定驻点，间隙=1.000',
+    'perturb_left': r'微小扰动 $\to$ 缓慢破缺滑向左峰',
+    'biased_right': r'强偏置 $\to$ 快速收敛到右峰',
 }
 for key, _, _ in run_specs:
     h = np.array(cavi_runs[key]["history"])
@@ -333,10 +332,10 @@ for key, _, _ in run_specs:
         axes[1].plot(np.arange(len(h)), h, '-o', markersize=3.5, lw=1.8,
                      color=colors[key], label=labels[key])
 axes[1].axhline(log_px, color='r', linestyle='--', lw=2,
-                label=rf'$\log p(x)={log_px:.4f}$ (upper bound)')
-axes[1].set_xlabel(r'CAVI iteration')
+                label=rf'$\log p(x)={log_px:.4f}$（ELBO 上界）')
+axes[1].set_xlabel(r'CAVI 迭代轮数')
 axes[1].set_ylabel(r'ELBO')
-axes[1].set_title('CAVI convergence: monotone ELBO,\nsymmetry breaking and local optima')
+axes[1].set_title('CAVI 收敛：ELBO 逐轮非降、\n对称破缺与局部最优')
 axes[1].legend(fontsize=9)
 axes[1].grid(alpha=0.3)
 
@@ -449,28 +448,28 @@ fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 gauss_pdf = np.exp(log_gauss(z_grid, g_mu, g_sigma))
 axes[0].fill_between(z_grid, posterior_pdf, alpha=0.2, color='blue')
 axes[0].plot(z_grid, posterior_pdf, 'b-', lw=2,
-             label=r'True posterior $p(z|x)$ = mixture-family $q^*$ (gap=0)')
+             label=r'真实后验 $p(z|x)$ = 混合族最优解 $q^*$（间隙=0）')
 axes[0].plot(z_grid, gauss_pdf, 'r--', lw=2,
-             label=rf'Best single Gaussian $\mathcal{{N}}({g_mu:.2f},{g_sigma:.2f}^2)$, '
-                   rf'gap={g_gap:.3f}')
+             label=rf'最优单高斯 $\mathcal{{N}}({g_mu:.2f},{g_sigma:.2f}^2)$，'
+                   rf'间隙={g_gap:.3f}')
 axes[0].plot(z_grid, mf_pdf_left, 'g:', lw=2,
-             label=rf'Mean-field CAVI $q(z)$, gap={mf["gap"]:.3f}')
+             label=rf'平均场 CAVI $q(z)$，间隙={mf["gap"]:.3f}')
 axes[0].set_xlabel(r'$z$')
-axes[0].set_ylabel(r'density')
-axes[0].set_title('Two distinct sources of the variational gap')
+axes[0].set_ylabel(r'概率密度')
+axes[0].set_title('变分间隙的两种不同来源')
 axes[0].legend(fontsize=9)
 axes[0].grid(alpha=0.3)
 
-bar_labels = ['Mean-field\n(saddle, unstable)', 'Mean-field CAVI\n(broken symmetry)',
-              'Single Gaussian\n(free family)', '2-comp. Mixture\n(contains truth)']
+bar_labels = ['平均场\n（鞍点，不稳定）', '平均场 CAVI\n（对称破缺）',
+              '单高斯\n（自由参数族）', '2分量混合\n（包含真实后验）']
 bar_gaps = [mf_sym['gap'], mf['gap'], g_gap, 0.0]
 bar_colors = ['gray', 'green', 'red', 'blue']
 bars = axes[1].bar(bar_labels, bar_gaps, color=bar_colors, alpha=0.75)
 for b, v in zip(bars, bar_gaps):
     axes[1].text(b.get_x() + b.get_width() / 2, v + 0.015, f'{v:.4f}',
                  ha='center', fontsize=10)
-axes[1].set_ylabel(r'gap $= \log p(x) - \mathrm{ELBO} = \mathrm{KL}(q\|p(\cdot|x))$')
-axes[1].set_title('Gap decomposition: independence structure\nvs family capacity')
+axes[1].set_ylabel(r'间隙 $= \log p(x) - \mathrm{ELBO} = \mathrm{KL}(q\|p(\cdot|x))$')
+axes[1].set_title('间隙分解：独立性结构\nvs 族容量')
 axes[1].set_ylim(0, 1.15)
 axes[1].grid(alpha=0.3, axis='y')
 

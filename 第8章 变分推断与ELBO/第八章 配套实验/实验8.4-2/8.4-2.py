@@ -287,7 +287,7 @@ for sigma_q_fixed in sigma_range:
 
 axes[0].set_xlabel(r'$\mu_q$')
 axes[0].set_ylabel(r'$\mathbb{E}_q[\log p(x|z)]$')
-axes[0].set_title('Reconstruction term vs $q$ mean')
+axes[0].set_title(r'重建项随 $q$ 均值的变化')
 axes[0].legend()
 axes[0].grid(alpha=0.3)
 
@@ -303,14 +303,14 @@ for mu_q in mu_range:
     kl_terms.append(kl)
     elbos_scan.append(recon - kl)
 
-axes[1].plot(mu_range, elbos_scan, 'b-', lw=2, label=r'$\mathrm{ELBO} = \mathrm{Recon} - \mathrm{KL}$')
-axes[1].plot(mu_range, reconstruction_terms, 'r--', label=r'Reconstruction $\mathbb{E}_q[\log p(x|z)]$')
-axes[1].plot(mu_range, [-k for k in kl_terms], 'g--', label=r'$-\mathrm{KL}(q\|p)$')
+axes[1].plot(mu_range, elbos_scan, 'b-', lw=2, label='ELBO = 重建项 $-$ KL项')
+axes[1].plot(mu_range, reconstruction_terms, 'r--', label=r'重建项 $\mathbb{E}_q[\log p(x|z)]$')
+axes[1].plot(mu_range, [-k for k in kl_terms], 'g--', label=r'$-\mathrm{KL}(q\|p)$（正则项）')
 axes[1].axhline(y=log_px, color='k', linestyle=':', lw=1, label=r'$\log p(x) = ' + f'{log_px:.2f}$')
 
 axes[1].set_xlabel(r'$\mu_q$')
-axes[1].set_ylabel(r'Value')
-axes[1].set_title(r'ELBO decomposition ($\sigma_q=1.0$)')
+axes[1].set_ylabel('数值')
+axes[1].set_title(r'ELBO分解（$\sigma_q=1.0$）')
 axes[1].legend()
 axes[1].grid(alpha=0.3)
 

@@ -413,16 +413,16 @@ ax1 = plt.subplot(2, 2, 1)
 z_grid = np.linspace(-5, 5, 1000)
 true_pdf = true_posterior_pdf(z_grid)
 
-ax1.plot(z_grid, true_pdf, 'k-', lw=2, label='True posterior $p(z|x)$')
-ax1.hist(mcmc_samples, bins=50, density=True, alpha=0.5, color='blue', label='MCMC samples')
-ax1.plot(z_grid, 1/(np.sqrt(2*np.pi)*sigma_laplace) * np.exp(-0.5*((z_grid-z_map)/sigma_laplace)**2), 
-        'r--', lw=2, label='Laplace approx')
-ax1.plot(z_grid, 1/(np.sqrt(2*np.pi)*sigma_vi) * np.exp(-0.5*((z_grid-mu_vi)/sigma_vi)**2), 
-        'g--', lw=2, label='VI approx')
-ax1.axvline(z_map_estimate, color='purple', linestyle=':', lw=2, label='MAP estimate')
+ax1.plot(z_grid, true_pdf, 'k-', lw=2, label='真实后验 $p(z|x)$')
+ax1.hist(mcmc_samples, bins=50, density=True, alpha=0.5, color='blue', label='MCMC 样本')
+ax1.plot(z_grid, 1/(np.sqrt(2*np.pi)*sigma_laplace) * np.exp(-0.5*((z_grid-z_map)/sigma_laplace)**2),
+        'r--', lw=2, label='Laplace 近似')
+ax1.plot(z_grid, 1/(np.sqrt(2*np.pi)*sigma_vi) * np.exp(-0.5*((z_grid-mu_vi)/sigma_vi)**2),
+        'g--', lw=2, label='变分推断（VI）近似')
+ax1.axvline(z_map_estimate, color='purple', linestyle=':', lw=2, label='MAP 估计')
 ax1.set_xlabel('$z$')
 ax1.set_ylabel('$p(z|x)$')
-ax1.set_title('Posterior and Approximations')
+ax1.set_title('后验分布及其各类近似')
 ax1.legend()
 ax1.grid(alpha=0.3)
 
@@ -433,14 +433,15 @@ times = [t_mcmc, t_laplace, t_map, t_vi]
 colors = ['blue', 'red', 'purple', 'green']
 
 ax2.bar(strategies, times, color=colors, alpha=0.7)
-ax2.set_ylabel('Computation Time (seconds)')
-ax2.set_title('Computation Cost Comparison')
+ax2.set_ylabel('计算时间（秒）')
+ax2.set_title('计算代价对比')
 ax2.set_yscale('log')
+ax2.set_ylim(top=max(times) * 4)  # 对数轴顶部留白，避免柱顶数值标签出界
 ax2.grid(alpha=0.3, axis='y')
 
 # 添加数值标签
 for i, (strategy, t) in enumerate(zip(strategies, times)):
-    ax2.text(i, t * 1.2, f'{t:.4f}s', ha='center', va='bottom', fontsize=9)
+    ax2.text(i, t * 1.2, f'{t:.4f} 秒', ha='center', va='bottom', fontsize=9)
 
 # 子图3：近似质量对比（KL散度）
 ax3 = plt.subplot(2, 2, 3)
@@ -449,8 +450,8 @@ kl_strategies = ['MCMC', 'Laplace', 'VI']
 kl_colors = ['blue', 'red', 'green']
 
 bars = ax3.bar(kl_strategies, kl_values, color=kl_colors, alpha=0.7)
-ax3.set_ylabel('KL Divergence $KL(q \| p(z|x))$')
-ax3.set_title('Approximation Quality (lower is better)')
+ax3.set_ylabel('KL 散度 $KL(q \\| p(z|x))$')
+ax3.set_title('近似质量对比（数值越小越好）')
 ax3.grid(alpha=0.3, axis='y')
 
 # 添加数值标签
@@ -466,16 +467,16 @@ for i, strategy in enumerate(['MCMC', 'Laplace', 'VI']):
     ax4.annotate(strategy, (kl_times[i], [kl_mcmc, kl_laplace, kl_vi][i]), 
                 textcoords="offset points", xytext=(10, 5), fontsize=10)
 
-ax4.set_xlabel('Computation Time (seconds)')
-ax4.set_ylabel('KL Divergence (lower is better)')
-ax4.set_title('Trade-off: Speed vs Accuracy')
+ax4.set_xlabel('计算时间（秒）')
+ax4.set_ylabel('KL 散度（数值越小越好）')
+ax4.set_title('权衡：速度 vs 精度')
 ax4.set_xscale('log')
 ax4.grid(alpha=0.3)
 
 # 添加说明文字
 ax4.text(0.02, 0.02,
-        'Lower-left: Fast + Accurate (Ideal)\n'
-        'Upper-right: Slow + Inaccurate (Worst)',
+        '左下角：快且准（理想）\n'
+        '右上角：慢且不准（最差）',
         transform=ax4.transAxes, fontsize=9,
         verticalalignment='bottom',
         bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))

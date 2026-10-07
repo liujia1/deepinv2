@@ -83,7 +83,7 @@ DIM = 2
 
 def p0_pdf(x):
     y = np.zeros(x.shape[0])
-    for i in range(2):
+    for i in range(len(W)):
         d = x - MU[i]
         y += W[i] * np.exp(-0.5 * np.sum(d * d, axis=-1) / (SIG ** 2)) \
              / ((2 * np.pi * SIG ** 2) ** (DIM / 2.0))
@@ -306,7 +306,7 @@ def step1():
     ax.set_xticks(tier)
     ax.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
     ax.set_xlabel('采样步数 N（NFE）')
-    ax.set_ylabel('负对数似然 -log p0(x̂)（越低越好）')
+    ax.set_ylabel('负对数似然 $-\\log p_0(\\hat{x})$（越低越好）')
     ax.set_title('高阶指数积分器：用更少的步数逼近高步数质量')
     ax.legend()
     ax.grid(alpha=0.3)
@@ -329,8 +329,8 @@ def step2(xT):
     t_grid = t_grid[1:]                              # 去掉近 0 端
     n_pairs = 20000
     idx = np.random.randint(0, len(t_grid) - 1, size=n_pairs)
-    t1 = t_grid[idx]                                 # 较大时间(噪声侧)
-    t2 = t_grid[idx + 1]                             # 较小时间(数据侧)
+    t1 = t_grid[idx]                                 # 较小时间(数据侧, 较干净; 老师输入)
+    t2 = t_grid[idx + 1]                             # 较大时间(噪声侧; 学生输入)
     x0 = sample_p0(n_pairs)
     ab1 = alpha_bar(t1)
     eps = np.random.randn(n_pairs, DIM)
@@ -341,14 +341,14 @@ def step2(xT):
     x_t2 = x_t1 + vel * (t2 - t1)[:, None]
 
     # ---- 训练极小 MLP (自一致性 + EMA 停梯度) ----
-    model = TinyMLP(h=64, seed=1)
-    model_ema = TinyMLP(h=64, seed=1)
+    model = TinyMLP(h=128, seed=1)
+    model_ema = TinyMLP(h=128, seed=1)
     def copy_to(src, dst):
         dst.W1[:], dst.b1[:] = src.W1.copy(), src.b1.copy()
         dst.W2[:], dst.b2[:] = src.W2.copy(), src.b2.copy()
     copy_to(model, model_ema)
 
-    lr, batch, iters = 1e-2, 512, 2500
+    lr, batch, iters = 1e-2, 512, 15000
     ema_decay = 0.999
     mW1 = np.zeros_like(model.W1); vW1 = np.zeros_like(model.W1)
     mb1 = np.zeros_like(model.b1); vb1 = np.zeros_like(model.b1)
@@ -380,7 +380,7 @@ def step2(xT):
         for w, wema in [(model.W1, model_ema.W1), (model.b1, model_ema.b1),
                         (model.W2, model_ema.W2), (model.b2, model_ema.b2)]:
             wema[:] = ema_decay * wema + (1 - ema_decay) * w
-        if it % 500 == 0:
+        if it % 3000 == 0:
             print("  [CD %5d/%d] loss=%.5f" % (it, iters, loss))
 
     # ---- 生成对比 ----
@@ -393,9 +393,13 @@ def step2(xT):
         x = xT.copy()
         for i in range(k):
             t_node = ts[i]
-            x = cm_forward(model_ema, x, np.full(n, t_node))
+            x0_hat = cm_forward(model_ema, x, np.full(n, t_node))
             if i < k - 1:
-                x = x + sigma_t(ts[i + 1]) * np.random.randn(n, DIM)
+                # VP 重加噪: x_{t_{i+1}} = sqrt(ab) x0_hat + sqrt(1-ab) eps
+                ab = alpha_bar(ts[i + 1])
+                x = np.sqrt(ab) * x0_hat + np.sqrt(1 - ab) * np.random.randn(n, DIM)
+            else:
+                x = x0_hat
         return x
     x_cm4 = cm_multistep(4)
     x_ddim50 = odefixed(xT, 50)
@@ -408,9 +412,10 @@ def step2(xT):
     for name, v in zip(names, nll):
         print("  %-18s %.4f" % (name, v))
 
-    fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+    fig, axes = plt.subplots(1, 5, figsize=(20, 4))
     x0_gt = sample_p0(n)
-    subs = {'真实分布': x0_gt, names[0]: samples[0], names[1]: samples[1], names[3]: samples[3]}
+    subs = {'真实分布': x0_gt, names[0]: samples[0], names[1]: samples[1],
+            names[2]: samples[2], names[3]: samples[3]}
     for ax, (title, pts) in zip(axes, subs.items()):
         s = pts[:1500]
         ax.scatter(s[:, 0], s[:, 1], s=2, alpha=0.35)
