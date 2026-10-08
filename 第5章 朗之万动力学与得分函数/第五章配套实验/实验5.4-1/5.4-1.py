@@ -125,7 +125,10 @@ else:
     plt.axis('off')
 
     for i, lam in enumerate(lam_values):
-        result = chambolle_prox_TV(noisy_image_t, device, {'lambda': lam, 'maxiter': 200})
+        # maxiter=200 时大 λ（0.5）只走到残差~0.05，图像带有欠收敛伪影；
+        # 2000 次迭代 + 紧 tol 可使四个 λ 面板均充分收敛（实测与20000次解差<4e-3）
+        result = chambolle_prox_TV(noisy_image_t, device,
+                                   {'lambda': lam, 'maxiter': 2000, 'tol': 1e-8})
         # 设备一致性检查
         assert result.device == noisy_image_t.device, f"设备不一致: result在{result.device}, 输入在{noisy_image_t.device}"
         plt.subplot(1, len(lam_values)+2, i+3)
@@ -154,12 +157,15 @@ if not _has_sampling_tools:
     print("警告: sampling_tools 模块未找到，跳过步骤2")
 else:
     lam_tv = 0.1
-    # 步骤2必须在 float64 下做：包络值量级 ~1e3，float32 舍入(ulp~1e-4)与
-    # 差分增量 2ε·∇R̂ 同量级，会把有限差分信噪比淹没（实测float32相对误差~18%）
+    # 步骤2必须在 float64 下做：包络值量级 ~8e2，float32 舍入(ulp~6e-5)与
+    # 差分增量 2ε·∇R̂ 同量级，会把有限差分信噪比淹没（复核实测：ε=1e-5 时
+    # float32 相对误差约 150%；即使放宽到 ε=1e-4 仍有 ~14%）
     noisy_image_d = noisy_image_t.double()
-    
-    # 计算近端算子（tol=1e-14：禁用提前停止，固定跑满maxiter，
-    # 避免停迭次数在 y±ε 两侧不一致引入的包络跳变被 1/(2ε) 放大）
+
+    # 计算近端算子。tol=1e-14 固定跑满 maxiter=2000：复核发现本问题在第2000次
+    # 迭代时对偶残差约 1.1e-3 > 默认 tol=1e-3，默认阈值此时本来就不会触发，
+    # 但固定迭代次数可保证 y 与 y±ε 的 prox 出自完全相同的迭代映射（有限精度
+    # 下触阈停迭的边界行为难以分析）；同时2000次迭代已使内部FD误差降至~3e-5
     prox_result = chambolle_prox_TV(noisy_image_d, device, {'lambda': lam_tv, 'maxiter': 2000, 'tol': 1e-14})
     
     # 理论梯度：(y - prox) / λ
@@ -192,13 +198,13 @@ else:
     n_samples = 100  # 采样像素数
     H, W = noisy_image_d.shape
     
-    # 随机选择采样像素（避开最后一行/列：库文件 chambolle_prox_TV 的
-    # DivergenceIm 末行/末列用 p[-1]（恒为0）而非严格伴随所需的 p[-2]，
-    # 边界像素的 prox 存在已知缺陷（实测边界像素FD误差~1，内部~1e-5）；
-    # 该库为多个实验共用，此处不改库，只在验证中避开边界）
+    # 随机选择采样像素（全图含边界采样）：复核已修复库文件 chambolle_prox_TV 的
+    # DivergenceIm 末行/列伴随索引（-p[-1]→-p[-2]）。修复前边界像素 FD 误差~1、
+    # 需避开最后一行/列；修复后边界像素 FD 误差~1e-5，与内部像素同量级，
+    # 因此采样范围恢复为完整 64×64 图像（randint 上界可取 H、W）
     torch.manual_seed(42)
-    sample_h = torch.randint(0, H - 1, (n_samples,))
-    sample_w = torch.randint(0, W - 1, (n_samples,))
+    sample_h = torch.randint(0, H, (n_samples,))
+    sample_w = torch.randint(0, W, (n_samples,))
     
     # 计算有限差分梯度
     gradient_fd = torch.zeros_like(noisy_image_d)
@@ -288,6 +294,7 @@ else:
     print(r"    下排：理论梯度、有限差分梯度（采样点）、梯度误差图（仅采样点）")
     print(r"    注：prox 由 Chambolle 算法计算，其对偶配对对应各向同性TV，")
     print(r"        包络值必须用同一 R（各向同性TV）计算，否则恒等式检验不成立")
+    print(r"        库 DivergenceIm 末行/列的伴随索引已修复，边界像素同样参与验证")
 
 
 # ============================================================
@@ -353,7 +360,9 @@ try:
         "有限差分步长": float(eps),
         "计算精度": "float64（步骤2）",
         "R约定": "各向同性TV（与chambolle_prox_TV对偶配对一致）",
-        "采样范围": "避开最后一行/列（库DivergenceIm边界伴随缺陷）",
+        "采样范围": "全图64x64含边界（库DivergenceIm末行/列伴随索引已修复：-p[-1]→-p[-2]）",
+        "库修复": "chambolle_prox_TV.DivergenceIm 末行/末列改为严格负伴随 -p[-2]（2026-10复核）",
+        "步骤1迭代": "maxiter=2000, tol=1e-8（原maxiter=200在大λ下欠收敛）",
     }
     results_summary["步骤2_Moreau包络梯度验证"] = _step2
 except (NameError, UnboundLocalError):

@@ -374,7 +374,7 @@ results_summary = {
     'setup': {
         'image_size': [int(nx), int(ny)],
         'BSNR': BSNR,
-        'true_sigma2': float(round(true_sigma2, 6)),
+        'true_sigma2': round(float(true_sigma2), 6),
         'kernel_len': kernel_len,
         'type_blur': type_blur,
     },
@@ -385,14 +385,14 @@ results_summary = {
         'th_init': th_init,
     },
     'estimates': {
-        'theta_est': float(round(theta_est, 6)),
-        'sigma2_est': float(round(sigma2_est, 6)),
-        'true_sigma2': float(round(true_sigma2, 6)),
+        'theta_est': round(float(theta_est), 6),
+        'sigma2_est': round(float(sigma2_est), 6),
+        'true_sigma2': round(float(true_sigma2), 6),
     },
     'map_results': {
-        'snr_obs': float(round(snr_obs, 2)),
-        'snr_map': float(round(snr_map, 2)),
-        'snr_improvement': float(round(snr_map - snr_obs, 2)),
+        'snr_obs': round(float(snr_obs), 2),
+        'snr_map': round(float(snr_map), 2),
+        'snr_improvement': round(float(snr_map - snr_obs), 2),
     }
 }
 

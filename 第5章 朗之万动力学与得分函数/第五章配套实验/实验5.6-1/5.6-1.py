@@ -109,15 +109,21 @@ print(f"后验均值形状: {post_mean.shape}")
 print(f"后验方差形状: {post_var.shape}")
 print(f"样本数量: {len(mc_samples)}")
 
-# 从样本重新估计统计量（验证采样结果的核心操作）
+# 从抽稀样本重算后验统计量，并与 npz 中记录的统计量对比
+# 注意：npz 的 post_mean/post_var 由整条链（约190步）经 Welford 累积而得，
+# 而 mc_samples 仅为其中抽稀出的 37 个样本，故两者存在抽样差异（均值差异
+# 偏大属正常，并非采样出错），此处保留差异数值供参考。
 post_mean_recomputed = np.mean(mc_samples, axis=0)
 post_var_recomputed = np.var(mc_samples, axis=0, ddof=1)
 
-print(f"\n[验证] 从样本重新估计的统计量:")
-print(f"  均值差异 (L2范数): {np.linalg.norm(post_mean - post_mean_recomputed):.6f}")
-print(f"  方差差异 (L2范数): {np.linalg.norm(post_var - post_var_recomputed):.6f}")
+mean_diff = np.linalg.norm(post_mean - post_mean_recomputed)
+var_diff = np.linalg.norm(post_var - post_var_recomputed)
 
-# 使用重新估计的方差（教学意义：展示如何从样本计算后验统计量）
+print(f"\n[对比] npz 记录值 与 抽稀样本重算值 的差异 (L2范数):")
+print(f"  均值差异: {mean_diff:.6f}")
+print(f"  方差差异: {var_diff:.6f}")
+
+# 后续统一使用从样本重算的方差（教学意义：展示如何从 MC 样本计算后验统计量）
 post_var = post_var_recomputed
 print(f"\n[Info] 使用从样本重新估计的后验方差进行后续分析")
 
@@ -289,8 +295,8 @@ results_summary = {
     "数据信息": {
         "后验均值形状": list(post_mean.shape),
         "样本数量": int(len(mc_samples)),
-        "均值差异_L2范数": round(float(np.linalg.norm(post_mean - post_mean_recomputed)), 8),
-        "方差差异_L2范数": round(float(np.linalg.norm(post_var - post_var_recomputed)), 8),
+        "均值差异_L2范数": round(float(mean_diff), 8),
+        "方差差异_L2范数": round(float(var_diff), 8),
     },
     "步骤2_后验标准差统计": {
         "平均值": round(float(np.mean(post_std)), 6),

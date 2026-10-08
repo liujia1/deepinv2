@@ -98,17 +98,21 @@ print(f"样本数量: {len(mc_samples)}")
 if len(mc_samples) < 50:
     print(f"\n[警告] 样本数量 {len(mc_samples)} 过少，统计估计不可靠（建议≥100）")
 
-# 从样本重新估计统计量（与5.6-1保持一致）
+# 保留 5.5-1 中由整条 MCMC 链（全部 post-burn-in 迭代）累积的后验方差，
+# 作为“独立于这 37 个稀疏样本”的参照量（用于步骤5的一致性检验）
+post_var_full = np.asarray(post_var).copy()
+
+# 从稀疏样本重新估计统计量（与5.6-1保持一致）
 post_mean_recomputed = np.mean(mc_samples, axis=0)
 post_var_recomputed = np.var(mc_samples, axis=0, ddof=1)
 
-print(f"\n[验证] 从样本重新估计的统计量:")
+print(f"\n[验证] 从稀疏样本重新估计的统计量 vs 全链统计量:")
 print(f"  均值差异 (L2范数): {np.linalg.norm(post_mean - post_mean_recomputed):.6f}")
-print(f"  方差差异 (L2范数): {np.linalg.norm(post_var - post_var_recomputed):.6f}")
+print(f"  方差差异 (L2范数): {np.linalg.norm(post_var_full - post_var_recomputed):.6f}")
 
-# 使用重新估计的方差
+# 置信区间与经验分位数使用同一批样本的方差，保持自洽（与5.6-1一致）
 post_var = post_var_recomputed
-print(f"\n[Info] 使用从样本重新估计的后验方差进行后续分析")
+print(f"\n[Info] 置信区间使用从样本重新估计的后验方差；步骤5另以全链方差作独立参照")
 
 
 # ============================================================
@@ -249,8 +253,10 @@ print("步骤5：样本差异分析")
 print("=" * 60)
 
 if len(mc_samples) >= 2:
-    # 计算样本间差异
+    # 稀疏样本逐像素标准差（多样性度量）
     sample_std = np.std(mc_samples, axis=0)
+    # 独立参照：整条 MCMC 链累积的后验标准差（不来自这 37 个稀疏样本）
+    post_std_full = np.sqrt(post_var_full)
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
@@ -260,17 +266,17 @@ if len(mc_samples) >= 2:
     axes[0].axis('off')
     plt.colorbar(im_sample_std, ax=axes[0], fraction=0.046, pad=0.04)
 
-    # 与后验标准差对比（随机采样避免空间相关性偏差）
-    post_std_flat = post_std.flatten()
+    # 全链后验标准差 vs 稀疏样本标准差（随机采样避免空间相关性偏差）
+    ref_flat = post_std_full.flatten()
     sample_std_flat = sample_std.flatten()
-    n_samples_scatter = min(500, len(post_std_flat))
-    idx = np.random.choice(len(post_std_flat), size=n_samples_scatter, replace=False)
-    axes[1].scatter(post_std_flat[idx], sample_std_flat[idx], alpha=0.3, s=1)
-    axes[1].plot([0, max(post_std.max(), sample_std.max())],
-                [0, max(post_std.max(), sample_std.max())], 'r--', label='y=x')
-    axes[1].set_xlabel('后验标准差')
-    axes[1].set_ylabel('样本标准差')
-    axes[1].set_title('后验标准差 vs 样本标准差')
+    n_samples_scatter = min(500, len(ref_flat))
+    idx = np.random.choice(len(ref_flat), size=n_samples_scatter, replace=False)
+    axes[1].scatter(ref_flat[idx], sample_std_flat[idx], alpha=0.3, s=1)
+    lim = max(post_std_full.max(), sample_std.max())
+    axes[1].plot([0, lim], [0, lim], 'r--', label='y=x')
+    axes[1].set_xlabel('全链后验标准差')
+    axes[1].set_ylabel('稀疏样本标准差')
+    axes[1].set_title('全链后验σ vs 稀疏样本σ')
     axes[1].legend()
     axes[1].grid(alpha=0.3)
 
@@ -284,10 +290,11 @@ if len(mc_samples) >= 2:
     plt.savefig(os.path.join(SAVE_DIR, '步骤5_样本差异分析.png'), dpi=150, bbox_inches='tight')
     plt.close()
 
-    # 相关性
-    corr = np.corrcoef(post_std.flatten(), sample_std.flatten())[0, 1]
-    print(f"后验标准差与样本标准差相关系数: {corr:.3f}")
-    print("解读: 相关系数接近1说明样本差异与不确定性一致")
+    # 相关性：两个“独立估计量”的一致性（稀疏化是否保真），非自比
+    corr = np.corrcoef(post_std_full.flatten(), sample_std.flatten())[0, 1]
+    print(f"全链后验标准差 vs 稀疏样本标准差 相关系数: {corr:.3f}")
+    print("解读: 两者来自不同数据(全链 vs 37稀疏样本)，接近1说明仅用少量样本估计不确定性是可靠的")
+    print("     （注：若与同一批样本重算的方差相比，则恒为1，属同义反复，故此处改用全链估计作参照）")
 
 
 # ============================================================
@@ -298,10 +305,10 @@ print("实验5.6-2 总结")
 print("=" * 60)
 print("1. 95%置信区间: $\\hat{x}_{MMSE} \\pm 1.96\\sqrt{\\mathrm{Var}(x|y)}$")
 print("2. 置信区间宽度直观反映局部不确定性")
-print("3. 后验样本展示分布的多峰性:")
+print("3. 后验样本展示分布的多样性（本例为单峰附近的小幅扰动，非明显多峰）:")
 print("   - 共享全局结构（先验约束）")
-print("   - 细节存在差异（多峰后验）")
-print("4. 样本差异大的区域 = 高后验方差区域")
+print("   - 细节存在差异（高不确定区扰动更大）")
+print("4. 全链后验σ与稀疏样本σ高度一致，说明用少量样本估计不确定性可靠")
 print("5. 置信区间可用于下游决策（如医学影像中的专家复核区域）")
 
 
@@ -328,7 +335,7 @@ results_summary = {
         "后验均值形状": list(post_mean.shape),
         "样本数量": int(len(mc_samples)),
         "均值差异_L2范数": round(float(np.linalg.norm(post_mean - post_mean_recomputed)), 8),
-        "方差差异_L2范数": round(float(np.linalg.norm(post_var - post_var_recomputed)), 8),
+        "方差差异_L2范数": round(float(np.linalg.norm(post_var_full - post_var_recomputed)), 8),
     },
     "步骤2_95%置信区间": {
         "正态近似_z值": float(z_95),
@@ -351,7 +358,7 @@ results_summary = {
 # 步骤5的相关系数在条件块内定义，需安全访问
 try:
     results_summary["步骤5_样本差异分析"] = {
-        "后验标准差与样本标准差相关系数": round(float(corr), 6),
+        "全链后验标准差_vs_稀疏样本标准差_相关系数": round(float(corr), 6),
     }
 except (NameError, UnboundLocalError):
     results_summary["步骤5_样本差异分析"] = "未执行（样本数不足）"

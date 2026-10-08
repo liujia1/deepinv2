@@ -1,0 +1,37 @@
+{
+  "experiment": "4.7-1",
+  "title": "PnP-ULA后验采样与收敛诊断",
+  "setup": {
+    "image_size": [
+      256,
+      256
+    ],
+    "BSNR": 40,
+    "sigma": 0.002484,
+    "kernel_len": [
+      5,
+      5
+    ],
+    "type_blur": "uniform",
+    "maxit": 500,
+    "burnin": 50,
+    "n_samples": 50,
+    "use_pnp": true,
+    "algorithm": "PnP-ULA"
+  },
+  "results": {
+    "initial_psnr": 21.61,
+    "initial_nrmse": 0.11739999800920486,
+    "initial_ssim": 0.6959,
+    "result_psnr": 28.14,
+    "result_nrmse": 0.05550000071525574,
+    "result_ssim": 0.8492,
+    "elapsed_time": 24.38
+  },
+  "convergence_diagnosis": {
+    "ess_slow": 1.54,
+    "ess_med": 4.35,
+    "ess_fast": 29.9,
+    "chain_length": 49
+  }
+}

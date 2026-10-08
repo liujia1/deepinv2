@@ -75,15 +75,18 @@ def GradientIm(u, device):
     return dux, duy
 
 def DivergenceIm(p1, p2):
+    # 负伴随修正（2026-10复核，与实验5.4-1统一修复）：零填充前向差分算子的
+    # 严格负伴随在末行/末列应取 -p[-2]（上游原代码误用恒为0的 -p[-1]，
+    # 导致该算子不构成任何差分算子的伴随，prox 在边界及邻近像素上次优）。
     z = p2[:,1:-1] - p2[:,:-2]
     shape2 = list(p2.shape)
     shape2[1]=1
-    v = torch.hstack([p2[:,0].reshape(shape2), z, -p2[:,-1].reshape(shape2)])
-    
+    v = torch.hstack([p2[:,0].reshape(shape2), z, -p2[:,-2].reshape(shape2)])
+
     shape1 = list(p1.shape)
     shape1[0]=1
     z = p1[1:-1,:] - p1[:-2,:]
-    u = torch.vstack([p1[0,:].reshape(shape1), z, -p1[-1,:].reshape(shape1)])
+    u = torch.vstack([p1[0,:].reshape(shape1), z, -p1[-2,:].reshape(shape1)])
 
     return v+u
 

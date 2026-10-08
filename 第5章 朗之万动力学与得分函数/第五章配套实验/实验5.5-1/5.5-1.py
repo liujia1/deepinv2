@@ -17,11 +17,11 @@
     - Cell 14-17: 步长选择、主采样循环
 
 运行前提：
-  步骤1-3：无特殊要求，CPU即可运行
-  步骤4：需要GPU和预训练RealSN-DnCNN模型
+  步骤1-4：CPU 或 GPU 均可运行（PnP-ULA 算法本身不依赖 GPU）
     - sampling_tools/ 已包含在当前目录
     - Pretrained_models/ 会自动下载（首次运行）
-    - 若无GPU，步骤4将被跳过
+    - 仅当缺少 sampling_tools 或预训练模型时，步骤4才会被跳过
+    - 若有 GPU 会自动使用以加速（可选，非必需）
 """
 
 import math
@@ -170,15 +170,15 @@ def download_model_if_needed(model_path, model_dir):
 # 检查模型可用性
 _has_model = download_model_if_needed(_model_path, _model_dir)
 
-if not (_has_gpu and _has_sampling_tools and _has_model):
+if not (_has_sampling_tools and _has_model):
     print("\n" + "=" * 60)
     print("运行环境检查")
     print("=" * 60)
-    print(f"  GPU可用: {_has_gpu}")
+    print(f"  device: {device}（CPU/GPU 均可运行）")
     print(f"  sampling_tools可用: {_has_sampling_tools}")
     print(f"  预训练模型可用: {_has_model}")
-    print("\n  缺少必要资源，将仅运行步骤1-3（数据准备和算法演示）")
-    print("  步骤4需要GPU和预训练模型")
+    print("\n  缺少必要资源（sampling_tools 或预训练模型），将仅运行步骤1-3")
+    print("  步骤4需要 sampling_tools 和预训练模型，不强制要求 GPU")
     print("=" * 60)
 
 
@@ -211,7 +211,7 @@ plt.imshow(im, cmap='gray')
 plt.title('原始图像 $x$')
 plt.axis('off')
 
-if _has_gpu and _has_sampling_tools:
+if _has_sampling_tools:
     x = torch.Tensor(im/255.).to(device)
 
     # 模糊算子
@@ -235,18 +235,18 @@ if _has_gpu and _has_sampling_tools:
     print(f"噪声标准差: {sigma.item():.4f}")
     print(f"BSNR: {BSNRdb} dB")
 else:
-    print("  缺少GPU或sampling_tools，跳过模糊和加噪")
+    print("  缺少 sampling_tools，跳过模糊和加噪")
     plt.subplot(1, 2, 2)
     # 创建一个空白图像用于显示提示
     plt.imshow(np.ones_like(im) * 0.9, cmap='gray', vmin=0, vmax=1)
-    plt.text(0.5, 0.6, '需要GPU运行', 
+    plt.text(0.5, 0.6, '缺少依赖', 
              ha='center', va='center', transform=plt.gca().transAxes,
              fontsize=14, fontweight='bold', color='red',
              bbox=dict(boxstyle='round,pad=0.5', facecolor='white', edgecolor='red', linewidth=2))
-    plt.text(0.5, 0.35, '请使用GPU设备\n以生成含噪+模糊观测', 
+    plt.text(0.5, 0.35, '请安装 sampling_tools\n以生成含噪+模糊观测', 
              ha='center', va='center', transform=plt.gca().transAxes,
              fontsize=10, color='darkred')
-    plt.title('含噪+模糊观测 $y$ (需要GPU)')
+    plt.title('含噪+模糊观测 $y$ (缺少 sampling_tools)')
     plt.axis('off')
 
 plt.tight_layout()
@@ -257,7 +257,7 @@ plt.close()
 # ============================================================
 # 步骤2：似然与梯度
 # ============================================================
-if _has_gpu and _has_sampling_tools:
+if _has_sampling_tools:
     print("\n" + "=" * 60)
     print("步骤2：似然与梯度")
     print("=" * 60)
@@ -279,7 +279,7 @@ if _has_gpu and _has_sampling_tools:
 # ============================================================
 # 步骤3：Tweedie等式与去噪器
 # ============================================================
-if _has_gpu and _has_sampling_tools and _has_model:
+if _has_sampling_tools and _has_model:
     print("\n" + "=" * 60)
     print("步骤3：Tweedie等式与去噪器")
     print("=" * 60)
@@ -302,7 +302,7 @@ if _has_gpu and _has_sampling_tools and _has_model:
 # ============================================================
 # 步骤4：PnP-ULA采样
 # ============================================================
-if _has_gpu and _has_sampling_tools and _has_model:
+if _has_sampling_tools and _has_model:
     print("\n" + "=" * 60)
     print("步骤4：PnP-ULA采样")
     print("=" * 60)
@@ -479,16 +479,16 @@ if _has_gpu and _has_sampling_tools and _has_model:
              y_obs=y.cpu().numpy())
     print(f"\n采样结果已保存到: {os.path.join(SAVE_DIR, 'sampling_results.npz')}")
 else:
-    # 步骤4需要GPU但不可用时的可视化提示
+    # 缺少 sampling_tools 或预训练模型时的可视化提示
     print("\n" + "=" * 60)
     print("步骤4：PnP-ULA采样")
     print("=" * 60)
-    print("  缺少必要资源（GPU、sampling_tools或预训练模型）")
+    print("  缺少必要资源（sampling_tools 或预训练模型）")
     print("  无法执行PnP-ULA采样")
     
     # 创建第一个提示图表（2行4列，对应plots函数的第一个图表）
     fig1, axes1 = plt.subplots(2, 4, figsize=(15, 10))
-    fig1.suptitle('PnP-ULA采样结果 (需要GPU运行)', fontsize=16, fontweight='bold', color='red')
+    fig1.suptitle('PnP-ULA采样结果 (缺少依赖)', fontsize=16, fontweight='bold', color='red')
     
     for ax in axes1.flat:
         ax.imshow(np.ones((256, 256)) * 0.9, cmap='gray', vmin=0, vmax=1)
@@ -500,13 +500,13 @@ else:
     
     for i, title in enumerate(titles_row1):
         axes1[0, i].set_title(title, fontsize=10)
-        axes1[0, i].text(0.5, 0.5, '需要GPU', 
+        axes1[0, i].text(0.5, 0.5, '缺少依赖', 
                         ha='center', va='center', transform=axes1[0, i].transAxes,
                         fontsize=12, color='red', fontweight='bold')
     
     for i, title in enumerate(titles_row2):
         axes1[1, i].set_title(title, fontsize=10)
-        axes1[1, i].text(0.5, 0.5, '需要GPU', 
+        axes1[1, i].text(0.5, 0.5, '缺少依赖', 
                         ha='center', va='center', transform=axes1[1, i].transAxes,
                         fontsize=12, color='red', fontweight='bold')
     
@@ -516,12 +516,12 @@ else:
     
     # 创建第二个提示图表（1行3列，对应plots函数的第二个图表）
     fig2, axes2 = plt.subplots(1, 3, figsize=(15, 5))
-    fig2.suptitle('收敛曲线 (需要GPU运行)', fontsize=14, fontweight='bold', color='red')
+    fig2.suptitle('收敛曲线 (缺少依赖)', fontsize=14, fontweight='bold', color='red')
     
     titles_row3 = ['NRMSE of $X$ vs $x_{gr}$', 'PSNR of $X$ vs $x_{gr}$', 'SSIM of $X$ vs $x_{gr}$']
     
     for i, ax in enumerate(axes2):
-        ax.text(0.5, 0.5, '需要GPU\n才能显示\n收敛曲线', 
+        ax.text(0.5, 0.5, '缺少依赖\n才能显示\n收敛曲线', 
                 ha='center', va='center', transform=ax.transAxes,
                 fontsize=12, color='red', fontweight='bold',
                 bbox=dict(boxstyle='round,pad=0.5', facecolor='white', edgecolor='red', linewidth=2))

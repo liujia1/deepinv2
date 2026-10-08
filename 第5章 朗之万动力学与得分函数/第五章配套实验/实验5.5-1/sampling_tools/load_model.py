@@ -52,11 +52,15 @@ class DnCNN(nn.Module):
 
 # ---- load the model based on the type and sigma (noise level) ---- 
 def load_model(path, device):
-
+    # 设备无关：CPU 或 GPU 均可加载运行（算法本身不依赖 GPU）。
+    # 原实现用 nn.DataParallel(net).cuda(device) 硬编码 GPU，导致无 GPU 时崩溃，
+    # 但 DataParallel 仅用于多卡并行，单设备（含 CPU）并不需要它。
     net = DnCNN(channels=1, num_of_layers=17)
-    model = nn.DataParallel(net).cuda(device)
+    state_dict = torch.load(path, map_location=device, weights_only=True)
+    # 兼容以 DataParallel 保存的权重（键带 'module.' 前缀）
+    state_dict = {(k[7:] if k.startswith('module.') else k): v for k, v in state_dict.items()}
+    net.load_state_dict(state_dict)
+    net.to(device)
+    net.eval()
     
-    model.load_state_dict(torch.load(path, weights_only=True))
-    model.eval()
-    
-    return model
+    return net

@@ -75,15 +75,20 @@ def GradientIm(u, device):
     return dux, duy
 
 def DivergenceIm(p1, p2):
+    # Adjoint fix (2026-10 review, unified with experiment 5.4-1): the strict
+    # negative adjoint of the zero-padded forward-difference operator must use
+    # -p[-2] on the last row/column. The upstream code used -p[-1], which is
+    # always zero, so the operator was not an adjoint of any difference operator
+    # and the TV prox was suboptimal at (and near) the image boundaries.
     z = p2[:,1:-1] - p2[:,:-2]
     shape2 = list(p2.shape)
     shape2[1]=1
-    v = torch.hstack([p2[:,0].reshape(shape2), z, -p2[:,-1].reshape(shape2)])
-    
+    v = torch.hstack([p2[:,0].reshape(shape2), z, -p2[:,-2].reshape(shape2)])
+
     shape1 = list(p1.shape)
     shape1[0]=1
     z = p1[1:-1,:] - p1[:-2,:]
-    u = torch.vstack([p1[0,:].reshape(shape1), z, -p1[-1,:].reshape(shape1)])
+    u = torch.vstack([p1[0,:].reshape(shape1), z, -p1[-2,:].reshape(shape1)])
 
     return v+u
 

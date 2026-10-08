@@ -337,17 +337,17 @@ results_summary = {
     'myula_params': {
         'beta': beta,
         'lambda_prox': lambda_prox,
-        'L_f': float(round(L_f, 4)),
-        'L_g': float(round(L_g, 4)),
-        'L_total': float(round(L_total, 4)),
-        'gamma': float(round(gamma, 8)),
+        'L_f': round(float(L_f), 4),
+        'L_g': round(float(L_g), 4),
+        'L_total': round(float(L_total), 4),
+        'gamma': round(float(gamma), 8),
         'n_iter': n_iter,
         'n_burn_in': n_burn_in,
     },
     'results': {
-        'psnr_obs': float(round(psnr_obs, 2)),
-        'psnr_mean': float(round(psnr_mean, 2)),
-        'psnr_last': float(round(psnr_last, 2)),
+        'psnr_obs': round(float(psnr_obs), 2),
+        'psnr_mean': round(float(psnr_mean), 2),
+        'psnr_last': round(float(psnr_last), 2),
     }
 }
 
