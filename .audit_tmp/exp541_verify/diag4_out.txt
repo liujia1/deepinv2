@@ -1,0 +1,7 @@
+﻿||D_code - (-G^T)||_max = 1.0
+||D_true - (-G^T)||_max = 0.0
+
+灏忛棶棰?H=W=6): obj鐪熻В=45.9192288271  obj搴撹В=46.4427315643
+||x_code - x_true||_inf = 2.000e-01
+鐪焢rox鐨凢D楠岃瘉: mean_err=5.218e-01  max_err=1.405e+00  rel=33.61%
+搴損rox鐨凢D楠岃瘉: mean_err=6.902e-01  max_err=2.000e+00  rel=47.81%

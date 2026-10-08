@@ -1,0 +1,11 @@
+﻿tv_aniso(x_lib)=869.133148   tv_iso(x_lib)=789.061205
+
+--- 搴損rox + 涓嶅悓R 鐨?FD-vs-鐞嗚 妫€鏌?(float64, 2000iter) ---
+搴損rox + 鍚勫悜寮傛€(瀹為獙鐜扮姸): mean_err=3.240e-01  max_err=5.506e-01  rel=26.320%
+搴損rox + 鍚勫悜鍚屾€(鍋囪): mean_err=6.456e-04  max_err=9.365e-04  rel=0.052%
+
+--- 淇浼撮殢鐗堟眰瑙ｅ櫒 ---
+obj_iso(x_fix)=786.379458  (搴撹В: 789.061205)
+obj_aniso(x_fix)=864.887319  (搴撹В: 869.133148)
+淇prox + 鍚勫悜鍚屾€: mean_err=2.369e-04  max_err=7.497e-04  rel=0.019%
+淇prox + 鍚勫悜寮傛€: mean_err=3.217e-01  max_err=5.465e-01  rel=25.880%

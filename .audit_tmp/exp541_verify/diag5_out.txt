@@ -1,0 +1,14 @@
+﻿QP姹傝В鎴愬姛: True, nit=17
+obj(x_exact_QP) = 45.0183502848
+dual(q*) = 4.5018350276  (寮哄鍋朵笅搴旂瓑浜?primal min)
+iters=   200  obj_搴?46.44273156  obj_淇=45.91922883
+iters=  2000  obj_搴?46.44273156  obj_淇=45.91922883
+iters= 20000  obj_搴?46.44273156  obj_淇=45.91922883
+
+KKT妫€楠?淇鐗?200iter): max|p - (-sign(Gx))| = 1.908e+00
+obj(x_fx200)=45.91922883  dual(q=-p)=3.83689481
+
+=== 绮剧‘QP prox 鐨?FD 楠岃瘉 ===
+mean_err=4.383e-04  max_err=3.249e-03  rel=0.024%
+搴損rox(200iter): mean_err=6.902e-01  rel=47.811%
+||x_lib200 - x_exact||_inf = 2.000e-01
