@@ -6,10 +6,14 @@
   - 后验方差估计：Var(x_i) = 1/(M-B) Σ(X_m^(i) - x_MMSE^(i))^2
   - 高方差区域 = 信息丢失区域
   - 低方差区域 = 数据约束强
-  - 注意：后验方差只刻画“数据/采样不确定性”，不包含模型偏差；
-    PnP 近似后验对系统性误差（如边缘振铃）会给出偏窄的方差，
-    因此方差与误差“正相关”，但绝对幅度可能低估实际误差。
-  - 短链强自相关时，逐像素方差估计噪声很大（ESS 远小于名义样本数），
+  - 注意：后验方差只刻画“数据/采样不确定性”，不包含模型偏差，其绝对
+    幅度可能向两个方向偏离实际误差：
+      (a) 偏窄/欠覆盖：PnP 近似后验不刻画系统性误差（如边缘振铃），
+          模型偏差不进方差，校准比 MAE/std 明显高于理想值 sqrt(2/pi)≈0.80；
+      (b) 偏宽/过弥散：PnP-ULA 在有限去噪噪声水平 eps 下的平稳分布本身
+          比目标后验更弥散，校准比会低于 0.80。
+    两种机制都存在，实际方向由数据决定，必须用校准比检验而非预设。
+  - 短链强自相关时，逐像素方差估计噪声很大（全链图像 ESS 远小于迭代步数），
     空间聚合后的结论才稳健。
 
 前置实验：
@@ -23,7 +27,6 @@
   - 实验5.3.py 不确定性量化部分
 """
 
-import torch
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端
@@ -117,9 +120,11 @@ def rankdata_average(a):
 
 def ess_initial_positive(samples):
     """
-    从（抽稀）链样本估计有效样本量 ESS。
-    先对全部像素汇总逐滞后自相关，再用 Geyer initial-positive-sequence
-    截断（逐对 rho_{2k-1}+rho_{2k}，遇到非正即停）。
+    从（抽稀）链样本估计有效样本量 ESS（多维池化版）。
+    对全部像素汇总逐滞后自相关，再用 Geyer initial-positive-sequence
+    截断（逐对 rho_{2k-1}+rho_{2k}，遇到负值即停）。
+    标量轨迹（trace_fid 等）的 IAT/ESS 统一走 pnp_ula_common.iat_geyer，
+    本函数仅处理多维链样本；两者的截断条件保持一致（pair < 0）。
     返回 (ESS, rho数组)。
     """
     M = samples.shape[0]
@@ -136,7 +141,7 @@ def ess_initial_positive(samples):
     pair_sum = 0.0
     for j in range(0, len(rhos) - 1, 2):
         pair = rhos[j] + rhos[j + 1]
-        if pair <= 0:
+        if pair < 0:
             break
         pair_sum += pair
     return M / (1.0 + 2.0 * pair_sum), rhos
@@ -191,6 +196,30 @@ lag1 = float(rhos[0]) if len(rhos) else 0.0
 mean_std_thin = float(np.sqrt(post_var_thin).mean())
 mc_se_thin = mean_std_thin / np.sqrt(ess)   # 抽稀均值的每像素蒙特卡洛标准误
 
+# 全链（未抽稀）图像层面的 IAT/ESS：由抽稀序列 lag1 反推每步自相关
+# rho_step = lag1^(1/thin)，AR(1)近似下 IAT≈(1+rho_step)/(1-rho_step)。
+# 这是图中“全链 Welford 逐像素标准差”采样噪声对应的 ESS 口径，
+# 不能用抽稀样本自己的 ESS（那描述的是 mc_samples 重算量）。
+if 'chain_config' in data and lag1 > 0:
+    _maxit, _burnin, _half, _thin = (int(v) for v in data['chain_config'].tolist())
+    _rho_step = lag1 ** (1.0 / _thin)
+    iat_image = (1.0 + _rho_step) / max(1.0 - _rho_step, 1e-12)
+    n_post_full = _maxit - _burnin     # Welford 累积的链状态数
+    ess_fullchain = n_post_full / iat_image
+else:
+    _thin = None
+    iat_image = float('nan')
+    ess_fullchain = float('nan')
+
+# 劈半一致性：两半链各自 Welford 方差图的相关系数，直接度量逐像素
+# 方差图在当前链长下的可重复性（1=完全可重复，越低越噪）。
+if 'post_var_h1' in data and 'post_var_h2' in data:
+    half_std_corr = float(np.corrcoef(
+        np.sqrt(np.maximum(data['post_var_h1'], 0)).ravel(),
+        np.sqrt(np.maximum(data['post_var_h2'], 0)).ravel())[0, 1])
+else:
+    half_std_corr = float('nan')
+
 print("\n[诊断] 全链 Welford 统计量 vs 抽稀样本重算量：")
 print(f"  均值差异 L2范数      : {mean_diff:.6f}")
 print(f"  均值差异 每像素RMS   : {mean_diff_rms:.6f} "
@@ -199,8 +228,12 @@ print(f"  方差差异 L2范数      : {var_diff:.6f}")
 print(f"  抽稀序列 lag1 自相关 : {lag1:.3f}")
 print(f"  抽稀序列 ESS        : {ess:.1f} (名义样本数 {len(mc_samples)})")
 print(f"  抽稀均值 MC标准误    : {mc_se_thin:.5f}")
-print("  解读: 链强自相关(ESS≪名义样本数)使抽稀样本与全链统计量高度共享信息，")
-print("        差异很小属正常；但逐像素方差估计噪声大，结论应以空间聚合为主。")
+print(f"  全链图像 IAT/ESS    : {iat_image:.0f} 步 / {ess_fullchain:.1f} "
+      f"(累积 {n_post_full if _thin else '-'} 个链状态；这是全链Welford方差图的精度口径)")
+print(f"  劈半 std 图相关     : {half_std_corr:.3f} (逐像素方差图的可重复性)")
+print("  解读: 链强自相关(ESS≪链状态数)使抽稀样本与全链统计量高度共享信息，")
+print("        差异很小属正常；但全链图像ESS仍小、劈半std图相关不接近1，说明")
+print("        逐像素方差图有明显采样噪声，结论应以空间聚合为主。")
 
 
 # ============================================================
@@ -269,8 +302,14 @@ axes[1, 2].set_title(f'高不确定性区域 (>{threshold:.4f})')
 axes[1, 2].axis('off')
 
 fig.suptitle('实验5.6-1 后验标准差与不确定性图（全链 Welford）', fontsize=14, y=1.02)
+_ess_note = (
+    f'注：本图为全链 Welford 方差（{n_post_full if _thin else "?"} 个链状态），'
+    f'全链图像 ESS≈{ess_fullchain:.0f}' if _thin else
+    '注：npz 无 chain_config，无法换算全链图像 ESS')
+_half_note = (f'，劈半两半 std 图相关={half_std_corr:.2f}'
+              if not np.isnan(half_std_corr) else '')
 fig.text(0.5, 0.005,
-         f'注：逐像素标准差含有限 ESS（抽稀序列 ESS≈{ess:.0f}，名义 {len(mc_samples)} 样本）的采样噪声，'
+         f'{_ess_note}{_half_note}：逐像素标准差含明显采样噪声，'
          '仅供定性空间定位；定量结论以步骤4的五分位/区域聚合为准。',
          ha='center', fontsize=10)
 plt.tight_layout(rect=[0, 0.025, 1, 1])
@@ -335,20 +374,20 @@ for i in range(n_bins):
     if np.sum(mask) > 0:
         bin_means.append(float(np.mean(error_flat[mask])))
         bin_std.append(float(np.mean(post_std_flat[mask])))
-        # 校准比：理想高斯后验下 E|误差|/std ≈ sqrt(2/pi)≈0.80；
-        # 系统性模型偏差不进后验方差时该比值 >1，即方差偏窄/低估误差
+        # 校准比（箱内“均值之比” E|e|/E[σ]）：理想高斯后验≈sqrt(2/pi)≈0.80；
+        # 明显>0.80 表示方差偏窄（模型偏差未进方差），<0.80 表示偏宽（过弥散）
         bin_ratio.append(bin_means[-1] / max(bin_std[-1], 1e-12))
         bin_labels.append(f'Q{i+1}')
 
 _bars = axes[2].bar(range(len(bin_means)), bin_means, color='steelblue', alpha=0.7)
-# 柱顶标注校准比 MAE/std：理想高斯后验≈0.80，明显>0.80 表示方差偏窄
+# 柱顶标注校准比 E|e|/E[σ]：理想高斯后验≈0.80
 for _rect, _rr in zip(_bars, bin_ratio):
     axes[2].text(_rect.get_x() + _rect.get_width() / 2, _rect.get_height(),
                  f'{_rr:.2f}', ha='center', va='bottom', fontsize=11)
 axes[2].set_ylim(0, float(max(bin_means)) * 1.12)
 axes[2].set_xlabel('不确定性分位数')
 axes[2].set_ylabel('平均重建误差')
-axes[2].set_title('五分位平均误差（柱顶为 MAE/std，理想≈0.80）')
+axes[2].set_title('五分位平均误差（柱顶为箱内 $E|e|/E[\\sigma]$，理想≈0.80）')
 axes[2].set_xticks(range(len(bin_means)))
 axes[2].set_xticklabels(bin_labels)
 axes[2].grid(alpha=0.3, axis='y')
@@ -357,13 +396,19 @@ plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤4_不确定性与误差关系.png'), dpi=150, bbox_inches='tight')
 plt.close()
 
+# 两种校准口径：
+#   calib_overall  = E|e| / E[σ]  —— 均值之比（对像素间 σ 异方差稳健，主口径）
+#   calib_perpixel = E[ |e|/σ ]  —— 逐像素归一化误差的平均（逐像素 PIT 式口径）
+# 理想高斯后验下两者都应≈sqrt(2/pi)≈0.798；不重合只反映空间异质性，均保留。
 calib_overall = float(error.mean() / max(post_std.mean(), 1e-12))
+calib_perpixel = float(np.mean(error_flat / np.maximum(post_std_flat, 1e-12)))
 print(f"不确定性-误差 Pearson 相关 : {corr:.3f}")
 print(f"不确定性-误差 Spearman 秩相关: {corr_spearman:.3f}")
-print("五分位校准（平均误差 / 平均后验std，理想≈0.80）:")
+print("五分位校准（箱内 E|e|/E[σ]，理想≈0.80）:")
 for i, (lab, m_, s_, rr) in enumerate(zip(bin_labels, bin_means, bin_std, bin_ratio)):
     print(f"  {lab}: MAE={m_:.5f}, std={s_:.5f}, 比值={rr:.2f}")
-print(f"整体 MAE/平均std = {calib_overall:.2f}")
+print(f"整体 E|e|/E[σ] = {calib_overall:.3f}（均值之比，主口径）")
+print(f"整体 E[|e|/σ] = {calib_perpixel:.3f}（逐像素之比；与上者不重合仅反映空间异质性）")
 if calib_overall > 0.9:
     print("解读: 正相关成立，方差可定位“容易出错”的区域；但比值明显高于理想值0.80，")
     print("      说明后验方差未覆盖系统性模型偏差（边缘振铃等），绝对不确定性偏窄。")
@@ -387,8 +432,11 @@ print("1. 后验标准差提供像素级的不确定性度量（主结果用全�
 print("2. 高方差区域对应信息丢失区域（模糊核导致的高频缺失：边缘、纹理）")
 print("3. 低方差区域对应数据约束强的区域（平滑背景）")
 print("4. 不确定性与重建误差正相关，可定位易错区域；后验方差只含数据/采样")
-print(f"   不确定性，不含模型偏差；整体校准比 MAE/std={calib_overall:.2f}（理想≈0.80）")
-print(f"5. 抽稀链 ESS≈{ess:.0f}（名义{len(mc_samples)}个样本），逐像素方差噪声大，")
+print(f"   不确定性，不含模型偏差；整体校准比 E|e|/E[σ]={calib_overall:.2f}、"
+      f"E[|e|/σ]={calib_perpixel:.2f}（理想≈0.80）")
+print(f"5. 全链图像 ESS≈{ess_fullchain:.0f}"
+      + (f"（{n_post_full} 个链状态，IAT≈{iat_image:.0f}步）" if _thin else "")
+      + f"，劈半std图相关={half_std_corr:.2f}：逐像素方差图噪声较大，")
 print("   应以空间聚合（分位数、区域均值）后的结论为准")
 if src_warnings:
     print("6. [注意] 上游5.5-1链核查有警告（见开头[上游链状态]），本实验结论需结合该警告解读")
@@ -416,9 +464,9 @@ def _to_native(obj):
 quintile_table = [
     {
         "分位": lab,
-        "平均重建误差_MAE": round(m_, 6),
-        "平均后验标准差": round(s_, 6),
-        "校准比_MAE除std": round(rr, 4),
+        "平均重建误差_E_abs_e": round(m_, 6),
+        "平均后验标准差_E_sigma": round(s_, 6),
+        "校准比_均值之比_Ee除Esigma": round(rr, 4),
     }
     for lab, m_, s_, rr in zip(bin_labels, bin_means, bin_std, bin_ratio)
 ]
@@ -436,6 +484,10 @@ results_summary = {
         "抽稀序列_lag1自相关": round(lag1, 6),
         "抽稀序列_有效样本量ESS": round(float(ess), 4),
         "抽稀均值_MC标准误": round(float(mc_se_thin), 6),
+        "全链Welford累积状态数": (int(n_post_full) if _thin else None),
+        "全链图像_IAT_步_AR1换算": (round(float(iat_image), 2) if _thin else None),
+        "全链图像_ESS_AR1换算": (round(float(ess_fullchain), 3) if _thin else None),
+        "劈半_std图相关系数": (None if np.isnan(half_std_corr) else round(half_std_corr, 4)),
     },
     "步骤2_后验标准差统计_全链Welford": {
         "平均值": round(float(np.mean(post_std)), 6),
@@ -450,7 +502,8 @@ results_summary = {
     "步骤4_不确定性与误差关系": {
         "Pearson相关系数": round(corr, 6),
         "Spearman秩相关系数": round(corr_spearman, 6),
-        "整体校准比_MAE除平均std_理想约0.80": round(calib_overall, 4),
+        "校准比_均值之比_E_abs_e除_E_sigma_理想约0.798": round(calib_overall, 4),
+        "校准比_逐像素之比_E_abs_e除sigma_理想约0.798": round(calib_perpixel, 4),
         "五分位校准表": quintile_table,
     },
 }

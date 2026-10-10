@@ -20,6 +20,16 @@ PnP-ULA 共享模块（唯一事实源）
   chain_config）缺失时不报错，但闸门会如实给出"无法核查"警告。
 """
 
+# ------------------------------------------------------------------
+# 采样内核版本（下游昂贵采样缓存的版本键）
+# 仅当 PnP-ULA 的采样递推本身改变时才手动 bump：步长 ε/δ 定义、马氏核更新、
+# 注入噪声口径、RNG/种子约定、Welford 累计方式等。
+# 下列改动【不得】bump：iat_geyer 等收敛诊断、上游闸门展示、docstring/注释。
+# 下游（如 5.6-3 步骤6）以本常量作为扫描链/MAP 缓存指纹的一部分，
+# 诊断升级不使旧采样缓存失效。
+# ------------------------------------------------------------------
+SAMPLING_KERNEL_VERSION = 'pnpula-kernel-1'
+
 import os
 import sys
 import math
@@ -126,26 +136,43 @@ def find_cman_path():
 # ============================================================
 # IAT / ESS（Geyer 初始正序列，与实验5.2-1同实现）
 # ============================================================
-def iat_geyer(vals):
-    """标量序列的 IAT 与 ESS：IAT = 1 + 2*sum rho(k)，ESS = n / IAT。"""
+def iat_geyer(vals, max_lag=None):
+    """
+    标量序列的 IAT 与 ESS（Geyer 初始正序列估计）：
+        IAT = 1 + 2*sum_{k>=1} rho(k)，ESS = n / IAT。
+
+    返回 (iat, ess, diag)：
+      diag['cutoff_lag']   —— 首个非正 rho 对所在的滞后（初始正序列截断点）；
+      diag['truncated']    —— 若直到 max_lag 都没出现非正 rho 对则为 True。
+                              此时 IAT 只是【下界】、ESS 只是【上界】：
+                              序列在该滞后内始终未去相关，调用方必须如实标注，
+                              不得把该 IAT/ESS 当作已收敛的确切值。
+    """
     x = np.asarray(vals, dtype=float)
     n = len(x)
     x = x - x.mean()
     var = np.dot(x, x) / n
     if var <= 0 or n < 4:
-        return 1.0, float(n)
-    max_lag = min(1000, n // 3)
+        return 1.0, float(n), {'cutoff_lag': 0, 'max_lag': 0, 'truncated': False}
+    if max_lag is None:
+        # 相关和计算量为 O(n*max_lag)，取 n//3 与 5000 的较小者兼顾成本与覆盖
+        max_lag = min(n // 3, 5000)
     acf = np.array([np.dot(x[:-k], x[k:]) / ((n - k) * var)
                     for k in range(1, max_lag + 1)])
     iat = 1.0
     k = 0
+    cutoff_lag = None
     while k + 1 < len(acf):
         pair = acf[k] + acf[k + 1]
         if pair < 0:
+            cutoff_lag = k
             break
         iat += 2.0 * pair
         k += 2
-    return float(iat), float(n / iat)
+    truncated = cutoff_lag is None
+    diag = {'cutoff_lag': (int(cutoff_lag) if cutoff_lag is not None else None),
+            'max_lag': int(max_lag), 'truncated': bool(truncated)}
+    return float(iat), float(n / iat), diag
 
 
 # ============================================================
@@ -227,7 +254,8 @@ def run_pnp_ula(prob, maxit=10000, burnin=None, n_samples=100, seed=None,
       post_mean/post_var（及 h1/h2）numpy、mc_samples、
       trace_fid、trace_psnr（按 trace_every 抽点）、trace_extra、
       nrmse_values/psnr_values/ssim_values（want_metric_curves=True，逐点）、
-      iat_fid/ess_fid/last_quarter_gain/half_sigma_corr/elapsed
+      iat_fid/ess_fid/iat_diag/last_quarter_gain/half_sigma_corr/elapsed
+      （iat_diag['truncated']=True 时 iat_fid 为下界、ess_fid 为上界）
     """
     if burnin is None:
         burnin = int(maxit * 0.05)
@@ -298,8 +326,8 @@ def run_pnp_ula(prob, maxit=10000, burnin=None, n_samples=100, seed=None,
     elapsed = time.time() - start
     n_post = len(trace_fid)
 
-    # 收敛诊断（与 5.5-1 旧版同口径）
-    iat_fid, ess_fid = iat_geyer(trace_fid)
+    # 收敛诊断（Geyer 初始正序列；慢模态可能在 lag 上限内未去相关，此时 IAT 为下界）
+    iat_fid, ess_fid, iat_diag = iat_geyer(trace_fid)
     if want_metric_curves:
         last_quarter_gain = float(psnr_values[-1] - psnr_values[int(0.75 * len(psnr_values))])
         psnr_last = float(psnr_values[-1])
@@ -335,6 +363,7 @@ def run_pnp_ula(prob, maxit=10000, burnin=None, n_samples=100, seed=None,
         'trace_extra': np.array(trace_extra, dtype=np.float64),
         'nrmse_values': nrmse_values, 'psnr_values': psnr_values, 'ssim_values': ssim_values,
         'n_post': int(n_post), 'iat_fid': iat_fid, 'ess_fid': ess_fid,
+        'iat_diag': iat_diag,
         'last_quarter_gain': last_quarter_gain, 'psnr_last': psnr_last,
         'half_sigma_corr': half_sigma_corr, 'elapsed': elapsed,
     }
@@ -410,10 +439,19 @@ def upstream_chain_gate(data, data_path, purpose='下游分析'):
         warnings.append("npz 中无 trace_psnr（旧版5.5-1产物），无法核查上游链是否到平台")
 
     if 'trace_fid' in data:
-        iat, ess = iat_geyer(data['trace_fid'].astype(np.float64))
-        extras.update(iat=iat, ess=ess)
-        status['全链IAT_步'] = round(iat, 2)
-        status['全链ESS'] = round(ess, 1)
+        iat, ess, iat_diag = iat_geyer(data['trace_fid'].astype(np.float64))
+        extras.update(iat=iat, ess=ess, iat_diag=iat_diag)
+        if iat_diag['truncated']:
+            status['全链IAT_步'] = f">={round(iat, 2)}（下界，lag {iat_diag['max_lag']} 内未去相关）"
+            status['全链ESS'] = f"<={round(ess, 1)}（上界）"
+            warnings.append(
+                f"数据失配轨迹在 {iat_diag['max_lag']} 个滞后内始终未去相关，"
+                f"IAT>={iat:.0f} 步仅为下界、ESS<={ess:.1f} 仅为上界："
+                "慢模态在该链长下没有充分混合，定量 UQ（置信区间/分位数）不可靠；"
+                "全链 Welford 均值/方差作为演示可用，严格 UQ 需 5e5~1e6 步长链")
+        else:
+            status['全链IAT_步'] = round(iat, 2)
+            status['全链ESS'] = round(ess, 1)
         thin = extras['thinning'] or 0
         status['抽稀间隔_ge_IAT'] = bool(thin >= iat) if thin else None
         if thin and thin < iat:

@@ -1,0 +1,48 @@
+{
+  "experiment": "4.2-1",
+  "title": "Metropolis-Hastings算法基础演示",
+  "step1_mh_basic": {
+    "n_samples": 50000,
+    "sigma": 1.0,
+    "burn_in": 5000,
+    "accept_rate_full": 0.7062,
+    "accept_rate_post": 0.7048,
+    "sample_mean": 0.0187,
+    "sample_var": 0.9885
+  },
+  "step2_detailed_balance": {
+    "mean_error": 0.0921,
+    "max_error": 0.8,
+    "n_balance_pairs": 148
+  },
+  "step3_normalization_constant": {
+    "constants": [
+      1.0,
+      2.0,
+      5.0,
+      10.0,
+      100.0
+    ],
+    "means": [
+      0.0187,
+      -0.0109,
+      -0.024,
+      -0.0441,
+      -0.0107
+    ],
+    "vars": [
+      0.9938,
+      1.0149,
+      0.972,
+      1.0348,
+      1.0499
+    ],
+    "accept_rates": [
+      0.713,
+      0.699,
+      0.7017,
+      0.7073,
+      0.7086
+    ]
+  }
+}

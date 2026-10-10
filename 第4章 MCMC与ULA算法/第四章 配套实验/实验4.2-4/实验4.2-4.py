@@ -282,6 +282,24 @@ fig.savefig(os.path.join(OUT_DIR, 'exp4_2-4_reconstruction.png'),
 plt.close()
 print(f"  图已保存: {os.path.join(OUT_DIR, 'exp4_2-4_reconstruction.png')}")
 
+# ── 叠加图：真值 / 带噪观测 / 解析后验均值 / pCN 经验后验均值 ──────
+# 把解析均值（红色实线）与 pCN 均值（绿色虚线）画在同一坐标上，
+# 两者几乎重合时绿虚线恰好覆盖红实线，直观展示 pCN 收敛到正确后验。
+fig, ax = plt.subplots(figsize=(9.5, 4.6))
+ax.plot(t, xt, 'k-', lw=1.0, alpha=0.85, label='真值 $x_{\\rm true}$')
+ax.plot(t, yt, color='0.6', lw=0.8, alpha=0.7, label='带噪观测 $y=Bx+\\eta$')
+ax.plot(t, mu_post, 'C3-', lw=2.2, label='解析后验均值')
+ax.plot(t, pcn_mean, 'C2--', lw=1.2, label='pCN 经验后验均值')
+ax.set_xlabel(r'位置索引 $i$', fontsize=12)
+ax.set_title(r'$d=256$：pCN 经验后验均值（绿虚线）叠加于解析后验均值（红实线）', fontsize=12)
+ax.legend(fontsize=9, ncol=2)
+ax.grid(True, alpha=0.3)
+plt.tight_layout()
+fig.savefig(os.path.join(OUT_DIR, 'exp4_2-4_overlay.png'),
+            dpi=150, bbox_inches='tight')
+plt.close()
+print(f"  图已保存: {os.path.join(OUT_DIR, 'exp4_2-4_overlay.png')}")
+
 # ── 小结 ──────────────────────────────────────────────────────────
 # 动态计算 pCN 接受率统计量，避免硬编码结论
 pcn_mean_acc = float(np.mean(acc_pcn))

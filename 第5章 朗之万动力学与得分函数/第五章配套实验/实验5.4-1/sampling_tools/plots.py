@@ -140,7 +140,7 @@ def plots(x,y,post_meanvar,post_meanvar_absfourier, nrmse_values, psnr_values, s
     # --- log pi
     if type(logPi_trace) == np.ndarray:
         plot = plt.figure(figsize = (15,10))
-        plt.plot(np.arange(len(logPi_trace))[::10],logPi_trace[::10], label =  "- $\log \pi$ -")
+        plt.plot(np.arange(len(logPi_trace))[::10],logPi_trace[::10], label =  r"- $\log \pi$ -")
         plt.legend()
         plt.show()
         plt.close()

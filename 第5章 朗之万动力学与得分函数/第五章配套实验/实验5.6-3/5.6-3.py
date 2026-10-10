@@ -24,8 +24,9 @@
     本文件不复制问题构建与采样循环代码；去噪器权重缺失时由共享模块自动定位/下载。
   - 运行顺序：先跑 5.5-1（maxit=10000 主链，GPU/Colab 约十分钟量级）生成 npz，
     再跑本实验；步骤6 共 10 条 2000 步扫描链，建议 GPU/Colab，CPU 很慢。
-    MAP 解与每条扫描链均按“参数+共享模块版本”缓存到本实验目录（首次运行建立，
-    之后重跑自动跳过；改图/改文字无需再跑链，改采样实现会自动失效重算）。
+    MAP 解与每条扫描链均按“参数+采样内核版本”缓存到本实验目录（首次运行建立，
+    之后重跑自动跳过；改图/改文字无需再跑链，改采样递推并 bump 内核版本才失效重算，
+    仅 IAT/闸门等诊断改动不使缓存失效）。
 
 素材来源：
   - 实验5.5-1/pnp_ula_common.py（前向算子/去噪器/PnP-ULA 设定的唯一事实源）
@@ -160,9 +161,11 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # ============================================================
 # 结果缓存（checkpoint）
 # MAP 解与步骤6 的每条扫描链都很昂贵（3000 步确定性迭代 / 每条 2000 步 ULA）。
-# 按“参数指纹 + pnp_ula_common 源码版本”落盘到本实验目录：
+# 缓存指纹 = 参数指纹 + 采样内核版本（SAMPLING_KERNEL_VERSION）：
 #   - 重跑时指纹命中 → 直接加载、跳过计算（改绘图/解读/文字无需再跑链）；
-#   - 修改 pnp_ula_common.py（采样实现）→ 版本指纹变化，自动重新计算；
+#   - 修改采样递推（步长/马氏核/噪声/RNG 口径）并在共享模块 bump 内核版本
+#     → 指纹变化，自动重新计算；
+#   - 仅修改 IAT/闸门等诊断代码 → 内核版本不变，旧缓存继续复用（采样数组与诊断无关）；
 #   - 修改扫描参数（SCAN_MAXIT/ε/δ/seed 等）→ 参数指纹变化，仅重算受影响的链；
 #   - 手动删除缓存文件或“步骤6_扫描链缓存”目录即可强制重跑。
 # ============================================================
@@ -170,44 +173,80 @@ import hashlib
 import json as _json
 
 REUSE_CACHE = True          # 置 False 可临时关闭缓存、强制全部重算
-# 版本指纹基于共享模块源码文件：优先取已导入模块的 __file__，异常时用探测目录拼接兜底
+# 共享模块源码文件（诊断指纹仅用于展示/追溯，不参与缓存命中）
 _COMMON_FILE = getattr(pnp_ula_common, '__file__', None) or os.path.join(
     _exp551_dir, 'pnp_ula_common.py')
-_COMMON_VER = hashlib.md5(
+_COMMON_DIAG_VER = hashlib.md5(
     open(_COMMON_FILE, 'rb').read()).hexdigest()[:10]
+# 缓存版本键：优先使用共享模块显式声明的采样内核版本；
+# 共享模块过旧、无该常量时回退到全文指纹（退化为旧行为，不会错误复用）
+KERNEL_VER = getattr(pnp_ula_common, 'SAMPLING_KERNEL_VERSION', None)
+if KERNEL_VER is None:
+    KERNEL_VER = _COMMON_DIAG_VER
+    print("[Warn] 共享模块未声明 SAMPLING_KERNEL_VERSION（版本过旧），"
+          f"缓存回退为全文指纹 {KERNEL_VER}；请上传最新 pnp_ula_common.py")
+# 历史缓存别名：采样内核与当前相同、仅诊断层不同的旧版共享模块全文指纹。
+# 命中别名缓存时自动迁移（重命名）为当前内核指纹文件名，无需重跑链。
+#   47bc93b584 = IAT 截断诊断升级前 Colab 使用的 pnp_ula_common.py
+#   0bdaff85d6 = IAT 截断诊断升级版（iat_geyer 三元组/闸门警告），
+#                但尚未声明 SAMPLING_KERNEL_VERSION、5.6-3.py 回退全文MD5时产出
+_LEGACY_CACHE_VERSIONS = ('0bdaff85d6', '47bc93b584')
 SCAN_CACHE_DIR = os.path.join(SAVE_DIR, '步骤6_扫描链缓存')
+_legacy_cache_hits = []   # 记录由旧别名迁移复用的缓存文件（写入 JSON，透明可查）
 
 
-def _cache_fingerprint(kind, params):
+def _cache_fingerprint(kind, params, ver):
     src = _json.dumps(params, sort_keys=True, ensure_ascii=False)
-    h = hashlib.md5((kind + '|' + src + '|' + _COMMON_VER).encode('utf-8')).hexdigest()[:16]
+    h = hashlib.md5((kind + '|' + src + '|' + str(ver)).encode('utf-8')).hexdigest()[:16]
     return h, src
 
 
+def _cache_path(kind, h):
+    return (os.path.join(SCAN_CACHE_DIR, h + '.npz') if kind == 'scan'
+            else os.path.join(SAVE_DIR, f'cache_{kind}_{h}.npz'))
+
+
 def cache_load(kind, params):
-    """命中返回 {数组名: 数组} 字典（句柄已关闭），否则 None。"""
+    """命中返回 {数组名: 数组} 字典（句柄已关闭），否则 None。
+    先查当前内核版本，未命中再按历史别名查找并原子迁移（重命名）到新文件名。"""
     if not REUSE_CACHE:
         return None
-    h, _ = _cache_fingerprint(kind, params)
-    path = (os.path.join(SCAN_CACHE_DIR, h + '.npz') if kind == 'scan'
-            else os.path.join(SAVE_DIR, f'cache_{kind}_{h}.npz'))
-    if not os.path.exists(path):
-        return None
+    h_new, _ = _cache_fingerprint(kind, params, KERNEL_VER)
+    path_new = _cache_path(kind, h_new)
+    if os.path.exists(path_new):
+        hit_path = path_new
+    else:
+        hit_path = None
+        for _old_ver in _LEGACY_CACHE_VERSIONS:
+            h_old, _ = _cache_fingerprint(kind, params, _old_ver)
+            path_old = _cache_path(kind, h_old)
+            if os.path.exists(path_old):
+                hit_path = path_old
+                break
+        if hit_path is None:
+            return None
+        # 迁移为当前内核文件名（同目录原子重命名；Drive FUSE 失败则原地复用）
+        if hit_path != path_new:
+            try:
+                os.replace(hit_path, path_new)
+                _legacy_cache_hits.append(
+                    os.path.basename(hit_path) + ' -> ' + os.path.basename(path_new))
+                hit_path = path_new
+            except OSError:
+                _legacy_cache_hits.append(os.path.basename(hit_path) + '（原地复用）')
     try:
-        with np.load(path) as z:
+        with np.load(hit_path) as z:
             return {k: z[k] for k in z.files}
     except Exception as _ce:
-        print(f"[缓存] {os.path.basename(path)} 读取失败({_ce})，改为重新计算")
+        print(f"[缓存] {os.path.basename(hit_path)} 读取失败({_ce})，改为重新计算")
         return None
 
 
 def cache_save(kind, params, **arrays):
-    h, src = _cache_fingerprint(kind, params)
+    h, src = _cache_fingerprint(kind, params, KERNEL_VER)
+    path = _cache_path(kind, h)
     if kind == 'scan':
         os.makedirs(SCAN_CACHE_DIR, exist_ok=True)
-        path = os.path.join(SCAN_CACHE_DIR, h + '.npz')
-    else:
-        path = os.path.join(SAVE_DIR, f'cache_{kind}_{h}.npz')
     arrays['_meta'] = np.array(src)   # 记录参数原文，便于人工核对缓存身份
     np.savez(path, **arrays)
     return path
@@ -216,7 +255,9 @@ def cache_save(kind, params, **arrays):
 # ============================================================
 # 辅助函数：图像质量指标
 # 注意：这是简化版实现，用于相对比较
-# 与sampling_tools中的实现可能有数值差异（尤其NRMSE归一化口径不同）
+# NRMSE 与 5.5-1 的 sampling_tools/measures.py 严格同一口径
+# （Frobenius 归一化，上游 MI2G 论文官方定义）；PSNR 在 [0,1] 图像上与
+# skimage 版等价；仅“全局相似度”是简化的全局 SSIM，非标准局部窗口 SSIM。
 # ============================================================
 def compute_psnr(x, y):
     """计算PSNR（以 max(x.max(),1.0) 为峰值，[0,1]图像即标准PSNR）"""
@@ -241,11 +282,20 @@ def compute_global_similarity(x, y):
     return ssim
 
 def compute_nrmse(x, y):
-    """NRMSE：RMSE 除以 std(x_true)。注意与5.5-1的归一化口径不同。"""
-    std_x = np.std(x)
-    if std_x == 0:
+    """NRMSE（Frobenius 归一化）：||x-y||_F / ||x||_F。
+
+    与 5.5-1 sampling_tools/measures.py 的 NRMSE 严格同一公式（上游 MI2G
+    官方口径），分母是整幅图信号能量 RMS=sqrt(mean(x^2))（含均值能量），
+    而非去均值标准差 std(x)；故 MMSE 行结果与 5.5-1 JSON 的 NRMSE 完全一致、
+    可直接互证。输入为 numpy 数组（measures.NRMSE 收 torch tensor，故此处
+    保留 numpy 自包含实现，公式逐字对齐，勿改成 RMSE/std 口径）。
+    """
+    xn = np.asarray(x, dtype=np.float64)
+    yn = np.asarray(y, dtype=np.float64)
+    denom = np.linalg.norm(xn, 'fro')
+    if denom == 0:
         return float('inf')
-    return np.sqrt(np.mean((x - y) ** 2)) / std_x
+    return float(np.linalg.norm(xn - yn, 'fro') / denom)
 
 
 # ============================================================
@@ -360,11 +410,11 @@ nrmse_map = compute_nrmse(x_true, x_map)
 print("\nMMSE估计（后验均值）:")
 print(f"  PSNR: {psnr_mmse:.2f} dB")
 print(f"  全局相似度: {sim_mmse:.4f} (全局近似，非标准SSIM)")
-print(f"  NRMSE: {nrmse_mmse:.4f}")
+print(f"  NRMSE: {nrmse_mmse:.4f}  (Frobenius口径 ||e||_F/||x||_F，与5.5-1同一口径)")
 print(f"\n{map_label}:")
 print(f"  PSNR: {psnr_map:.2f} dB")
 print(f"  全局相似度: {sim_map:.4f} (全局近似，非标准SSIM)")
-print(f"  NRMSE: {nrmse_map:.4f}")
+print(f"  NRMSE: {nrmse_map:.4f}  (Frobenius口径，同上)")
 
 print("\n[教学点·一般原理] MMSE是MSE最优估计（Bayes风险意义下PSNR上界），"
       "\n             且自带后验方差=不确定性；MAP是后验众数，通常边缘更锐利。")
@@ -544,7 +594,8 @@ delta_test = np.array([0.1, 0.3, 0.5, 0.7, 0.99])
 print(f"[Info] 真实扫描模式：{len(eps_test) + len(delta_test)} 条 ULA 链，每条 {SCAN_MAXIT} 步，"
         "测量 ε/δ/M 的影响（GPU 建议，CPU 很慢）...")
 print(f"[Info] 扫描链缓存：{SCAN_CACHE_DIR}")
-print(f"       缓存开启={REUSE_CACHE}，共享模块版本={_COMMON_VER}；"
+print(f"       缓存开启={REUSE_CACHE}，采样内核版本={KERNEL_VER}"
+        f"（共享模块诊断指纹={_COMMON_DIAG_VER}，仅诊断升级不使缓存失效）；"
         "命中自动跳过，删目录可强制重跑")
 
 def run_scan(eps, delta_frac, maxit, n_samples, seed=0, burn_frac=SCAN_BURN_FRAC, tag=''):
@@ -553,7 +604,8 @@ def run_scan(eps, delta_frac, maxit, n_samples, seed=0, burn_frac=SCAN_BURN_FRAC
     返回 (粗化样本数组, 像素均值轨迹, 末1/4段运行均值PSNR提升dB)。
     末1/4段提升用于判断扫描链是否已到平台：未收敛链上的"方差/稳定性"对比会
     混入瞬态成分，必须显式警告，而不是直接画进图里当作稳态结论。
-    结果按参数指纹+共享模块版本缓存：命中则直接加载，不重跑链。"""
+    结果按参数指纹+采样内核版本缓存：命中则直接加载，不重跑链。
+    旧版全文指纹缓存（采样内核相同、仅诊断不同）由 cache_load 自动迁移复用。"""
     _sparams = dict(eps=float(eps), delta_frac=float(delta_frac),
                     maxit=int(maxit), burnin=int(maxit * burn_frac),
                     n_samples=int(n_samples), seed=int(seed),
@@ -828,6 +880,11 @@ results_summary = {
             "NRMSE": round(float(nrmse_map), 6),
             "高频能量": round(hf_map, 6),
         },
+        "指标口径说明": (
+            "NRMSE = ||x_true-x_hat||_F / ||x_true||_F（Frobenius 归一化），"
+            "与5.5-1 sampling_tools/measures.py 及5.5-1 JSON 同一口径，"
+            "故MMSE行NRMSE与5.5-1的0.031208一致、可直接互证；"
+            "全局相似度为简化的全局SSIM（非skimage标准局部窗口SSIM），勿与5.5-1的0.9200直接比"),
     },
     "步骤5_不确定性量化": {
         "后验标准差_平均值": round(float(np.mean(post_std)), 6),
@@ -841,8 +898,11 @@ results_summary = {
         "结果缓存": {
             "开启": bool(REUSE_CACHE),
             "扫描链缓存目录": SCAN_CACHE_DIR,
-            "共享模块版本指纹": _COMMON_VER,
-            "说明": "按参数指纹+共享模块源码版本缓存；改参数或采样实现自动重算，删除缓存目录强制全部重跑"
+            "采样内核版本": KERNEL_VER,
+            "共享模块诊断指纹": _COMMON_DIAG_VER,
+            "旧别名缓存迁移记录": _legacy_cache_hits,
+            "说明": "按参数指纹+采样内核版本缓存；改参数或采样递推（bump SAMPLING_KERNEL_VERSION）自动重算；"
+                    "仅诊断/IAT/闸门改动不使缓存失效；删除缓存目录强制全部重跑"
         },
         "M实验说明": "复用5.5-1 npz抽稀样本无放回bootstrap，60次重复；" + _m_indep_note,
         "基准平均方差": round(base_var, 10),

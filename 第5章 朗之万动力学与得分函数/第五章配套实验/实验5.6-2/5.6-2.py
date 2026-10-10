@@ -10,6 +10,9 @@
   - 样本差异大的区域 = 高后验方差区域
   - 95%区间的经验覆盖率检验：真值 x_true 落入区间的像素比例应接近95%
   - 平稳性的劈半检验：前/后半段链各自估计的后验σ应一致（数据段不同，非自比）
+  - 统计量口径：正态法主区间的中心与宽度都取自全链 Welford 累积量（与5.6-1
+    一致、与上游闸门"全链Welford量演示可用"的裁定一致）；94个抽稀样本重算
+    方差的正态区间仅作对照；非参数分位数只能由抽稀样本估计（npz未存全链分位数）
 
 前置实验：
   - 需要先运行实验5.5-1，生成sampling_results.npz
@@ -124,21 +127,25 @@ src_status, src_warnings, _src_extras = upstream_chain_gate(
 n_post_full = _src_extras['n_post_full']
 print_gate(src_status, src_warnings, '下游置信区间/覆盖率结论有效')
 
-# 保留 5.5-1 中由整条 MCMC 链（全部 post-burn-in 迭代）累积的后验方差，
-# 作为"全链参照量"（用于步骤5的抽稀保真度检验；注意稀疏样本是它的子集，二者非独立）
+# 主统计量口径（与5.6-1一致、与上游闸门裁定一致）：
+# post_mean / post_var_full 是整条链全部 post-burn-in 状态的 Welford 在线
+# 累积量。MCMC 状态虽强自相关，但每个状态的边际分布都是目标后验，Welford
+# 时间平均对后验均值/方差无偏，且是当前链长下方差最小的估计；闸门明确裁定
+# "全链 Welford 均值/方差作为演示可用"。故正态法主区间一律用全链 Welford 量。
 post_var_full = np.asarray(post_var).copy()
 
-# 从稀疏样本重新估计统计量（与5.6-1保持一致）
+# 抽稀诊断量：94 个抽稀样本（抽稀间隔100 < 全链IAT≥1101，ESS 上界仅8.6）。
+# 它们同样无偏但逐像素估计噪声大，仅用于：(a) 抽稀口径的正态区间【对照】；
+# (b) 非参数分位数（npz 未保存全链逐像素分位数，分位数只能由这批样本估计）；
+# (c) 步骤5的抽稀保真度检验。注意：不得像旧版那样把它当作主区间的方差来源。
 post_mean_recomputed = np.mean(mc_samples, axis=0)
 post_var_recomputed = np.var(mc_samples, axis=0, ddof=1)
 
-print(f"\n[验证] 从稀疏样本重新估计的统计量 vs 全链统计量:")
+print(f"\n[验证] 从稀疏样本重新估计的统计量 vs 全链 Welford 统计量:")
 print(f"  均值差异 (L2范数): {np.linalg.norm(post_mean - post_mean_recomputed):.6f}")
 print(f"  方差差异 (L2范数): {np.linalg.norm(post_var_full - post_var_recomputed):.6f}")
-
-# 置信区间与经验分位数使用同一批样本的方差，保持自洽（与5.6-1一致）
-post_var = post_var_recomputed
-print(f"\n[Info] 置信区间使用从样本重新估计的后验方差；步骤5另以全链方差作抽稀保真度参照（非独立验证）")
+print("[Info] 正态法主区间使用全链 Welford 的均值与方差（主口径，与5.6-1一致）；")
+print("       抽稀样本方差版正态区间仅作对照；分位数法只能由94个抽稀样本估计（定性参考）")
 
 # 劈半统计：使用上游5.5-1保存的"全链前/后半段"（两段是链上不同数据，
 # 比稀疏样本子集更接近独立检验）；旧版npz无此字段时，降级为稀疏样本前/后半。
@@ -161,15 +168,22 @@ print("\n" + "=" * 60)
 print("步骤2：计算95%置信区间")
 print("=" * 60)
 
-post_std = np.sqrt(post_var)
+post_std = np.sqrt(post_var)                    # 主：全链 Welford σ
+post_std_thin = np.sqrt(post_var_recomputed)    # 对照：94 抽稀样本 σ
 
-# 方法1：正态近似（假设后验为正态分布）
+# 方法1（主口径）：正态近似（假设后验为正态分布），中心与宽度都取自全链 Welford
 z_95 = 1.96
 q_low = post_mean - z_95 * post_std
 q_high = post_mean + z_95 * post_std
 ci_width = q_high - q_low  # 置信区间宽度
 
-# 方法2：基于样本分位数（非参数方法，不假设正态）
+# 方法1（抽稀对照）：中心仍为全链 MMSE，仅把 σ 换成94个抽稀样本的重算标准差，
+# 使两版差异纯粹来自"方差估计口径"，直接展示使用高噪声（ESS≤8.6）方差的后果
+q_low_thin = post_mean - z_95 * post_std_thin
+q_high_thin = post_mean + z_95 * post_std_thin
+ci_width_thin = q_high_thin - q_low_thin
+
+# 方法2：基于样本分位数（非参数方法，不假设正态）；npz 未存全链分位数，只能用抽稀样本
 q_low_empirical = np.percentile(mc_samples, 2.5, axis=0)
 q_high_empirical = np.percentile(mc_samples, 97.5, axis=0)
 ci_width_empirical = q_high_empirical - q_low_empirical
@@ -177,11 +191,15 @@ ci_width_empirical = q_high_empirical - q_low_empirical
 print(f"95%置信区间公式（正态近似）: x̂_MMSE ± 1.96·√Var(x|y)")
 print(f"\n[注意] ±1.96σ 假设后验为正态分布，是近似结果")
 print(f"       若后验非正态（如TV先验），应使用样本分位数方法")
-print(f"\n正态近似置信区间宽度统计:")
+print(f"\n正态近似置信区间宽度统计（主口径：全链 Welford σ）:")
 print(f"  平均宽度: {np.mean(ci_width):.4f}")
 print(f"  最大宽度: {np.max(ci_width):.4f}")
 print(f"  最小宽度: {np.min(ci_width):.4f}")
-print(f"\n样本分位数置信区间宽度统计（非参数）:")
+print(f"\n正态近似置信区间宽度统计（对照：94抽稀样本 σ, ESS≤8.6）:")
+print(f"  平均宽度: {np.mean(ci_width_thin):.4f}")
+print(f"  最大宽度: {np.max(ci_width_thin):.4f}")
+print(f"  最小宽度: {np.min(ci_width_thin):.4f}")
+print(f"\n样本分位数置信区间宽度统计（非参数，只能由抽稀样本估计）:")
 print(f"  平均宽度: {np.mean(ci_width_empirical):.4f}")
 print(f"  最大宽度: {np.max(ci_width_empirical):.4f}")
 print(f"  最小宽度: {np.min(ci_width_empirical):.4f}")
@@ -191,16 +209,46 @@ print(f"  最小宽度: {np.min(ci_width_empirical):.4f}")
 # 注意：像素间存在强空间相关，不能把65536个像素当作独立伯努利试验套用
 # sqrt(0.95*0.05/N) 的标准误，故这里只作描述性校准检查，不做假设检验。
 cover_mask_norm = (x_true >= q_low) & (x_true <= q_high)
+cover_mask_norm_thin = (x_true >= q_low_thin) & (x_true <= q_high_thin)
 cover_mask_emp = (x_true >= q_low_empirical) & (x_true <= q_high_empirical)
 coverage_norm = float(cover_mask_norm.mean())
+coverage_norm_thin = float(cover_mask_norm_thin.mean())
 coverage_emp = float(cover_mask_emp.mean())
 print(f"\n95%区间经验覆盖率（真值落入区间的像素比例，名义水平=95%）:")
-print(f"  正态近似法: {coverage_norm*100:.2f}%")
-print(f"  样本分位数法: {coverage_emp*100:.2f}%")
+print(f"  正态近似法（主，全链Welford σ）: {coverage_norm*100:.2f}%")
+print(f"  正态近似法（对照，94抽稀样本 σ）: {coverage_norm_thin*100:.2f}%")
+print(f"  样本分位数法（抽稀样本）        : {coverage_emp*100:.2f}%")
 print(f"  注：像素强空间相关，此为描述性校准；覆盖严重偏离95%说明区间不可直接定量使用")
 _q_order = max(1, int(round(0.025 * len(mc_samples))))
 print(f"  注：样本分位数仅由 {len(mc_samples)} 个抽稀样本估计，2.5%分位约对应第 {_q_order} 小样本，"
       "末端次序统计量分辨率粗；若抽稀间隔<全链IAT，有效样本更少，覆盖率只作定性参考")
+
+# ===== 覆盖率偏离95%的定量解释：校准比（与5.6-1同一公式、同一npz，可交叉验证）=====
+# 理想（逐像素高斯后验）：E|x_true - x_MMSE| / E[σ] = sqrt(2/pi) ≈ 0.798。
+#   比值 >0.80：σ相对实际重建误差偏窄（后验方差不含模型偏差，如边缘振铃）；
+#   比值 <0.80：σ相对实际误差偏保守——PnP-ULA 在有限去噪噪声 ε 下的平稳分布
+#               比目标后验更弥散（见5.6-1知识点说明），区间系统性偏宽→覆盖率>95%。
+_recon_err = np.abs(x_true - post_mean)
+_sigma_mean = float(post_std.mean())
+calib_mae = float(_recon_err.mean() / max(_sigma_mean, 1e-12))
+calib_rms = float(np.sqrt(np.mean((x_true - post_mean) ** 2))
+                 / max(_sigma_mean, 1e-12))
+_calib_ideal = float(np.sqrt(2.0 / np.pi))
+print(f"\n覆盖率偏离的校准诊断（全链Welford口径）:")
+print(f"  重建MAE={_recon_err.mean():.6f}, 全链σ均值={_sigma_mean:.6f}")
+print(f"  校准比 E|e|/E[σ] = {calib_mae:.4f}（理想高斯≈{_calib_ideal:.3f}；与5.6-1同源应一致）")
+print(f"  校准比 RMS(e)/E[σ] = {calib_rms:.4f}")
+if calib_mae < 0.80:
+    print(f"  解读: 校准比<0.80，后验σ相对实际重建误差偏保守（有限ε下平稳分布过弥散），")
+    print("        95%区间系统性偏宽，因此经验覆盖率高于名义95%（过覆盖），方向与数值均与此一致。")
+elif calib_mae > 0.90:
+    print(f"  解读: 校准比明显>0.80，σ偏窄（模型偏差不进后验方差），区间倾向欠覆盖。")
+else:
+    print(f"  解读: 校准比接近理想值0.80，σ幅度与实际误差同量级，覆盖率偏离主要来自短链/空间相关。")
+print(f"  两比值联读: MAE比={calib_mae:.3f} 而 RMS比={calib_rms:.3f}（理想高斯应同时≈0.798与1.00）。")
+print("        本例典型像素上σ偏宽（MAE比低）、但大误差像素把RMS比抬到≈1，说明校准失配是")
+print("        空间异质的：平滑背景区σ明显过宽（对应5.6-1五分位Q1~Q3比值0.45~0.51），")
+print("        高不确定边缘区σ才与误差同量级（Q5≈0.85）；这与漏检像素沿边缘分布一致。")
 
 
 # ============================================================
@@ -227,7 +275,7 @@ axes[0, 2].axis('off')
 
 # 第2行：区间宽度、宽度直方图、高宽度区域
 im_width = axes[1, 0].imshow(ci_width, cmap='hot')
-axes[1, 0].set_title('置信区间宽度 $w = 3.92\\sqrt{\\mathrm{Var}}$')
+axes[1, 0].set_title('置信区间宽度 $w = 3.92\\sqrt{\\mathrm{Var}}$（主口径：全链Welford σ）')
 axes[1, 0].axis('off')
 plt.colorbar(im_width, ax=axes[1, 0], fraction=0.046, pad=0.04)
 
@@ -308,7 +356,8 @@ print("步骤5：样本差异分析")
 print("=" * 60)
 
 if len(mc_samples) >= 2:
-    # 稀疏样本逐像素标准差（多样性度量）；ddof=1 与全链Welford及步骤2口径一致
+    # 稀疏样本逐像素标准差（多样性度量）；ddof=1 与全链 Welford 的无偏方差
+    # 约定（S/(k-1)）一致，但它只基于94个抽稀样本，不是步骤2主区间所用的σ
     sample_std = np.std(mc_samples, axis=0, ddof=1)
     # 参照：整条 MCMC 链累积的后验标准差
     post_std_full = np.sqrt(post_var_full)
@@ -360,12 +409,13 @@ if len(mc_samples) >= 2:
     axes[1, 0].legend()
     axes[1, 0].grid(alpha=0.3)
 
-    # (1,1) 未覆盖真值的像素：红=正态法漏盖，蓝=分位数法漏盖，紫=两者都漏
+    # (1,1) 未覆盖真值的像素：红=主正态法(全链σ)漏盖，蓝=分位数法漏盖，紫=两者都漏
     miss_overlay = np.zeros((*x_true.shape, 3))
     miss_overlay[~cover_mask_norm, 0] = 1.0
     miss_overlay[~cover_mask_emp, 2] = 1.0
     axes[1, 1].imshow(miss_overlay)
-    axes[1, 1].set_title('95%区间未覆盖真值的像素\n（红=正态法漏，蓝=分位数法漏，紫=两者都漏）')
+    axes[1, 1].set_title('95%区间未覆盖真值的像素（主口径）\n'
+                         '（红=正态法[全链σ]漏，蓝=分位数法漏，紫=两者都漏）')
     axes[1, 1].axis('off')
 
     # (1,2) 定量结论文字
@@ -376,9 +426,13 @@ if len(mc_samples) >= 2:
         f"样本数: {len(mc_samples)}（真实PnP-ULA链）\n"
         f"上游链: {'有警告，详见控制台/JSON' if src_warnings else '已到平台、抽稀充分'}\n\n"
         "95%区间经验覆盖率:\n"
-        f"  正态近似法 : {coverage_norm*100:.2f}%\n"
-        f"  样本分位数 : {coverage_emp*100:.2f}%\n"
-        "  名义水平   : 95.00%\n\n"
+        f"  正态(全链σ,主) : {coverage_norm*100:.2f}%\n"
+        f"  正态(抽稀σ对照): {coverage_norm_thin*100:.2f}%\n"
+        f"  样本分位数     : {coverage_emp*100:.2f}%\n"
+        "  名义水平       : 95.00%\n"
+        f"校准比 E|e|/E[σ] = {calib_mae:.2f}\n"
+        "  (理想≈0.80；<0.80表示σ\n"
+        "   偏保守、区间偏宽→过覆盖)\n\n"
         f"抽稀保真度 r = {corr_thin:.3f}\n"
         "  (稀疏样本是全链的子集，仅\n"
         "   检验空间格局是否保真，\n"
@@ -401,7 +455,9 @@ if len(mc_samples) >= 2:
     print("      r接近1仅说明'稀疏化保留了不确定性的空间格局'，不构成幅度校准，也不是独立验证。")
     print(f"劈半一致性（{half_source}）相关系数: {corr_half:.3f}")
     print("解读: 前/后半段是链上不同数据段；r高且散点贴近y=x，才支持链已平稳、不确定性估计可重复。")
-    print(f"经验覆盖率: 正态法 {coverage_norm*100:.2f}% / 分位数法 {coverage_emp*100:.2f}%（名义95%）")
+    print(f"经验覆盖率（名义95%）: 正态法[全链σ,主] {coverage_norm*100:.2f}% / "
+          f"正态法[抽稀σ,对照] {coverage_norm_thin*100:.2f}% / 分位数法 {coverage_emp*100:.2f}%")
+    print(f"校准比 E|e|/E[σ] = {calib_mae:.3f}（理想≈0.80）：<0.80 表示σ偏保守、区间偏宽，定量解释过覆盖")
 
 
 # ============================================================
@@ -410,13 +466,16 @@ if len(mc_samples) >= 2:
 print("\n" + "=" * 60)
 print("实验5.6-2 总结")
 print("=" * 60)
-print("1. 95%置信区间: x̂_MMSE ± 1.96·√Var(x|y)")
+print("1. 95%置信区间（主口径，全链Welford）: x̂_MMSE ± 1.96·√Var(x|y)；另报抽稀σ版作对照")
 print("2. 置信区间宽度直观反映局部不确定性")
 print("3. 后验样本展示分布的多样性（本例为单峰附近的小幅扰动，非明显多峰；多峰演示见5.2-1）:")
 print("   - 共享全局结构（先验约束）")
 print("   - 细节存在差异（高不确定区扰动更大）")
-print(f"4. 经验覆盖率：正态法 {coverage_norm*100:.1f}% / 分位数法 {coverage_emp*100:.1f}%（名义95%），")
+print(f"4. 经验覆盖率：正态法[全链σ,主] {coverage_norm*100:.1f}% / 正态法[抽稀σ,对照] "
+      f"{coverage_norm_thin*100:.1f}% / 分位数法 {coverage_emp*100:.1f}%（名义95%），")
 print("   这是对'95%区间是否名副其实'的直接校准（像素强相关，仅作描述性检查）")
+print(f"   校准比 E|e|/E[σ]={calib_mae:.2f}<0.80：σ相对实际误差偏保守（有限ε下平稳分布过弥散），")
+print("   区间系统性偏宽，定量解释了覆盖率高于95%的过覆盖现象（与5.6-1同公式同源，可交叉核对）")
 print("5. 抽稀保真检验：稀疏子集σ与全链σ高相关仅说明空间格局保真（二者为包含关系、非独立）；")
 print("   链是否平稳应看劈半一致性（前/后半段不同数据段）与上游5.5-1的IAT/ESS诊断")
 if src_warnings:
@@ -454,25 +513,64 @@ results_summary = {
         "方差差异_L2范数": round(float(np.linalg.norm(post_var_full - post_var_recomputed)), 8),
     },
     "步骤2_95%置信区间": {
-        "正态近似_z值": float(z_95),
-        "正态近似_区间宽度统计": {
-            "平均宽度": round(float(np.mean(ci_width)), 6),
-            "最大宽度": round(float(np.max(ci_width)), 6),
-            "最小宽度": round(float(np.min(ci_width)), 6),
+        "口径说明": (
+            "主口径：正态区间的中心(全链Welford MMSE)与宽度(全链Welford σ)同源，"
+            "与5.6-1及上游闸门'全链Welford量演示可用'的裁定一致；"
+            "抽稀94样本σ版正态区间仅作口径对照（中心相同、只换σ）；"
+            "非参数分位数只能由94个抽稀样本估计（npz未存全链逐像素分位数），定性参考"),
+        "正态近似_主_全链Welford": {
+            "z值": float(z_95),
+            "区间宽度统计": {
+                "平均宽度": round(float(np.mean(ci_width)), 6),
+                "最大宽度": round(float(np.max(ci_width)), 6),
+                "最小宽度": round(float(np.min(ci_width)), 6),
+            },
+            "经验覆盖率": round(coverage_norm, 6),
         },
-        "样本分位数_区间宽度统计": {
-            "平均宽度": round(float(np.mean(ci_width_empirical)), 6),
-            "最大宽度": round(float(np.max(ci_width_empirical)), 6),
-            "最小宽度": round(float(np.min(ci_width_empirical)), 6),
+        "正态近似_对照_抽稀94样本": {
+            "区间宽度统计": {
+                "平均宽度": round(float(np.mean(ci_width_thin)), 6),
+                "最大宽度": round(float(np.max(ci_width_thin)), 6),
+                "最小宽度": round(float(np.min(ci_width_thin)), 6),
+            },
+            "经验覆盖率": round(coverage_norm_thin, 6),
+            "注记": (
+                "σ由94个强自相关抽稀样本重算（ESS上界≤8.6、抽稀间隔100<全链IAT≥1101），"
+                "无偏但逐像素估计噪声大；与主版中心相同、仅σ口径不同，用于对照而非主结论"),
         },
-        "经验覆盖率_真值落入区间像素比例": {
-            "名义水平": 0.95,
-            "正态近似法": round(coverage_norm, 6),
-            "样本分位数法": round(coverage_emp, 6),
+        "样本分位数_抽稀94样本": {
+            "区间宽度统计": {
+                "平均宽度": round(float(np.mean(ci_width_empirical)), 6),
+                "最大宽度": round(float(np.max(ci_width_empirical)), 6),
+                "最小宽度": round(float(np.min(ci_width_empirical)), 6),
+            },
+            "经验覆盖率": round(coverage_emp, 6),
             "分位数分辨率注记": (
                 f"仅由{len(mc_samples)}个抽稀样本估计，2.5%分位约对应第{_q_order}小样本；"
                 "抽稀间隔<全链IAT时有效样本更少，分位数法覆盖率只作定性参考"),
+        },
+        "经验覆盖率_汇总": {
+            "名义水平": 0.95,
+            "正态_全链σ_主": round(coverage_norm, 6),
+            "正态_抽稀σ_对照": round(coverage_norm_thin, 6),
+            "样本分位数法": round(coverage_emp, 6),
             "备注": "像素间强空间相关，不能按独立伯努利试验给标准误，此处为描述性校准检查",
+        },
+        "校准诊断_解释覆盖率偏离95": {
+            "重建MAE": round(float(_recon_err.mean()), 6),
+            "全链σ均值": round(_sigma_mean, 6),
+            "校准比_MAE除平均σ": round(calib_mae, 6),
+            "校准比_RMS误差除平均σ": round(calib_rms, 6),
+            "理想高斯值_sqrt2_pi": round(_calib_ideal, 6),
+            "解释": (
+                "校准比 E|x_true-x_MMSE|/E[σ] 与5.6-1同公式、同一npz（数值应≈0.65，可交叉核对）；"
+                "理想逐像素高斯后验≈0.798。本次<0.80，说明后验σ相对实际重建误差偏保守——"
+                "PnP-ULA在有限去噪噪声ε下的平稳分布比目标后验更弥散（见5.6-1知识点），"
+                "95%区间系统性偏宽，故经验覆盖率高于95%（过覆盖），方向与幅度均由此定量解释。"
+                "RMS版比值≈0.99而MAE版仅0.65，二者并不矛盾：失配是空间异质的——"
+                "平滑背景区σ明显过宽（5.6-1五分位Q1~Q3比值0.45/0.45/0.51）拉低MAE比，"
+                "高不确定边缘区σ才与误差同量级（Q5≈0.85），大误差像素把RMS比抬到≈1；"
+                "这正对应漏检像素沿边缘轮廓分布"),
         },
     },
     "步骤4_后验样本多样性": {

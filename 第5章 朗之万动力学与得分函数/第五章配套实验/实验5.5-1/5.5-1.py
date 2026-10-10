@@ -22,6 +22,18 @@
     - Pretrained_models/ 会自动下载（首次运行）
     - 仅当缺少 sampling_tools 或预训练模型时，步骤4才会被跳过
     - 若有 GPU 会自动使用以加速（可选，非必需）
+
+链长与耗时（重要）：
+  - 默认 maxit=10000、burnin=5%、目标保存 100 个抽稀样本（间隔约100步，
+    实际落盘约94个，npz 约25~30MB，供实验5.6系列使用），与上游官方笔记本的
+    迭代预算一致（上游保存2000个样本，本实验受落盘体积限制取100个）；
+    10000 次在 GPU 上约 9 分钟，在纯 CPU 上约 2.5~3 小时。
+  - 10000 次仅够"演示采样流程 + MMSE 复原"：实测后验均值 PSNR 已到约 33 dB
+    的渐近平台，但数据失配慢模态的 IAT 长达上千步（ESS 仅约10个量级），
+    尚不满足严格的不确定性量化（UQ）；上游明确指出真实 UQ 通常需要
+    5×10^5 ~ 10^6 次迭代。请以收敛曲线走平 + IAT/ESS + 劈半诊断为准。
+  - 快速冒烟测试（不用于结论）可设置环境变量：
+        PNP_MAXIT=200 PNP_NSAMPLES=40 python 5.5-1.py
 """
 
 import math
@@ -64,6 +76,11 @@ except ImportError:
 
 np.random.seed(42)
 torch.manual_seed(42)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(42)
+# 尽量保证同设备跨次运行可复现（不影响 CPU/GPU 均可运行的性质）
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 # 导入sampling_tools模块
 _local_sampling_tools = os.path.join(SAVE_DIR, 'sampling_tools')
@@ -303,12 +320,18 @@ if prob is not None:
     # 正式实测后验运行均值 PSNR 在约1200步时仅约30.1 dB，到10000步才到33.1 dB平台；
     # 早期 maxit=200 版曲线末端近线性上升、maxit=1000 版仍未到平台，
     # 均不能声称链已进入平稳分布（见实验5.6-2复核问题2），故对齐官方预算并保留IAT/ESS诊断。
-    maxit = 10000
+    # 默认 10000（官方预算）；可用环境变量 PNP_MAXIT/PNP_NSAMPLES 缩短做冒烟测试
+    maxit = int(os.environ.get("PNP_MAXIT", "10000"))
     burnin = np.int64(maxit * 0.05)
     # 抽稀目标样本数：官方 n_samples=2000（间隔5步），但这里样本要落盘 npz 供5.6系列使用，
-    # 2000张256×256约占1GB；故取100（间隔100步，实际约95张、约50MB）。
+    # 2000张256×256未压缩约占0.5GB以上；故取100（间隔100步，实际约94张、约25~30MB）。
     # 抽稀间隔是否≥IAT由下方诊断自动判定并如实打印。
-    n_samples = np.int64(100)
+    n_samples = np.int64(os.environ.get("PNP_NSAMPLES", "100"))
+    _smoke_run = ("PNP_MAXIT" in os.environ) or ("PNP_NSAMPLES" in os.environ)
+    if _smoke_run:
+        print("[冒烟测试] 检测到 PNP_MAXIT/PNP_NSAMPLES 环境变量覆盖："
+              f"maxit={maxit}, n_samples={n_samples}")
+        print("[冒烟测试] 该设置仅用于检查代码能否跑通，产出结果不可用于实验结论")
 
     # 问题相关变量（供本文件打印/绘图/JSON 使用，均来自共享模块构建的 prob）
     alpha = prob.alpha
@@ -344,22 +367,47 @@ if prob is not None:
     ssim_values = res['ssim_values']
     iat_fid = res['iat_fid']
     ess_fid = res['ess_fid']
+    iat_diag = res['iat_diag']
     n_post = res['n_post']
     last_quarter_gain = res['last_quarter_gain']
     half_sigma_corr = res['half_sigma_corr']
     elapsed = res['elapsed']
 
+    # 显式收敛判定（阈值固定并打印，避免"只报数值不给结论"或"暗示已收敛"）
+    _GAIN_PLATFORM_DB = 0.2     # 末1/4段运行均值 PSNR 提升小于此值视为 MMSE 渐近平台
+    _HALF_CORR_STATIONARY = 0.9 # 劈半后验标准差空间相关系数达到此值才支持链已平稳
+    _ESS_MIN_UQ = 30.0          # 定量 UQ 所需有效样本量的最低门槛（经验值，仅作粗筛）
+    mmse_platform = last_quarter_gain < _GAIN_PLATFORM_DB
+    half_stationary = half_sigma_corr >= _HALF_CORR_STATIONARY
+    iat_truncated = bool(iat_diag['truncated'])
+    # 慢模态充分混合需同时满足：Geyer 序列在 lag 上限内完成去相关，且 ESS 达到最低门槛
+    uq_mixing_ok = (not iat_truncated) and (ess_fid >= _ESS_MIN_UQ)
+    uq_ok = uq_mixing_ok and half_stationary
+
     print(f"\n收敛诊断（基于数据失配 ||y-AX||^2/(2*sigma^2) 的标量轨迹，不依赖真值）:")
     print(f"  post-burnin 步数: {n_post}")
-    print(f"  IAT（积分自相关时间）: {iat_fid:.2f} 步")
-    print(f"  ESS（有效样本量）: {ess_fid:.1f}")
+    if iat_truncated:
+        print(f"  IAT（积分自相关时间）: >= {iat_fid:.2f} 步【下界】"
+              f"——滞后 {iat_diag['max_lag']} 步内 rho 对始终未转负")
+        print(f"  ESS（有效样本量）: <= {ess_fid:.1f}【上界】：慢模态在本链长下未充分混合")
+    else:
+        print(f"  IAT（积分自相关时间）: {iat_fid:.2f} 步（初始正序列截断于 lag {iat_diag['cutoff_lag']}）")
+        print(f"  ESS（有效样本量）: {ess_fid:.1f}")
     if thinning_step >= iat_fid:
         print(f"  抽稀间隔 {thinning_step} 步 >= IAT {iat_fid:.2f}：抽稀样本可近似视为独立")
     else:
         print(f"  抽稀间隔 {thinning_step} 步 < IAT {iat_fid:.2f}：抽稀样本仍有自相关，下游统计结论需谨慎")
-    print(f"  前/后半段后验sigma空间相关系数: {half_sigma_corr:.4f}")
-    print(f"  （前后半段是链上不同数据段；相关系数接近1且散点贴近y=x才支持链已平稳）")
-    print(f"  末1/4段运行均值PSNR提升: {last_quarter_gain:+.3f} dB（<0.2 dB 可视为渐近平台）")
+    print(f"  前/后半段后验sigma空间相关系数: {half_sigma_corr:.4f}（判平稳阈值 >= {_HALF_CORR_STATIONARY}）")
+    print(f"  末1/4段运行均值PSNR提升: {last_quarter_gain:+.3f} dB（判平台阈值 < {_GAIN_PLATFORM_DB} dB）")
+    print("\n  结论（MMSE 复原与 UQ 分开判定）:")
+    print(f"    - MMSE 后验均值渐近平台: {'是' if mmse_platform else '否'}")
+    print(f"    - 劈半平稳性: {'支持' if half_stationary else '不支持（相关系数低于阈值，链可能仍在漂移）'}")
+    print(f"    - 慢模态去相关: {'Geyer序列已在lag上限内截断' if not iat_truncated else '否（IAT下界仍超滞后上限）'}"
+          f"，ESS={ess_fid:.1f}（定量UQ经验门槛≥{_ESS_MIN_UQ:g}）")
+    print(f"    - 定量 UQ 前提（未截断 + ESS达标 + 劈半平稳）: {'满足' if uq_ok else '不满足'}")
+    if not (mmse_platform and uq_ok):
+        print("    => 当前链长可用于演示 PnP-ULA 采样与 MMSE 复原；")
+        print("       后验方差/分位数等定量 UQ 结论需更长链（上游建议 5e5~1e6 次）后重跑。")
 
     # 结果评估
     print(f"\n采样耗时: {elapsed:.2f} 秒")
@@ -442,8 +490,12 @@ if prob is not None:
     axes2[2].set_title(f'后验运行均值 SSIM（末值 {ssim_values[-1]:.4f}）')
     axes2[2].set_xlabel('烧入后累积样本序号')
 
-    fig2.suptitle('收敛轨迹（曲线为后验运行均值，非单步链样本；观测起点 PSNR=%.2f dB）：'
-                  '末端趋平 + IAT/ESS与劈半诊断共同支持平稳性' % PSNR(x, y),
+    _verdict_txt = ('MMSE运行均值已到渐近平台；但慢模态未充分混合、劈半相关 %.2f，'
+                    '本链长仅用于流程演示与MMSE复原，定量UQ需更长链' % half_sigma_corr)
+    if mmse_platform and uq_ok:
+        _verdict_txt = '末端趋平 + IAT/ESS与劈半诊断共同支持链已平稳'
+    fig2.suptitle('收敛轨迹（曲线为后验运行均值，非单步链样本；观测起点 PSNR=%.2f dB）：%s'
+                  % (PSNR(x, y), _verdict_txt),
                   fontsize=13)
     plt.savefig(os.path.join(SAVE_DIR, '步骤4_PnP-ULA结果_曲线.png'), dpi=150, bbox_inches='tight')
     plt.close()
@@ -501,9 +553,10 @@ else:
                         fontsize=12, color='red', fontweight='bold')
     
     plt.tight_layout()
-    plt.savefig(os.path.join(SAVE_DIR, '步骤4_PnP-ULA结果_图像.png'), dpi=150, bbox_inches='tight')
+    # 缺依赖占位图必须与真实结果文件名区分，避免与成功运行的产物混淆/互相覆盖
+    plt.savefig(os.path.join(SAVE_DIR, '步骤4_未执行_图像.png'), dpi=150, bbox_inches='tight')
     plt.close()
-    
+
     # 创建第二个提示图表（1行3列，对应plots函数的第二个图表）
     fig2, axes2 = plt.subplots(1, 3, figsize=(15, 5))
     fig2.suptitle('收敛曲线 (缺少依赖)', fontsize=14, fontweight='bold', color='red')
@@ -519,12 +572,12 @@ else:
         ax.axis('off')
     
     plt.tight_layout()
-    plt.savefig(os.path.join(SAVE_DIR, '步骤4_PnP-ULA结果_曲线.png'), dpi=150, bbox_inches='tight')
+    plt.savefig(os.path.join(SAVE_DIR, '步骤4_未执行_曲线.png'), dpi=150, bbox_inches='tight')
     plt.close()
-    
-    print(f"\n提示图表已保存:")
-    print(f"  - {os.path.join(SAVE_DIR, '步骤4_PnP-ULA结果_图像.png')}")
-    print(f"  - {os.path.join(SAVE_DIR, '步骤4_PnP-ULA结果_曲线.png')}")
+
+    print(f"\n提示图表已保存（注意：以下为缺依赖占位图，不是采样结果）:")
+    print(f"  - {os.path.join(SAVE_DIR, '步骤4_未执行_图像.png')}")
+    print(f"  - {os.path.join(SAVE_DIR, '步骤4_未执行_曲线.png')}")
 
 
 # ============================================================
@@ -539,7 +592,9 @@ print("2. Tweedie等式架起去噪器与先验得分的桥梁:")
 print("   ∇log p_ε(x) = (D_ε(x) - x) / ε")
 print("3. 步长约束保证收敛:")
 print("   δ ≤ 1/(L_f + L_D/ε)")
-print("4. 后验采样生成多个样本，可用于不确定性量化（见实验5.6-1/2/3）")
+print("4. 后验采样生成多个样本，是不确定性量化(UQ)的原材料；但默认10000步链的慢模态")
+print("   尚未充分混合（见IAT/ESS与劈半诊断），定量UQ结论需更长链（5e5~1e6步），")
+print("   实验5.6-1/2/3 中凡依赖样本独立性的统计均会再次显式提示这一点")
 
 
 # ===== 保存数值结果 =====
@@ -595,21 +650,40 @@ try:
         "收敛诊断": {
             "诊断轨迹": "数据失配||y-AX||^2/(2*sigma^2)（不依赖真值x）",
             "post_burnin步数": int(n_post),
-            "IAT_积分自相关时间_步": round(iat_fid, 4),
-            "ESS_有效样本量": round(ess_fid, 2),
+            "IAT_积分自相关时间_步": (f">={round(iat_fid, 4)}(下界)" if iat_truncated else round(iat_fid, 4)),
+            "ESS_有效样本量": (f"<={round(ess_fid, 2)}(上界)" if iat_truncated else round(ess_fid, 2)),
+            "IAT滞后截断": {
+                "truncated": bool(iat_truncated),
+                "初始正序列截断lag": iat_diag['cutoff_lag'],
+                "计算lag上限": int(iat_diag['max_lag']),
+                "含义": "truncated=true 表示数据失配轨迹在 lag 上限内 rho 对始终未转负，IAT 仅为下界、ESS 仅为上界，慢模态未充分混合",
+            },
             "抽稀间隔_步": int(thinning_step),
             "实际落盘抽稀样本数": int(len(MC_X)),
             "抽稀间隔_ge_IAT": bool(thinning_step >= iat_fid),
             "前后半段后验sigma相关系数": round(half_sigma_corr, 6),
+            "劈半平稳阈值": _HALF_CORR_STATIONARY,
             "末1/4段运行均值PSNR提升_dB": round(last_quarter_gain, 4),
-            "平台判据": "末1/4段提升<0.2dB且劈半相关接近1，可视为渐近平台（与实验5.4-2同判据）",
-            "说明": "IAT由Geyer初始正序列估计；前后半段为链上不同数据段，相关系数高且贴近y=x才支持平稳",
+            "MMSE平台阈值_dB": _GAIN_PLATFORM_DB,
+            "定量UQ最低ESS门槛": _ESS_MIN_UQ,
+            "MMSE复原渐近平台": bool(mmse_platform),
+            "劈半平稳性支持": bool(half_stationary),
+            "慢模态去相关_Geyer未截断": bool(not iat_truncated),
+            "慢模态充分混合_支持定量UQ": bool(uq_mixing_ok),
+            "定量UQ前提满足": bool(uq_ok),
+            "综合结论": ("MMSE 复原演示成立" +
+                      ("且后验均值到渐近平台；" if mmse_platform else "且运行均值尚未到平台；") +
+                      ("当前链长不支持定量UQ（慢模态未充分混合/ESS不足/劈半未平稳），需5e5~1e6步长链"
+                       if not uq_ok
+                       else "IAT/ESS与劈半诊断支持当前链已平稳，可做定量UQ")),
+            "说明": "IAT由Geyer初始正序列估计；前后半段为链上不同数据段；MMSE平台与UQ可用性是两件事，需分别判定",
         },
+        "冒烟测试": bool(_smoke_run),
         "采样耗时_秒": round(float(elapsed), 4),
     }
     results_summary["步骤4_PnP-ULA采样"] = _step4
 except (NameError, UnboundLocalError):
-    results_summary["步骤4_PnP-ULA采样"] = "未执行（缺少GPU、sampling_tools或预训练模型）"
+    results_summary["步骤4_PnP-ULA采样"] = "未执行（缺少 sampling_tools 或预训练模型；CPU/GPU 均可运行，GPU 仅用于加速）"
 
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

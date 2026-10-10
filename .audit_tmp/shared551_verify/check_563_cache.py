@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """复核 5.6-3 Colab 新产物：扫描链缓存身份/内容、MAP缓存、JSON勾稽。"""
-import os, json, math, glob
+import os, json, math, glob, hashlib
 import numpy as np
 
 D = r'd:\works\deepinv\第5章 朗之万动力学与得分函数\第五章配套实验\实验5.6-3'
@@ -51,8 +51,6 @@ for (_, m, _, _, g, _), gj in zip(delta_rows, s6['步长扫描链末1/4段PSNR�
 print('\n[OK] 10个缓存 gain 与 JSON 逐点一致')
 
 # 2) ε链平均后验方差（ddof=1，全像素均值）重算勾稽
-for (_, _, shp, _, _, _), vj in [(t, None) for t in eps_rows], []:
-    pass
 for (name, m, shp, nt, g, size), vj in zip(eps_rows, s6['epsilon对应平均后验方差']):
     z = np.load(os.path.join(CD, name))
     v = float(np.mean(np.var(z['samples'], axis=0, ddof=1)))
@@ -75,13 +73,15 @@ for (name, m, shp, nt, g, size), ej, sj in zip(
     assert abs(se - sj) / sj < 1e-9, (se, sj)
 print('[OK] δ链 lag-1 ESS 与均值SE由缓存trace重算与 JSON 一致')
 
-# 4) 采样配置
+# 4) 采样配置：trace 烧入后逐步记录 maxit-burnin-1=1499 点；
+#    mc_samples 粗化 thinning=int(maxit/n_samples)：int(2000/60)=33→1499//33=45；
+#    int(2000/120)=16→1499//16=93
 for _, m, shp, nt, _, _ in eps_rows:
     assert m['maxit'] == 2000 and m['burnin'] == 500 and m['trace_every'] == 25
-    assert shp[0] == 60 and nt == 80, (shp, nt)   # 1500/25=60 trace点? 实际: (2000-500)/25=60 -> trace每步？
+    assert shp[0] == 1499 // int(2000 / 60) and nt == 1499, (shp, nt)
 for _, m, shp, nt, _, _ in delta_rows:
-    assert shp[0] == 120
-print(f'[OK] 配置 maxit/burnin/trace_every 一致；ε链样本60 δ链样本120，trace长度={nt}')
+    assert shp[0] == 1499 // int(2000 / 120) and nt == 1499, (shp, nt)
+print(f'[OK] 配置一致；ε链粗化45样本、δ链粗化93样本，trace长度={nt}（均与共享模块逻辑吻合）')
 
 # 5) MAP 缓存复核
 mf = glob.glob(os.path.join(D, 'cache_map_*.npz'))
@@ -99,12 +99,39 @@ psnr = 10 * math.log10(1.0 / mse)
 assert abs(psnr - j['步骤2_MAP_vs_MMSE对比']['MAP估计_确定性PnP']['PSNR_dB']) < 1e-3
 print(f'[OK] MAP缓存重算 PSNR={psnr:.4f} 与 JSON {32.5683} 一致')
 
-# 6) 指纹与本地共享模块一致
-import hashlib
+# 6) 指纹：记录 Colab 产出版本与本地当前共享模块版本（本地已升级 IAT 诊断时预期不同）
+colab_cache = s6['结果缓存']
 local_ver = hashlib.md5(open(
     r'd:\works\deepinv\第5章 朗之万动力学与得分函数\第五章配套实验\实验5.5-1\pnp_ula_common.py',
     'rb').read()).hexdigest()[:10]
-assert local_ver == s6['结果缓存']['共享模块版本指纹'], (local_ver, s6['结果缓存']['共享模块版本指纹'])
-print(f'[OK] Colab缓存指纹 {local_ver} == 本地共享模块版本（同一份代码产出）')
+if '采样内核版本' in colab_cache:
+    # 新机制：内核版本决定缓存身份，诊断指纹仅展示
+    import sys as _sys
+    _sys.path.insert(0, r'd:\works\deepinv\第5章 朗之万动力学与得分函数\第五章配套实验\实验5.5-1')
+    import pnp_ula_common as _m
+    _k = getattr(_m, 'SAMPLING_KERNEL_VERSION', None)
+    assert colab_cache['采样内核版本'] == _k, (colab_cache['采样内核版本'], _k)
+    print(f"[OK] Colab采样内核版本={_k} 与本地一致；"
+          f"Colab诊断指纹={colab_cache.get('共享模块诊断指纹')}，本地={local_ver}")
+    print(f"     旧别名迁移记录 {len(colab_cache.get('旧别名缓存迁移记录', []))} 条"
+          f"（MAP+10链应共11条）")
+    assert len(colab_cache.get('旧别名缓存迁移记录', [])) == 11
+else:
+    colab_ver = colab_cache['共享模块版本指纹']  # 旧版JSON
+    print(f'[信息] Colab产出指纹={colab_ver}；本地共享模块指纹={local_ver}；'
+          + ('一致' if local_ver == colab_ver else '不一致（本地已升级，Colab为旧版，诊断口径需同步）'))
+
+# 7) 用本地新版 iat_geyer 对同一份 npz 重算，记录口径差异
+import sys
+sys.path.insert(0, r'd:\works\deepinv\第5章 朗之万动力学与得分函数\第五章配套实验\实验5.5-1')
+from pnp_ula_common import iat_geyer
+npz551b = np.load(r'd:\works\deepinv\第5章 朗之万动力学与得分函数\第五章配套实验\实验5.5-1\sampling_results.npz')
+iat_n, ess_n, diag_n = iat_geyer(npz551b['trace_fid'].astype(np.float64))
+npz551b.close()
+print(f'[信息] 同一份npz：旧版IAT=788.7/ESS=12.0(被lag1000截断) → '
+      f'新版IAT>={iat_n:.1f}(下界)/ESS<={ess_n:.1f}(上界), truncated={diag_n["truncated"]}')
+assert diag_n['truncated'] is True
+# 定性结论不变：抽稀100仍远小于新IAT
+assert 100 < iat_n
 
 print('\n563_CACHE_AUDIT_OK')
