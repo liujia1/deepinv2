@@ -141,9 +141,9 @@ else:
     plt.close()
 
     print("TV近端算子说明：")
-    print(r"  $\lambda$小（0.01）：近端算子接近输入，TV正则化弱，保留更多噪声")
-    print(r"  $\lambda$大（0.5）：近端算子趋向于常数，TV正则化强，图像被过度平滑")
-    print(r"  适当$\lambda$：平衡去噪与保真度")
+    print("  λ 小（0.01）：近端算子接近输入，TV正则化弱，保留更多噪声")
+    print("  λ 大（0.5）：近端算子趋向于常数，TV正则化强，图像被过度平滑")
+    print("  适当 λ：平衡去噪与保真度")
 
 # ============================================================
 # 步骤2：Moreau包络梯度验证
@@ -236,7 +236,7 @@ else:
     max_error = np.max(errors)
     rel_error = mean_error / (torch.mean(torch.abs(gradient_theory)).item() + 1e-8)
     
-    print(rf"  测试 $\lambda = {lam_tv}$")
+    print(f"  测试 λ = {lam_tv}")
     print(f"  理论梯度: (y - prox) / λ")
     print(f"  有限差分梯度: [R̂(y+εe_i) - R̂(y-εe_i)] / (2ε)")
     print(f"  平均绝对误差: {mean_error:.4e}")
@@ -304,16 +304,16 @@ print("\n" + "=" * 60)
 print("实验5.4-1 总结")
 print("=" * 60)
 print("1. 近端算子定义：")
-print(r"   $\mathrm{prox}_{\lambda R}(y) = \arg\min_x \{R(x) + \frac{\|x-y\|^2}{2\lambda}\}$")
+print("   prox_{λR}(y) = argmin_x { R(x) + ‖x-y‖² / (2λ) }")
 print("\n2. Moreau包络梯度：")
-print(r"   $\nabla \hat{R}_\lambda(y) = \frac{y - \mathrm{prox}_{\lambda R}(y)}{\lambda}$")
+print("   ∇R̂_λ(y) = (y - prox_{λR}(y)) / λ")
 print("\n3. 梯度步解读：")
-print(r"   $\mathrm{prox}_{\lambda R}(y) = y - \lambda\,\nabla\hat{R}_\lambda(y)$")
-print(r"   近端算子 = 从 $y$ 出发，沿Moreau包络梯度走一步，步长为 $\lambda$")
+print("   prox_{λR}(y) = y - λ·∇R̂_λ(y)")
+print("   近端算子 = 从 y 出发，沿Moreau包络梯度走一步，步长为 λ")
 print(r"   这是MAP方向的'一步梯度下降'")
 print("\n4. TV近端算子参数敏感性：")
-print(r"   $\lambda$小：弱正则化，保留更多细节和噪声")
-print(r"   $\lambda$大：强正则化，趋向常数，过度平滑")
+print("   λ 小：弱正则化，保留更多细节和噪声")
+print("   λ 大：强正则化，趋向常数，过度平滑")
 print("\n下一步：加载去噪器（学习去噪器），实现MMSE方向的'一步'（见拆分实验5.4-2）")
 
 

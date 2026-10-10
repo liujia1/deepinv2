@@ -27,8 +27,6 @@
 import math
 import torch
 import numpy as np
-import time
-from tqdm.auto import tqdm
 from PIL import Image
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端
@@ -255,139 +253,113 @@ plt.close()
 
 
 # ============================================================
-# 步骤2：似然与梯度
+# 步骤2-3：似然/梯度、Tweedie/去噪器 —— 统一由共享模块构建
+# 问题构建与采样循环的唯一实现在同目录 pnp_ula_common.py，
+# 实验5.6-1/5.6-2/5.6-3 均通过该模块引用，不在各脚本中复制。
 # ============================================================
-if _has_sampling_tools:
+prob = None
+if _has_sampling_tools and _has_model:
+    try:
+        from pnp_ula_common import build_problem
+        prob = build_problem(device=device, model_path=_model_path)
+    except Exception as _build_err:
+        print(f"[Error] 构建PnP-ULA问题失败: {_build_err}")
+        prob = None
+
+if prob is not None:
     print("\n" + "=" * 60)
     print("步骤2：似然与梯度")
     print("=" * 60)
 
-    # 似然函数
-    f = lambda x, A: (torch.linalg.matrix_norm(y-A(x), ord='fro')**2.0)/(2.0*sigma**2)
+    print("似然函数: f(x) = ‖y-Ax‖² / (2σ²)")
+    print("似然梯度: ∇f(x) = Aᵀ(Ax-y) / σ²")
+    print(f"似然梯度Lipschitz常数: L_f = ‖AA‖ / σ² = {float(prob.L_y):.2f}")
 
-    # 似然梯度
-    gradf = lambda x, A, AT: AT(A(x)-y)/sigma**2
-
-    # Lipschitz常数
-    L_y = AAT_norm/(sigma**2)
-
-    print(f"似然函数: $f(x) = \\|y-Ax\\|^2 / (2\\sigma^2)$")
-    print(f"似然梯度: $\\nabla f(x) = A^T(Ax-y) / \\sigma^2$")
-    print(f"似然梯度Lipschitz常数: $L_f = \\|A^TA\\| / \\sigma^2 = {L_y.item():.2f}$")
-
-
-# ============================================================
-# 步骤3：Tweedie等式与去噪器
-# ============================================================
-if _has_sampling_tools and _has_model:
     print("\n" + "=" * 60)
     print("步骤3：Tweedie等式与去噪器")
     print("=" * 60)
 
-    # 加载去噪器
-    L_net = 1.0
-    model = load_model(_model_path, device)
-    denoise = lambda x: (x - model(x[None][None].to(device))[0][0]).detach()
-
-    # Tweedie等式视角
-    eps = (5/255)**2
-    print(f"\n去噪器训练噪声水平: $\\varepsilon = (5/255)^2 = {eps:.6f}$")
+    print(f"\n去噪器训练噪声水平: ε = (5/255)² = {prob.eps0:.6f}")
     print("\nTweedie等式:")
-    print("  $\\nabla \\log p_\\varepsilon(x) = (D_\\varepsilon(x) - x) / \\varepsilon$")
+    print("  ∇log p_ε(x) = (D_ε(x) - x) / ε")
     print("\nPnP-ULA中的先验得分步:")
-    print("  $(\\delta/\\varepsilon)(D_\\varepsilon(x) - x) = \\delta \\cdot \\nabla \\log p_\\varepsilon(x)$")
+    print("  (δ/ε)(D_ε(x) - x) = δ · ∇log p_ε(x)")
     print("\n这展示了PnP的核心思想：用去噪器替换先验梯度")
 
 
 # ============================================================
-# 步骤4：PnP-ULA采样
+# 步骤4：PnP-ULA采样（采样循环实现见 pnp_ula_common.run_pnp_ula，禁止复制）
 # ============================================================
-if _has_sampling_tools and _has_model:
+if prob is not None:
+    from pnp_ula_common import run_pnp_ula
+
     print("\n" + "=" * 60)
     print("步骤4：PnP-ULA采样")
     print("=" * 60)
 
-    # 算法参数
-    alpha = 1
-    max_lambd = 1.0/((2.0*alpha*L_net)/eps+4.0*L_y)
-    lambd_frac = 0.99
-    lambd = max_lambd*lambd_frac
+    # 主采样循环预算
+    # maxit=10000、burnin=500（5%，与官方 lab2_PnP_sol 一致），post-burnin 共9500步。
+    # 预算依据：本链与实验5.4-2 完全同构（同 cman 图、同 σ/δ、同 RealSN_DnCNN 去噪器），
+    # 正式实测后验运行均值 PSNR 在约1200步时仅约30.1 dB，到10000步才到33.1 dB平台；
+    # 早期 maxit=200 版曲线末端近线性上升、maxit=1000 版仍未到平台，
+    # 均不能声称链已进入平稳分布（见实验5.6-2复核问题2），故对齐官方预算并保留IAT/ESS诊断。
+    maxit = 10000
+    burnin = np.int64(maxit * 0.05)
+    # 抽稀目标样本数：官方 n_samples=2000（间隔5步），但这里样本要落盘 npz 供5.6系列使用，
+    # 2000张256×256约占1GB；故取100（间隔100步，实际约95张、约50MB）。
+    # 抽稀间隔是否≥IAT由下方诊断自动判定并如实打印。
+    n_samples = np.int64(100)
 
-    C_upper_lim = torch.tensor(1).to(device)
-    C_lower_lim = torch.tensor(0).to(device)
-    projbox = lambda x: torch.clamp(x, min=C_lower_lim, max=C_upper_lim)
+    # 问题相关变量（供本文件打印/绘图/JSON 使用，均来自共享模块构建的 prob）
+    alpha = prob.alpha
+    L_net = prob.L_net
+    eps = prob.eps0
+    sigma = prob.sigma
+    L_y = prob.L_y
+    x = prob.x
+    y = prob.y
+    BSNRdb = prob.bsnr_db
+    NRMSE, PSNR, SSIM = prob.NRMSE, prob.PSNR, prob.SSIM
 
-    # PnP-ULA Markov核
-    def Markov_kernel(X, delta, projected=True):
-        """
-        PnP-ULA递推式:
-        X_{m+1} = X_m - δ∇f(X_m) + (αδ/ε)(D_ε(X_m)-X_m) + √(2δ)Z
+    res = run_pnp_ula(prob, maxit=maxit, burnin=int(burnin), n_samples=int(n_samples),
+                      desc="PnP-ULA采样")
 
-        其中:
-        - δ∇f(X_m): 似然梯度步
-        - (αδ/ε)(D_ε(X_m)-X_m): 先验得分步（Tweedie替换）
-        - √(2δ)Z: 探索噪声
-        """
-        if projected:
-            return projbox(X - delta * gradf(X, A, AT) +
-                          alpha*delta/eps*(denoise(X)-X) +
-                          math.sqrt(2*delta) * torch.randn_like(X))
-        else:
-            return X - delta * gradf(X, A, AT) + \
-                   alpha*delta/eps*(denoise(X)-X) + \
-                   delta/lambd*(projbox(X)-X) + \
-                   math.sqrt(2*delta) * torch.randn_like(X)
+    delta = res['delta']
+    delta_max = res['delta_max']
+    print(f"步长: δ = {delta:.6f} (最大允许: {delta_max:.6f})")
+    print(f"步长约束: δ ≤ 1/(L_f + L_D/ε)")
 
-    # 步长选择
-    projected = True
-    if projected:
-        delta_max = (1.0)/(L_net/eps+L_y)
+    # 解包到与旧版同名的变量（绘图/npz落盘/JSON 代码保持不变）
+    burnin = np.int64(res['burnin'])
+    half_mark = res['half_mark']
+    thinning_step = np.int64(res['thinning_step'])
+    post_meanvar = res['post_meanvar']
+    post_meanvar_h1 = res['post_meanvar_h1']
+    post_meanvar_h2 = res['post_meanvar_h2']
+    absfouriercoeff = res['absfouriercoeff']
+    MC_X = list(res['mc_samples'])
+    trace_fid = list(res['trace_fid'])
+    nrmse_values = res['nrmse_values']
+    psnr_values = res['psnr_values']
+    ssim_values = res['ssim_values']
+    iat_fid = res['iat_fid']
+    ess_fid = res['ess_fid']
+    n_post = res['n_post']
+    last_quarter_gain = res['last_quarter_gain']
+    half_sigma_corr = res['half_sigma_corr']
+    elapsed = res['elapsed']
+
+    print(f"\n收敛诊断（基于数据失配 ||y-AX||^2/(2*sigma^2) 的标量轨迹，不依赖真值）:")
+    print(f"  post-burnin 步数: {n_post}")
+    print(f"  IAT（积分自相关时间）: {iat_fid:.2f} 步")
+    print(f"  ESS（有效样本量）: {ess_fid:.1f}")
+    if thinning_step >= iat_fid:
+        print(f"  抽稀间隔 {thinning_step} 步 >= IAT {iat_fid:.2f}：抽稀样本可近似视为独立")
     else:
-        delta_max = (1.0/3.0)/((alpha*L_net)/eps+L_y+1/lambd)
-    delta_frac = 0.99
-    delta = delta_max*delta_frac
-
-    print(f"步长: $\\delta = {delta:.6f}$ (最大允许: {delta_max:.6f})")
-    print(f"步长约束: $\\delta \\leq 1/(L_f + L_D/\\varepsilon)$")
-
-    # 主采样循环
-    maxit = 200
-    burnin = np.int64(maxit*0.05)
-    n_samples = np.int64(40)
-    X = y.clone()
-    MC_X = []
-    thinned_trace_counter = 0
-    thinning_step = np.int64(maxit/n_samples)
-
-    nrmse_values = []
-    psnr_values = []
-    ssim_values = []
-
-    start_time = time.time()
-    for i_x in tqdm(range(maxit), desc="PnP-ULA采样"):
-        X = Markov_kernel(X, delta, projected=projected)
-
-        if i_x == burnin:
-            post_meanvar = welford(X)
-            absfouriercoeff = welford(torch.fft.fft2(X).abs())
-            count = 0
-        elif i_x > burnin:
-            post_meanvar.update(X)
-            absfouriercoeff.update(torch.fft.fft2(X).abs())
-
-            current_mean = post_meanvar.get_mean()
-            nrmse_values.append(NRMSE(x, current_mean))
-            psnr_values.append(PSNR(x, current_mean))
-            ssim_values.append(SSIM(x, current_mean))
-
-            if count == thinning_step-1:
-                MC_X.append(X.detach().cpu().numpy())
-                count = 0
-            else:
-                count += 1
-
-    end_time = time.time()
-    elapsed = end_time - start_time
+        print(f"  抽稀间隔 {thinning_step} 步 < IAT {iat_fid:.2f}：抽稀样本仍有自相关，下游统计结论需谨慎")
+    print(f"  前/后半段后验sigma空间相关系数: {half_sigma_corr:.4f}")
+    print(f"  （前后半段是链上不同数据段；相关系数接近1且散点贴近y=x才支持链已平稳）")
+    print(f"  末1/4段运行均值PSNR提升: {last_quarter_gain:+.3f} dB（<0.2 dB 可视为渐近平台）")
 
     # 结果评估
     print(f"\n采样耗时: {elapsed:.2f} 秒")
@@ -398,8 +370,8 @@ if _has_sampling_tools and _has_model:
 
     post_mean = post_meanvar.get_mean()
     print(f"\n后验均值指标:")
-    print(f"  NRMSE: {NRMSE(post_mean, x):.4f}")
-    print(f"  PSNR: {PSNR(post_mean, x):.2f} dB")
+    print(f"  NRMSE: {NRMSE(x, post_mean):.4f}")
+    print(f"  PSNR: {PSNR(x, post_mean):.2f} dB")
     print(f"  SSIM: {SSIM(x, post_mean):.4f}")
 
     # 可视化 - 需要手动保存两个图表
@@ -411,6 +383,9 @@ if _has_sampling_tools and _has_model:
     
     fig1, axes1 = plt.subplots(nrows=2, ncols=4, figsize=(15, 10))
     fig1.tight_layout(pad=.01)
+    fig1.suptitle(f'PnP-ULA 后验采样结果（cameraman，BSNR=40dB，maxit={maxit}，烧入={burnin}）：'
+                  f'后验均值 PSNR={PSNR(x, post_mean):.2f} dB',
+                  fontsize=14)
     
     axes1[0,0].imshow(x.detach().cpu().numpy(), cmap="gray")
     axes1[0,0].set_title('Ground truth image')
@@ -448,21 +423,28 @@ if _has_sampling_tools and _has_model:
     plt.close()
     
     # 创建第二个图表（1行3列）
+    # 注意：三条曲线画的是“后验运行均值”（welford 在线累积均值）相对真值的指标，
+    # 不是单步链样本 X 的指标——运行均值才是 MMSE 估计，其末端斜率趋平支持链已平稳。
     fig2, axes2 = plt.subplots(nrows=1, ncols=3, figsize=(15, 5))
-    fig2.tight_layout(pad=.01)
-    
-    axes2[0].plot(np.arange(len(nrmse_values))[::10], nrmse_values[::10], label="-- NRMSE --")
-    axes2[0].set_title('NRMSE of $X$ vs $x_{gr}$')
-    axes2[0].legend()
-    
-    axes2[1].plot(np.arange(len(psnr_values))[::10], psnr_values[::10], label="-- PSNR --")
-    axes2[1].set_title('PSNR of $X$ vs $x_{gr}$')
-    axes2[1].legend()
-    
-    axes2[2].plot(np.arange(len(ssim_values))[::10], ssim_values[::10], label="-- SSIM --")
-    axes2[2].set_title('SSIM of $X$ vs $x_{gr}$')
-    axes2[2].legend()
-    
+    fig2.tight_layout(pad=.01, rect=[0, 0, 1, 0.92])
+    _xx = np.arange(len(nrmse_values))[::10]
+
+    axes2[0].plot(_xx, nrmse_values[::10])
+    axes2[0].set_title(f'后验运行均值 NRMSE（末值 {nrmse_values[-1]:.4f}）')
+    axes2[0].set_xlabel('烧入后累积样本序号')
+
+    axes2[1].plot(_xx, psnr_values[::10])
+    axes2[1].set_title(f'后验运行均值 PSNR（末值 {psnr_values[-1]:.2f} dB，'
+                       f'末1/4段 {last_quarter_gain:+.3f} dB）')
+    axes2[1].set_xlabel('烧入后累积样本序号')
+
+    axes2[2].plot(_xx, ssim_values[::10])
+    axes2[2].set_title(f'后验运行均值 SSIM（末值 {ssim_values[-1]:.4f}）')
+    axes2[2].set_xlabel('烧入后累积样本序号')
+
+    fig2.suptitle('收敛轨迹（曲线为后验运行均值，非单步链样本；观测起点 PSNR=%.2f dB）：'
+                  '末端趋平 + IAT/ESS与劈半诊断共同支持平稳性' % PSNR(x, y),
+                  fontsize=13)
     plt.savefig(os.path.join(SAVE_DIR, '步骤4_PnP-ULA结果_曲线.png'), dpi=150, bbox_inches='tight')
     plt.close()
     
@@ -474,7 +456,15 @@ if _has_sampling_tools and _has_model:
     np.savez(os.path.join(SAVE_DIR, 'sampling_results.npz'),
              post_mean=post_mean.cpu().numpy(),
              post_var=post_meanvar.get_var().cpu().numpy(),
+             post_mean_h1=post_meanvar_h1.get_mean().cpu().numpy(),
+             post_var_h1=post_meanvar_h1.get_var().cpu().numpy(),
+             post_mean_h2=post_meanvar_h2.get_mean().cpu().numpy(),
+             post_var_h2=post_meanvar_h2.get_var().cpu().numpy(),
              mc_samples=np.array(MC_X),
+             # 收敛诊断轨迹：trace_fid 为数据失配（不依赖真值），trace_psnr 为运行均值PSNR
+             trace_fid=np.array(trace_fid, dtype=np.float64),
+             trace_psnr=np.array(psnr_values, dtype=np.float64),
+             chain_config=np.array([maxit, burnin, half_mark, thinning_step], dtype=np.int64),
              x_true=x.cpu().numpy(),
              y_obs=y.cpu().numpy())
     print(f"\n采样结果已保存到: {os.path.join(SAVE_DIR, 'sampling_results.npz')}")
@@ -544,11 +534,11 @@ print("\n" + "=" * 60)
 print("实验5.5-1 总结")
 print("=" * 60)
 print("1. PnP-ULA核心递推式:")
-print("   $X_{m+1} = X_m - \\delta\\nabla f(X_m) + (\\delta/\\varepsilon)[D_\\varepsilon(X_m)-X_m] + \\sqrt{2\\delta}Z$")
+print("   X_{m+1} = X_m - δ∇f(X_m) + (δ/ε)[D_ε(X_m)-X_m] + √(2δ)·Z")
 print("2. Tweedie等式架起去噪器与先验得分的桥梁:")
-print("   $\\nabla \\log p_\\varepsilon(x) = (D_\\varepsilon(x) - x) / \\varepsilon$")
+print("   ∇log p_ε(x) = (D_ε(x) - x) / ε")
 print("3. 步长约束保证收敛:")
-print("   $\\delta \\leq 1/(L_f + L_D/\\varepsilon)$")
+print("   δ ≤ 1/(L_f + L_D/ε)")
 print("4. 后验采样生成多个样本，可用于不确定性量化（见实验5.6-1/2/3）")
 
 
@@ -598,9 +588,22 @@ try:
             "SSIM": round(float(SSIM(x, y)), 6),
         },
         "后验均值指标": {
-            "NRMSE": round(float(NRMSE(post_mean, x)), 6),
-            "PSNR_dB": round(float(PSNR(post_mean, x)), 4),
+            "NRMSE": round(float(NRMSE(x, post_mean)), 6),
+            "PSNR_dB": round(float(PSNR(x, post_mean)), 4),
             "SSIM": round(float(SSIM(x, post_mean)), 6),
+        },
+        "收敛诊断": {
+            "诊断轨迹": "数据失配||y-AX||^2/(2*sigma^2)（不依赖真值x）",
+            "post_burnin步数": int(n_post),
+            "IAT_积分自相关时间_步": round(iat_fid, 4),
+            "ESS_有效样本量": round(ess_fid, 2),
+            "抽稀间隔_步": int(thinning_step),
+            "实际落盘抽稀样本数": int(len(MC_X)),
+            "抽稀间隔_ge_IAT": bool(thinning_step >= iat_fid),
+            "前后半段后验sigma相关系数": round(half_sigma_corr, 6),
+            "末1/4段运行均值PSNR提升_dB": round(last_quarter_gain, 4),
+            "平台判据": "末1/4段提升<0.2dB且劈半相关接近1，可视为渐近平台（与实验5.4-2同判据）",
+            "说明": "IAT由Geyer初始正序列估计；前后半段为链上不同数据段，相关系数高且贴近y=x才支持平稳",
         },
         "采样耗时_秒": round(float(elapsed), 4),
     }

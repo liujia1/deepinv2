@@ -15,14 +15,20 @@
   - 旧版步骤6为闭式公式画的"理论示意"曲线。本版改为真实跑多条 ULA 链，
     分别扫描 ε、δ、M 三个旋钮，用实测数据作图（CPU 上较慢，建议 GPU/Colab）。
 
-前置实验 / 依赖：
-  - 需要先运行实验5.5-1，生成 sampling_results.npz（本实验读取其中的
-    post_mean / mc_samples / x_true / y_obs）
-  - 步骤2/6 的真实 MAP 与参数扫描需要 5.5-1 目录下的 sampling_tools 与预训练去噪器；
-    若缺失则自动回退到旧版行为（y_obs 作基准 + 理论示意曲线），并打印警告。
+前置条件 / 依赖（引用实验5.5-1，不内嵌其采样代码）：
+  - MMSE(后验均值)、后验样本、真值/观测一律读取实验5.5-1 产出的
+    sampling_results.npz；找不到该文件或字段缺失会硬失败并提示先运行5.5-1，
+    不使用合成数据兜底——与5.6-1/5.6-2严格同源，可直接横向比较。
+  - MAP 求解与步骤6 的扫描链通过实验5.5-1/pnp_ula_common.py 共享的
+    build_problem()/run_pnp_ula() 完成（同一前向算子、同一去噪器、同一RNG口径），
+    本文件不复制问题构建与采样循环代码；去噪器权重缺失时由共享模块自动定位/下载。
+  - 运行顺序：先跑 5.5-1（maxit=10000 主链，GPU/Colab 约十分钟量级）生成 npz，
+    再跑本实验；步骤6 共 10 条 2000 步扫描链，建议 GPU/Colab，CPU 很慢。
+    MAP 解与每条扫描链均按“参数+共享模块版本”缓存到本实验目录（首次运行建立，
+    之后重跑自动跳过；改图/改文字无需再跑链，改采样实现会自动失效重算）。
 
 素材来源：
-  - 实验5.5-1.py（前向算子/去噪器/PnP-ULA 设定）
+  - 实验5.5-1/pnp_ula_common.py（前向算子/去噪器/PnP-ULA 设定的唯一事实源）
   - Terris et al. (2022); Laumont et al. (2021)
 """
 
@@ -122,10 +128,89 @@ except ImportError:
     print("警告: chinese_font 模块未找到")
 # ========================================================
 
-np.random.seed(42)
-torch.manual_seed(42)
+# ============================================================
+# 引用实验5.5-1 的唯一共享模块（问题构建/采样/npz加载/上游闸门的唯一事实源
+# 在 实验5.5-1/pnp_ula_common.py）。本文件不复制 5.5-1 的问题构建与采样代码。
+# ============================================================
+_exp551_dir = (os.path.join(_gdrive, '实验5.5-1') if _IN_COLAB
+               else os.path.join(os.path.dirname(SAVE_DIR), '实验5.5-1'))
+if os.path.isdir(_exp551_dir) and _exp551_dir not in sys.path:
+    sys.path.insert(0, _exp551_dir)
+# Colab Drive FUSE：目录在 pnp_ula_common.py 上传前被首次 import 探测时，
+# FileFinder 会缓存“该目录无此模块”，文件之后到位也不刷新 → 导入前强制失效缓存。
+import importlib
+importlib.invalidate_caches()
+sys.path_importer_cache.pop(_exp551_dir, None)
+try:
+    import pnp_ula_common   # 需绑定模块名以读取 __file__（缓存版本指纹用）
+    from pnp_ula_common import (build_problem, run_pnp_ula,
+                                load_sampling_result, upstream_chain_gate,
+                                print_gate)
+except ImportError as _e:
+    raise FileNotFoundError(
+        "未找到实验5.5-1 的共享代码 pnp_ula_common.py。\n"
+        "请确认完整的“实验5.5-1”目录（含 pnp_ula_common.py、sampling_tools/、cman.png）"
+        "与本实验同在“第五章配套实验”下（Colab 为 我的云端硬盘/实验5.5-1/）。\n"
+        "并请先【运行实验5.5-1/5.5-1.py】生成 sampling_results.npz 后，再运行本实验。"
+    ) from _e
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+# ============================================================
+# 结果缓存（checkpoint）
+# MAP 解与步骤6 的每条扫描链都很昂贵（3000 步确定性迭代 / 每条 2000 步 ULA）。
+# 按“参数指纹 + pnp_ula_common 源码版本”落盘到本实验目录：
+#   - 重跑时指纹命中 → 直接加载、跳过计算（改绘图/解读/文字无需再跑链）；
+#   - 修改 pnp_ula_common.py（采样实现）→ 版本指纹变化，自动重新计算；
+#   - 修改扫描参数（SCAN_MAXIT/ε/δ/seed 等）→ 参数指纹变化，仅重算受影响的链；
+#   - 手动删除缓存文件或“步骤6_扫描链缓存”目录即可强制重跑。
+# ============================================================
+import hashlib
+import json as _json
+
+REUSE_CACHE = True          # 置 False 可临时关闭缓存、强制全部重算
+# 版本指纹基于共享模块源码文件：优先取已导入模块的 __file__，异常时用探测目录拼接兜底
+_COMMON_FILE = getattr(pnp_ula_common, '__file__', None) or os.path.join(
+    _exp551_dir, 'pnp_ula_common.py')
+_COMMON_VER = hashlib.md5(
+    open(_COMMON_FILE, 'rb').read()).hexdigest()[:10]
+SCAN_CACHE_DIR = os.path.join(SAVE_DIR, '步骤6_扫描链缓存')
+
+
+def _cache_fingerprint(kind, params):
+    src = _json.dumps(params, sort_keys=True, ensure_ascii=False)
+    h = hashlib.md5((kind + '|' + src + '|' + _COMMON_VER).encode('utf-8')).hexdigest()[:16]
+    return h, src
+
+
+def cache_load(kind, params):
+    """命中返回 {数组名: 数组} 字典（句柄已关闭），否则 None。"""
+    if not REUSE_CACHE:
+        return None
+    h, _ = _cache_fingerprint(kind, params)
+    path = (os.path.join(SCAN_CACHE_DIR, h + '.npz') if kind == 'scan'
+            else os.path.join(SAVE_DIR, f'cache_{kind}_{h}.npz'))
+    if not os.path.exists(path):
+        return None
+    try:
+        with np.load(path) as z:
+            return {k: z[k] for k in z.files}
+    except Exception as _ce:
+        print(f"[缓存] {os.path.basename(path)} 读取失败({_ce})，改为重新计算")
+        return None
+
+
+def cache_save(kind, params, **arrays):
+    h, src = _cache_fingerprint(kind, params)
+    if kind == 'scan':
+        os.makedirs(SCAN_CACHE_DIR, exist_ok=True)
+        path = os.path.join(SCAN_CACHE_DIR, h + '.npz')
+    else:
+        path = os.path.join(SAVE_DIR, f'cache_{kind}_{h}.npz')
+    arrays['_meta'] = np.array(src)   # 记录参数原文，便于人工核对缓存身份
+    np.savez(path, **arrays)
+    return path
 
 
 # ============================================================
@@ -164,98 +249,52 @@ def compute_nrmse(x, y):
 
 
 # ============================================================
-# 步骤1：加载采样结果 + 重建前向算子/去噪器（供真实MAP与扫描用）
+# 步骤1：引用 5.5-1 的后验样本，并共享其问题构建（不内嵌采样代码）
 # ============================================================
 print("=" * 60)
-print("步骤1：加载采样结果与依赖资源")
+print("步骤1：加载5.5-1后验样本并构建同一去模糊问题")
 print("=" * 60)
 
-_possible_paths = [
-    os.path.join(SAVE_DIR, 'sampling_results.npz'),
-    os.path.join(os.path.dirname(SAVE_DIR), '实验5.5-1', 'sampling_results.npz'),
-]
-if _IN_COLAB:
-    _possible_paths.insert(0, os.path.join(_gdrive, '实验5.5-1', 'sampling_results.npz'))
+# 1) MMSE/后验样本/真值/观测一律读 5.5-1 的 sampling_results.npz：
+#    找不到或必需字段缺失即硬失败（Missing551DataError），消息中明确要求
+#    先运行实验5.5-1；不用合成数据兜底，保证与5.6-1/5.6-2严格同源。
+data, _data_path = load_sampling_result(SAVE_DIR)
+print(f"[Data] 从 {_data_path} 加载5.5-1采样结果（MMSE/样本与5.6-1/5.6-2严格同源）")
+x_true = np.asarray(data['x_true'])
+y_obs = np.asarray(data['y_obs'])
+post_mean = np.asarray(data['post_mean'])                    # 全链 Welford 后验均值(MMSE)
+post_var = np.maximum(np.asarray(data['post_var']), 0.0)     # 全链 Welford 后验方差
+mc_samples = np.asarray(data['mc_samples'])
 
-_data_loaded = False
-for _path in _possible_paths:
-    if os.path.exists(_path):
-        print(f"[Data] 从 {_path} 加载采样结果")
-        data = np.load(_path)
-        post_mean = data['post_mean']
-        mc_samples = data['mc_samples']
-        x_true = data['x_true']
-        y_obs = data['y_obs']
-        _data_loaded = True
-        break
+# 上游链收敛闸门（判定实现与5.6-1/5.6-2共用，改判据只改 pnp_ula_common）
+src_status, src_warnings, src_extras = upstream_chain_gate(
+    data, _data_path, purpose='MAP-vs-MMSE/不确定性')
+print_gate(src_status, src_warnings, 'MAP-vs-MMSE/不确定性对比结论有效')
 
-if not _data_loaded:
-    raise FileNotFoundError(
-        "未找到 sampling_results.npz（请先运行实验5.5-1）。本实验依赖其采样结果。")
+maxit = src_extras['maxit']
+burnin = src_extras['burnin']
+thinning_step = src_extras['thinning']
+n_samples = len(mc_samples)
+psnr_last = src_extras['psnr_last']
+last_quarter_gain = src_extras['gain_db']
+# 平台判据：末1/4段运行均值 PSNR 提升 <0.2 dB（与5.5-1/5.4-2一致）
+_plateau_ok = (last_quarter_gain is not None
+               and not math.isnan(last_quarter_gain) and last_quarter_gain < 0.2)
 
-# 从样本重新估计后验方差（统一口径，ddof=1）
-post_var = np.var(mc_samples, axis=0, ddof=1)
-print(f"后验均值形状: {post_mean.shape}, 样本数量: {len(mc_samples)}")
-
-# ---- 尝试重建前向算子与去噪器（真实MAP / 参数扫描所需）----
-_exp551_dir = os.path.join(os.path.dirname(SAVE_DIR), '实验5.5-1')
-_has_tools = False
-_has_model = False
-A = AT = AAT_norm = sigma = L_y = None
-denoise = None
-eps0 = (5 / 255) ** 2
-L_net = 1.0
-alpha = 1.0
-
-if _exp551_dir not in sys.path:
-    sys.path.insert(0, _exp551_dir)
-try:
-    from sampling_tools.blur_operators import blur_operators
-    _has_tools = True
-except Exception as e:
-    print(f"[Warn] 无法导入 sampling_tools.blur_operators: {e}")
-
-_model_path = os.path.join(_exp551_dir, 'Pretrained_models', 'RealSN_DnCNN_noise5.pth')
-if _has_tools:
-    try:
-        from sampling_tools.load_model import DnCNN
-
-        def _load_model_cpu(path, dev):
-            net = DnCNN(channels=1, num_of_layers=17)
-            sd = torch.load(path, map_location=dev, weights_only=True)
-            sd2 = {(k[7:] if k.startswith('module.') else k): v for k, v in sd.items()}
-            net.load_state_dict(sd2)
-            net.eval()
-            return net
-
-        if os.path.exists(_model_path):
-            _net = _load_model_cpu(_model_path, device)
-            denoise = lambda xx: (xx - _net(xx[None][None].to(device))[0][0]).detach()
-            _has_model = True
-        else:
-            print(f"[Warn] 未找到预训练去噪器: {_model_path}")
-    except Exception as e:
-        print(f"[Warn] 去噪器加载失败: {e}")
-
-if _has_tools:
-    # 用 npz 中的 x_true 重建确定性量（前向算子、sigma 与随机数无关）
-    _x_t = torch.tensor(x_true, dtype=torch.float32, device=device)
-    _y_t = torch.tensor(y_obs, dtype=torch.float32, device=device)
-    A, AT, AAT_norm = blur_operators([5, 5], list(x_true.shape), "uniform", device)
-    BSNRdb = 40.0
-    sigma = torch.linalg.matrix_norm(A(_x_t) - torch.mean(A(_x_t)), ord='fro') / \
-        math.sqrt(torch.numel(_x_t) * 10 ** (BSNRdb / 10))
-    L_y = AAT_norm / (sigma ** 2)
-    gradf = lambda xx: AT(A(xx) - _y_t) / sigma ** 2
-    _C_hi = torch.tensor(1.0, device=device)
-    _C_lo = torch.tensor(0.0, device=device)
-    projbox = lambda xx: torch.clamp(xx, min=_C_lo, max=_C_hi)
-    _gradf = gradf
+# 2) MAP 求解与步骤6 扫描链需要前向算子/去噪器：由共享模块按 5.5-1 同配置
+#    构建（同种子、同参数，prob.y 即 npz 中的 y_obs；权重缺失自动定位/下载）。
+prob = build_problem(device=device)
+eps0 = prob.eps0
+print(f"[Problem] device={prob.device}, sigma={float(prob.sigma):.5f}, "
+      f"L_y={float(prob.L_y):.1f}, eps0={eps0:.2e}")
+print(f"后验均值形状: {post_mean.shape}, 抽稀样本数量: {n_samples}")
+if _plateau_ok:
+    print(f"[Sampling] 上游主链末段运行均值PSNR={psnr_last:.2f} dB，"
+          f"末1/4段提升 {last_quarter_gain:+.3f} dB -> 已到平台")
 else:
-    _gradf = None
-
-_can_real_map = bool(_has_tools and _has_model and _gradf is not None)
-print(f"[Env] device={device}, sampling_tools={_has_tools}, 去噪器={_has_model} -> 真实MAP/扫描可用={_can_real_map}")
+    print(f"[Sampling] 上游主链末段运行均值PSNR={psnr_last} dB，末1/4段提升={last_quarter_gain} -> 未确认到平台")
+    print("[Warn] 上游5.5-1主链未确认到平台：以下 MMSE/MAP 对比与步骤5不确定性"
+          "均可能随链长变化，请勿当作最终结论；请延长5.5-1链长后重跑。")
 
 
 # ============================================================
@@ -268,24 +307,47 @@ print("=" * 60)
 # MMSE估计 = 后验均值
 x_mmse = post_mean
 
-def pnp_map(maxit=300, delta_frac=0.99):
+def pnp_map(maxit=3000, delta_frac=0.99, momentum=0.9, tol=1e-6):
     """确定性PnP不动点迭代（去掉朗之万噪声项）求平滑后验的MAP。
-    收敛点满足 ∇f(x) = (α/ε)(D_ε(x)-x) = -α∇g_ε(x)，即 f+α·g_ε 的驻点。"""
-    delta_max = 1.0 / (L_net / eps0 + L_y)
-    delta = float(delta_max) * delta_frac
-    X = _y_t.clone()
-    for _ in range(maxit):
-        X = projbox(X - delta * _gradf(X) + alpha * delta / eps0 * (denoise(X) - X))
+    收敛点满足 ∇f(x) = (α/ε)(D_ε(x)-x) = -α∇g_ε(x)，即 f+α·g_ε 的驻点——
+    与PnP-ULA采样的是同一个后验（前向算子/去噪器均取自共享模块构建的 prob，
+    即5.5-1同一问题），因此这是与MMSE(后验均值)严格对应的后验众数。
+    该去模糊后验非常刚性(L_y~1e5)，纯不动点步长δ~6e-6需上万步，
+    故用重球动量(heavy-ball)加速并用相对变化早停。"""
+    delta_max_map = 1.0 / (prob.L_net / prob.eps0 + prob.L_y)
+    delta = float(delta_max_map) * delta_frac
+    X = prob.y.clone()
+    vel = torch.zeros_like(X)
+    used = maxit
+    for k in range(maxit):
+        drift = (-delta * prob.gradf(X)
+                 + prob.alpha * delta / prob.eps0 * (prob.denoise(X) - X))
+        vel = momentum * vel + drift
+        X_new = prob.projbox(X + vel)
+        if (k + 1) % 25 == 0:
+            rel = float((X_new - X).norm() / (X.norm() + 1e-12))
+            if rel < tol:
+                X = X_new
+                used = k + 1
+                break
+        X = X_new
+    if used == maxit:
+        print(f"  [Warn] MAP 迭代 {maxit} 步未达 tol={tol:g}（相对变化仍大于容差），"
+              f"该点可能不是严格不动点，MAP 指标仅供参考")
+    print(f"  [MAP] 确定性PnP收敛：iter={used}, delta={delta:.3e}")
     return X.detach().cpu().numpy()
 
-if _can_real_map:
-    x_map = pnp_map()
-    map_label = 'MAP (确定性PnP)'
-    print("[Info] 使用确定性PnP迭代真实求解MAP（后验众数）")
+MAP_PARAMS = dict(maxit=3000, delta_frac=0.99, momentum=0.9, tol=1e-6)
+_map_z = cache_load('map', MAP_PARAMS)
+if _map_z is not None:
+    x_map = _map_z['x_map']
+    print("[MAP] 命中磁盘缓存，跳过 3000 步确定性PnP迭代")
 else:
-    x_map = y_obs
-    map_label = '含噪观测(退化基准)'
-    print("[Warn] 缺少去噪器/sampling_tools，回退：用含噪观测作退化基准（非真实MAP）")
+    x_map = pnp_map(**MAP_PARAMS)
+    cache_save('map', MAP_PARAMS, x_map=np.asarray(x_map))
+    print("[MAP] 确定性PnP解已写入缓存，下次重跑将直接加载")
+map_label = 'MAP (确定性PnP)'
+print("[Info] 使用确定性PnP迭代真实求解MAP（后验众数）")
 
 # 计算质量指标
 psnr_mmse = compute_psnr(x_true, x_mmse)
@@ -295,7 +357,7 @@ sim_map = compute_global_similarity(x_true, x_map)
 nrmse_mmse = compute_nrmse(x_true, x_mmse)
 nrmse_map = compute_nrmse(x_true, x_map)
 
-print(f"\nMMSE估计（后验均值）:")
+print("\nMMSE估计（后验均值）:")
 print(f"  PSNR: {psnr_mmse:.2f} dB")
 print(f"  全局相似度: {sim_mmse:.4f} (全局近似，非标准SSIM)")
 print(f"  NRMSE: {nrmse_mmse:.4f}")
@@ -304,9 +366,12 @@ print(f"  PSNR: {psnr_map:.2f} dB")
 print(f"  全局相似度: {sim_map:.4f} (全局近似，非标准SSIM)")
 print(f"  NRMSE: {nrmse_map:.4f}")
 
-if _can_real_map:
-    print("\n[预期教学点] MMSE在MSE/PSNR意义下最优（PSNR≥MAP），但更平滑；")
-    print("             MAP保留更多高频细节（边缘更锐利，可能有振铃），PSNR通常略低。")
+print("\n[教学点·一般原理] MMSE是MSE最优估计（Bayes风险意义下PSNR上界），"
+      "\n             且自带后验方差=不确定性；MAP是后验众数，通常边缘更锐利。")
+print("[本例实测] 该去模糊后验较集中，MAP(众数)与收敛链的后验均值PSNR可能很接近，"
+      "\n             MAP 在单例上甚至可能略高——这不违反MMSE最优性(那是Bayes期望意义)；")
+print("             MMSE的额外价值主要在于它同时给出不确定性(见步骤5)，而非单纯更平滑。")
+print("             若主链未到平台（见上方[Warn]），二者差距会随链长继续变化。")
 
 # 高频能量对比（量化"MAP更锐利/MMSE更平滑"，用梯度幅值均值）
 def _grad_energy(img):
@@ -315,6 +380,16 @@ def _grad_energy(img):
 hf_mmse = _grad_energy(x_mmse)
 hf_map = _grad_energy(x_map)
 print(f"[高频能量] MMSE={hf_mmse:.5f}, {map_label}={hf_map:.5f}")
+# 本例实测方向可能与“MAP通常更锐利”的一般趋势相反：梯度能量同时包含真实细节
+# 与噪声/振铃，高不等于更真实，必须如实点明而不是只给数字。
+if hf_map > hf_mmse * 1.02:
+    print("  本例 MAP 梯度能量更高，与“MAP 通常边缘更锐利”的一般趋势一致")
+elif hf_mmse > hf_map * 1.02:
+    print("  本例 MMSE 梯度能量反而略高（差异约"
+          f"{(hf_mmse / hf_map - 1) * 100:.0f}%，二者接近）：“MAP更锐利”是一般趋势而非定律；")
+    print("  梯度能量同时含噪声/振铃成分，高不等于细节更真实，请结合步骤3局部放大图判断")
+else:
+    print("  两者梯度能量几乎相同（差异<2%），与“该后验较集中、MAP≈MMSE”一致")
 
 
 # ============================================================
@@ -370,11 +445,11 @@ ax_mmse_zoom.imshow(x_mmse[zoom_region[0]:zoom_region[1], zoom_region[2]:zoom_re
 ax_mmse_zoom.set_title('MMSE', fontsize=10)
 ax_mmse_zoom.axis('off')
 ax_map_zoom.imshow(x_map[zoom_region[0]:zoom_region[1], zoom_region[2]:zoom_region[3]], cmap='gray')
-ax_map_zoom.set_title('MAP' if _can_real_map else '含噪观测', fontsize=10)
+ax_map_zoom.set_title('MAP', fontsize=10)
 ax_map_zoom.axis('off')
 axes[1, 3].set_title('局部放大对比', fontsize=11)
 
-fig.suptitle('实验5.6-3 MMSE vs MAP 对比' + ('' if _can_real_map else '（退化：MAP不可用）'),
+fig.suptitle('实验5.6-3 MMSE vs MAP 对比',
              fontsize=14, y=1.02)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤3_MAP_vs_MMSE对比.png'), dpi=150, bbox_inches='tight')
@@ -389,20 +464,21 @@ print("步骤4：两种估计哲学的对比")
 print("=" * 60)
 
 print("\nMAP估计（第3-5章优化路径）:")
-print("  $\\hat{x}_{MAP} = \\arg\\max_x \\log p(x|y) = \\arg\\min_x \\{f(x) + g(x)\\}$")
+print("  x̂_MAP = argmax_x log p(x|y) = argmin_x {f(x) + g(x)}")
 print("  - 给出'最可能的'重建——后验分布的众数")
 print("  - 本实验用确定性PnP（去噪声项的不动点迭代）真实求解")
 print("  - 保留更多高频细节，但可能放大噪声/振铃，PSNR通常不占优")
 
 print("\nMMSE估计（第5章采样路径）:")
-print("  $\\hat{x}_{MMSE} = E[x|y] = \\int x\\,p(x|y)\\,dx$")
+print("  x̂_MMSE = E[x|y] = ∫ x·p(x|y) dx")
 print("  - 给出'平均意义下最好'的重建——后验分布的均值")
 print("  - 是估计+不确定性：均值是点估计，方差是置信度")
 print("  - MSE最优 => PSNR通常≥MAP，视觉上更平滑")
 
 print("\n关键洞察:")
 print("  后验均值天然平滑多峰不确定性；MAP取峰值、MMSE平均所有峰。")
-print("  因此MMSE的PSNR更高（更平滑），MAP的边缘更锐利（高频能量更大）。")
+print("  一般地（后验宽/多峰时）MMSE更平滑、MAP边缘更锐利；但二者高低关系")
+print("  依赖具体后验与采样是否收敛——本例的实测PSNR/高频能量见步骤2输出。")
 
 
 # ============================================================
@@ -439,7 +515,7 @@ axes[2].imshow(overlay)
 axes[2].set_title(f'不确定性叠加（红色=高不确定区域，占{np.mean(high_uncertainty_mask)*100:.1f}%）')
 axes[2].axis('off')
 
-fig.suptitle('不确定性量化在医学影像中的应用示意', fontsize=14, y=1.02)
+fig.suptitle('高不确定区域自动标记（应用示意：医学影像中可提示人工复核）', fontsize=14, y=1.02)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤5_实践指导意义.png'), dpi=150, bbox_inches='tight')
 plt.close()
@@ -458,87 +534,142 @@ print("\n" + "=" * 60)
 print("步骤6：参数敏感性分析")
 print("=" * 60)
 
-step6_mode = 'sketch'  # 'real' 或 'sketch'
-eps_test = np.array([eps0 * f for f in [0.5, 1.0, 2.0, 4.0, 8.0]])
-M_test = np.array([10, 20, 50, 100, 200])
+SCAN_MAXIT = 2000        # 每条扫描链预算；CPU 上请勿随意调小——过短的扫描链未收敛，结果不可信
+SCAN_BURN_FRAC = 0.25    # 扫描链统一烧入比例（δ 小时链混合慢，烧入比例取大一些）
+_eps_factors = [0.5, 1.0, 2.0, 4.0, 8.0]
+eps_test = np.array([eps0 * f for f in _eps_factors])
+M_test = np.array([10, 20, 50, 100])
 delta_test = np.array([0.1, 0.3, 0.5, 0.7, 0.99])
 
-if _can_real_map:
-    step6_mode = 'real'
-    print("[Info] 真实扫描模式：跑多条ULA链测量ε/δ/M的影响（GPU建议，CPU较慢）...")
+print(f"[Info] 真实扫描模式：{len(eps_test) + len(delta_test)} 条 ULA 链，每条 {SCAN_MAXIT} 步，"
+        "测量 ε/δ/M 的影响（GPU 建议，CPU 很慢）...")
+print(f"[Info] 扫描链缓存：{SCAN_CACHE_DIR}")
+print(f"       缓存开启={REUSE_CACHE}，共享模块版本={_COMMON_VER}；"
+        "命中自动跳过，删目录可强制重跑")
 
-    def run_ula(eps, delta_frac, maxit, n_samples, seed=0, burn_frac=0.05):
-        """运行一条PnP-ULA链，返回(粗化样本数组, 链均值轨迹)。"""
-        torch.manual_seed(seed)
-        delta_max = 1.0 / (L_net / eps + L_y)
-        delta = float(delta_max) * delta_frac
-        X = _y_t.clone()
-        burnin = int(maxit * burn_frac)
-        thin = max(1, int((maxit - burnin) / n_samples))
-        samples, trace = [], []
-        count = 0
-        for i in range(maxit):
-            X = projbox(X - delta * _gradf(X) + alpha * delta / eps * (denoise(X) - X)
-                        + math.sqrt(2 * delta) * torch.randn_like(X))
-            if i > burnin:
-                trace.append(float(X.mean()))
-                if count == thin - 1:
-                    samples.append(X.detach().cpu().numpy())
-                    count = 0
-                else:
-                    count += 1
-        return np.array(samples), np.array(trace)
+def run_scan(eps, delta_frac, maxit, n_samples, seed=0, burn_frac=SCAN_BURN_FRAC, tag=''):
+    """通过共享模块运行一条扫描PnP-ULA链（采样循环唯一实现见
+    pnp_ula_common.run_pnp_ula，本文件不复制）。
+    返回 (粗化样本数组, 像素均值轨迹, 末1/4段运行均值PSNR提升dB)。
+    末1/4段提升用于判断扫描链是否已到平台：未收敛链上的"方差/稳定性"对比会
+    混入瞬态成分，必须显式警告，而不是直接画进图里当作稳态结论。
+    结果按参数指纹+共享模块版本缓存：命中则直接加载，不重跑链。"""
+    _sparams = dict(eps=float(eps), delta_frac=float(delta_frac),
+                    maxit=int(maxit), burnin=int(maxit * burn_frac),
+                    n_samples=int(n_samples), seed=int(seed),
+                    burn_frac=float(burn_frac), trace_every=25)
+    _z = cache_load('scan', _sparams)
+    if _z is not None:
+        print(f"  [扫描缓存] 命中 {tag}（{maxit} 步链），直接加载")
+        return _z['samples'], np.asarray(_z['trace'], dtype=np.float64), float(_z['gain'])
+    res = run_pnp_ula(prob, maxit=maxit, burnin=int(maxit * burn_frac),
+                      n_samples=n_samples, seed=seed, eps=float(eps),
+                      delta_frac=float(delta_frac), desc=f'扫描链 {tag}',
+                      want_fourier=False, want_metric_curves=False,
+                      trace_every=25, progress=True,
+                      trace_fn=lambda X: float(X.mean()))
+    _s = res['mc_samples']
+    _tr = np.asarray(res['trace_extra'], dtype=np.float64)
+    _gain = float(res['last_quarter_gain'])
+    cache_save('scan', _sparams, samples=_s, trace=_tr, gain=np.array(_gain))
+    return _s, _tr, _gain
 
-    # --- 实验1：ε 对后验方差的影响 ---
-    var_vs_epsilon = []
-    for j, e in enumerate(eps_test):
-        s, _ = run_ula(float(e), 0.99, maxit=400, n_samples=60, seed=100 + j)
-        var_vs_epsilon.append(float(np.mean(np.var(s, axis=0, ddof=1))))
-        print(f"  ε={e:.2e} -> 平均后验方差={var_vs_epsilon[-1]:.3e}")
-    var_vs_epsilon = np.array(var_vs_epsilon)
+scan_warnings = []
 
-    # --- 实验2：M 对方差估计稳定性的影响（长链bootstrap）---
-    long_samples, _ = run_ula(eps0, 0.99, maxit=2000, n_samples=500, seed=7)
-    n_long = len(long_samples)
-    rng = np.random.default_rng(0)
-    std_error_vs_M = []
-    for M in M_test:
-        M_use = int(min(M, n_long))
-        est = []
-        for _ in range(60):
-            idx = rng.choice(n_long, size=M_use, replace=False)
-            est.append(float(np.mean(np.var(long_samples[idx], axis=0, ddof=1))))
-        std_error_vs_M.append(float(np.std(est, ddof=1)))
-        print(f"  M={M_use} -> 方差估计标准误差={std_error_vs_M[-1]:.3e}")
-    std_error_vs_M = np.array(std_error_vs_M)
+# --- 实验1：ε 对后验方差的影响 ---
+var_vs_epsilon = []
+eps_gains = []
+for j, e in enumerate(eps_test):
+    s, _, gain = run_scan(float(e), 0.99, SCAN_MAXIT, 60,
+                          seed=100 + j, tag=f'eps_x{_eps_factors[j]:g}')
+    var_vs_epsilon.append(float(np.mean(np.var(s, axis=0, ddof=1))))
+    eps_gains.append(gain)
+    print(f"  ε={e:.2e} -> 平均后验方差={var_vs_epsilon[-1]:.3e}, 末1/4段PSNR提升={gain:+.3f} dB")
+    if not math.isnan(gain) and gain >= 0.2:
+        scan_warnings.append(f'ε={e:.2e} 扫描链未到平台（末1/4段提升{gain:.2f} dB≥0.2），该点方差含瞬态成分')
+var_vs_epsilon = np.array(var_vs_epsilon)
 
-    # --- 实验3：δ 对估计稳定性的影响（用链自相关估计有效样本数）---
-    var_stability = []
-    for j, df in enumerate(delta_test):
-        _, tr = run_ula(eps0, float(df), maxit=600, n_samples=120, seed=200 + j)
-        tr = tr - tr.mean()
-        if len(tr) > 2:
-            rho = float(np.corrcoef(tr[:-1], tr[1:])[0, 1])
-            rho = min(max(rho, 0.0), 0.999)
-            ess = len(tr) * (1 - rho) / (1 + rho)  # 有效样本数
-        else:
-            ess = len(tr)
-        se = float(np.std(tr, ddof=1) / (math.sqrt(max(ess, 1.0)) + 1e-12))
-        var_stability.append(se)
-        print(f"  δ_frac={df} -> ESS≈{ess:.1f}, 均值标准误差={se:.3e}")
-    var_stability = np.array(var_stability)
-
-    base_var = float(np.mean(post_var))
+# --- 实验2：M 对方差估计稳定性的影响（复用主链抽稀样本做无放回bootstrap）---
+# 直接复用 5.5-1 npz 中的抽稀样本，不另跑短链造假样本。样本是否近似独立
+# 必须用 npz 里的实测全链 IAT 判定，不能口头假设（见 _m_independence 注记）。
+_m_iat = src_extras['iat']
+_m_thin = src_extras['thinning']
+if _m_iat is None:
+    _m_independent = None
+    _m_indep_note = ("抽稀样本独立性无法核查（npz 无 trace_fid，旧版5.5-1产物）；"
+                     "1/√M 仅作为独立样本的理想参照，实测衰减仅供定性参考")
+elif _m_thin is not None and _m_thin >= _m_iat:
+    _m_independent = True
+    _m_indep_note = (f"抽稀间隔 {_m_thin} 步 ≥ 全链IAT {_m_iat:.0f} 步，"
+                     "样本可近似视为独立，实测SE衰减可与1/√M 参考线定量比较")
 else:
-    # 回退：闭式理论示意（与旧版一致，明确标注非真实跑数）
-    print("[Warn] 缺少去噪器，回退到理论示意曲线（非真实跑数）")
-    base_var = float(np.mean(post_var))
-    var_vs_epsilon = base_var * (np.array([0.01, 0.02, 0.05, 0.1, 0.2]) / 0.05) ** 2
-    eps_test = np.array([0.01, 0.02, 0.05, 0.1, 0.2])
-    std_error_vs_M = base_var * 0.5 / np.sqrt(M_test)
-    effective_samples = np.clip(100 * np.array([0.001, 0.005, 0.01, 0.05, 0.1]) / 0.01, 5, 200)
-    var_stability = base_var * (1 + 0.5 / np.sqrt(effective_samples))
-    delta_test = np.array([0.001, 0.005, 0.01, 0.05, 0.1])
+    _m_independent = False
+    _m_indep_note = (f"抽稀间隔 {_m_thin} 步 < 全链IAT {_m_iat:.0f} 步：{len(mc_samples)}个样本仍强自相关"
+                     f"（全链ESS仅{src_extras['ess']:.0f}），bootstrap 子样本不是独立样本组；"
+                     "1/√M 只是独立样本的理想衰减率，实测曲线比参考线平正是自相关使"
+                     "有效样本量增长慢于 M 的直接体现，不能宣称吻合1/√M规律")
+print(f"[M实验] {_m_indep_note}")
+
+long_samples = mc_samples
+n_long = len(long_samples)
+rng = np.random.default_rng(0)
+std_error_vs_M = []
+m_used = []
+m_warnings = []
+for M in M_test:
+    M_use = int(min(M, n_long))
+    m_used.append(M_use)
+    if M_use >= n_long:
+        # 无放回抽取只能取全部 n_long 个样本：60 次重采样的子样本集合唯一，
+        # bootstrap 变异恒为 0（有限总体效应），不是“M 增大使估计更稳定”。
+        # 该点记为缺失，不连线、不参与 1/√M 趋势比较，只在图上以空心点示意。
+        std_error_vs_M.append(np.nan)
+        m_warnings.append(
+            f"M={M} 达到/超过可用抽稀样本数 {n_long}：无放回子样本只能取全部 {n_long} 个，"
+            "bootstrap 标准误差人为趋零（有限总体效应），该点按缺失处理，不参与M趋势比较")
+        print(f"  M={M}(实际{M_use}) -> 无放回取完全部 {n_long} 个样本，bootstrap 变异为 0"
+              "（有限总体效应），按缺失处理，不参与趋势")
+        continue
+    est = []
+    for _ in range(60):
+        idx = rng.choice(n_long, size=M_use, replace=False)
+        est.append(float(np.mean(np.var(long_samples[idx], axis=0, ddof=1))))
+    std_error_vs_M.append(float(np.std(est, ddof=1)))
+    print(f"  M={M_use} -> 方差估计标准误差={std_error_vs_M[-1]:.3e}")
+std_error_vs_M = np.array(std_error_vs_M)
+# 1/√M 参考线（以首个 M 点标定）：仅在样本独立时才是应遵循的理论衰减率
+se_ref_slope = std_error_vs_M[0] * math.sqrt(float(M_test[0]))
+
+# --- 实验3：δ 对估计稳定性的影响（用链自相关估计有效样本数）---
+var_stability = []
+delta_ess = []
+delta_gains = []
+for j, df in enumerate(delta_test):
+    _, tr, gain = run_scan(prob.eps0, float(df), SCAN_MAXIT, 120,
+                           seed=200 + j, tag=f'delta_x{df:g}')
+    delta_gains.append(gain)
+    tr = tr - tr.mean()
+    if len(tr) > 2:
+        rho = float(np.corrcoef(tr[:-1], tr[1:])[0, 1])
+        rho = min(max(rho, 0.0), 0.999)
+        ess = len(tr) * (1 - rho) / (1 + rho)  # 有效样本数（lag-1 AR(1)近似）
+    else:
+        ess = len(tr)
+    delta_ess.append(ess)
+    se = float(np.std(tr, ddof=1) / (math.sqrt(max(ess, 1.0)) + 1e-12))
+    var_stability.append(se)
+    print(f"  δ_frac={df:g} -> ESS≈{ess:.1f}(lag-1近似), 均值标准误差={se:.3e}, "
+          f"末1/4段PSNR提升={gain:+.3f} dB")
+    if not math.isnan(gain) and gain >= 0.2:
+        scan_warnings.append(f'δ_frac={df:g} 扫描链未到平台（末1/4段提升{gain:.2f} dB≥0.2），该点SE含瞬态成分')
+var_stability = np.array(var_stability)
+
+base_var = float(np.mean(post_var))
+if scan_warnings:
+    print("[Warn] 部分扫描链未到平台（详见 JSON 步骤6.扫描警告）：")
+    for _w in scan_warnings:
+        print("   - " + _w)
+    print("       对应曲线只能定性看趋势；如要定量结论请增大 SCAN_MAXIT。")
 
 # --- 绘图 ---
 fig, axes = plt.subplots(1, 3, figsize=(15, 5))
@@ -546,40 +677,75 @@ fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 axes[0].plot(eps_test, var_vs_epsilon, 'o-', color='#2E86AB', linewidth=2, markersize=8)
 axes[0].set_xlabel('去噪器噪声水平 ε')
 axes[0].set_ylabel('平均后验方差')
-axes[0].set_title('ε对后验方差的影响' + ('（实测）' if step6_mode == 'real' else '（理论示意）'))
+axes[0].set_title(f'ε对后验方差的影响（实测，每链{SCAN_MAXIT}步）')
 axes[0].grid(True, alpha=0.3)
-axes[0].set_xscale('log')
 axes[0].annotate('ε↑ → 先验约束弱 → 方差↑', xy=(0.7, 0.7), xycoords='axes fraction',
                  fontsize=10, ha='center', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
-axes[1].plot(M_test, std_error_vs_M, 's-', color='#A23B72', linewidth=2, markersize=8)
-axes[1].set_xlabel('样本数 M')
+_m_label = ('近似独立' if _m_independent is True
+            else ('独立性无法核查' if _m_independent is None else '仍强自相关'))
+_m_valid = ~np.isnan(std_error_vs_M)
+axes[1].plot(M_test[_m_valid], std_error_vs_M[_m_valid], 's-', color='#A23B72',
+             linewidth=2, markersize=8, label='主链抽稀样本bootstrap')
+# 越界点（M≥可用样本数）：bootstrap 变异人为为 0，画在最小有效值下方作空心示意，
+# 不与有效点连线，避免被误读为“M 再增大稳定性还能垂直提升”
+if (~_m_valid).any():
+    _floor = float(np.nanmin(std_error_vs_M)) * 0.35
+    axes[1].plot(M_test[~_m_valid], np.full(int((~_m_valid).sum()), _floor),
+                 marker='o', linestyle='None', markersize=11,
+                 markerfacecolor='none', markeredgecolor='#A23B72',
+                 markeredgewidth=1.8, label='M≥可用样本数(人为为0,不参与趋势)')
+axes[1].plot(M_test, se_ref_slope / np.sqrt(M_test), 'k--', linewidth=1.2, alpha=0.6, label='1/√M 参考(独立样本理想率)')
+axes[1].set_xlabel(f'样本数 M（取自10000步主链的抽稀样本；{_m_label}）')
 axes[1].set_ylabel('方差估计标准误差')
-axes[1].set_title('M对估计稳定性的影响' + ('（实测）' if step6_mode == 'real' else '（理论示意）'))
+axes[1].set_title('M对估计稳定性的影响（实测）')
 axes[1].grid(True, alpha=0.3)
-axes[1].annotate('M↑ → 估计更稳定', xy=(0.7, 0.7), xycoords='axes fraction',
+axes[1].legend(fontsize=8, loc='upper right')
+_m_annotate = ('M↑ → 估计更稳定' if _m_independent is not False
+               else '样本强自相关：\n实测衰减慢于1/√M')
+axes[1].annotate(_m_annotate, xy=(0.62, 0.72), xycoords='axes fraction',
                  fontsize=10, ha='center', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
 axes[2].plot(delta_test, var_stability, '^-', color='#F18F01', linewidth=2, markersize=8)
-axes[2].set_xlabel('步长比例 δ/δ_max' if step6_mode == 'real' else '步长 δ')
+# Colab 的 Noto Sans SC 缺 δ(U+03B4) 字形（ε 可正常显示），用 mathtext 渲染避免丢字
+axes[2].set_xlabel(r'步长比例 $\delta/\delta_{\max}$')
 axes[2].set_ylabel('均值估计标准误差')
-axes[2].set_title('δ对估计稳定性的影响' + ('（实测）' if step6_mode == 'real' else '（理论示意）'))
+axes[2].set_title(f'$\\delta$对估计稳定性的影响（实测，每链{SCAN_MAXIT}步，ESS为lag-1近似）')
 axes[2].grid(True, alpha=0.3)
-axes[2].annotate('δ过小 → 有效样本少 → 不稳定', xy=(0.25, 0.8), xycoords='axes fraction',
+axes[2].annotate(r'$\delta$过小 → 有效样本少 → 不稳定', xy=(0.25, 0.8), xycoords='axes fraction',
                  fontsize=10, ha='center', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
-fig.suptitle('关键参数对不确定性估计的影响' +
-             ('（真实ULA扫描实测）' if step6_mode == 'real' else '（理论示意）'), fontsize=14, y=1.02)
-if step6_mode != 'real':
-    fig.text(0.5, 0.01, '注：以上曲线为理论模型示意，非真实实验数据', ha='center', fontsize=9, color='gray')
-plt.tight_layout()
+fig.suptitle('关键参数对不确定性估计的影响（真实ULA扫描实测）', fontsize=14, y=1.02)
+_foot_notes = []
+if scan_warnings:
+    _foot_notes.append(f'{len(scan_warnings)} 个扫描点未到平台（见控制台/JSON），相应趋势含瞬态成分，仅作定性参考')
+if _m_independent is False:
+    _foot_notes.append('M实验样本强自相关（抽稀间隔<全链IAT），1/√M仅为理想参照，不构成定量吻合')
+elif _m_independent is None:
+    _foot_notes.append('M实验样本独立性无法核查（旧版npz），1/√M对比仅作定性参考')
+if m_warnings:
+    _foot_notes.append('空心点：M≥可用抽稀样本数，无放回bootstrap变异人为为0（有限总体效应），不参与趋势')
+if _foot_notes:
+    fig.text(0.5, 0.01, '注：' + '；'.join(_foot_notes),
+             ha='center', fontsize=9, color='firebrick')
+plt.tight_layout(rect=[0, 0.04, 1, 1])
 plt.savefig(os.path.join(SAVE_DIR, '步骤6_参数敏感性.png'), dpi=150, bbox_inches='tight')
 plt.close()
 
-print("\n参数敏感性结论:")
-print("  1. ε（去噪器噪声水平/先验温度）: ε越大 → 先验约束越弱 → 后验方差越大")
-print("  2. M（样本数）: M越大 → 方差估计越稳定（标准误差 ∝ 1/√M）")
-print("  3. δ（步长）: δ过小 → 链相关性强、有效样本少 → 估计不稳定")
+print("\n参数敏感性实测结论（以上方每次扫描打印的实测值为准）:")
+print("  1. ε: 理论预期 ε越大→先验越弱→后验方差越大（实测见上）")
+if _m_independent is True:
+    print("  2. M: 实测标准误差衰减可与1/√M 参考线定量比较（抽稀间隔≥全链IAT，样本近似独立）")
+elif _m_independent is None:
+    print("  2. M: 1/√M 仅为独立样本理想参照；样本独立性无法核查（旧版npz），实测只作定性参考")
+else:
+    print("  2. M: 实测衰减慢于1/√M 理想率——抽稀间隔<全链IAT、样本强自相关，"
+          "增大M带来的有效样本量增长慢于名义M，不能宣称吻合1/√M")
+for _mw in m_warnings:
+    print(f"     [注意] {_mw}")
+print("  3. δ: δ越小→链相关越强、ESS越小→均值估计越不稳定（ESS为lag-1 AR(1)近似）")
+print("  [注意] DnCNN为单噪声水平去噪器，此处ε作为先验温度旋钮使用；")
+print("         实测曲线可能与理论方向不完全一致，这本身也是有价值的观察。")
 
 
 # ============================================================
@@ -588,12 +754,19 @@ print("  3. δ（步长）: δ过小 → 链相关性强、有效样本少 → �
 print("\n" + "=" * 60)
 print("实验5.6-3 总结")
 print("=" * 60)
-print("1. MAP估计: 后验众数（确定性PnP求解），保留更多细节，PSNR通常不占优")
-print("2. MMSE估计: 后验均值，MSE最优 => PSNR通常≥MAP，更平滑")
-print("3. 二者PSNR差异不大但视觉/高频特征不同（见步骤3局部放大）")
-print("4. 不确定性量化在医学、遥感、科学计算、主动学习中有重要应用")
-print(f"5. 参数（ε、δ、M）影响不确定性估计——步骤6为{'真实扫描' if step6_mode=='real' else '理论示意'}")
-print("\n来源: 实验5.5-1.py; Terris et al. (2022); Laumont et al. (2021)")
+print("1. MAP估计: 后验众数（确定性PnP+动量求解），与ULA采样同一后验，通常边缘更锐利")
+print("2. MMSE估计: 后验均值，Bayes风险意义下MSE最优，且额外提供后验方差=不确定性")
+print("3. 二者PSNR/高频的具体高低关系依赖后验形状与采样是否收敛（见步骤2实测与步骤3局部放大）")
+_psnr_last_txt = f"{psnr_last:.2f}" if psnr_last is not None else "不可核查（旧版npz）"
+_gain_txt = (f"{last_quarter_gain:+.3f}"
+             if last_quarter_gain is not None and not math.isnan(last_quarter_gain)
+             else "不可核查（旧版npz）")
+print(f"4. 上游5.5-1主链 {maxit} 步：末段运行均值PSNR={_psnr_last_txt} dB，"
+      f"末1/4段提升 {_gain_txt} dB（{'已到平台' if _plateau_ok else '未到平台'}）")
+print("5. 不确定性量化在医学、遥感、科学计算、主动学习中有重要应用")
+_s6_tail = (f"{len(scan_warnings)} 个扫描点未到平台" if scan_warnings else "全部扫描点已到平台")
+print(f"6. 步骤6为真实ULA扫描：{len(eps_test) + len(delta_test)} 条各 {SCAN_MAXIT} 步链，{_s6_tail}")
+print("\n来源: 实验5.5-1/pnp_ula_common.py; Terris et al. (2022); Laumont et al. (2021)")
 
 
 # ===== 保存数值结果 =====
@@ -611,13 +784,36 @@ def _to_native(obj):
     except: pass
     return obj
 
+def _round_or_none(v, nd=4):
+    if v is None:
+        return None
+    try:
+        if isinstance(v, float) and math.isnan(v):
+            return None
+    except TypeError:
+        pass
+    return round(float(v), nd)
+
+
 results_summary = {
     "实验名称": "实验5.6-3 MAP vs MMSE综合对比",
+    "数据来源": "实验5.5-1 的 sampling_results.npz（真实 PnP-ULA 采样；MMSE/样本与5.6-1/5.6-2严格同源）",
+    "上游链状态_5.5-1": {**src_status, "警告": src_warnings},
     "数据信息": {
+        "数据文件": _data_path,
         "后验均值形状": list(post_mean.shape),
-        "样本数量": int(len(mc_samples)),
-        "真实MAP可用": bool(_can_real_map),
+        "抽稀样本数量": int(len(mc_samples)),
         "device": str(device),
+        "主链配置（5.5-1，npz读取）": {
+            "maxit": (int(maxit) if maxit is not None else None),
+            "burnin": (int(burnin) if burnin is not None else None),
+            "抽稀样本数": int(n_samples),
+            "抽稀间隔": (int(thinning_step) if thinning_step is not None else None),
+            "末段运行均值PSNR_dB": _round_or_none(psnr_last),
+            "末1/4段提升_dB": _round_or_none(last_quarter_gain),
+            "平台判据_末1/4段提升小于0.2dB": bool(_plateau_ok),
+        },
+        "说明": "MMSE/后验样本读自5.5-1的npz；MAP与步骤6扫描链由pnp_ula_common共享构建/采样",
     },
     "步骤2_MAP_vs_MMSE对比": {
         "MMSE估计_后验均值": {
@@ -626,7 +822,7 @@ results_summary = {
             "NRMSE": round(float(nrmse_mmse), 6),
             "高频能量": round(hf_mmse, 6),
         },
-        ("MAP估计_确定性PnP" if _can_real_map else "含噪观测_退化基准"): {
+        "MAP估计_确定性PnP": {
             "PSNR_dB": round(float(psnr_map), 4),
             "全局相似度": round(float(sim_map), 6),
             "NRMSE": round(float(nrmse_map), 6),
@@ -639,14 +835,30 @@ results_summary = {
         "高不确定性区域占比_百分比": round(float(np.mean(high_uncertainty_mask) * 100), 4),
     },
     "步骤6_参数敏感性": {
-        "模式": step6_mode,
+        "模式": "真实ULA扫描实测",
+        "每条扫描链预算": int(SCAN_MAXIT),
+        "扫描链烧入比例": SCAN_BURN_FRAC,
+        "结果缓存": {
+            "开启": bool(REUSE_CACHE),
+            "扫描链缓存目录": SCAN_CACHE_DIR,
+            "共享模块版本指纹": _COMMON_VER,
+            "说明": "按参数指纹+共享模块源码版本缓存；改参数或采样实现自动重算，删除缓存目录强制全部重跑"
+        },
+        "M实验说明": "复用5.5-1 npz抽稀样本无放回bootstrap，60次重复；" + _m_indep_note,
         "基准平均方差": round(base_var, 10),
         "epsilon测试值": [float(v) for v in eps_test],
         "epsilon对应平均后验方差": [float(v) for v in var_vs_epsilon],
+        "epsilon扫描链末1/4段PSNR提升_dB": [None if math.isnan(g) else round(float(g), 4) for g in eps_gains],
         "样本数测试值": [int(v) for v in M_test],
-        "样本数对应方差估计标准误差": [float(v) for v in std_error_vs_M],
-        "步长测试值": [float(v) for v in delta_test],
+        "样本数测试值_实际使用样本数": m_used,
+        "样本数对应方差估计标准误差": [None if (isinstance(v, float) and math.isnan(v)) else float(v)
+                                  for v in std_error_vs_M],
+        "M实验有限总体警告": m_warnings,
+        "步长比例测试值": [float(v) for v in delta_test],
         "步长对应均值估计标准误差": [float(v) for v in var_stability],
+        "步长对应ESS_lag1近似": [float(v) for v in delta_ess],
+        "步长扫描链末1/4段PSNR提升_dB": [None if math.isnan(g) else round(float(g), 4) for g in delta_gains],
+        "扫描警告": scan_warnings,
     },
 }
 results_summary = _to_native(results_summary)

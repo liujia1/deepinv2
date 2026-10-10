@@ -2,8 +2,8 @@
 """
 实验5.4-2 近端算子 vs 学习去噪器：结构对偶性验证
 对应章节：5.4 MAP与MMSE的结构对偶性
-  - 结构对偶：Moreau包络 vs 软下卷积（第5小节）
-  - 温度参数：从MMSE到MAP的连续过渡（第6小节，本实验通过温度扫描真实演示）
+  - 结构对偶：Moreau包络 vs 软下卷积（第4小节）
+  - 温度参数：从MMSE到MAP的连续过渡（第5小节，本实验通过温度扫描真实演示）
 
 知识点：
   - TV-ULA（显式先验）：后验 exp(-f-β·TV)，β为先验权重；用 Moreau-Yoshida
@@ -31,7 +31,7 @@
   - EXP542_ALLOW_CPU=1：无 GPU 时按正式预算在 CPU 上运行（较慢）；
     EXP542_QUICK=1：快速冒烟模式（128×128 裁剪、少量迭代，仅验证流程）。
 
-本实验对应5.4节第5小节"结构对偶"和第6小节"温度参数"。
+本实验对应5.4节第4小节"结构对偶"和第5小节"温度参数"。
 """
 
 import math
@@ -142,8 +142,9 @@ else:
     TV_NITER, PNP_NITER = 12000, 10000
     TV_BURNIN, PNP_BURNIN = 4800, 1000
     CKPT_EVERY = 200
-    # 温度扫描：T=0 确定性链取末段（=众数）；T=0.3 中间温度
-    TEMP_CONF = {0.0: (3000, 1500), 0.3: (6000, 2000)}
+    # 温度扫描：T=0 确定性链取末段（=众数），4000步≈10个有效近端步（nδ/γ≈9.8），
+    # 足以让确定性链到达不动点；T=0.3 中间温度
+    TEMP_CONF = {0.0: (4000, 2000), 0.3: (6000, 2000)}
     # 热启动内迭代数：实测在链轨迹上 prox 稳态 rms 误差 2.6e-4，
     # 比 MYULA 固有平滑尺度 γ=2.5e-3 小近 10 倍（内求解误差可忽略）
     WARM_INNER = 50
@@ -551,7 +552,11 @@ if _run_ok:
 
     fig.suptitle('实验5.4-2 显式先验(TV) vs 隐式先验(学习去噪器)：两条链均为 T=1 的后验均值(MMSE)',
                  fontsize=14, y=1.01)
-    plt.tight_layout()
+    fig.text(0.5, 0.005,
+             '注：两幅后验标准差图共用同一色标，仅供定性比较不确定度的空间分布'
+             '（边缘/暗部大、平滑区小）；有效独立样本数有限，背景颗粒含采样噪声，勿作定量读数。',
+             ha='center', fontsize=10)
+    plt.tight_layout(rect=[0, 0.025, 1, 1])
     plt.savefig(os.path.join(SAVE_DIR, '步骤3_显式vs隐式先验.png'), dpi=150, bbox_inches='tight')
     plt.close()
 
@@ -653,11 +658,16 @@ if _run_ok:
             axes[row][j].set_title(f'{tag}  {label_map[T]}\nPSNR: {tag_psnr:.2f} dB{extra}', fontsize=11)
             axes[row][j].axis('off')
     fig.suptitle('温度参数：噪声幅度 √(2Tδ) 控制从众数(MAP)到均值(MMSE)的过渡', fontsize=15, y=1.02)
-    fig.text(0.5, 0.01,
-             '注：T=0 链无随机噪声，收敛到 Moreau/ε-光滑化后验的众数（教学意义上的MAP；'
+    fig.text(0.5, 0.028,
+             '注1：T=0 链无随机噪声，收敛到 Moreau/ε-光滑化后验的众数（教学意义上的MAP；'
              '严格TV-MAP可由Chambolle-Pock/ADMM求得）；T=1 即 TV-ULA/PnP-ULA 的后验均值。',
              ha='center', fontsize=10)
-    plt.tight_layout(rect=[0, 0.03, 1, 1])
+    fig.text(0.5, 0.006,
+             '注2：PSNR 不必随 T 单调——后验均值(T=1)最小化逐像素MSE，但单张图、'
+             '先验存在模型误设时，众数(T=0)可能因边缘更锐利而 PSNR 更高；'
+             '温度过渡的可验证标志是后验离散度(std)随 T 单调增大，而非 PSNR。',
+             ha='center', fontsize=10)
+    plt.tight_layout(rect=[0, 0.05, 1, 1])
     plt.savefig(os.path.join(SAVE_DIR, '步骤5_温度参数_MAP到MMSE.png'), dpi=150, bbox_inches='tight')
     plt.close()
 
@@ -690,12 +700,17 @@ if _run_ok:
         for T in sorted(store.keys()):
             r = store[T]
             img = r['mean'] if T > 0 else r['final']
-            out[f"T={T}"] = {
+            entry = {
                 "迭代次数": r['niter'], "烧入": r['burnin'],
                 "报告量": "后验均值" if T > 0 else "最终样本(众数)",
                 "PSNR_dB": round(float(PSNR(x, img)), 4),
                 "平均标准差": round(float(r['std'].mean()), 6),
             }
+            # 温度链也落盘 PSNR 轨迹（T>0 为后验均值 PSNR；T=0 为烧入后
+            # 累计均值对不动点的逼近），可事后核对链是否到达平台
+            if r['traj']:
+                entry["PSNR轨迹"] = [[int(s), float(p)] for s, p in r['traj']]
+            out[f"T={T}"] = entry
         return out
 
     results_summary = {

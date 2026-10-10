@@ -1,0 +1,555 @@
+# -*- coding: utf-8 -*-
+"""
+实验5.6-2 置信区间与多样性分析
+对应章节：5.6 近似理论与收敛保证 -> 5.6.5 置信区间 + 后验样本多样性与多峰性
+知识点：
+  - 95%置信区间：x_MMSE ± 1.96√Var(x|y)
+  - 置信区间宽度反映局部不确定性
+  - 后验样本展示分布的多样性（本例强数据约束下为单峰附近小幅扰动；
+    真正可分的多峰后验演示见实验5.2-1的高斯混合）
+  - 样本差异大的区域 = 高后验方差区域
+  - 95%区间的经验覆盖率检验：真值 x_true 落入区间的像素比例应接近95%
+  - 平稳性的劈半检验：前/后半段链各自估计的后验σ应一致（数据段不同，非自比）
+
+前置实验：
+  - 需要先运行实验5.5-1，生成sampling_results.npz
+
+素材来源：
+  - 实验5.3.py 不确定性量化部分（置信区间、多样本展示）
+"""
+
+import torch
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # 非交互式后端
+import matplotlib.pyplot as plt
+import os
+import sys
+
+# ====== 中文字体配置（兼容本地和Google Colab）======
+_gdrive = '/content/drive/MyDrive'
+_IN_COLAB = 'google.colab' in sys.modules
+
+if _IN_COLAB:
+    from google.colab import drive
+    if not os.path.isdir(_gdrive):
+        print("正在挂载 Google Drive...")
+        drive.mount('/content/drive')
+    SAVE_DIR = os.path.join(_gdrive, '实验5.6-2')
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+    os.makedirs(_chinese_path, exist_ok=True)
+else:
+    try:
+        SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        SAVE_DIR = os.getcwd()
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+    os.makedirs(_chinese_path, exist_ok=True)
+
+sys.path.insert(0, _chinese_path)
+try:
+    from chinese_font import setup_chinese_font
+    setup_chinese_font(save_dir=_chinese_path)
+except ImportError:
+    print("警告: chinese_font 模块未找到")
+# ========================================================
+
+np.random.seed(42)
+
+
+def iat_geyer(vals):
+    """
+    标量序列的 Geyer 初始正序列 IAT 与 ESS（与实验5.5-1/5.6-1 同一实现）。
+    用于从 npz 中全链数据失配轨迹复核上游链自相关与抽稀充分性。
+    """
+    x = np.asarray(vals, dtype=float)
+    n = len(x)
+    x = x - x.mean()
+    var = np.dot(x, x) / n
+    if var <= 0 or n < 4:
+        return 1.0, float(n)
+    max_lag = min(1000, n // 3)
+    acf = np.array([np.dot(x[:-k], x[k:]) / ((n - k) * var)
+                    for k in range(1, max_lag + 1)])
+    iat = 1.0
+    k = 0
+    while k + 1 < len(acf):
+        pair = acf[k] + acf[k + 1]
+        if pair < 0:
+            break
+        iat += 2.0 * pair
+        k += 2
+    return float(iat), float(n / iat)
+
+
+# ============================================================
+# 加载采样结果（真实数据，不做合成兜底——与实验5.6-1一致）
+# ============================================================
+print("=" * 60)
+print("步骤1：加载采样结果")
+print("=" * 60)
+
+_possible_paths = [
+    os.path.join(SAVE_DIR, 'sampling_results.npz'),
+    os.path.join(os.path.dirname(SAVE_DIR), '实验5.5-1', 'sampling_results.npz'),
+]
+
+if _IN_COLAB:
+    _possible_paths.insert(0, os.path.join(_gdrive, '实验5.5-1', 'sampling_results.npz'))
+
+_data_path = None
+for _path in _possible_paths:
+    if os.path.exists(_path):
+        _data_path = _path
+        break
+
+if _data_path is None:
+    # 不允许用合成数据静默顶替真实实验：否则置信区间/覆盖率等产物无法与真实采样区分
+    raise FileNotFoundError(
+        "未找到采样结果文件 sampling_results.npz。\n"
+        "请先运行实验5.5-1生成真实采样结果后再运行本实验；\n"
+        f"已查找路径: {_possible_paths}"
+    )
+
+print(f"[Data] 从 {_data_path} 加载采样结果（数据来源：真实 PnP-ULA 采样）")
+data = np.load(_data_path)
+post_mean = data['post_mean']
+post_var = data['post_var']
+mc_samples = data['mc_samples']
+x_true = data['x_true']
+_data_source = f"真实采样结果：{os.path.abspath(_data_path)}"
+
+print(f"[Data] 数据来源：{_data_source}")
+print(f"后验均值形状: {post_mean.shape}")
+print(f"样本数量: {len(mc_samples)}")
+
+# 样本数警告
+if len(mc_samples) < 50:
+    print(f"\n[警告] 样本数量 {len(mc_samples)} 过少，统计估计不可靠（建议≥100）")
+
+# ------------------------------------------------------------
+# 上游链(5.5-1)收敛闸门：覆盖率/劈半等结论只在上游链已平稳时才成立。
+# 新版 5.5-1 的 npz 含 trace_psnr/trace_fid/chain_config；旧版没有则如实提示。
+# ------------------------------------------------------------
+src_warnings = []
+src_status = {"数据文件": os.path.abspath(_data_path)}
+if 'chain_config' in data:
+    _cfg = [int(v) for v in data['chain_config'].tolist()]
+    src_status["maxit"] = _cfg[0]
+    src_status["burnin"] = _cfg[1]
+    src_status["劈半点"] = _cfg[2]
+    src_status["抽稀间隔"] = _cfg[3]
+
+if 'trace_psnr' in data:
+    _tp = data['trace_psnr'].astype(np.float64)
+    n_post_full = int(len(_tp))
+    src_gain = float(_tp[-1] - _tp[int(0.75 * n_post_full)])
+    src_status["post_burnin步数"] = n_post_full
+    src_status["末段PSNR"] = round(float(_tp[-1]), 4)
+    src_status["末1/4段PSNR提升_dB"] = round(src_gain, 4)
+    if src_gain >= 0.2:
+        src_warnings.append(
+            f"上游链末1/4段运行均值PSNR仍提升 {src_gain:.3f} dB(≥0.2)，未确认到平台；"
+            "本实验的置信区间/覆盖率结论可能随链长变化，请延长5.5-1链长后重跑")
+else:
+    n_post_full = None
+    src_gain = None
+    src_warnings.append("npz 中无 trace_psnr（旧版5.5-1产物），无法核查上游链是否到平台")
+
+if 'trace_fid' in data:
+    src_iat, src_ess_full = iat_geyer(data['trace_fid'].astype(np.float64))
+    src_status["全链IAT_步"] = round(src_iat, 2)
+    src_status["全链ESS"] = round(src_ess_full, 1)
+    _thin = int(src_status.get("抽稀间隔", 0))
+    src_status["抽稀间隔_ge_IAT"] = bool(_thin >= src_iat) if _thin else None
+    if _thin and _thin < src_iat:
+        src_warnings.append(
+            f"抽稀间隔 {_thin} 步 < 全链IAT {src_iat:.1f}：mc_samples 仍有自相关，"
+            "样本分位数区间与覆盖率的实际分辨率比名义样本数更差；全链Welford量不受影响")
+else:
+    src_iat, src_ess_full = None, None
+    src_warnings.append("npz 中无 trace_fid（旧版5.5-1产物），无法复核全链IAT/ESS与抽稀充分性")
+
+print("\n[上游链状态] 实验5.5-1 链的收敛核查：")
+for _k, _v in src_status.items():
+    print(f"  {_k}: {_v}")
+if src_warnings:
+    for _w in src_warnings:
+        print(f"  [警告] {_w}")
+else:
+    print("  上游链末1/4段已到平台（<0.2 dB），下游置信区间/覆盖率结论有效")
+
+# 保留 5.5-1 中由整条 MCMC 链（全部 post-burn-in 迭代）累积的后验方差，
+# 作为"全链参照量"（用于步骤5的抽稀保真度检验；注意稀疏样本是它的子集，二者非独立）
+post_var_full = np.asarray(post_var).copy()
+
+# 从稀疏样本重新估计统计量（与5.6-1保持一致）
+post_mean_recomputed = np.mean(mc_samples, axis=0)
+post_var_recomputed = np.var(mc_samples, axis=0, ddof=1)
+
+print(f"\n[验证] 从稀疏样本重新估计的统计量 vs 全链统计量:")
+print(f"  均值差异 (L2范数): {np.linalg.norm(post_mean - post_mean_recomputed):.6f}")
+print(f"  方差差异 (L2范数): {np.linalg.norm(post_var_full - post_var_recomputed):.6f}")
+
+# 置信区间与经验分位数使用同一批样本的方差，保持自洽（与5.6-1一致）
+post_var = post_var_recomputed
+print(f"\n[Info] 置信区间使用从样本重新估计的后验方差；步骤5另以全链方差作抽稀保真度参照（非独立验证）")
+
+# 劈半统计：使用上游5.5-1保存的"全链前/后半段"（两段是链上不同数据，
+# 比稀疏样本子集更接近独立检验）；旧版npz无此字段时，降级为稀疏样本前/后半。
+if 'post_var_h1' in data.files and 'post_var_h2' in data.files:
+    post_var_h1 = np.asarray(data['post_var_h1'])
+    post_var_h2 = np.asarray(data['post_var_h2'])
+    half_source = "全链前/后半段"
+else:
+    _nh = len(mc_samples) // 2
+    post_var_h1 = np.var(mc_samples[:_nh], axis=0, ddof=1)
+    post_var_h2 = np.var(mc_samples[_nh:], axis=0, ddof=1)
+    half_source = f"稀疏样本前/后半（各{_nh}个，降级方案，非严格独立）"
+    print(f"[Info] npz中无全链劈半字段，劈半检验降级为：{half_source}")
+
+
+# ============================================================
+# 步骤2：计算置信区间
+# ============================================================
+print("\n" + "=" * 60)
+print("步骤2：计算95%置信区间")
+print("=" * 60)
+
+post_std = np.sqrt(post_var)
+
+# 方法1：正态近似（假设后验为正态分布）
+z_95 = 1.96
+q_low = post_mean - z_95 * post_std
+q_high = post_mean + z_95 * post_std
+ci_width = q_high - q_low  # 置信区间宽度
+
+# 方法2：基于样本分位数（非参数方法，不假设正态）
+q_low_empirical = np.percentile(mc_samples, 2.5, axis=0)
+q_high_empirical = np.percentile(mc_samples, 97.5, axis=0)
+ci_width_empirical = q_high_empirical - q_low_empirical
+
+print(f"95%置信区间公式（正态近似）: $\\hat{{x}}_{{MMSE}} \\pm 1.96\\sqrt{{\\mathrm{{Var}}(x|y)}}$")
+print(f"\n[注意] ±1.96σ 假设后验为正态分布，是近似结果")
+print(f"       若后验非正态（如TV先验），应使用样本分位数方法")
+print(f"\n正态近似置信区间宽度统计:")
+print(f"  平均宽度: {np.mean(ci_width):.4f}")
+print(f"  最大宽度: {np.max(ci_width):.4f}")
+print(f"  最小宽度: {np.min(ci_width):.4f}")
+print(f"\n样本分位数置信区间宽度统计（非参数）:")
+print(f"  平均宽度: {np.mean(ci_width_empirical):.4f}")
+print(f"  最大宽度: {np.max(ci_width_empirical):.4f}")
+print(f"  最小宽度: {np.min(ci_width_empirical):.4f}")
+
+# ===== 95%区间的经验覆盖率检验（直接回答"95%是否名副其实"）=====
+# 逐像素检查真值 x_true 是否落在区间内；边界使用未裁剪数组（裁剪仅用于显示）。
+# 注意：像素间存在强空间相关，不能把65536个像素当作独立伯努利试验套用
+# sqrt(0.95*0.05/N) 的标准误，故这里只作描述性校准检查，不做假设检验。
+cover_mask_norm = (x_true >= q_low) & (x_true <= q_high)
+cover_mask_emp = (x_true >= q_low_empirical) & (x_true <= q_high_empirical)
+coverage_norm = float(cover_mask_norm.mean())
+coverage_emp = float(cover_mask_emp.mean())
+print(f"\n95%区间经验覆盖率（真值落入区间的像素比例，名义水平=95%）:")
+print(f"  正态近似法: {coverage_norm*100:.2f}%")
+print(f"  样本分位数法: {coverage_emp*100:.2f}%")
+print(f"  注：像素强空间相关，此为描述性校准；覆盖严重偏离95%说明区间不可直接定量使用")
+_q_order = max(1, int(round(0.025 * len(mc_samples))))
+print(f"  注：样本分位数仅由 {len(mc_samples)} 个抽稀样本估计，2.5%分位约对应第 {_q_order} 小样本，"
+      "末端次序统计量分辨率粗；若抽稀间隔<全链IAT，有效样本更少，覆盖率只作定性参考")
+
+
+# ============================================================
+# 步骤3：可视化置信区间
+# ============================================================
+print("\n" + "=" * 60)
+print("步骤3：可视化置信区间")
+print("=" * 60)
+
+fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+
+# 第1行：后验均值、下界、上界
+axes[0, 0].imshow(post_mean, cmap='gray', vmin=0, vmax=1)
+axes[0, 0].set_title('后验均值 $\\hat{x}_{MMSE}$')
+axes[0, 0].axis('off')
+
+axes[0, 1].imshow(np.clip(q_low, 0, 1), cmap='gray', vmin=0, vmax=1)
+axes[0, 1].set_title('95%置信区间下界')
+axes[0, 1].axis('off')
+
+axes[0, 2].imshow(np.clip(q_high, 0, 1), cmap='gray', vmin=0, vmax=1)
+axes[0, 2].set_title('95%置信区间上界')
+axes[0, 2].axis('off')
+
+# 第2行：区间宽度、宽度直方图、高宽度区域
+im_width = axes[1, 0].imshow(ci_width, cmap='hot')
+axes[1, 0].set_title('置信区间宽度 $w = 3.92\\sqrt{\\mathrm{Var}}$')
+axes[1, 0].axis('off')
+plt.colorbar(im_width, ax=axes[1, 0], fraction=0.046, pad=0.04)
+
+# 宽度直方图
+unique_widths = np.unique(ci_width)
+if len(unique_widths) > 10:
+    n_bins = 50
+else:
+    n_bins = min(10, len(unique_widths))
+
+if n_bins > 1:
+    axes[1, 1].hist(ci_width.flatten(), bins=n_bins, color='coral', alpha=0.7, edgecolor='white')
+    axes[1, 1].axvline(np.mean(ci_width), color='red', linestyle='--',
+                       label=f'均值：{np.mean(ci_width):.4f}')
+    axes[1, 1].set_xlabel('置信区间宽度')
+    axes[1, 1].set_ylabel('像素数量')
+    axes[1, 1].set_title('宽度分布')
+    axes[1, 1].legend()
+    axes[1, 1].grid(alpha=0.3)
+else:
+    axes[1, 1].text(0.5, 0.5, f'宽度恒定：{ci_width[0,0]:.4f}', ha='center', va='center',
+                    transform=axes[1, 1].transAxes, fontsize=12)
+    axes[1, 1].set_title('宽度分布（常数）')
+    axes[1, 1].axis('off')
+
+# 高宽度区域
+threshold = np.percentile(ci_width, 90)
+high_width = ci_width > threshold
+axes[1, 2].imshow(high_width, cmap='Reds')
+axes[1, 2].set_title(f'高宽度区域 (>P90={threshold:.4f})')
+axes[1, 2].axis('off')
+
+fig.suptitle('实验5.6-2 置信区间分析', fontsize=14, y=1.02)
+plt.tight_layout()
+plt.savefig(os.path.join(SAVE_DIR, '步骤3_置信区间分析.png'), dpi=150, bbox_inches='tight')
+plt.close()
+
+
+# ============================================================
+# 步骤4：后验样本多样性展示
+# ============================================================
+print("\n" + "=" * 60)
+print("步骤4：后验样本多样性展示")
+print("=" * 60)
+
+num_show = min(16, len(mc_samples))
+step = max(1, len(mc_samples) // num_show)
+selected = mc_samples[::step][:num_show]
+
+ncols = 4
+nrows = (num_show + ncols - 1) // ncols
+fig, axes = plt.subplots(nrows, ncols, figsize=(16, 4*nrows))
+
+for i in range(nrows * ncols):
+    ax = axes[i // ncols][i % ncols] if nrows > 1 else axes[i]
+    if i < len(selected):
+        ax.imshow(selected[i], cmap='gray', vmin=0, vmax=1)
+        ax.set_title(f'样本 {i+1}')
+    ax.axis('off')
+
+fig.suptitle('PnP-ULA后验样本（展示后验分布的多样性）', fontsize=14, y=1.01)
+plt.tight_layout()
+plt.savefig(os.path.join(SAVE_DIR, '步骤4_后验样本多样性.png'), dpi=150, bbox_inches='tight')
+plt.close()
+
+print(f"展示了 {len(selected)} 个后验样本")
+print("\n观察要点:")
+print("  - 共享相似的全局结构（先验约束）")
+print("  - 细节存在差异（数据一致性与先验的权衡）")
+print("  - 差异区域 = 高不确定性区域")
+
+
+# ============================================================
+# 步骤5：样本差异分析
+# ============================================================
+print("\n" + "=" * 60)
+print("步骤5：样本差异分析")
+print("=" * 60)
+
+if len(mc_samples) >= 2:
+    # 稀疏样本逐像素标准差（多样性度量）；ddof=1 与全链Welford及步骤2口径一致
+    sample_std = np.std(mc_samples, axis=0, ddof=1)
+    # 参照：整条 MCMC 链累积的后验标准差
+    post_std_full = np.sqrt(post_var_full)
+
+    # 劈半一致性：前/后半段各自的后验σ（两段是链上不同数据，比"全链vs其子集"更有检验力）
+    half_std1 = np.sqrt(post_var_h1)
+    half_std2 = np.sqrt(post_var_h2)
+    corr_thin = np.corrcoef(post_std_full.flatten(), sample_std.flatten())[0, 1]
+    corr_half = np.corrcoef(half_std1.flatten(), half_std2.flatten())[0, 1]
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+
+    # (0,0) 样本标准差
+    im_sample_std = axes[0, 0].imshow(sample_std, cmap='hot')
+    axes[0, 0].set_title('样本标准差（多样性度量，ddof=1）')
+    axes[0, 0].axis('off')
+    plt.colorbar(im_sample_std, ax=axes[0, 0], fraction=0.046, pad=0.04)
+
+    # (0,1) 抽稀保真度：全链σ vs 稀疏子集σ（随机采样像素，避免视觉过密）
+    ref_flat = post_std_full.flatten()
+    sample_std_flat = sample_std.flatten()
+    n_pixels_scatter = min(500, len(ref_flat))
+    idx = np.random.choice(len(ref_flat), size=n_pixels_scatter, replace=False)
+    axes[0, 1].scatter(ref_flat[idx], sample_std_flat[idx], alpha=0.3, s=1)
+    lim = max(post_std_full.max(), sample_std.max())
+    axes[0, 1].plot([0, lim], [0, lim], 'r--', label='y=x')
+    _npost_lbl = f'{n_post_full}步累积' if n_post_full is not None else '步数未知（旧版npz）'
+    axes[0, 1].set_xlabel(f'全链后验σ（约{_npost_lbl}）')
+    axes[0, 1].set_ylabel(f'稀疏抽稀样本σ（{len(mc_samples)}个）')
+    axes[0, 1].set_title(f'抽稀保真度（稀疏样本是全链子集，非独立），r={corr_thin:.3f}')
+    axes[0, 1].legend()
+    axes[0, 1].grid(alpha=0.3)
+
+    # (0,2) 差异图（相邻抽稀样本）
+    diff = np.abs(mc_samples[0] - mc_samples[1])
+    axes[0, 2].imshow(diff, cmap='hot')
+    axes[0, 2].set_title('相邻抽稀样本差异（样本1 vs 样本2）')
+    axes[0, 2].axis('off')
+
+    # (1,0) 劈半一致性散点：前半段σ vs 后半段σ
+    h1_flat = half_std1.flatten()
+    h2_flat = half_std2.flatten()
+    axes[1, 0].scatter(h1_flat[idx], h2_flat[idx], alpha=0.3, s=1, color='seagreen')
+    lim_h = max(half_std1.max(), half_std2.max())
+    axes[1, 0].plot([0, lim_h], [0, lim_h], 'r--', label='y=x')
+    axes[1, 0].set_xlabel('前半段后验σ')
+    axes[1, 0].set_ylabel('后半段后验σ')
+    axes[1, 0].set_title(f'劈半一致性（{half_source}），r={corr_half:.3f}')
+    axes[1, 0].legend()
+    axes[1, 0].grid(alpha=0.3)
+
+    # (1,1) 未覆盖真值的像素：红=正态法漏盖，蓝=分位数法漏盖，紫=两者都漏
+    miss_overlay = np.zeros((*x_true.shape, 3))
+    miss_overlay[~cover_mask_norm, 0] = 1.0
+    miss_overlay[~cover_mask_emp, 2] = 1.0
+    axes[1, 1].imshow(miss_overlay)
+    axes[1, 1].set_title('95%区间未覆盖真值的像素\n（红=正态法漏，蓝=分位数法漏，紫=两者都漏）')
+    axes[1, 1].axis('off')
+
+    # (1,2) 定量结论文字
+    axes[1, 2].axis('off')
+    _conclusion_txt = (
+        "定量检验汇总\n"
+        "----------------------------\n"
+        f"样本数: {len(mc_samples)}（真实PnP-ULA链）\n"
+        f"上游链: {'有警告，详见控制台/JSON' if src_warnings else '已到平台、抽稀充分'}\n\n"
+        "95%区间经验覆盖率:\n"
+        f"  正态近似法 : {coverage_norm*100:.2f}%\n"
+        f"  样本分位数 : {coverage_emp*100:.2f}%\n"
+        "  名义水平   : 95.00%\n\n"
+        f"抽稀保真度 r = {corr_thin:.3f}\n"
+        "  (稀疏样本是全链的子集，仅\n"
+        "   检验空间格局是否保真，\n"
+        "   非独立验证)\n\n"
+        f"劈半一致性 r = {corr_half:.3f}\n"
+        f"  ({half_source};\n"
+        "   贴近y=x才支持链已平稳)"
+    )
+    axes[1, 2].text(0.03, 0.97, _conclusion_txt, transform=axes[1, 2].transAxes,
+                    fontsize=11, va='top', ha='left',
+                    bbox=dict(boxstyle='round,pad=0.6', facecolor='whitesmoke', edgecolor='gray'))
+
+    fig.suptitle('实验5.6-2 样本差异与区间校准分析', fontsize=14, y=1.01)
+    plt.tight_layout()
+    plt.savefig(os.path.join(SAVE_DIR, '步骤5_样本差异分析.png'), dpi=150, bbox_inches='tight')
+    plt.close()
+
+    print(f"抽稀保真度（全链σ vs 稀疏子集σ）相关系数: {corr_thin:.3f}")
+    print("解读: 稀疏样本是全链的嵌套子集（每隔thinning_step步抽1个），两者不独立；")
+    print("      r接近1仅说明'稀疏化保留了不确定性的空间格局'，不构成幅度校准，也不是独立验证。")
+    print(f"劈半一致性（{half_source}）相关系数: {corr_half:.3f}")
+    print("解读: 前/后半段是链上不同数据段；r高且散点贴近y=x，才支持链已平稳、不确定性估计可重复。")
+    print(f"经验覆盖率: 正态法 {coverage_norm*100:.2f}% / 分位数法 {coverage_emp*100:.2f}%（名义95%）")
+
+
+# ============================================================
+# 实验总结
+# ============================================================
+print("\n" + "=" * 60)
+print("实验5.6-2 总结")
+print("=" * 60)
+print("1. 95%置信区间: $\\hat{x}_{MMSE} \\pm 1.96\\sqrt{\\mathrm{Var}(x|y)}$")
+print("2. 置信区间宽度直观反映局部不确定性")
+print("3. 后验样本展示分布的多样性（本例为单峰附近的小幅扰动，非明显多峰；多峰演示见5.2-1）:")
+print("   - 共享全局结构（先验约束）")
+print("   - 细节存在差异（高不确定区扰动更大）")
+print(f"4. 经验覆盖率：正态法 {coverage_norm*100:.1f}% / 分位数法 {coverage_emp*100:.1f}%（名义95%），")
+print("   这是对'95%区间是否名副其实'的直接校准（像素强相关，仅作描述性检查）")
+print("5. 抽稀保真检验：稀疏子集σ与全链σ高相关仅说明空间格局保真（二者为包含关系、非独立）；")
+print("   链是否平稳应看劈半一致性（前/后半段不同数据段）与上游5.5-1的IAT/ESS诊断")
+if src_warnings:
+    print("6. [注意] 上游5.5-1链核查有警告（见开头[上游链状态]），上述覆盖率/区间结论需结合该警告解读")
+else:
+    print("6. 上游5.5-1链已确认到平台且抽稀充分，上述覆盖率/区间结论有效")
+print("7. 置信区间可用于下游决策（如医学影像中的专家复核区域）")
+
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "实验名称": "实验5.6-2 置信区间与多样性分析",
+    "上游链状态_5.5-1": {**src_status, "警告": src_warnings},
+    "数据信息": {
+        "数据来源": _data_source,
+        "后验均值形状": list(post_mean.shape),
+        "样本数量": int(len(mc_samples)),
+        "均值差异_L2范数": round(float(np.linalg.norm(post_mean - post_mean_recomputed)), 8),
+        "方差差异_L2范数": round(float(np.linalg.norm(post_var_full - post_var_recomputed)), 8),
+    },
+    "步骤2_95%置信区间": {
+        "正态近似_z值": float(z_95),
+        "正态近似_区间宽度统计": {
+            "平均宽度": round(float(np.mean(ci_width)), 6),
+            "最大宽度": round(float(np.max(ci_width)), 6),
+            "最小宽度": round(float(np.min(ci_width)), 6),
+        },
+        "样本分位数_区间宽度统计": {
+            "平均宽度": round(float(np.mean(ci_width_empirical)), 6),
+            "最大宽度": round(float(np.max(ci_width_empirical)), 6),
+            "最小宽度": round(float(np.min(ci_width_empirical)), 6),
+        },
+        "经验覆盖率_真值落入区间像素比例": {
+            "名义水平": 0.95,
+            "正态近似法": round(coverage_norm, 6),
+            "样本分位数法": round(coverage_emp, 6),
+            "分位数分辨率注记": (
+                f"仅由{len(mc_samples)}个抽稀样本估计，2.5%分位约对应第{_q_order}小样本；"
+                "抽稀间隔<全链IAT时有效样本更少，分位数法覆盖率只作定性参考"),
+            "备注": "像素间强空间相关，不能按独立伯努利试验给标准误，此处为描述性校准检查",
+        },
+    },
+    "步骤4_后验样本多样性": {
+        "展示样本数": int(len(selected)),
+        "多峰性说明": "本例强数据约束(BSNR=40dB)+近对数凹去噪先验，样本为单峰附近小幅扰动；可分多峰演示见实验5.2-1",
+    },
+}
+
+# 步骤5的相关系数在条件块内定义，需安全访问
+try:
+    results_summary["步骤5_样本差异分析"] = {
+        "抽稀保真度_全链σ_vs_稀疏子集σ_相关系数": round(float(corr_thin), 6),
+        "抽稀保真度说明": ("稀疏样本是全链的嵌套子集（每隔thinning_step步抽1个），二者非独立；"
+                          "r高仅说明抽稀保留了不确定性的空间格局，不构成幅度校准或独立验证"),
+        "劈半一致性_前半段σ_vs_后半段σ_相关系数": round(float(corr_half), 6),
+        "劈半数据来源": half_source,
+        "劈半检验说明": "前/后半段是链上不同数据段；r高且散点贴近y=x才支持链已平稳、估计可重复",
+    }
+except (NameError, UnboundLocalError):
+    results_summary["步骤5_样本差异分析"] = "未执行（样本数不足）"
+
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
