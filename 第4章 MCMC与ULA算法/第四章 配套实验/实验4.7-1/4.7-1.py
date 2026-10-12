@@ -189,6 +189,8 @@ if _use_pnp:
     L_net = 1.0
     model = load_model(_model_path, device)
     denoise = lambda x: (x - model(x[None][None].to(device))[0][0]).detach()
+    # 步长上界取 PPnP-ULA 形式 1/(L_net/eps + L_y)。本实现用未投影的简化 PnP-ULA 核
+    # （无 box 投影、无 λ 尾项），而 δ = 1/L_total 仍在 Langevin 稳定域 (δ < 2/L_total) 内，故数值稳定
     delta_max = (1.0) / (L_net / eps + L_y)
     print(f"正则化参数: ε = {eps:.6f}")
 else:
@@ -291,8 +293,10 @@ print(f"初始 NRMSE: {NRMSE(x, y):.4f}")
 print(f"初始 PSNR:  {PSNR(x, y):.2f} dB")
 print(f"初始 SSIM:  {SSIM(x, y):.4f}")
 print()
-print(f"结果 NRMSE: {NRMSE(post_meanvar.get_mean(), x):.4f}")
-print(f"结果 PSNR:  {PSNR(post_meanvar.get_mean(), x):.2f} dB")
+# 统一以真值 x 为归一化基准（NRMSE 非对称：NRMSE(a,b)=‖a-b‖/‖a‖）；
+# PSNR/SSIM 对称，此处仅为与初始指标/参考实现一致而统一参数顺序
+print(f"结果 NRMSE: {NRMSE(x, post_meanvar.get_mean()):.4f}")
+print(f"结果 PSNR:  {PSNR(x, post_meanvar.get_mean()):.2f} dB")
 print(f"结果 SSIM:  {SSIM(x, post_meanvar.get_mean()):.4f}")
 
 # ══════════════════════════════════════════════════════════
@@ -493,8 +497,8 @@ results_summary = {
         'initial_psnr': float(round(PSNR(x, y), 2)),
         'initial_nrmse': float(round(NRMSE(x, y), 4)),
         'initial_ssim': float(round(SSIM(x, y), 4)),
-        'result_psnr': float(round(PSNR(post_meanvar.get_mean(), x), 2)),
-        'result_nrmse': float(round(NRMSE(post_meanvar.get_mean(), x), 4)),
+        'result_psnr': float(round(PSNR(x, post_meanvar.get_mean()), 2)),
+        'result_nrmse': float(round(NRMSE(x, post_meanvar.get_mean()), 4)),
         'result_ssim': float(round(SSIM(x, post_meanvar.get_mean()), 4)),
         'elapsed_time': float(round(elapsed, 2)),
     }

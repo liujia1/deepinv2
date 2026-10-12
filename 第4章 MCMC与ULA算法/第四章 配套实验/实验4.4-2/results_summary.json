@@ -7,7 +7,7 @@
       512
     ],
     "BSNR": 30,
-    "true_sigma2": 4.975107,
+    "true_sigma2": 4.975089,
     "kernel_len": [
       9,
       9
@@ -21,13 +21,13 @@
     "th_init": 0.01
   },
   "estimates": {
-    "theta_est": 0.0043,
-    "sigma2_est": 5.530642,
-    "true_sigma2": 4.975107
+    "theta_est": 0.024222,
+    "sigma2_est": 4.826401,
+    "true_sigma2": 4.975089
   },
   "map_results": {
     "snr_obs": 18.84,
-    "snr_map": 20.8,
-    "snr_improvement": 1.97
+    "snr_map": 23.07,
+    "snr_improvement": 4.23
   }
 }

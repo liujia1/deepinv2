@@ -1,0 +1,10 @@
+{
+  "n": 50,
+  "m": 40,
+  "sigma2": 0.01,
+  "alpha_eb": 0.0351,
+  "alpha_opt": 0.0351,
+  "log_ml_max": 7.46,
+  "psnr_eb": 17.53,
+  "psnr_opt": 17.53
+}

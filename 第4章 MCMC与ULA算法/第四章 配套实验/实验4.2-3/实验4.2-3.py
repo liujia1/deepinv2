@@ -9,7 +9,9 @@
 #   - 即便按最优步长缩放，RWM 的有效样本率 ESS/N 仍随维数下降 → 效率崩塌
 #
 # 实验步骤：
-#   步骤1：固定步长 σ=1 下，RWM 接受率随维数 d 指数式衰减（直观演示维数诅咒）
+#   步骤1：固定步长 σ=1 下，RWM 平稳接受率随维数 d 指数式衰减（直观演示
+#          维数诅咒）。接受率是链的平稳性质，故链从平稳态 x~N(0,I) 启动，
+#          避免高维下链在 burn-in 内冻死于众数附近造成测量口径偏差
 #   步骤2：最优步长缩放 σ = 2.38/√d，接受率收敛到渐近值 ≈ 0.234，但 σ 必须随 d 缩小
 #   步骤3：最优步长下有效样本率 ESS/N 仍随 d 衰减 → 高维采样效率崩塌
 # ============================================================
@@ -76,11 +78,25 @@ def log_target_gaussian(x):
     return -0.5 * np.dot(x, x)
 
 
-def rwm_sampler(log_target, d, n_samples, sigma=1.0, burn_in=0, rng=None):
-    """随机游走 Metropolis (RWM) 采样器。"""
+def rwm_sampler(log_target, d, n_samples, sigma=1.0, burn_in=0, rng=None,
+                init='mode'):
+    """随机游走 Metropolis (RWM) 采样器。
+
+    init（链的初始状态，决定测量口径）：
+        'mode'       ：从原点（标准高斯的众数）冷启动；
+        'stationary' ：从目标分布的平稳态启动（x~N(0,I)）。
+    接受率是链的**平稳性质**：测量接受率随维数变化时必须用 'stationary'，
+    否则高维 + 固定大步长下链会在 burn-in 内冻死于众数附近（局部接受率
+    仅约 1e-11），测得的是"冷启动冻结接受率"而非平稳接受率。
+    """
     if rng is None:
         rng = np.random.default_rng(0)
-    x = np.zeros(d)
+    if init == 'stationary':
+        x = rng.standard_normal(d)
+    elif init == 'mode':
+        x = np.zeros(d)
+    else:
+        raise ValueError(f"未知 init={init!r}，可选 'mode' | 'stationary'")
     log_x = log_target(x)
     samples = np.empty((n_samples, d))
     n_accept = 0
@@ -150,13 +166,14 @@ def ess(x):
 print("实验4.2-3 MH接受率随维数衰减（随机游走 Metropolis）")
 print("=" * 60)
 
-# ── 步骤1：固定步长 σ=1，接受率随维数衰减 ─────────────────────────
-print("\n[步骤1] 固定步长 σ=1，RWM 接受率随维数 d 衰减")
+# ── 步骤1：固定步长 σ=1，平稳接受率随维数衰减 ─────────────────────
+print("\n[步骤1] 固定步长 σ=1，RWM 平稳接受率随维数 d 衰减")
+print("  口径：链从平稳态 x~N(0,I) 启动（接受率是平稳性质，不可从众数冷启动测量）")
 dims_s1 = [1, 2, 5, 10, 20, 50, 100, 200]
 acc_s1 = []
 for d in dims_s1:
     _, ar = rwm_sampler(log_target_gaussian, d, n_samples=20000, sigma=1.0,
-                        burn_in=1000, rng=RNG)
+                        burn_in=1000, rng=RNG, init='stationary')
     acc_s1.append(ar)
     print(f"  d={d:4d}  接受率={ar:.4f}")
 
@@ -173,7 +190,7 @@ if zero_dims:
                label=f'实际为 0 的维度: {zero_dims}')
 ax[0].set_xlabel(r'维数 $d$', fontsize=12)
 ax[0].set_ylabel('接受率（对数轴）', fontsize=12)
-ax[0].set_title(r'步骤1: 固定步长 $\sigma=1$ 下接受率随维数衰减', fontsize=12)
+ax[0].set_title(r'步骤1: 固定步长 $\sigma=1$ 下平稳接受率随维数衰减', fontsize=12)
 ax[0].legend(fontsize=9)
 ax[0].grid(True, which='both', alpha=0.3)
 
@@ -182,7 +199,7 @@ ax[1].set_xscale('log')
 ax[1].axhline(0.234, ls='--', color='C3', label=r'渐近最优接受率 $\approx 0.234$')
 ax[1].set_xlabel(r'维数 $d$（对数轴）', fontsize=12)
 ax[1].set_ylabel('接受率', fontsize=12)
-ax[1].set_title(r'步骤1: 接受率随维数（线性坐标）', fontsize=12)
+ax[1].set_title(r'步骤1: 平稳接受率随维数（线性坐标）', fontsize=12)
 ax[1].legend(fontsize=10)
 ax[1].grid(True, which='both', alpha=0.3)
 plt.tight_layout()
@@ -261,10 +278,14 @@ summary = {
     "实验": "实验4.2-3 MH接受率随维数衰减（随机游走 Metropolis）",
     "目标分布": "d 维标准高斯 N(0, I)",
     "ESS算法": "Geyer (1992) IPSE：先归一化 rho=acov/acov[0]，再配对 Gamma_m=rho[2m]+rho[2m+1]，首次非正处截断",
+    "步骤1_测量口径": ("链从平稳态 x~N(0,I) 启动（init='stationary'），测量的是 RWM 平稳"
+                     "接受率；接受率是链的平稳性质，从众数冷启动会因链在 burn-in 内冻死"
+                     "于众数附近而严重低估。值=0 表示 20000 个样本内未观察到接受（如 "
+                     "d=100 时平稳接受率约 6e-7，期望接受次数仅约 0.01）"),
     "步骤1_固定步长_接受率": {str(d): round(a, 4) for d, a in zip(dims_s1, acc_s1)},
     "步骤2_最优步长_接受率": {str(d): round(a, 4) for d, a in zip(dims_s2, acc_s2)},
     "步骤3_有效样本率ESS/N": {str(d): round(r, 4) for d, r in zip(dims_s3, ess_ratio)},
-    "结论": ("固定步长下接受率随维数指数衰减；按渐近最优步长 σ=2.38/√d 缩放后接受率"
+    "结论": ("固定步长下平稳接受率随维数指数衰减；按渐近最优步长 σ=2.38/√d 缩放后接受率"
              "收敛到 ≈0.234（注：2.38/√d 是 d→∞ 渐近最优，小 d 时并非严格最优，如 d=1"
              "对应最优接受率约 0.44，这里仅作理论代表演示），但步长必须随维数缩小，"
              "且有效样本率 ESS/N 仍随维数下降（Geyer IPSE 截断估计），说明 RWM 在高维下"
@@ -275,7 +296,7 @@ with open(os.path.join(OUT_DIR, 'exp4_2-3_summary.json'), 'w', encoding='utf-8')
 
 print("\n" + "=" * 60)
 print("结论:")
-print("  1. 固定步长 σ=1：接受率随维数指数衰减（维数诅咒）")
+print("  1. 固定步长 σ=1：平稳接受率随维数指数衰减（维数诅咒）")
 print("  2. 最优步长缩放 σ=2.38/√d：接受率收敛到 ≈0.234，但 σ 必须随 √d 缩小")
 print("  3. 即便最优缩放，有效样本率 ESS/N 仍随维数下降 → 高维效率崩塌")
 print("  → 这正是需要维度无关提议核（pCN，见实验4.2-4）的原因")

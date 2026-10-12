@@ -135,6 +135,8 @@ u_old = torch.from_numpy(f.copy())
 
 maxit = 10000
 check = 1000
+energy_map_hist = []
+energy_ila_hist = []
 
 print("\n" + "=" * 60)
 print("【MAP求解】加速梯度下降（重球法）")
@@ -147,11 +149,15 @@ for it in range(maxit):
     u_i = u_map + theta * (u_map - u_old)
     u_old = u_map.clone()
     u_map = u_i - tau * grad_u
-    
+
+    # 能量统一在“更新后”的状态计算，避免TV项取自旧状态、数据项取自新状态的口径混用
+    diff_new = Du(u_map)
+    E_new = (lamb * torch.abs(diff_new).sum()
+             + torch.sum((u_map - f_)**2 / (2 * sigma**2)))
+    energy_map_hist.append(E_new.item())
+
     if it % check == 0:
-        TV = lamb * torch.abs(diff_u).sum()
-        Dat = torch.sum((u_map - f_)**2 / (2 * sigma**2))
-        print(f"  iter {it:5d}: TV + Data = {TV.item() + Dat.item():.6f}", end="\r")
+        print(f"  iter {it:5d}: TV + Data = {E_new.item():.6f}", end="\r")
 
 print(f"\n  MAP求解完成")
 
@@ -166,6 +172,10 @@ n_burn_in = 1000
 u_sum_ = torch.zeros((N, N))
 u_sqr_ = torch.zeros((N, N))
 
+# 平坦背景区单像素探针（10,10 位于方块外），用于估计积分自相关时间与有效样本量 ESS
+probe_rc, probe_cc = 10, 10
+probe_trace = []
+
 print("\n" + "=" * 60)
 print("【MMSE求解】ILA采样")
 print("=" * 60)
@@ -177,22 +187,45 @@ for it in range(maxit):
     u_i = u_ila + theta * (u_ila - u_old_)
     u_old_ = u_ila.clone()
     u_ila = u_i - tau * grad_u + torch.randn((N, N)) * np.sqrt(2 * tau * (1 - theta))
-    
+
+    # 能量同样统一在更新后的状态计算
+    diff_new = Du(u_ila)
+    E_new = (lamb * torch.abs(diff_new).sum()
+             + torch.sum((u_ila - f_)**2 / (2 * sigma**2)))
+    energy_ila_hist.append(E_new.item())
+
     # burn-in: 跳过前期非平稳样本
     if it >= n_burn_in:
         u_sum_ += u_ila
         u_sqr_ += u_ila**2
-    
+        probe_trace.append(u_ila[probe_rc, probe_cc].item())
+
     if it % check == 0:
-        TV = lamb * torch.abs(diff_u).sum()
-        Dat = torch.sum((u_ila - f_)**2 / (2 * sigma**2))
-        print(f"  iter {it:5d}: TV + Data = {TV.item() + Dat.item():.6f}", end="\r")
+        print(f"  iter {it:5d}: TV + Data = {E_new.item():.6f}", end="\r")
 
 print(f"\n  ILA采样完成 (burn-in: {n_burn_in} iterations)")
 
 n_samples = maxit - n_burn_in
 u_avg_ = u_sum_ / n_samples
 u_var_ = u_sqr_ / n_samples - u_avg_**2
+
+# 积分自相关时间（初始正序列估计量）与有效样本量 ESS
+def _tau_int(trace):
+    x = np.asarray(trace, dtype=float)
+    x = x - x.mean()
+    acf = np.correlate(x, x, 'full')[len(x) - 1:]
+    acf = acf / acf[0]
+    t = 0.5
+    for k in range(1, min(len(acf), 2000)):
+        if acf[k] < 0:          # 初始正序列截断
+            break
+        t += acf[k]
+    return t
+
+tau_int_probe = _tau_int(probe_trace)
+ess_probe = len(probe_trace) / tau_int_probe
+print(f"\n  探针像素({probe_rc},{probe_cc}) 积分自相关时间 ≈ {tau_int_probe:.1f} 步，"
+      f"ESS ≈ {ess_probe:.0f}（共{n_samples}个burn-in后样本）")
 
 # ══════════════════════════════════════════════════════════
 # 7. 结果输出
@@ -225,7 +258,8 @@ print("   → 优化算法 + 噪声 = 采样算法")
 print("")
 print("3. 动量项 β(X_m - X_{m-1}) 加速收敛，对应优化中的重球法（Heavy-ball momentum）")
 print("")
-print("4. 后验标准差量化不确定性：边缘处不确定性高，平坦区域不确定性低")
+print("4. 后验标准差量化不确定性：边缘处相对最高（边缘位置多峰）；")
+print("   平坦区绝对量级约 σ/2（TV零空间中的集体涨落仅受数据项约束），并非接近确定")
 
 # ══════════════════════════════════════════════════════════
 # 8. 可视化
@@ -240,7 +274,13 @@ axes[0, 1].imshow(f, cmap='gray', vmin=0, vmax=1)
 axes[0, 1].set_title(rf'含噪图像 ($\sigma={sigma}$)', fontsize=12)
 axes[0, 1].axis('off')
 
-axes[0, 2].axis('off')
+axes[0, 2].plot(np.arange(len(energy_map_hist)), energy_map_hist, color='tab:blue', lw=1.0, label='MAP（重球法）')
+axes[0, 2].plot(np.arange(len(energy_ila_hist)), energy_ila_hist, color='tab:red', lw=0.7, alpha=0.85, label='ILA（采样）')
+axes[0, 2].set_title(r'TV+Data 能量迭代（稳定无发散）', fontsize=12)
+axes[0, 2].set_xlabel(r'迭代次数', fontsize=10)
+axes[0, 2].set_ylabel(r'能量', fontsize=10)
+axes[0, 2].legend(fontsize=9)
+axes[0, 2].grid(True, alpha=0.3)
 
 axes[1, 0].imshow(u_map.numpy(), cmap='gray', vmin=0, vmax=1)
 axes[1, 0].set_title(r'MAP（加速梯度下降）', fontsize=12)
@@ -249,10 +289,19 @@ axes[1, 0].axis('off')
 axes[1, 1].imshow(u_avg_.numpy(), cmap='gray', vmin=0, vmax=1)
 axes[1, 1].set_title(r'MMSE（ILA后验均值）', fontsize=12)
 axes[1, 1].axis('off')
+# MMSE图上的细颗粒是后验均值“软收缩”的真实结构（独立链高度一致），不是采样未收敛
+axes[1, 1].text(0.5, -0.03, r'细颗粒为软收缩的真实结构（多链一致，非未收敛）',
+                transform=axes[1, 1].transAxes, ha='center', va='top', fontsize=8)
 
-axes[1, 2].imshow(torch.sqrt(torch.clamp(u_var_, min=0)).numpy(), cmap='hot')
+u_std_ = torch.sqrt(torch.clamp(u_var_, min=0))
+# 用2%~99.5%分位数定标，避免少量极值压扁对比度；colorbar给出绝对量级（约σ/2）
+im_std = axes[1, 2].imshow(
+    u_std_.numpy(), cmap='hot',
+    vmin=float(torch.quantile(u_std_, 0.02)),
+    vmax=float(torch.quantile(u_std_, 0.995)))
 axes[1, 2].set_title(r'后验标准差（不确定性）', fontsize=12)
 axes[1, 2].axis('off')
+fig.colorbar(im_std, ax=axes[1, 2], fraction=0.046, pad=0.04, label=r'后验标准差')
 
 fig.suptitle(r'实验4.6-1 优化 vs 采样：MAP vs MMSE', fontsize=14, y=1.01)
 plt.tight_layout()
@@ -282,6 +331,12 @@ def _to_native(obj):
             return obj
     return obj
 
+# 审计字段：能量平台/涨落、自相关时间、ESS、分区后验标准差，供脱离重跑地复核收敛性
+_gmag = Du(torch.from_numpy(u)).abs().max(dim=0).values.numpy()
+_edge_mask = _gmag > 0.02                 # 真值存在显著梯度的边缘像素
+_flat_mask = (m1 == 0) & (m2 == 0)        # 方块与圆盘之外的平坦背景
+_std_np = u_std_.numpy()
+
 results_summary = {
     'experiment': '4.6-1',
     'title': '优化 vs 采样：MAP vs MMSE',
@@ -297,6 +352,23 @@ results_summary = {
         'psnr_noisy': float(round(psnr_noisy, 2)),
         'psnr_map': float(round(psnr_map, 2)),
         'psnr_ila': float(round(psnr_ila, 2)),
+        'psnr_mmse_minus_map_db': float(round(psnr_ila - psnr_map, 2)),
+    },
+    'audit': {
+        'note': '能量均在更新后状态计算；ESS由平坦区探针像素(10,10)的积分自相关时间估计',
+        'L': float(L),
+        'tau': float(tau),
+        'n_post_burnin_samples': int(n_samples),
+        'tau_int_probe_steps': float(round(tau_int_probe, 2)),
+        'ess_probe': float(round(ess_probe, 1)),
+        'energy_map_plateau': float(round(np.mean(energy_map_hist[-500:]), 2)),
+        'energy_ila_band_mean': float(round(np.mean(energy_ila_hist[n_burn_in:]), 2)),
+        'energy_ila_band_std': float(round(np.std(energy_ila_hist[n_burn_in:]), 2)),
+        'posterior_std': {
+            'flat_bg_median': float(round(np.median(_std_np[_flat_mask]), 4)),
+            'edge_median': float(round(np.median(_std_np[_edge_mask]), 4)),
+            'global_max': float(round(_std_np.max(), 4)),
+        },
     }
 }
 

@@ -11,4 +11,30 @@
     "tau_opt = 1/L": {
       "tau": 0.990099,
       "psnr": 14.64,
-      "convergent": 
+      "convergent": true,
+      "final_obj": 1.3163,
+      "iters_to_thresh_0p1pct": 23
+    },
+    "tau = 0.5/L (偏小)": {
+      "tau": 0.49505,
+      "psnr": 14.65,
+      "convergent": true,
+      "final_obj": 1.3163,
+      "iters_to_thresh_0p1pct": 47
+    },
+    "tau = 1.8/L (接近边界)": {
+      "tau": 1.782178,
+      "psnr": 14.64,
+      "convergent": true,
+      "final_obj": 1.3163,
+      "iters_to_thresh_0p1pct": 18
+    },
+    "tau = 2.1/L (发散)": {
+      "tau": 2.079208,
+      "psnr": 12.21,
+      "convergent": false,
+      "final_obj": 106975.0106,
+      "iters_to_thresh_0p1pct": null
+    }
+  }
+}

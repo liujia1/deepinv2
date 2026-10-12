@@ -2,7 +2,7 @@
 实验4.4-1 2D图像MYULA后验采样（去卷积）
 对应章节：4.4 MYULA——近端ULA
 知识点：不可微后验的挑战；Moreau-Yoshida包络光滑化；近端算子替代不可微梯度；
-        MYULA迭代公式；Lipschitz常数 L = L_f + beta/lambda_prox；后验均值/方差/MMSE
+        MYULA迭代公式；Lipschitz常数 L = L_f + 1/lambda_prox；后验均值/方差/MMSE
 
 修改说明：
   从原参考实验4.3.py迁移，将Huber-TV改为Moreau-TV（Chambolle近端算子），
@@ -148,9 +148,9 @@ def grad_g_myula(x, tau, lam):
 # ══════════════════════════════════════════════════════════
 # Lipschitz常数: L = L_f + L_{g_lambda}
 #   L_f = ||A^T A|| / sigma^2 = AAT_norm / sigma^2
-#   L_{g_lambda} = beta / lambda_prox
+#   L_{g_lambda} = 1 / lambda_prox   (Moreau包络梯度 nabla g_lambda 恒为 1/lambda-Lipschitz, 与 beta 无关)
 L_f = AAT_norm / sigma2
-L_g = beta / lambda_prox
+L_g = 1.0 / lambda_prox
 L_total = L_f + L_g
 gamma = 0.98 / L_total
 
@@ -166,24 +166,25 @@ print(f"  L_f={L_f:.2f}, L_g={L_g:.4f}, L_total={L_total:.2f}")
 print(f"  gamma=0.98/L={gamma:.6f}")
 print(f"  n_iter={n_iter}, burn_in={n_burn_in}")
 
-# ★ 自检：验证MYULA步长的理论约束(避免系数0.98被误改后仍能通过)
-# 收敛条件: gamma < 2/L_total (Langevin扩散要求), 实际取 0.98/L < 2/L
-# 检验规则: 0.98/L_total < 2/L_total  (即0.98 < 2, 永远成立, 退化为常数检查)
-# 更核心的检查: 步长系数 0.98 在合理范围(0, 2)内, 避免被改成1.0或更大导致发散
-print(f"[MYULA自检] 步长收敛条件验证(实际运行, 非手算):")
-_coef = 0.98
-print(f"  步长系数={_coef} (应<2保证Langevin收敛, 教学惯例取0.98留余量): {'OK' if _coef < 2.0 else 'FAIL'}")
-print(f"  gamma={gamma:.6f} < 2/L_total={2.0/L_total:.6f}: {'OK' if gamma < 2.0/L_total else 'FAIL'}")
+# ★ 自检：验证MYULA步长的两条真实约束(避免被误改后仍能通过)
+# (1) Langevin稳定: gamma < 2/L_total
+# (2) MYULA近端式: gamma < lambda_prox (即讲义框式系数 (1-delta/lambda)>0 的要求)
+# 注: 本实现采用"显式包络梯度"形式 X - gamma*nabla(含 nabla g_lambda), 其稳定条件为(1);
+#     schemeA 修复后 gamma=0.98/(L_f+1/lambda)≈0.96 < lambda=1.0, 同时满足(1)(2)
+print(f"[MYULA自检] 步长约束验证(实际运行, 非手算):")
+print(f"  gamma={gamma:.6f} < 2/L_total={2.0/L_total:.6f} (Langevin稳定条件): {'OK' if gamma < 2.0/L_total else 'FAIL'}")
+print(f"  gamma={gamma:.6f} < lambda_prox={lambda_prox:.2f} (MYULA 近端式 δ<λ 约束): {'OK' if gamma < lambda_prox else 'FAIL'}")
 # 验证L_f = ||A^T A||/sigma^2 的量级合理性(在二维toy问题上, AAT_norm不应为零)
 print(f"  AAT_norm={AAT_norm:.4f}, sigma2={sigma2:.4f} (应>0避免除零): {'OK' if AAT_norm > 0 and sigma2 > 0 else 'FAIL'}")
 
 # ══════════════════════════════════════════════════════════
 # 5. MYULA主循环
 # ══════════════════════════════════════════════════════════
-# MYULA迭代:
-#   grad_prior = beta * nabla g_lambda(X)
+# MYULA迭代 (g = beta*TV, 对其整体取 Moreau-Yoshida 包络):
+#   grad_prior = nabla g_lambda(X) = (X - prox_{lambda*g}(X)) / lambda
 #   X_{m+1} = X_m - gamma * (nabla f(X_m) + grad_prior) + sqrt(2*gamma) * Z_{m+1}
-# 其中 nabla g_lambda(x) = (x - prox_{lambda*g}(x)) / lambda
+# 关键: nabla g_lambda 已隐含 beta (因 prox_{lambda*g}=prox_{lambda*beta*TV} 用 tau=lambda*beta),
+#       外层不可再乘 beta, 否则有效先验权重退化为 beta^2, 与标注的 beta 不符
 
 print(f"\nRunning MYULA...")
 
@@ -193,7 +194,7 @@ mmse_errors = []
 
 for i in range(n_iter):
     grad_likelihood = grad_f(X)
-    grad_prior = beta * grad_g_myula(X, lam_beta, lambda_prox)
+    grad_prior = grad_g_myula(X, lam_beta, lambda_prox)
 
     Z = torch.randn_like(X)
     X = X - gamma * (grad_likelihood + grad_prior) + math.sqrt(2 * gamma) * Z
@@ -278,7 +279,7 @@ print(f"\n[步骤1] 正向模型: {nx}x{ny}图像, BSNR={BSNR}dB")
 print(f"  sigma^2 = {sigma2:.6f}")
 print(f"\n[步骤2] MYULA参数:")
 print(f"  L_f = ||A^TA||/sigma^2 = {L_f:.2f}")
-print(f"  L_g = beta/lambda_prox = {L_g:.4f}")
+print(f"  L_g = 1/lambda_prox = {L_g:.4f}")
 print(f"  L_total = {L_total:.2f}")
 print(f"  gamma = 0.98/L = {gamma:.6f}")
 print(f"\n[步骤3] 结果:")
@@ -296,7 +297,7 @@ print(r"1. 不可微先验 g(x)=beta*TV(x) 的梯度不存在，ULA不可直接�
 print(r"2. Moreau-Yoshida包络光滑化: g_lambda(x) = min_z{g(z)+||x-z||^2/(2*lambda)}")
 print(r"3. MYULA梯度: nabla g_lambda(x) = (x - prox_{lambda*g}(x)) / lambda")
 print(r"4. 近端算子 prox_{lambda*g} 由Chambolle算法迭代求解")
-print(r"5. Lipschitz常数: L = L_f + beta/lambda_prox")
+print(r"5. Lipschitz常数: L = L_f + 1/lambda_prox")
 print(r"6. lambda权衡: 小lambda->近似精确但L大(收敛慢); 大lambda->近似粗糙但L小(收敛快)")
 print(r"7. 后验均值(MMSE)比单个样本更稳定，PSNR更高")
 print(f"\n实验完成。结果已保存至: {SAVE_DIR}")

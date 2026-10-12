@@ -56,10 +56,13 @@ def load_model(path, device):
     net = DnCNN(channels=1, num_of_layers=17)
     model = nn.DataParallel(net)
     
-    # 支持CPU和GPU
-    if device == 'cuda' and torch.cuda.is_available():
-        model = model.cuda(device)
-        model.load_state_dict(torch.load(path))
+    # 支持CPU和GPU：device 可能是字符串('cuda'/'cpu')或 torch.device 对象。
+    # 旧写法 `device == 'cuda'` 对 torch.device 对象恒为 False，会导致 GPU 上模型
+    # 从不被显式 .cuda()；这里统一取 .type 判断，并把权重 map_location 到目标设备。
+    dev = device if isinstance(device, torch.device) else torch.device(device)
+    if dev.type == 'cuda' and torch.cuda.is_available():
+        model = model.cuda(dev)
+        model.load_state_dict(torch.load(path, map_location=dev))
     else:
         model.load_state_dict(torch.load(path, map_location='cpu'))
     

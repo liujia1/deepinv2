@@ -1,0 +1,12 @@
+{
+  "n": 128,
+  "sigma": 0.15,
+  "lam_tv": 0.15,
+  "lam_tikh": 0.5,
+  "psnr_noisy": 16.45,
+  "psnr_tikh": 22.91,
+  "psnr_tv": 26.57,
+  "diff_edge_mean": 0.0592,
+  "diff_flat_mean": 0.0474,
+  "diff_edge_to_flat_ratio": 1.25
+}

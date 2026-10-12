@@ -1,0 +1,33 @@
+{
+  "experiment": "4.4-1",
+  "title": "2D图像MYULA后验采样（去卷积）",
+  "setup": {
+    "image_size": [
+      128,
+      128
+    ],
+    "BSNR": 20,
+    "sigma": 6.5495195388793945,
+    "sigma2": 42.89620590209961,
+    "kernel_len": [
+      9,
+      9
+    ],
+    "type_blur": "uniform"
+  },
+  "myula_params": {
+    "beta": 0.3,
+    "lambda_prox": 1.0,
+    "L_f": 0.0233,
+    "L_g": 0.3,
+    "L_total": 0.3233,
+    "gamma": 3.03159451,
+    "n_iter": 10000,
+    "n_burn_in": 4000
+  },
+  "results": {
+    "psnr_obs": 21.03,
+    "psnr_mean": 24.19,
+    "psnr_last": 22.89
+  }
+}

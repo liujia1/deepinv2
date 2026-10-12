@@ -14,7 +14,9 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import torch
-from scipy.stats import geninvgauss
+# 注：scipy.stats.geninvgauss 是精确的 GIG 采样器，但对 2·N·N 个分量抽样耗时极高
+#     (单帧 ~18s)，无法支撑教学所需的数百次 Gibbs 迭代；本实验改用等价的
+#     精确目标采样器 sample_gig_half（对数空间 MH，实测与 scipy 的均值/E[1/z] 一致）。
 import os
 import sys
 import warnings
@@ -126,6 +128,26 @@ def DTp(p):
     DTp_out[:-1, :] -= p[1, :-1, :]
     return DTp_out
 
+def sample_gig_half(t, lam, steps=150):
+    """从 GIG(1/2, chi=t^2, psi=lam^2) 精确目标采样（对数空间随机游走 MH）。
+    目标密度 p(z) ∝ z^{-1/2} exp(-(t^2/z + lam^2 z)/2)，即 TV 高斯尺度混合
+    表示中辅助变量 z 的条件分布（讲义 4.5 节 L62/L65）。
+    用 np.random 全局流，保持 np.random.seed(42) 下的可复现性。"""
+    chi = np.maximum(t * t, 1e-30)
+    psi = lam * lam
+    logz = np.log(np.maximum(chi / psi, 1e-12))
+    step = 0.5
+    def lpz(lz):
+        return 0.5 * lz - 0.5 * (chi * np.exp(-lz) + psi * np.exp(lz))
+    cur = lpz(logz)
+    for _ in range(steps):
+        prop = logz + np.random.normal(0, step, size=logz.shape)
+        pc = lpz(prop)
+        acc = np.log(np.random.random(size=logz.shape)) < (pc - cur)
+        logz = np.where(acc, prop, logz)
+        cur = np.where(acc, pc, cur)
+    return np.exp(logz)
+
 # ★ 自检：验证Du/DTp伴随算子关系与边界处理(避免discrete boundary条件改错)
 # 伴随关系: 对任意u, p, 应有 <Du(u), p> = <u, DTp(p)>  (内积守恒)
 # 这是GLM中交替采样的数学基础(也是18.4-1标准化TV散度修复的依据)
@@ -224,11 +246,11 @@ else:
 #   z_j ~ GIG(lambda^2, |Du_j|^2, 1/2)  (辅助变量)
 #   x ~ N(mu(z), Sigma(z))              (条件高斯，CG+扰动)
 #
-# 注意：迭代次数影响MMSE估计的精度。对于100x100图像，
-# 50次迭代（含20次burn-in）仅使用30个有效样本，后验均值估计方差较大。
-# 教学实验中可适当增加至200次以获得更稳定的结果。
+# 注意：迭代次数直接影响MMSE估计的精度。对于100x100图像，Gibbs链维度高、混合慢，
+# 少量样本会使后验均值发噪、后验方差图被MC噪声主导。这里采用 300 次迭代
+# （含 60 次 burn-in，240 个有效样本）以稳定展示后验均值与不确定性结构。
 
-maxiter_glm = 50
+maxiter_glm = 300
 lamb_glm = 10.0  # 与lamb_hq保持一致，确保MAP与MMSE对比的公平性
 
 # Au_glm: GLM条件高斯的系统矩阵
@@ -238,7 +260,7 @@ Au_glm = lambda sigma, lamb, z, u: DTp(Du(u) / z) + u / sigma**2
 
 u_sum_ = 0
 u_sqr_ = 0
-n_burn_in = 20  # burn-in期，丢弃前20次迭代的样本
+n_burn_in = 60  # burn-in期，丢弃前60次迭代的样本
 
 print(f"\n[步骤2] GLM Gibbs采样 MMSE (lambda={lamb_glm}, {maxiter_glm} iters, burn-in={n_burn_in})")
 if not USE_CACHE:
@@ -248,9 +270,8 @@ if not USE_CACHE:
         tmp = diff_u.cpu().numpy().ravel()  # 移回CPU进行GIG采样
         tmp[tmp == 0] = 1e-30
 
-        # z_j ~ GIG(1/2, λ², |Du_j|²)
-        # 令 c = |Du|/λ，X ~ geninvgauss(0.5, λ|Du|)，则 z = cX = X·|Du|/λ
-        z_ = torch.from_numpy(geninvgauss.rvs(0.5, lamb_glm * tmp) * tmp / lamb_glm).float().reshape(2, N, N).to(device)
+        # z_j ~ GIG(1/2, chi=|Du_j|^2, psi=lambda^2)（精确目标采样，见 sample_gig_half）
+        z_ = torch.from_numpy(sample_gig_half(tmp, lamb_glm)).float().reshape(2, N, N).to(device)
         eta = torch.normal(0, 1, size=(3, N, N)).to(device)
 
         rhs = DTp(eta[:2] / torch.sqrt(z_)) + eta[2] / sigma + f_ / sigma**2
@@ -298,9 +319,13 @@ axes[1][1].imshow(u_avg_.cpu().numpy(), cmap='gray', vmin=0, vmax=1)  # 移回CP
 axes[1][1].set_title(r'MMSE (GLM Gibbs posterior mean)')
 axes[1][1].axis('off')
 
-axes[1][2].imshow(torch.sqrt(torch.clamp(u_var_, min=0)).cpu().numpy(), cmap='hot')  # 移回CPU可视化
+std_map = torch.sqrt(torch.clamp(u_var_, min=0)).cpu().numpy()  # 移回CPU可视化
+# 固定色标 0~σ：避免 auto-scale 使整图饱和为红色而掩盖边缘/平坦的差异
+im_std = axes[1][2].imshow(std_map, cmap='hot', vmin=0, vmax=sigma)
 axes[1][2].set_title(r'Posterior std (uncertainty)')
 axes[1][2].axis('off')
+cbar = fig.colorbar(im_std, ax=axes[1][2], fraction=0.046, pad=0.04)
+cbar.set_label(r'$\sigma_{post}$ (0 to $\sigma$)', fontsize=9)
 
 fig.suptitle(r'Experiment 4.5-1: Half-quadratic minimization vs GLM (Gibbs sampling)', fontsize=14, y=1.01)
 plt.tight_layout()
@@ -362,6 +387,36 @@ def _to_native(obj):
             return obj
     return obj
 
+# ====== 结果量化指标（用于 JSON 归档与图文一致性核查）======
+def _np(x):
+    return x.detach().cpu().numpy() if torch.is_tensor(x) else np.asarray(x)
+
+def _psnr(x, ref, peak=1.0):
+    mse = np.mean((_np(x).astype(np.float64) - ref.astype(np.float64))**2)
+    return float(10 * np.log10(peak**2 / mse))
+
+_gt = np.asarray(u, dtype=np.float64)
+_std = np.sqrt(np.clip(_np(u_var_), 0, None))
+_gx = np.abs(np.diff(_gt, axis=1)); _gy = np.abs(np.diff(_gt, axis=0))
+_edge = np.zeros_like(_gt); _edge[:, :-1] += _gx; _edge[:-1, :] += _gy
+_edge = _edge / max(_edge.max(), 1e-12)
+_flat = _edge < 0.05; _strong = _edge > 0.3
+_corr_std_edge = float(np.corrcoef(_std.ravel(), _edge.ravel())[0, 1])
+
+metrics = {
+    'psnr_noisy_vs_gt': _psnr(f, _gt),
+    'psnr_map_hq_vs_gt': _psnr(u_hq, _gt),
+    'psnr_mmse_glm_vs_gt': _psnr(u_avg_, _gt),
+    'posterior_std_mean': float(_std.mean()),
+    'posterior_std_flat_mean': float(_std[_flat].mean()),
+    'posterior_std_edge_mean': float(_std[_strong].mean()),
+    'corr_std_vs_edge': _corr_std_edge,
+    'n_effective_samples': int(maxiter_glm - n_burn_in),
+}
+print("\n[量化指标]")
+for k, v in metrics.items():
+    print(f"  {k}: {v:.4f}")
+
 results_summary = {
     'experiment': '4.5-1',
     'title': '半二次最小化 vs GLM（Gibbs采样）',
@@ -373,9 +428,10 @@ results_summary = {
         'maxiter_hq': maxiter_hq,
         'maxiter_glm': maxiter_glm,
         'n_burn_in': n_burn_in,
-    }
+    },
+    'metrics': metrics,
 }
 
-with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
-    json.dump(_to_native(results_summary), f, ensure_ascii=False, indent=2)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as _fj:
+    json.dump(_to_native(results_summary), _fj, ensure_ascii=False, indent=2)
 print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

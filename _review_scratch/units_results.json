@@ -1,0 +1,93 @@
+{
+  "adjoint": {
+    "<Du,p>": -82.0135269165039,
+    "<u,div p>": 82.01351928710938,
+    "rel_err_|<Du,p>+<u,divp>|/|<Du,p>|": 9.302605092227422e-08
+  },
+  "prox_accuracy[观测 y (链初态)]": {
+    "1": {
+      "rel_err_prox": 0.00044117131616689314,
+      "rel_err_moreau_grad": 0.11472717542779129
+    },
+    "2": {
+      "rel_err_prox": 0.00014239996097201,
+      "rel_err_moreau_grad": 0.03703129533735633
+    },
+    "5": {
+      "rel_err_prox": 4.38302691675638e-05,
+      "rel_err_moreau_grad": 0.011398118589224272
+    },
+    "10": {
+      "rel_err_prox": 1.89916055043894e-05,
+      "rel_err_moreau_grad": 0.00493879174940113
+    },
+    "20": {
+      "rel_err_prox": 7.842564485168441e-06,
+      "rel_err_moreau_grad": 0.002039469109894062
+    },
+    "50": {
+      "rel_err_prox": 2.17289180031359e-06,
+      "rel_err_moreau_grad": 0.000565063343025414
+    },
+    "100": {
+      "rel_err_prox": 7.864078119721149e-07,
+      "rel_err_moreau_grad": 0.000204506375858261
+    }
+  },
+  "prox_accuracy[强平滑图像 (类似链稳态)]": {
+    "1": {
+      "rel_err_prox": 0.0005989266743629714,
+      "rel_err_moreau_grad": 0.16835678035156665
+    },
+    "2": {
+      "rel_err_prox": 0.00022238416951490865,
+      "rel_err_moreau_grad": 0.06251163019330994
+    },
+    "5": {
+      "rel_err_prox": 7.323705991242356e-05,
+      "rel_err_moreau_grad": 0.02058675316537666
+    },
+    "10": {
+      "rel_err_prox": 3.357766896558719e-05,
+      "rel_err_moreau_grad": 0.00943859821366219
+    },
+    "20": {
+      "rel_err_prox": 1.4351563965137923e-05,
+      "rel_err_moreau_grad": 0.00403418850020343
+    },
+    "50": {
+      "rel_err_prox": 4.0073213081678425e-06,
+      "rel_err_moreau_grad": 0.0011264479312011702
+    },
+    "100": {
+      "rel_err_prox": 1.3794218695332779e-06,
+      "rel_err_moreau_grad": 0.00038775201479909137
+    }
+  },
+  "moreau_lipschitz_beta=0.0": {
+    "empirical_L": 0.0,
+    "theory_bound": 1.0,
+    "monotonicity_min_inner": 0.0
+  },
+  "moreau_lipschitz_beta=0.01": {
+    "empirical_L": 0.00043894830741919577,
+    "theory_bound": 1.0,
+    "monotonicity_min_inner": 1562.7552490234375
+  },
+  "moreau_lipschitz_beta=0.3": {
+    "empirical_L": 0.013020041398704052,
+    "theory_bound": 1.0,
+    "monotonicity_min_inner": 48289.08203125
+  },
+  "moreau_lipschitz_beta=3.0": {
+    "empirical_L": 0.1264529526233673,
+    "theory_bound": 1.0,
+    "monotonicity_min_inner": 453082.75
+  },
+  "gradient_scale_at_y": {
+    "grad_f_norm": 10.773753866425494,
+    "grad_g_norm_exact": 71.28195438069822,
+    "prox10_grad_err_norm": 0.35204672817658017,
+    "rel_err_pct": 0.493879174940113
+  }
+}

@@ -2,7 +2,7 @@
 实验4.4-2 MYULA经验贝叶斯（SAPG参数自适应估计）
 对应章节：4.4 MYULA（近端ULA）、3.6（经验贝叶斯、边际似然）
 知识点：不可微后验的挑战；Moreau-Yoshida包络光滑化；近端算子替代不可微梯度；
-        MYULA迭代公式；Lipschitz常数 L = L_f + theta/lambda_prox；
+        MYULA迭代公式；Lipschitz常数 L = L_f + 1/lambda_prox；
         Fisher恒等式；SAPG随机近似投影梯度；经验贝叶斯自适应参数估计
 
 修改说明：
@@ -22,6 +22,14 @@ import os
 import sys
 import warnings
 import logging
+
+# Windows 中文环境默认 GBK 控制台打印 σ² 等 Unicode 字符会 UnicodeEncodeError，
+# 统一强制 UTF-8 输出（Colab/UTF-8 环境下 reconfigure 为空操作或被异常保护跳过）
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except (AttributeError, ValueError):
+    pass
 
 logging.getLogger('matplotlib').setLevel(logging.ERROR)
 logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
@@ -65,6 +73,8 @@ from sampling_tools import *
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Device: {device}")
+# 固定随机种子：保证 max_eigenval 的幂迭代初值与 y 的噪声实现跨运行可复现
+torch.manual_seed(42)
 
 # ══════════════════════════════════════════════════════════
 # 1. 图像和正向模型
@@ -149,20 +159,21 @@ n_burn_in = 700   # 70% burn-in，与 4.4-1 风格统一
 
 # Lipschitz常数
 L_f_init = AAT_norm / sigma2_init
-L_g_init = th_init / lambda_prox
+L_g_init = 1.0 / lambda_prox   # Moreau包络梯度 ∇g_λ 对任意凸g恒为 1/λ-Lipschitz, 与θ无关
 L_total_init = L_f_init + L_g_init
 gamma = 0.98 / L_total_init
 print(f"MCMC step size gamma = {gamma:.6f}")
 
-# ★ 自检：验证SAPG暖启动步长与Lipschitz分解(避免θ/λ_prox角色混淆)
-# 核心公式: L_g = theta/lambda_prox  (不是beta/lambda_prox, 4.4-1中是beta)
+# ★ 自检：验证SAPG暖启动步长与Lipschitz分解
+# 核心公式: L_g = 1/lambda_prox  (Moreau包络梯度 ∇g_λ 对任意凸g恒为 1/λ-Lipschitz, 与θ无关;
+#          若误写成 θ/λ 会使步长偏大, 且外层再乘θ会令有效先验权重退化为θ²)
 # 检验规则:
 #   1) 暖启动gamma=0.98/L_total < 2/L_total (Langevin收敛条件)
 #   2) L_f与sigma2的关系: L_f∝1/σ², 减小σ²应增大L_f
 print(f"[SAPG自检] 暖启动步长与Lipschitz分解验证(实际运行, 非手算):")
 print(f"  步长系数0.98: 收敛条件{'OK' if 0.98 < 2.0 else 'FAIL'}")
 print(f"  gamma={gamma:.6f} < 2/L_total={2.0/L_total_init:.6f}: {'OK' if gamma < 2.0/L_total_init else 'FAIL'}")
-print(f"  L_g依赖θ: L_g_init={L_g_init:.4f}, θ_init={th_init:.4f}, λ_prox={lambda_prox:.4f}, 理论值={th_init/lambda_prox:.4f} (与L_g_init一致: {'OK' if abs(L_g_init - th_init/lambda_prox) < 1e-6 else 'FAIL'})")
+print(f"  L_g=1/λ_prox(与θ无关): L_g_init={L_g_init:.4f}, λ_prox={lambda_prox:.4f}, 理论值={1.0/lambda_prox:.4f} (与L_g_init一致: {'OK' if abs(L_g_init - 1.0/lambda_prox) < 1e-6 else 'FAIL'})")
 # 验证L_f对σ²的1/σ²关系: sigma2_init处L_f=L_f_init, sigma2=sigma2_init/4处L_f应=4*L_f_init
 L_f_check = AAT_norm / (sigma2_init / 4.0)
 print(f"  L_f对σ²依赖(σ²减半→L_f加倍): sigma2_init处={L_f_init:.4f}, sigma2_init/4处={L_f_check:.4f}, 比例={L_f_check/L_f_init:.4f} (应≈4): {'OK' if abs(L_f_check/L_f_init - 4.0) < 1e-3 else 'FAIL'}")
@@ -179,7 +190,7 @@ fix_theta = th_init
 for k in tqdm(range(warmupSteps)):
     grad_f = grad_f_x(X_wu, fix_sigma2)
     lam_wu = lambda_prox * fix_theta   # prox参数: lambda*theta
-    grad_g = fix_theta * gradg(X_wu, lam_wu, lambda_prox)
+    grad_g = gradg(X_wu, lam_wu, lambda_prox)  # ∇(θTV)_λ 已含θ(经prox的λθ), 外层不再乘θ
     Z = torch.randn_like(X_wu)
     X_wu = X_wu - gamma * grad_f - gamma * grad_g + math.sqrt(2 * gamma) * Z
 
@@ -206,11 +217,11 @@ alpha = 1  # TV is 1-homogeneous
 for k in tqdm(range(total_iter)):
     # SAPG使用单步样本近似期望（随机近似），无需多样本平均
     L_f = AAT_norm / sigma2
-    L_g = theta / lambda_prox
+    L_g = 1.0 / lambda_prox   # Moreau包络梯度恒为 1/λ-Lipschitz, 与θ无关
     gamma = 0.98 / (L_f + L_g)
 
     lam = lambda_prox * theta   # prox参数: lambda*theta
-    grad_g = theta * gradg(X, lam, lambda_prox)
+    grad_g = gradg(X, lam, lambda_prox)  # ∇(θTV)_λ 已含θ, 外层再乘θ会退化为θ²
     grad_f = grad_f_x(X, sigma2)
 
     Z = torch.randn_like(X)
@@ -275,20 +286,22 @@ plt.close()
 print('\nRunning MAP reconstruction with estimated parameters...')
 
 x_map = y.clone()
-n_map_iter = 200
+# 800步：复核实测200步时梯度范数仍有约10.4、SNR随迭代继续上升约1.6dB，
+# 属未收敛状态；800步后梯度范数降至约2，SNR进入平台期
+n_map_iter = 800
 
 lam_map = lambda_prox * theta_est
 L_f_map = AAT_norm / sigma2_est
-L_g_map = theta_est / lambda_prox
+L_g_map = 1.0 / lambda_prox
 gamma_map = 0.98 / (L_f_map + L_g_map)
 
 for _ in tqdm(range(n_map_iter)):
     grad_f_map = grad_f_x(x_map, sigma2_est)
-    grad_g_map = theta_est * gradg(x_map, lam_map, lambda_prox)
+    grad_g_map = gradg(x_map, lam_map, lambda_prox)
     x_map = x_map - gamma_map * (grad_f_map + grad_g_map)
 
 # MAP收敛验证：打印最终梯度范数
-final_grad = grad_f_x(x_map, sigma2_est) + theta_est * gradg(x_map, lam_map, lambda_prox)
+final_grad = grad_f_x(x_map, sigma2_est) + gradg(x_map, lam_map, lambda_prox)
 print(f"  MAP final gradient norm: {torch.norm(final_grad).item():.6f}")
 # 图像值域统计（梯度下降无约束，MAP结果可能超出 [0,255]）
 print(f"  x_map range: [{x_map.min().item():.1f}, {x_map.max().item():.1f}]")

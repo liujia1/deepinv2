@@ -230,7 +230,7 @@ F_star = float(curve_ref[-1])
 
 gap_ista = np.maximum(curve_ista - F_star, 1e-15)   # 数值下限保护
 gap_fista = np.maximum(curve_fista - F_star, 1e-15)
-gap0 = float(curve_ista[0] - F_star)                # 初始偏差 F(x0) - F*
+gap0 = float(curve_ista[0] - F_star)                # 初始偏差基准：第一步后的 F(x_1)-F*（两法共用同一基准）
 print(f"  参考最优值 F* ≈ {F_star:.6f}（FISTA {ref_iter} 次估计）")
 print(f"  初始偏差 F(x0) - F* = {gap0:.4f}")
 
@@ -261,10 +261,10 @@ def fit_loglog_slope(gap, k_start, k_end):
 
 
 # 斜率拟合窗口（实验确定性种子下固定）：
-# - ISTA 在 k>=500 后进入 O(1/k) 渐近段（前段尚未到位，斜率偏平）
-# - FISTA 在 k<=300 内处于 O(1/k^2) 渐近段；k>500 后活跃集固定、
-#   问题在支撑集上呈（弱）强凸性，收敛快于 O(1/k^2)（见 Beck 10.6 节），
-#   log-log 曲线尾部变陡，属正常现象，故拟合窗口取中前段
+# - ISTA 局部斜率直到 k≈1500 才逼近 -1（k=500 处约 -0.6），k=500~2000 为过渡段平均
+# - FISTA 在中前段（k=50~300）局部斜率已达 -2.3~-3.1，全窗口均陡于理论 -2；
+#   k>500 后活跃集逐步固定、问题在支撑集上呈（弱）强凸性，收敛快于 O(1/k^2)
+#   （尾部局部斜率达 -6 量级，见 Beck 10.6 节），拟合窗口取中前段是对 FISTA 最保守的取法
 slope_ista, fit_rng_ista = fit_loglog_slope(gap_ista, 500, max_iter)
 slope_fista, fit_rng_fista = fit_loglog_slope(gap_fista, 50, 300)
 
@@ -444,10 +444,11 @@ def draw_two_step(ax, segs, pts, color, label_alg, label_grad, label_prox, label
                     label=label_extra if i == 0 else None)
     ax.plot(pts[:, 0], pts[:, 1], color=color, marker='o', markersize=4,
             linewidth=1.0, alpha=0.6, label=label_alg)
-    for k in [0, 1, 3, 7, 15, 25]:
+    for j, k in enumerate([0, 1, 3, 7, 25]):
         if k < len(pts):
+            dy = 6 if j % 2 == 0 else -13   # 上下交替偏移，防后段密集点标注重叠
             ax.annotate(f'$k={k}$', pts[k], textcoords="offset points",
-                        xytext=(5, 5), fontsize=9, color=color)
+                        xytext=(5, dy), fontsize=9, color=color)
 
 
 fig, axes = plt.subplots(1, 2, figsize=(14, 6))

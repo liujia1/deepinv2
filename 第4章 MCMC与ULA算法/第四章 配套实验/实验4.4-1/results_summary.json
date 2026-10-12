@@ -19,15 +19,15 @@
     "beta": 0.3,
     "lambda_prox": 1.0,
     "L_f": 0.0233,
-    "L_g": 0.3,
-    "L_total": 0.3233,
-    "gamma": 3.03159451,
+    "L_g": 1.0,
+    "L_total": 1.0233,
+    "gamma": 0.95772123,
     "n_iter": 10000,
     "n_burn_in": 4000
   },
   "results": {
-    "psnr_obs": 21.03,
-    "psnr_mean": 24.19,
-    "psnr_last": 22.89
+    "psnr_obs": 21.06,
+    "psnr_mean": 23.59,
+    "psnr_last": 23.41
   }
 }

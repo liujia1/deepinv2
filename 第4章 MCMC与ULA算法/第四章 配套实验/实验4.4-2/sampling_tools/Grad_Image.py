@@ -25,16 +25,21 @@ import torch
 
 # horizontal and vertical finite defference operators
 def diffh(x):
-    x_diffh = torch.zeros(x.shape)
+    # zeros_like 保证与 x 同设备/同 dtype（原 torch.zeros 在 GPU 上会生成 CPU 张量）
+    x_diffh = torch.zeros_like(x)
     x_diffh[:,:-1] = x[:,1:] - x[:,0:-1]
     return x_diffh
 
 def diffv(x):
-    x_diffv = torch.zeros(x.shape)
+    x_diffv = torch.zeros_like(x)
     x_diffv[:-1, :] = x[1:, :] - x[0:-1,:]
-    return x_diffv.T
+    # 修复（2026-10复核）：原实现末尾多了 .T 转置，使各向同性TV在 sqrt 内把
+    # 水平差 h[j,i] 与竖直差 v[i,j] 错配（正确应为 v[j,i]）。该转置不改变
+    # 各分量平方和，但改变 sqrt 内配对，TV 偏差实测可达 2.5%~14%，并经
+    # 均衡关系 theta*=d/E[TV] 同比例污染 SAPG 的 theta 估计。
+    return x_diffv
 
-# Total variation norm
+# Total variation norm（零填充前向差分，与 chambolle_prox_TV.GradientIm 同约定）
 def TVnorm(x):
     y = torch.sum(torch.sqrt(diffh(x)**2 + diffv(x)**2))
     return y

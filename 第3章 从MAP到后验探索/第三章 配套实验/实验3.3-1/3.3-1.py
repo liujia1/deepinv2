@@ -1,8 +1,8 @@
 """
 实验3.3-1 Tikhonov正则化：闭式解与lambda的贝叶斯诠释
 对应章节：3.3 Tikhonov正则化——闭式解与迭代解
-知识点：A=I下的Tikhonov闭式解 x = y/(1+lam)；lambda = sigma^2/sigma_x^2；
-        lambda扫描与PSNR曲线；欠正则化 vs 过正则化；最优lambda的贝叶斯选择
+知识点：A=I下以先验均值mu为中心的Tikhonov闭式解 x = mu + (y-mu)/(1+lam)；
+        lambda = sigma^2/sigma_x^2；lambda扫描与PSNR曲线；欠正则化 vs 过正则化；最优lambda的贝叶斯选择
 
 修改说明：
   从原参考实验3.1.py拆分，聚焦Tikhonov闭式解与lambda的概率诠释，
@@ -63,21 +63,26 @@ DATA_RANGE = x.max() - x.min()  # 使用实际动态范围，避免PSNR计算偏
 sigma_noise = 0.1
 y = x + sigma_noise * np.random.randn(n, n)
 
+# 【教学要点·先验均值】自然图像并非零均值（Cameraman 均值约 0.5）。
+# Tikhonov 的收缩方向由先验均值决定：先验 N(mu, sigma_x^2) 把解拉向 mu 而非 0。
+# 均值对噪声稳健（mean(y)≈mean(x)），可直接从含噪观测估计，无需 oracle。
+mu = float(np.mean(y))
+
 # 对含噪图像裁剪到 [0,1]，避免噪声导致的范围溢出影响 PSNR 计算
 y_clipped = np.clip(y, 0, 1)
 
 # ══════════════════════════════════════════════════════════
-# 2. Tikhonov闭式解（A=I情形）
+# 2. Tikhonov闭式解（A=I，先验均值 mu）
 # ══════════════════════════════════════════════════════════
-# 当 A = I（纯去噪），Tikhonov目标函数为:
-#   J(x) = 0.5||y-x||^2 + 0.5*lam*||x||^2
-# 梯度 nabla J = (x-y) + lam*x = 0 → x = y/(1+lam)
-# 这就是MAP估计在A=I下的闭式解
+# 当 A = I（纯去噪），以先验均值 mu 为中心的 Tikhonov 目标函数为:
+#   J(x) = 0.5||y-x||^2 + 0.5*lam*||x-mu||^2
+# 梯度 nabla J = (x-y) + lam*(x-mu) = 0 → x = mu + (y-mu)/(1+lam)
+# 这是高斯先验 N(mu, sigma_x^2) 下 MAP=MMSE 的闭式解（mu=0 时退化为 y/(1+lam)）
 
 # 贝叶斯lambda (oracle): lam = sigma^2 / sigma_x^2，其中 sigma_x 用真实x估计
 lam_bayes = sigma_noise ** 2 / x_std ** 2
 # 重建用原始 y（未 clip），正则化会将结果约束到合理范围
-x_bayes = y / (1 + lam_bayes)
+x_bayes = mu + (y - mu) / (1 + lam_bayes)
 
 psnr_noisy = peak_signal_noise_ratio(x, y_clipped, data_range=DATA_RANGE)
 psnr_bayes = peak_signal_noise_ratio(x, x_bayes, data_range=DATA_RANGE)
@@ -93,7 +98,7 @@ var_x_est = y_std**2 - sigma_noise**2
 var_x_est_warning = var_x_est <= 0
 sigma_x_est = np.sqrt(max(var_x_est, 1e-8))
 lam_bayes_noisy = sigma_noise ** 2 / sigma_x_est ** 2
-x_bayes_noisy = y / (1 + lam_bayes_noisy)
+x_bayes_noisy = mu + (y - mu) / (1 + lam_bayes_noisy)
 psnr_bayes_noisy = peak_signal_noise_ratio(x, x_bayes_noisy, data_range=DATA_RANGE)
 
 print("=" * 60)
@@ -105,8 +110,8 @@ print(f"  噪声水平: sigma = {sigma_noise}")
 print(f"  图像标准差: sigma_x = {x_std:.4f}")
 if var_x_est_warning:
     print("  ⚠️  y_std <= sigma_noise，方差估计为负，sigma_x_est 退化为下界")
-print(f"\n[闭式解验证: A=I]")
-print(f"  x = y / (1 + lam)")
+print(f"\n[闭式解验证: A=I, 先验均值 mu]")
+print(f"  x = mu + (y - mu) / (1 + lam),  mu = {mu:.4f}")
 print(f"  oracle贝叶斯 lam = {lam_bayes:.4f}: PSNR={psnr_bayes:.2f} dB (含噪: {psnr_noisy:.2f} dB)")
 
 # ══════════════════════════════════════════════════════════
@@ -116,7 +121,7 @@ lambdas = np.logspace(-4, 1, 50)
 psnr_list = []
 
 for lam in lambdas:
-    x_lam = y / (1 + lam)
+    x_lam = mu + (y - mu) / (1 + lam)
     psnr_list.append(peak_signal_noise_ratio(x, x_lam, data_range=DATA_RANGE))
 
 psnr_list = np.array(psnr_list)
@@ -166,7 +171,7 @@ axes[0, 2].set_title(r'贝叶斯 $\lambda$ 重建 (oracle)' + f'\n$\lambda={lam_
 axes[0, 2].axis('off')
 
 # 第二行：PSNR-λ曲线 → 剖面对比 → 误差图
-axes[1, 0].semilogx(lambdas, psnr_list, 'b-', linewidth=1.5, label=r'Tikhonov: $x = y/(1+\lambda)$')
+axes[1, 0].semilogx(lambdas, psnr_list, 'b-', linewidth=1.5, label=r'Tikhonov: $x=\mu+(y-\mu)/(1+\lambda)$')
 axes[1, 0].axhline(y=psnr_noisy, color='r', linestyle='--', alpha=0.5, label=f'含噪: {psnr_noisy:.1f}dB')
 axes[1, 0].axvline(x=lam_bayes, color='g', linestyle=':', linewidth=2,
                     label=r'oracle $\lambda=' + f'{lam_bayes:.4f}$')
@@ -193,7 +198,7 @@ colors = ['#fdae61', '#2c7bb6', '#d7191c']
 
 axes[1, 1].plot(x[center, :], 'k--', linewidth=1, label=r'真实 $x$')
 for lam_val, label, color in zip(lam_demo, labels, colors):
-    x_lam = y / (1 + lam_val)
+    x_lam = mu + (y - mu) / (1 + lam_val)
     axes[1, 1].plot(x_lam[center, :], linewidth=1, label=label, color=color)
 axes[1, 1].set_xlabel('像素索引')
 axes[1, 1].set_title(r'不同 $\lambda$ 的中心行剖面对比')
@@ -201,13 +206,13 @@ axes[1, 1].legend(fontsize=8)
 axes[1, 1].grid(True, alpha=0.3)
 
 # 误差图：展示欠/适/过正则化的重建误差空间分布
-# 【教学要点】
-#   - 过正则化(λ大): x̂ = y/(1+λ) ≈ 0.28y，误差 ≈ -0.72x，|误差|≈0.72|x|
-#     即误差图显示原始图像结构（人物轮廓清晰）
+# 【教学要点】（收缩向先验均值 mu）
+#   - 过正则化(λ大): x̂ → mu，误差 ≈ mu - x，|误差|≈|x-mu|
+#     即误差图显示图像相对均值的结构（人物轮廓清晰）
 #   - 欠正则化(λ小): x̂ ≈ y，误差 ≈ 噪声，误差图呈随机分布
 errors = []
 for lam_val in lam_demo:
-    x_lam = y / (1 + lam_val)
+    x_lam = mu + (y - mu) / (1 + lam_val)
     errors.append(x_lam - x)
 
 err_abs = [np.abs(e) for e in errors]
@@ -246,13 +251,15 @@ plt.close()
 print("\n" + "=" * 60)
 print("【核心结论】")
 print("=" * 60)
-print("1. 当 A=I 时，Tikhonov正则化有闭式解: x = y/(1+lam)")
-print("2. lambda = sigma^2/sigma_x^2 是最优正则化参数的贝叶斯选择")
+print("1. 当 A=I 时，以先验均值 mu 为中心的 Tikhonov 闭式解: x = mu + (y-mu)/(1+lam)")
+print("2. lambda = sigma^2/sigma_x^2 是最优正则化参数的贝叶斯选择（高斯先验下 MAP=MMSE）")
 print("3. lambda 过小 -> 欠正则化（噪声未被有效抑制）")
-print("4. lambda 过大 -> 过正则化（图像过度平滑）")
+print("4. lambda 过大 -> 过正则化（图像被拉向先验均值 mu）")
 print("5. PSNR-lambda曲线呈单峰形，最优lambda在峰值处")
 print("6. oracle贝叶斯lambda与PSNR最优lambda接近，验证贝叶斯框架的理论正确性")
 print("7. 实际中用含噪y估计sigma_x时需减去噪声方差，否则lambda系统性偏小")
+print("8. 先验均值必须取 mu≈mean(x)（亮图约0.5）而非0，否则收缩向0引入系统偏差，")
+print("   会使lambda偏大约4倍、PSNR反低于含噪观测（本实验初版即踩此坑）")
 
 print("\n" + "=" * 60)
 print("实验完成。结果已保存至:", SAVE_DIR)
@@ -262,6 +269,7 @@ print("=" * 60)
 import json
 results_summary = {
     'n': n,
+    'mu': float(round(mu, 4)),
     'sigma_noise': float(round(sigma_noise, 4)),
     'lam_bayes': float(round(lam_bayes, 4)),
     'lam_bayes_noisy': float(round(lam_bayes_noisy, 4)),

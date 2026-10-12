@@ -1,0 +1,56 @@
+{
+  "experiment": "4.3-2",
+  "title": "ULA步长delta对收敛的影响",
+  "step1_stepsize_effect": {
+    "delta_list": [
+      0.01,
+      0.1,
+      0.5,
+      0.8,
+      1.0,
+      1.5,
+      1.9,
+      2.2
+    ],
+    "empirical_vars": [
+      1.022504,
+      1.076289,
+      1.335445,
+      1.668511,
+      2.003752,
+      4.010385,
+      20.861893,
+      "inf"
+    ],
+    "theoretical_vars": [
+      1.005025,
+      1.052632,
+      1.333333,
+      1.666667,
+      2.0,
+      4.0,
+      20.0,
+      "inf"
+    ],
+    "empirical_means": [
+      -0.0099,
+      0.0117,
+      0.0064,
+      -0.0022,
+      -0.0023,
+      -0.0031,
+      -0.0031,
+      "nan"
+    ],
+    "status": [
+      "converged",
+      "converged",
+      "converged",
+      "converged",
+      "converged",
+      "converged",
+      "converged",
+      "diverged"
+    ]
+  }
+}

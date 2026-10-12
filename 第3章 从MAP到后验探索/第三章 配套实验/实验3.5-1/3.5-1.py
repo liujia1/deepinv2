@@ -2,7 +2,8 @@
 2x2像素TV最小化：暴力搜索 vs 优化求解
 对应章节：3.5 TV正则化与原始-对偶算法（开篇：TV优化的几何直觉）
 知识点：TV正则化的优化地形；暴力搜索 vs 网格搜索 vs 优化求解的效率对比；
-         各向异性TV的离散梯度算子；维度诅咒与迭代优化算法的必要性
+         各向异性TV的离散梯度算子；维度诅咒与迭代优化算法的必要性；
+         ADMM精确参考解 vs L-BFGS-B次梯度停点的差距展示
 """
 
 import numpy as np
@@ -170,11 +171,49 @@ print(f"优化解: x = [{x_opt[0]:.4f}, {x_opt[1]:.4f}, "
       f"{x_opt[2]:.4f}, {x_opt[3]:.4f}]")
 print(f"目标函数 F = {result.fun:.4f}, 耗时 = {t_opt:.6f} 秒")
 
+# ══════════════════════════════════════════════════════════
+# 3b. 精确参考解 (ADMM 变量分裂, 保留TV非光滑结构)
+# ══════════════════════════════════════════════════════════
+
+print("\n--- 方法D: 精确参考 (ADMM, 保留非光滑结构) ---")
+t0 = time.time()
+D_mat = np.vstack([DH, DV])
+
+def admm_solve(rho=1.0, iters=50000, tol=1e-12):
+    """ADMM 求解 min 0.5||Ax-b||^2 + alpha||Dx||_1
+
+    变量分裂 z = Dx：x 步解线性系统，z 步是软阈值（L1 近端有闭式），
+    完整保留 TV 的非光滑结构，对凸问题收敛到精确全局最优。
+    """
+    M_inv = np.linalg.inv(A.T @ A + rho * (D_mat.T @ D_mat))
+    x = np.zeros(4); z = np.zeros(4); u = np.zeros(4)
+    thr = alpha / rho
+    for k in range(iters):
+        x_new = M_inv @ (A.T @ rhs + rho * (D_mat.T @ (z - u)))
+        Dxu = D_mat @ x_new + u
+        z_new = np.sign(Dxu) * np.maximum(np.abs(Dxu) - thr, 0.0)
+        u = u + D_mat @ x_new - z_new
+        converged = np.linalg.norm(x_new - x) < tol and k > 1000
+        x = x_new; z = z_new
+        if converged:
+            break
+    return x
+
+x_ref = admm_solve()
+f_ref = tv_cost(x_ref)
+t_ref = time.time() - t0
+print(f"ADMM精确解: x = [{x_ref[0]:.4f}, {x_ref[1]:.4f}, "
+      f"{x_ref[2]:.4f}, {x_ref[3]:.4f}]")
+print(f"精确最优 F* = {f_ref:.4f}, 耗时 = {t_ref:.3f} 秒")
+print(f"L-BFGS-B 与精确最优的差距: {result.fun - f_ref:.4f} "
+      f"({(result.fun - f_ref) / f_ref * 100:.2f}%)")
+
 print("\n" + "=" * 60)
 print("对比总结:")
 print(f"  粗网格搜索:  F = {best_cost_grid:.4f}, 耗时 = {t_grid:.3f} 秒")
 print(f"  随机采样:    F = {best_cost_rand:.4f}, 耗时 = {t_rand:.3f} 秒")
 print(f"  优化求解:    F = {result.fun:.4f}, 耗时 = {t_opt:.6f} 秒")
+print(f"  ADMM精确参考: F* = {f_ref:.4f}, 耗时 = {t_ref:.3f} 秒")
 print(f"  优化优于粗网格: {best_cost_grid - result.fun:.4f}")
 print(f"  优化优于随机采样: {best_cost_rand - result.fun:.4f}")
 
@@ -227,9 +266,10 @@ print(f"     目标函数 F(x) = 0.5*||Ax - b||^2 + alpha * ||Dx||_1")
 print(f"  2. 粗网格搜索 (10^4 点): 精度受网格分辨率限制，")
 print(f"     加密一倍网格 → 搜索量增至 16 倍 (维度诅咒)")
 print(f"  3. 随机采样 (10^4 点): 无系统性覆盖，精度有限")
-print(f"  4. 优化求解 (L-BFGS-B): 高效精确，")
-print(f"     但在大规模问题中 TV 的不可微性使平滑梯度方法（如普通梯度下降/L-BFGS）失效，")
-print(f"     需使用 Chambolle-Pock 或 ADMM 等保留非光滑结构的专用算法")
+print(f"  4. 优化求解 (L-BFGS-B): 高效但仅得近似解——TV 的不可微性使拟牛顿法")
+print(f"     即便在本实验 4 维规模也已停在非最优处（见上方与精确最优的差距），")
+print(f"     大规模下更甚；需 ADMM / Chambolle-Pock 等保留非光滑结构的专用算法")
+print(f"     才能可靠收敛到精确全局最优（本实验 ADMM 参考解即为例证）")
 
 print(f"\n[联系后续实验]")
 print(f"  本实验展示了 TV 目标函数的几何地形与暴力搜索的局限。")
@@ -266,9 +306,13 @@ results_summary = {
     'best_x_rand': [float(round(v, 4)) for v in best_x_rand],
     'opt_cost': float(round(result.fun, 4)),
     'x_opt': [float(round(v, 4)) for v in x_opt],
+    'ref_cost_admm': float(round(f_ref, 6)),
+    'x_ref_admm': [float(round(v, 6)) for v in x_ref],
+    'gap_lbfgs_minus_ref': float(round(result.fun - f_ref, 6)),
     't_grid': float(round(t_grid, 3)),
     't_rand': float(round(t_rand, 3)),
     't_opt': float(round(t_opt, 6)),
+    't_ref': float(round(t_ref, 3)),
 }
 
 results_summary = {k: _to_native(v) for k, v in results_summary.items()}

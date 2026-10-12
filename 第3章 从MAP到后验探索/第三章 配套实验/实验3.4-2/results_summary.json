@@ -31,7 +31,7 @@
     "dist_to_opt_fista": 0.01844154258637924
   },
   "output_files": [
-    "d:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.4-2\\步骤1_ISTA_vs_FISTA收敛对比.png",
-    "d:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.4-2\\步骤2_梯度步近端步迭代轨迹.png"
+    "D:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.4-2\\步骤1_ISTA_vs_FISTA收敛对比.png",
+    "D:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.4-2\\步骤2_梯度步近端步迭代轨迹.png"
   ]
 }

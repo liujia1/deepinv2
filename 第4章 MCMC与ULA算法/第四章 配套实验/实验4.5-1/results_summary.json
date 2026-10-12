@@ -1,0 +1,26 @@
+{
+  "experiment": "4.5-1",
+  "title": "半二次最小化 vs GLM（Gibbs采样）",
+  "setup": {
+    "image_size": [
+      100,
+      100
+    ],
+    "sigma": 0.1,
+    "lamb_hq": 10.0,
+    "lamb_glm": 10.0,
+    "maxiter_hq": 50,
+    "maxiter_glm": 300,
+    "n_burn_in": 60
+  },
+  "metrics": {
+    "psnr_noisy_vs_gt": 19.9703927251775,
+    "psnr_map_hq_vs_gt": 32.097846294360004,
+    "psnr_mmse_glm_vs_gt": 30.058028141517845,
+    "posterior_std_mean": 0.03985961154103279,
+    "posterior_std_flat_mean": 0.03970900550484657,
+    "posterior_std_edge_mean": 0.05174405872821808,
+    "corr_std_vs_edge": 0.33344765298400203,
+    "n_effective_samples": 240
+  }
+}
