@@ -102,7 +102,7 @@ mse_norm = safe_normalize(mse_vals)
 mse_norm = 1 - mse_norm  # 反转后语义与 PSNR/SSIM 一致：越高越好
 psnr_norm = safe_normalize(psnr_vals)
 ssim_norm = safe_normalize(ssim_vals)
-axes[1, 3].plot(noise_levels, mse_norm, 'o-', label='1 − 归一化 MSE')
+axes[1, 3].plot(noise_levels, mse_norm, 'o-', label='$1-$归一化 MSE')  # U+2212 在 SimHei 缺字会渲染成豆腐块，改用 mathtext
 axes[1, 3].plot(noise_levels, psnr_norm, 's-', label='归一化 PSNR')
 axes[1, 3].plot(noise_levels, ssim_norm, '^-', label='归一化 SSIM')
 axes[1, 3].set_xlabel('噪声标准差 σ')

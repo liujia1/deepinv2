@@ -2,9 +2,24 @@
   "n": 50,
   "m": 40,
   "sigma2": 0.01,
-  "alpha_eb": 0.0351,
-  "alpha_opt": 0.0351,
+  "grid_points": 400,
+  "seed_main": 42,
+  "alpha_eb_grid": 0.036,
+  "alpha_opt_grid": 0.0373,
+  "alpha_eb_cont": 0.03557,
+  "alpha_opt_cont": 0.03695,
+  "alpha_rel_gap_pct": 3.88,
   "log_ml_max": 7.46,
-  "psnr_eb": 17.53,
-  "psnr_opt": 17.53
+  "psnr_eb": 17.529,
+  "psnr_opt": 17.529,
+  "psnr_gap_db": 0.0002,
+  "multiseed": {
+    "n_seeds": 30,
+    "median_alpha_eb": 0.0393,
+    "median_alpha_opt": 0.0393,
+    "within_2x_count": 24,
+    "log_alpha_corr": -0.508,
+    "psnr_gap_mean_db": 0.133,
+    "psnr_gap_max_db": 1.235
+  }
 }

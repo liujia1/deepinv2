@@ -1,0 +1,23 @@
+{
+  "image_size": 64,
+  "blur_sigma": 3.0,
+  "ghost_frequency": 15,
+  "ghost_alpha": 0.3,
+  "relative_image_error": 0.680174,
+  "relative_measurement_error": 0.0,
+  "amplification_factor": 220561293.74,
+  "frequency_attenuation": {
+    "5": 0.114336,
+    "10": 0.000171,
+    "15": 0.0,
+    "20": 0.0,
+    "25": 0.0
+  },
+  "amplification_factors": {
+    "5": 8.75,
+    "10": 5851.52,
+    "15": 299471027.89,
+    "20": 1178275116810575.8,
+    "25": 6.403814058603312e+16
+  }
+}

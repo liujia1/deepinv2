@@ -177,7 +177,7 @@ sigma = 0.15
 y = x_true + sigma * np.random.randn(n, n)
 
 lam_tv = 0.15
-lam_tikh = 0.5  # 经 λ 扫描验证，0.5 恰为 H1 自身 PSNR 最优 λ，对比基线公平
+lam_tikh = 0.5  # 接近 H1 自身 PSNR 最优 λ（扫描 argmax≈0.55，0.5 与之差<0.02dB），对比基线公平
 
 print(f"\n[参数设定]")
 print(f"  图像尺寸: {n} x {n}")
@@ -224,7 +224,7 @@ axes[3].set_title(
 diff = np.abs(x_tv - x_tikh)
 axes[4].imshow(diff, cmap='hot', vmin=0, vmax=0.1)
 axes[4].set_title(r'差异 $|\mathrm{TV} - \mathrm{Tikhonov}|$'
-                  + '\n' + r'(最强差异位于边缘)', fontsize=11)
+                  + '\n' + r'(边缘带略高 1.25×，整体弥散)', fontsize=11)
 
 for ax in axes:
     ax.axis('off')

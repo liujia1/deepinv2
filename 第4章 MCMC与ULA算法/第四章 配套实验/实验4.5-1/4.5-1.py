@@ -15,8 +15,9 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import torch
 # 注：scipy.stats.geninvgauss 是精确的 GIG 采样器，但对 2·N·N 个分量抽样耗时极高
-#     (单帧 ~18s)，无法支撑教学所需的数百次 Gibbs 迭代；本实验改用等价的
-#     精确目标采样器 sample_gig_half（对数空间 MH，实测与 scipy 的均值/E[1/z] 一致）。
+#     (单帧 ~18s)，无法支撑教学所需的上千次 Gibbs 迭代；本实验改用等价的
+#     精确目标采样器 sample_gig_half（对数空间 MH）。复核中已用 5e4 样本/参数点
+#     独立验证其 E[z]、E[1/z] 与理论矩及 scipy 精确采样一致（接受率 0.71~0.84）。
 import os
 import sys
 import warnings
@@ -60,16 +61,23 @@ np.random.seed(42)
 torch.manual_seed(42)
 
 # ══════════════════════════════════════════════════════════
-# 0. GPU检测与缓存配置
+# 0. 精度/设备与缓存配置
 # ══════════════════════════════════════════════════════════
-_has_gpu = torch.cuda.is_available()
-if _has_gpu:
-    device = torch.device('cuda')
+# ★ 必须用 float64：TV-GLM 链中近零梯度处 1/z 重尾（99.9分位~6e6），条件高斯矩阵
+#   条件数约 1e9。float32 机器精度(~6e-8)下内层 CG 在极端帧会数值崩溃
+#   （实测终止残差可达 1e11、采样步移误差达真实位移的~70%并强欠冲，静默污染样本）；
+#   float64 下 CG 稳定收敛。配合 float64，本实验规模(1e4维稠密小核)在 CPU 上反而
+#   更快更稳——消费级 GPU(Colab T4 等)的 FP64 吞吐极低，故本实验固定 CPU。
+DTYPE = torch.float64
+device = torch.device('cpu')
+if torch.cuda.is_available():
+    print("Device: 检测到 GPU，但本实验固定使用 CPU + float64（GPU 的 FP64 极慢且本问题为小核 CG）")
 else:
-    device = torch.device('cpu')
-print(f"Device: {device}")
+    print("Device: cpu (float64)")
 
-CACHE_FILE = os.path.join(SAVE_DIR, 'experiment_4.5-1_cache.pth')
+# v3：v2 仍用 float32（CG 在极端帧数值崩溃）；v3 改 float64 后数值不同代，
+# 改名使旧缓存失效、强制重算。
+CACHE_FILE = os.path.join(SAVE_DIR, 'experiment_4.5-1_cache_v3.pth')
 USE_CACHE = os.path.exists(CACHE_FILE)
 
 if USE_CACHE:
@@ -84,6 +92,7 @@ if USE_CACHE:
     u_var_ = cache['u_var_'].to(device)
     sigma = cache['sigma']
     N = cache['N']
+    chain_diag = cache.get('chain_diag', {})
     print("缓存加载完成")
 else:
     print("\n未找到缓存文件，开始计算...")
@@ -92,25 +101,77 @@ else:
 # 1. 辅助函数
 # ══════════════════════════════════════════════════════════
 
-def CG(x, Ax, sigma, lamb, z, b, maxit=100, verbose=0):
+def CG(x, Ax, sigma, lamb, z, b, maxit=1000, tol=1e-9, verbose=0, warn=True):
+    """共轭梯度求解 Ax=b（须在 float64 下调用，float32 对病态矩阵不稳定）。
+
+    返回 (x, n_iter, converged, mean_r2)：
+      n_iter    —— 实际迭代次数；
+      converged —— 是否在 maxit 内达到 mean(r^2) < tol；
+      mean_r2   —— 终止时的 mean(r^2)。
+    warn=False 时不发警告（用于 Gibbs 主循环：调用方自行统计触顶率并在循环末
+    汇总报告，避免逐帧刷屏；信息不丢弃，计数与残差写入 JSON）。
+    若迭代中出现非有限值（NaN/Inf，通常意味着精度不足），立即中止并标记，
+    绝不静默返回垃圾解。
+    """
     r = b - Ax(sigma, lamb, z, x)
     p = r
     rsold = torch.sum(r**2)
+    R = torch.mean(r**2)
+    n_iter = 0
+    converged = bool(R.item() < tol)
+    diverged = False
     for it in range(maxit):
+        n_iter = it + 1
         Ap = Ax(sigma, lamb, z, p)
         alpha = rsold / torch.sum(p * Ap)
         x = x + alpha * p
         r = r - alpha * Ap
         rsnew = torch.sum(r**2)
+        if not torch.isfinite(rsnew):
+            diverged = True
+            break
         beta = rsnew / rsold
         rsold = rsnew.clone()
         p = r + beta * p
         R = torch.mean(r**2)
-        if R < 1e-9:
+        if R < tol:
+            converged = True
             break
     if verbose > 0:
-        print("CG: it = ", it, ", mse = ", R)
-    return x
+        print("CG: it = ", n_iter, ", mse = ", float(R))
+    if diverged:
+        msg = (f"CG 出现 NaN/Inf 后中止（第 {n_iter} 步）：当前精度不足以处理该条件数，"
+               f"必须使用 float64；请勿在此状态下使用返回值。")
+        if warn:
+            warnings.warn(msg, RuntimeWarning, stacklevel=2)
+        return x, n_iter, False, float('nan')
+    if not converged and warn:
+        warnings.warn(
+            f"CG 触顶 maxit={maxit} 仍未收敛: mean(r^2)={float(R):.3e} >= tol={tol:.0e}；"
+            f"内层求解不精确会压缩后验方差，应增大 maxit 或引入预条件。",
+            RuntimeWarning, stacklevel=2)
+    return x, n_iter, converged, float(R)
+
+def ess_from_chain(seq):
+    """标量链的简单 ESS 估计（正滞后截断）：tau=1+2*sum_{k: rho(k)>0} rho(k)，ESS=n/tau。
+
+    只用于诊断混合速度（对图像均值/能量等标量统计量）；
+    逐像素 ESS 计算量过大，不在教学实验中给出。
+    """
+    x = np.asarray(seq, dtype=np.float64)
+    n = x.size
+    x = x - x.mean()
+    v = np.dot(x, x)
+    if v == 0.0 or n < 3:
+        return float(n), 1.0
+    acf = np.correlate(x, x, mode='full')[n - 1:] / v
+    s = 0.0
+    for k in range(1, min(n - 1, n // 2)):
+        if acf[k] <= 0:
+            break
+        s += acf[k]
+    tau = 1.0 + 2.0 * s
+    return float(n / tau), float(tau)
 
 def Du(u):
     M, N = u.shape
@@ -152,12 +213,13 @@ def sample_gig_half(t, lam, steps=150):
 # 伴随关系: 对任意u, p, 应有 <Du(u), p> = <u, DTp(p)>  (内积守恒)
 # 这是GLM中交替采样的数学基础(也是18.4-1标准化TV散度修复的依据)
 # 检验规则: |<Du(u), p> - <u, DTp(p)>| / <u,u> < 1e-10 (浮点精度内)
-print(f"[算子自检] Du/DTp伴随关系验证(实际运行, 非手算):")
+print("[算子自检] Du/DTp伴随关系验证(实际运行, 非手算):")
 np.random.seed(42)
-_torch_device = torch.device('cpu')  # 算子自检不依赖GPU, 始终CPU
+_torch_device = device  # 始终CPU
 _M, _N = 20, 30
-_u_test = torch.randn(_M, _N, device=_torch_device)
-_p_test = torch.randn(2, _M, _N, device=_torch_device)
+# 用 float64：伴随误差阈值 1e-10，float32 求和舍入达不到
+_u_test = torch.randn(_M, _N, device=_torch_device, dtype=torch.float64)
+_p_test = torch.randn(2, _M, _N, device=_torch_device, dtype=torch.float64)
 _Du_u = Du(_u_test)
 _DTp_p = DTp(_p_test)
 # 内积: <Du(u), p> = sum(Du_u * p), <u, DTp(p)> = sum(u * DTp_p)
@@ -193,7 +255,10 @@ if not USE_CACHE:
     m1 = 0 * X
     m1[N//8:-N//8, N//8:-N//8] = 1
     u = u1.copy()
-    u[m1 == 1] = u2[m1 == 1] * 1.25
+    # u2 已归一化到[0,1]，不再乘1.25：真值各分量都在[0,1]内，
+    # 与可视化 vmin/vmax=1 及 PSNR peak=1.0 的假设严格一致（旧版乘1.25
+    # 会使方块内真值超过1，被imshow静默裁切）。
+    u[m1 == 1] = u2[m1 == 1]
 
     m2 = 0 * X
     m2[(X - 1)**2 + (Y - 1)**2 <= 1] = 1
@@ -201,7 +266,7 @@ if not USE_CACHE:
 
     sigma = 0.1
     f = u + np.random.randn(N, N) * sigma
-    f_ = torch.from_numpy(f).float().to(device)  # 统一为float32，移到GPU
+    f_ = torch.from_numpy(f).to(DTYPE).to(device)  # float64，CPU
 
 # ══════════════════════════════════════════════════════════
 # 3. 步骤1：MAP——半二次最小化
@@ -215,18 +280,26 @@ print("=" * 60)
 
 maxiter_hq = 50
 lamb_hq = 10.0
+# HQ路径z=clip(|Du|,1e-6)在平坦区同样病态（λ/z~1e7）；float64 下达到 mean(r^2)<1e-9
+# 实测中位约4000次、最大约5000次，故上限设6000（float32 下因精度不足无法达到该阈值）。
+CG_MAXIT_HQ = 6000
 
 Au_hq = lambda sigma, lamb, z, u: lamb_hq * DTp(Du(u) / z) + u / sigma**2
 rhs_hq = f_ / sigma**2
 
 print(f"\n[步骤1] 半二次最小化 MAP (lambda={lamb_hq}, {maxiter_hq} iters)")
 if not USE_CACHE:
-    u_ = torch.from_numpy(f).float().to(device)  # 统一为float32，移到GPU
+    hq_cg_iters, hq_cg_capped, hq_cg_resid_max = [], 0, 0.0
+    u_ = torch.from_numpy(f).to(DTYPE).to(device)  # float64，CPU
     for it in range(maxiter_hq):
         diff_u = torch.abs(Du(u_))
         z_ = np.clip(diff_u.cpu().numpy(), a_min=1e-6, a_max=None)  # 移回CPU进行clip
-        z_ = torch.from_numpy(z_).float().to(device)  # 统一为float32，移到GPU
-        u_ = CG(u_, Au_hq, sigma, lamb_hq, z_, rhs_hq, maxit=1000, verbose=0)
+        z_ = torch.from_numpy(z_).to(DTYPE).to(device)  # float64，CPU
+        u_, _it, _ok, _R = CG(u_, Au_hq, sigma, lamb_hq, z_, rhs_hq,
+                              maxit=CG_MAXIT_HQ, verbose=0)
+        hq_cg_iters.append(_it)
+        hq_cg_capped += int(not _ok)
+        hq_cg_resid_max = max(hq_cg_resid_max, _R)
         # 使用更新后的u_计算TV和Dat，确保一致性
         diff_u = torch.abs(Du(u_))
         TV = lamb_hq * diff_u.sum()
@@ -235,7 +308,8 @@ if not USE_CACHE:
             print(f"  iter {it+1}: TV + Dat = {(TV + Dat).item():.6f}")
 
     u_hq = u_
-    print("  半二次最小化完成")
+    print(f"  半二次最小化完成 (CG触顶 {hq_cg_capped}/{maxiter_hq} 次, "
+          f"中位迭代 {int(np.median(hq_cg_iters))}, 最大残差 {hq_cg_resid_max:.2e})")
 else:
     print("  从缓存加载 MAP 结果")
 
@@ -246,12 +320,21 @@ else:
 #   z_j ~ GIG(lambda^2, |Du_j|^2, 1/2)  (辅助变量)
 #   x ~ N(mu(z), Sigma(z))              (条件高斯，CG+扰动)
 #
-# 注意：迭代次数直接影响MMSE估计的精度。对于100x100图像，Gibbs链维度高、混合慢，
-# 少量样本会使后验均值发噪、后验方差图被MC噪声主导。这里采用 300 次迭代
-# （含 60 次 burn-in，240 个有效样本）以稳定展示后验均值与不确定性结构。
+# 注意（复核修订）：样本数影响MMSE与后验方差的MC精度。复核中实测这条Gibbs链
+# 混合其实很快（标量积分自相关时间 tau≈1.2~2.1，逐像素ESS中位约1800/2100），
+# "10^4维=混合慢"并不成立；但后验std图的*空间结构*需要约800以上样本才稳定，
+# 故采用 1000 次迭代（含 60 次 burn-in，940 个保留样本），并报告标量链ESS供核查。
+# 两个关键点（float64 复核修订）：
+# ①近零梯度处 1/z 重尾使条件高斯矩阵条件数高达~1e9，内层CG必须 float64——float32
+#   下极端帧CG数值崩溃（残差可达1e11、采样步移欠冲~70%，静默污染样本）；
+# ②达到 mean(r^2)<1e-9 中位需约5000次CG，旧版 maxit=1000 每次触顶、静默压缩后验
+#   方差，故上限提至8000；float64 下仍有约3%~6%的极端重尾帧触顶，但这些帧残差已
+#   很小（<1e-7量级）、解质量可靠，触顶率统计写入 JSON，不逐帧报警。
 
-maxiter_glm = 300
+maxiter_glm = 1000
 lamb_glm = 10.0  # 与lamb_hq保持一致，确保MAP与MMSE对比的公平性
+# 实测达到 mean(r^2)<1e-9 中位需约5000次CG、尾部可达约7000次；8000覆盖绝大多数情形。
+CG_MAXIT_GLM = 8000
 
 # Au_glm: GLM条件高斯的系统矩阵
 # 注意：lamb参数未在函数体中使用，因为λ已通过GIG采样隐含在z_中
@@ -260,41 +343,81 @@ Au_glm = lambda sigma, lamb, z, u: DTp(Du(u) / z) + u / sigma**2
 
 u_sum_ = 0
 u_sqr_ = 0
-n_burn_in = 60  # burn-in期，丢弃前60次迭代的样本
+n_burn_in = 60  # burn-in期，丢弃前60次迭代的样本（复核实测60次足够）
 
 print(f"\n[步骤2] GLM Gibbs采样 MMSE (lambda={lamb_glm}, {maxiter_glm} iters, burn-in={n_burn_in})")
 if not USE_CACHE:
-    u_ = torch.from_numpy(f).float().to(device)  # 统一为float32，移到GPU
+    # 内层CG收敛统计 + 标量诊断链（图像均值/后验能量），用于ESS与混合速度报告
+    cg_iters, cg_capped, cg_resid_max = [], 0, 0.0
+    chain_mean, chain_energy = [], []
+    u_ = torch.from_numpy(f).to(DTYPE).to(device)  # float64，CPU
     for it in range(maxiter_glm):
         diff_u = torch.abs(Du(u_))
         tmp = diff_u.cpu().numpy().ravel()  # 移回CPU进行GIG采样
+        # 注：Du的最后一列/最后一行是零Neumann边界的"幻影边"（恒为0），此处置
+        # chi=1e-30 仅为数值占位；这些z分量随后被 DTp 的 [:-1] 索引丢弃，不进入
+        # 右端项与后验，故其GIG不混合不影响结果（但改动边界索引时需重新审视）。
         tmp[tmp == 0] = 1e-30
 
-        # z_j ~ GIG(1/2, chi=|Du_j|^2, psi=lambda^2)（精确目标采样，见 sample_gig_half）
-        z_ = torch.from_numpy(sample_gig_half(tmp, lamb_glm)).float().reshape(2, N, N).to(device)
-        eta = torch.normal(0, 1, size=(3, N, N)).to(device)
+        # z_j ~ GIG(1/2, chi=|Du_j|^2, psi=lambda^2)（精确目标采样，见 sample_gig_half；
+        # 其 E[z]、E[1/z] 已在复核中与 scipy.stats.geninvgauss 精确采样核对一致）
+        z_ = torch.from_numpy(sample_gig_half(tmp, lamb_glm)).to(DTYPE).reshape(2, N, N).to(device)
+        eta = torch.normal(0, 1, size=(3, N, N), dtype=DTYPE, device=device)
 
         rhs = DTp(eta[:2] / torch.sqrt(z_)) + eta[2] / sigma + f_ / sigma**2
-        u_ = CG(u_, Au_glm, sigma, lamb_glm, z_, rhs, maxit=1000, verbose=0)
-
-        # 仅在burn-in期后累加样本
-        if it >= n_burn_in:
-            u_sum_ += u_
-            u_sqr_ += u_**2
+        # warn=False：极端1/z帧（约3%~6%）可能在8000次内未到1e-9，逐帧警告会刷屏；
+        # 这里自行统计，循环末汇总。若出现NaN/Inf（float64下不应发生）则立即报错。
+        u_, _cg_it, _cg_ok, _cg_R = CG(u_, Au_glm, sigma, lamb_glm, z_, rhs,
+                                       maxit=CG_MAXIT_GLM, verbose=0, warn=False)
+        if not np.isfinite(_cg_R) or not torch.isfinite(u_).all():
+            raise RuntimeError(
+                f"Gibbs 第{it+1}帧内层CG数值发散(mean_r2={_cg_R})；请确认全程使用float64。")
+        cg_iters.append(_cg_it)
+        cg_capped += int(not _cg_ok)
+        cg_resid_max = max(cg_resid_max, _cg_R)
 
         # 使用更新后的u_计算TV和Dat，确保一致性
         diff_u = torch.abs(Du(u_))
         TV = lamb_glm * diff_u.sum()
         Dat = torch.sum((u_ - f_)**2 / (2 * sigma**2))
-        if (it + 1) % 10 == 0:
+
+        # 仅在burn-in期后累加样本与诊断标量
+        if it >= n_burn_in:
+            u_sum_ += u_
+            u_sqr_ += u_**2
+            chain_mean.append(float(u_.mean()))
+            chain_energy.append(float(TV + Dat))
+
+        if (it + 1) % 50 == 0:
             print(f"  iter {it+1}: TV + Dat = {(TV + Dat).item():.6f}")
 
     n_samples = maxiter_glm - n_burn_in
     u_avg_ = u_sum_ / n_samples
     u_var_ = u_sqr_ / n_samples - u_avg_**2
-    print(f"  GLM Gibbs采样完成 (有效样本数: {n_samples}, 总迭代={maxiter_glm}, burn-in={n_burn_in})")
+    ess_mean, iat_mean = ess_from_chain(chain_mean)
+    ess_energy, iat_energy = ess_from_chain(chain_energy)
+    chain_diag = {
+        'n_samples_after_burnin': int(n_samples),
+        'ess_scalar_mean': ess_mean, 'iat_scalar_mean': iat_mean,
+        'ess_scalar_energy': ess_energy, 'iat_scalar_energy': iat_energy,
+        'cg_maxit': int(CG_MAXIT_GLM),
+        'cg_capped_count': int(cg_capped),
+        'cg_capped_fraction': float(cg_capped / maxiter_glm),
+        'cg_iter_median': float(np.median(cg_iters)),
+        'cg_iter_max': int(np.max(cg_iters)),
+        'cg_resid_max': float(cg_resid_max),
+        'hq_cg_capped_count': int(hq_cg_capped),
+        'hq_cg_resid_max': float(hq_cg_resid_max),
+    }
+    print(f"  GLM Gibbs采样完成 (保留样本: {n_samples}, 总迭代={maxiter_glm}, burn-in={n_burn_in})")
+    print(f"  标量ESS: 图像均值 {ess_mean:.0f} (tau={iat_mean:.2f}), "
+          f"后验能量 {ess_energy:.0f} (tau={iat_energy:.2f})")
+    print(f"  内层CG: 触顶 {cg_capped}/{maxiter_glm} ({cg_capped/maxiter_glm:.1%}), "
+          f"中位迭代 {int(np.median(cg_iters))}, 最大 {int(np.max(cg_iters))}, "
+          f"最大残余 mean(r^2) {cg_resid_max:.2e}")
 else:
     print("  从缓存加载 MMSE 结果")
+    # chain_diag 已随缓存加载（旧缓存缺该键时为 {}，JSON 中相应指标显示为 null）
 
 # ══════════════════════════════════════════════════════════
 # 5. 可视化
@@ -345,6 +468,7 @@ if not USE_CACHE:
         'u_var_': u_var_.cpu(),
         'sigma': sigma,
         'N': N,
+        'chain_diag': chain_diag,  # ESS/积分自相关时间/CG收敛统计
     }
     torch.save(cache, CACHE_FILE)
     print(f"\n缓存已保存至: {CACHE_FILE}")
@@ -357,9 +481,9 @@ print("【核心结论】")
 print("=" * 60)
 print(r"1. 半二次最小化: |t| = min_{z>0} {t^2/(2z) + z/2}")
 print(r"   确定性: z = clip(|Du|, eps), 然后CG求解u -> MAP")
-print(r"2. GLM Gibbs: z ~ GIG(0.5, lambda*|Du|), 然后CG+扰动采样u -> MMSE")
+print(r"2. GLM Gibbs: z ~ GIG(nu=1/2, chi=|Du|^2, psi=lambda^2), 然后CG+扰动采样u -> MMSE")
 print(r"3. Gibbs = 半二次最小化 + 噪声")
-print(r"   确定版: z = clip(|Du|, eps)  vs  Gibbs版: z ~ GIG(0.5, lambda*|Du|)")
+print(r"   确定版: z = clip(|Du|, eps)  vs  Gibbs版: z ~ GIG(1/2; |Du|^2, lambda^2)")
 print(r"   确定版: CG精确右端          vs  Gibbs版: CG求解带高斯扰动的右端")
 print(r"4. MAP收敛到众数(分段常数), MMSE收敛到分布(后验均值+不确定性)")
 print(r"5. 统一转化律: 优化算法 + 噪声 = 采样算法")
@@ -411,11 +535,13 @@ metrics = {
     'posterior_std_flat_mean': float(_std[_flat].mean()),
     'posterior_std_edge_mean': float(_std[_strong].mean()),
     'corr_std_vs_edge': _corr_std_edge,
-    'n_effective_samples': int(maxiter_glm - n_burn_in),
 }
+# 链诊断：名义保留样本数 + 标量链实测ESS/积分自相关时间 + 内层CG收敛统计。
+# 注意区分：n_samples_after_burnin 是名义样本数，ess_* 才是去相关后的有效样本量。
+metrics.update(chain_diag)
 print("\n[量化指标]")
 for k, v in metrics.items():
-    print(f"  {k}: {v:.4f}")
+    print(f"  {k}: {v if v is None else (f'{v:.4f}' if isinstance(v, float) else v)}")
 
 results_summary = {
     'experiment': '4.5-1',
@@ -428,6 +554,9 @@ results_summary = {
         'maxiter_hq': maxiter_hq,
         'maxiter_glm': maxiter_glm,
         'n_burn_in': n_burn_in,
+        'cg_maxit_hq': int(CG_MAXIT_HQ),
+        'cg_maxit_glm': int(CG_MAXIT_GLM),
+        'cg_tol_mean_r2': 1e-9,
     },
     'metrics': metrics,
 }

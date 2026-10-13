@@ -226,7 +226,7 @@ def draw_path_fork(save_dir):
     box(4.3, 8.7, 3.4, 1.0, r"后验 $p(x|y)$" + "\n（高维后验，算不出）",
         fc='#FFF3CD', ec='#B8860B', fs=11)
     ax.text(6, 8.15, "分叉点：MAP 只给一个点，够吗？", ha='center', va='center',
-            fontsize=9, style='italic', color='#8B0000')
+            fontsize=9, color='#8B0000')
 
     # 左侧：采样主线（Part II）
     box(0.3, 6.7, 5.3, 0.95, "采样主线 · 逆问题驱动\n（Part II 第4–7章）",

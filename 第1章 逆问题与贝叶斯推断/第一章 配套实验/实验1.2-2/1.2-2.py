@@ -20,8 +20,10 @@ if os.path.isdir(_gdrive):
     _chinese_path = os.path.join(_gdrive, '实验1.2-2', '.chinese')
     SAVE_DIR = os.path.join(_gdrive, '实验1.2-2')
 else:
-    _chinese_path = '.chinese'
-    SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
+    # 以脚本所在目录定位 .chinese，避免从仓库根目录等其他 CWD 运行时静默丢失中文字体
+    _script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
+    _chinese_path = os.path.join(_script_dir, '.chinese')
+    SAVE_DIR = _script_dir
 sys.path.insert(0, _chinese_path)
 try:
     from chinese_font import setup_chinese_font

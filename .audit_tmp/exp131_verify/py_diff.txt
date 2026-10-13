@@ -1,0 +1,175 @@
+﻿diff --git a/绗?绔?閫嗛棶棰樹笌璐濆彾鏂帹鏂?绗竴绔?閰嶅瀹為獙/瀹為獙1.3-1/1.3-1.py b/绗?绔?閫嗛棶棰樹笌璐濆彾鏂帹鏂?绗竴绔?閰嶅瀹為獙/瀹為獙1.3-1/1.3-1.py
+index 41e445b..489c5dc 100644
+--- a/绗?绔?閫嗛棶棰樹笌璐濆彾鏂帹鏂?绗竴绔?閰嶅瀹為獙/瀹為獙1.3-1/1.3-1.py	
++++ b/绗?绔?閫嗛棶棰樹笌璐濆彾鏂帹鏂?绗竴绔?閰嶅瀹為獙/瀹為獙1.3-1/1.3-1.py	
+@@ -18,8 +18,9 @@ if os.path.isdir(_gdrive):
+     _chinese_path = os.path.join(_gdrive, '瀹為獙1.3-1', '.chinese')
+     SAVE_DIR = os.path.join(_gdrive, '瀹為獙1.3-1')
+ else:
+-    _chinese_path = '.chinese'
+     SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
++    # 鐢ㄨ剼鏈墍鍦ㄧ洰褰曟嫾璺緞锛屼繚璇佷粠浠撳簱鏍圭洰褰曡繍琛屼篃鑳芥壘鍒?.chinese
++    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+ sys.path.insert(0, _chinese_path)
+ try:
+     from chinese_font import setup_chinese_font
+@@ -28,6 +29,16 @@ except ImportError:
+     pass
+ # ========================================================
+ 
++# ---- 鏁板绗﹀彿娓叉煋 ----
++# SimHei 缂?U+2212 鏁板鍑忓彿涓庝笂鏍囨暟瀛楋細榛樿 LogFormatter 鐨?\mathdefault{} 浼氬洖閫€鍒?+# 涓枃瀛椾綋锛屼娇璐熸寚鏁板埢搴︽樉绀烘垚鍙夋/璞嗚厫鍧楋紝鏁呭鏁拌酱鍒诲害缁熶竴鏀圭敤绾?mathtext 娓叉煋銆?+plt.rcParams['mathtext.fontset'] = 'cm'
++plt.rcParams['axes.unicode_minus'] = False
++
++def _pow10_fmt(v, _pos):
++    e = int(round(np.log10(v)))
++    return '$10$' if e == 1 else f'$10^{{{e}}}$'
++
+ np.random.seed(42)
+ 
+ print("="*60)
+@@ -71,6 +82,7 @@ print("-"*60)
+ 
+ rel_errors = []
+ theory_bound = []
++data_rel_noise = []   # 鍚?魏 涓嬬湡瀹炵殑 鈥栁磞鈥?鈥杫鈥栵紙骞堕潪鎭掔瓑浜?1e-8锛岃寰幆鍐呰鏄庯級
+ 
+ for kappa in kappas:
+     singular_values = singular_values_cache[kappa]
+@@ -93,6 +105,8 @@ for kappa in kappas:
+     # 鐩存帴鐢ㄥ疄闄呭櫔澹拌寖鏁?鈥栁磞鈥栵紝鑰岄潪鏈熸湜鍊?noise_level路鈭歯
+     delta_y_norm = np.linalg.norm(y_noisy - y)
+     theory_bound.append(kappa * delta_y_norm / y_norm)
++    # 鍣０鎸夌粷瀵归噺 1e-8 娉ㄥ叆锛岃€?鈥杫鈥?闅?蟽 琛板噺鍙樺皬 鈫?鏁版嵁鐩稿璇樊闅?魏 缂撴參婕傜Щ
++    data_rel_noise.append(delta_y_norm / y_norm)
+ 
+ # ---- 2. 鍙鍖?----
+ fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+@@ -108,16 +122,19 @@ kappa_critical = 1.0 / noise_level
+ # 寮€澶存偓蹇靛搴旂殑鏉′欢鏁?魏=10^10锛屾濂借秴杩囦复鐣岀偣 1e8锛屾槸"瀹屽叏澶辩湡"鐨勫吀鍨? kappa_hook = 1e10
+ axes[0].axvline(kappa_critical, color='dimgray', linestyle=':', linewidth=2.0, alpha=0.8)
+-# 鍦ㄥ弬鑰冪嚎鏃佹坊鍔犳敞閲婏細鍚屾椂璇存槑鍏紡鍜屽惈涔?-axes[0].text(kappa_critical*1.3, 2e-4, 
+-             f'魏 = 1/蔚 = {kappa_critical:.0e}\n(璇樊鈮?锛屽紑濮嬪け鐪?', 
++# 鍦ㄥ弬鑰冪嚎鏃佹坊鍔犳敞閲婏細魏=1/蔚 鏄噺绾у垽鎹紝瀹炴祴鍊肩洿鎺ュ啓杩涘浘閲岋紝閬垮厤"璇樊鈮?"杩欑被涓庢洸绾垮涓嶄笂鐨勬柇瑷€
++_err_map = dict(zip(kappas, rel_errors))
++_crit_note = (f'(閲忕骇鍒ゆ嵁锛涙澶勫疄娴嬭宸?{_err_map[kappa_critical]:.2f})'
++              if kappa_critical in _err_map else '(閲忕骇鍒ゆ嵁)')
++axes[0].text(kappa_critical*1.3, 2e-4,
++             f'魏 = 1/蔚 = {kappa_critical:.0e}\n{_crit_note}',
+              fontsize=8, color='darkred',
+              bbox=dict(boxstyle='round,pad=0.4', facecolor='lightyellow', alpha=0.5))
+ 
+ # 楂樹寒寮€澶存偓蹇甸偅涓€琛岋細魏=10^10锛堟暟鎹粎 10^-8 璇樊锛屾渶鍧忔斁澶у埌涓€鍥贡楹伙級
+ axes[0].axvline(kappa_hook, color='purple', linestyle='-.', linewidth=1.5, alpha=0.7)
+ axes[0].text(kappa_hook*1.15, 1e-2,
+-             f'寮€澶存偓蹇碉細魏=10鹿鈦癨n(10鈦烩伕 璇樊 鈫?瀹屽叏澶辩湡)',
++             '寮€澶存偓蹇碉細$\\kappa=10^{10}$\n($10^{-8}$ 璇樊 鈫?瀹屽叏澶辩湡)',
+              fontsize=8, color='purple',
+              bbox=dict(boxstyle='round,pad=0.4', facecolor='lavender', alpha=0.6))
+ 
+@@ -139,10 +156,15 @@ for kappa in [1e0, 1e3, 1e6, 1e10]:
+ axes[1].set_xlabel(r'濂囧紓鍊肩储寮?$i$', fontsize=11)
+ axes[1].set_ylabel(r'濂囧紓鍊?$\sigma_i$', fontsize=11)
+ # 灏嗗壇鏍囬鏁村悎鍒颁富鏍囬涓紝浣跨敤鎹㈣绗﹀垎闅?-axes[1].set_title(r'涓嶅悓鏉′欢鏁扮殑濂囧紓鍊煎垎甯僜n锛堝皬 $\sigma_i$ 鈫?$1/\sigma_i$ 鐖嗙偢 鈫?鍣０鏀惧ぇ锛?,
++axes[1].set_title(r'涓嶅悓鏉′欢鏁扮殑濂囧紓鍊煎垎甯? + '\n' +
++                  r'锛堝皬 $\sigma_i$ 鈫?$1/\sigma_i$ 鐖嗙偢 鈫?鍣０鏀惧ぇ锛?,
+                   fontsize=12, fontweight='bold')
+ axes[1].legend(fontsize=9)
+ axes[1].grid(True, alpha=0.3)
++# 瀵规暟杞村埢搴︾敤绾?mathtext锛岄伩鍏?SimHei 缂哄瓧褰㈡妸璐熸寚鏁版樉绀烘垚鍙夋
++axes[0].xaxis.set_major_formatter(plt.FuncFormatter(_pow10_fmt))
++axes[0].yaxis.set_major_formatter(plt.FuncFormatter(_pow10_fmt))
++axes[1].yaxis.set_major_formatter(plt.FuncFormatter(_pow10_fmt))
+ 
+ plt.tight_layout()
+ plt.savefig(os.path.join(SAVE_DIR, '瀹為獙1_3_1_鐥呮€佹€?png'), dpi=150, bbox_inches='tight')
+@@ -151,7 +173,9 @@ plt.show()
+ # ===== 鏂板锛氬悓涓€淇″彿銆佷笉鍚屾潯浠舵暟涓嬬殑閲嶅缓瀵规瘮锛堝搴斿紑澶存偓蹇?魏=10^10锛?====
+ # 鍥哄畾涓€缁勫彲澶嶇幇闅忔満绉嶅瓙锛岃瀵规瘮鍥剧ǔ瀹氬彲閲嶇粯
+ np.random.seed(123)
+-# 鐢ㄤ竴鏉″惈涓板瘜楂橀缁嗚妭鐨勬尝褰綔寰呴噸寤轰俊鍙凤細楂橀瓒婂瘑锛屛?10^6 鐨?鍙戦挐"瓒婃槑鏄?+# 鐢ㄤ竴鏉″惈涓板瘜楂橀缁嗚妭鐨勬尝褰綔寰呴噸寤轰俊鍙凤紝渚夸簬鐪嬫竻"閲嶅缓鍋忕"钀藉湪鍝簺绱㈠紩涓?+# 娉ㄦ剰锛氭湰瀹為獙姝ｉ€嗙敤鍚屼竴涓?D锛寈_hat = x + e/蟽 鎭掓垚绔?鈫?淇″彿鏈韩闆惰“鍑忥紝
++# 鍥句笂鐪嬪埌鐨勫亸绂?100% 鏉ヨ嚜琚?1/蟽_i 鏀惧ぇ鐨勫櫔澹帮紝涓嶆槸"楂橀缁嗚妭琚姽骞?
+ t_demo = np.linspace(0, 1, n)
+ x_demo = (np.sin(2 * np.pi * 6 * t_demo)
+           + 0.5 * np.cos(2 * np.pi * 16 * t_demo)
+@@ -178,12 +202,13 @@ fig2, ax2 = plt.subplots(1, 1, figsize=(11, 5))
+ ax2.plot(t_demo, x_demo, color='black', linewidth=2.5, label='骞插噣淇″彿 x锛堝熀鍑嗭級')
+ # 鍚勬潯浠舵暟閲嶅缓锛毼?瓒婂皬瓒婃帴杩?鑳芥仮澶?锛岃秺澶ц秺"涓€鍥贡楹?锛岄鑹茬敱钃濃啋绾? colors = {1e7: 'steelblue', 1e10: 'crimson'}
+-tags = {1e7: '杞诲井鍙戦挐', 1e10: '涓€鍥贡楹?}
++# 鍋忕鏉ヨ嚜灏鹃儴灏?蟽_i 鏂瑰悜琚斁澶х殑鍣０锛堜俊鍙锋湰韬湭琚钩婊戯級锛屾晠涓嶅啀绉颁綔"鍙戦挐"
++tags = {1e7: '浠呭熬閮ㄨ交寰櫔澹版斁澶?, 1e10: '涓€鍥贡楹?}
+ for kk in demo_kappas:
+     xr, rel = recons[kk]
+     ax2.plot(t_demo, xr, color=colors[kk], alpha=0.85,
+              label=f'魏={kk:.0e} 閲嶅缓锛坽tags[kk]}锛岃宸?{rel:.1e}锛?)
+-ax2.set_xlabel('绱㈠紩 / 浣嶇疆', fontsize=11)
++ax2.set_xlabel('绱㈠紩 / 浣嶇疆锛堝瑙掔畻瀛愭寜绱㈠紩琛板噺 $\sigma_i$锛屾澶勭储寮曚笉绛変簬棰戠巼锛?, fontsize=11)
+ ax2.set_ylabel('淇″彿骞呭害', fontsize=11)
+ # 澶圭揣 y 杞村埌淇″彿閲忕骇锛毼?10^10 鐨勪贡楹荤嚎浼?鎾?鍒颁笂涓嬭竟鐣岋紝鐩磋浣撶幇褰诲簳澶辩湡
+ ax2.set_ylim(-1.6, 1.6)
+@@ -206,7 +231,14 @@ print(f"{'魏(A)':>12s}  {'鏈寸礌璇樊':>12s}  {'鐞嗚涓㈠け':>10s}  {'瀹為檯
+ print("-" * 52)
+ 
+ # 鍩虹嚎绮惧害锛氬櫔澹版按骞冲喅瀹氱殑鍒濆绮惧害涓婇檺
+-baseline_digits = round(-np.log10(noise_level))  # = 6锛岃〃绀哄櫔澹版湰韬殑绮惧害
++baseline_digits = round(-np.log10(noise_level))  # = 8锛屽櫔澹版湰韬粰鍑虹殑绮惧害涓婇檺
++
++def _lost_str(k):
++    """鎶婂疄娴嬬浉瀵硅宸崲绠楁垚"涓簡鍑犱綅鏈夋晥鏁板瓧"锛涜宸?鈮? 璁颁负瀹屽叏澶辩湡"""
++    e = _err_map[k]
++    if e >= 1.0:
++        return '瀹屽叏澶辩湡锛堣宸?1锛?
++    return f'绾︿涪 {max(0, baseline_digits - int(round(-np.log10(e))))} 浣嶆湁鏁堟暟瀛?
+ 
+ for kappa, err in zip(kappas, rel_errors):
+     # 鐞嗚涓㈠け锛歭og10(魏)锛岃　閲忔潯浠舵暟鏈韩鐨勯噺绾э紙涓婄晫浼拌锛?@@ -230,13 +262,19 @@ print("瀹為獙缁撹锛?)
+ print("="*60)
+ print("1. 鏉′欢鏁?魏(A) 瓒婂ぇ锛岃宸斁澶ц秺涓ラ噸")
+ print("2. 褰?魏(A) 杈惧埌 10^10 浠ヤ笂鏃讹紝閲嶅缓璇樊杩滃ぇ浜庡師濮嬩俊鍙?)
+-print("3. 鐞嗚涓婄晫 魏路(鈥栁磞鈥?鈥杫鈥? 涓鸿宸彁渚涗簡淇濆畧浼拌")
++_ratios = [e / b for e, b, k in zip(rel_errors, theory_bound, kappas) if b > 0 and k > 1]
++print(f"3. 鐞嗚涓婄晫 魏路(鈥栁磞鈥?鈥杫鈥? 寰堜繚瀹堬細魏>1 鏃跺疄娴嬭宸粎涓轰笂鐣岀殑 "
++      f"{min(_ratios):.1e}~{max(_ratios):.1e} 鍊嶏紙鏈€鍧忔儏褰㈣姹傚櫔澹板叏閮ㄨ惤鍦?蟽_min 鏂瑰悜锛?
++      f"魏=1 鏃朵笂鐣屾伆濂藉彇绛夛級")
+ print("4. 杩欏氨鏄负浠€涔堥€嗛棶棰樿绉颁负'鐥呮€?鐨勫師鍥?)
+ print("5. 闇€瑕佸紩鍏ラ澶栦俊鎭紙濡傛鍒欏寲锛夋潵鏀瑰杽閲嶅缓鏁堟灉")
+-print("\n鏁板€艰В璇伙紙鍙傝€?.3鑺傦級锛?)
+-print("- 魏 鈮?10^3锛氳交搴︾梾鎬侊紝绾︿涪澶?浣嶆湁鏁堟暟瀛?)
+-print("- 魏 鈮?10^6锛氫腑搴︾梾鎬侊紝绾︿涪澶?浣嶆湁鏁堟暟瀛?)
+-print("- 魏 鈮?10^10锛氫弗閲嶇梾鎬侊紝鍑犱箮鏃犳硶鎭㈠鏈夋剰涔夌殑瑙?)
++print("\n鏁板€艰В璇伙紙鍙栬嚜鏈瀹炴祴锛夛細")
++print(f"- 魏 鈮?10^3锛歿_lost_str(1e3)}")
++print(f"- 魏 鈮?10^6锛歿_lost_str(1e6)}")
++print(f"- 魏 鈮?10^8锛歿_lost_str(1e8)}锛埼?1/蔚 浠呬负閲忕骇鍒ゆ嵁锛?)
++print(f"- 魏 鈮?10^10锛歿_lost_str(1e10)}")
++print(f"- 鏁版嵁鐩稿璇樊 鈥栁磞鈥?鈥杫鈥?闅?魏 浠?{data_rel_noise[0]:.2e} 婕傚埌 {data_rel_noise[-1]:.2e}"
++      f"锛堝櫔澹版寜缁濆閲忔敞鍏ワ紝鈥杫鈥?闅?蟽 琛板噺鍙樺皬锛屽苟闈炰弗鏍兼亽瀹?1e-8锛?)
+ print("="*60)
+ 
+ if _in_jupyter:
+@@ -251,10 +289,11 @@ if _in_jupyter:
+ - 閫嗗悜绠楀瓙 $A^{-1}$ 鍍?楂橀€氭护娉㈠櫒"锛氭斁澶ц鍘嬪埗鐨勯珮棰戝櫔澹? - 灏忓寮傚€兼柟鍚?= 楂橀鏂瑰悜 鈫?$1/\\sigma_i$ 宸ㄥぇ 鈫?鍣０鐏鹃毦鎬ф斁澶? 
+-**鏁板€肩ず渚?*锛?-- $\\kappa \\approx 10^3$锛氳交搴︾梾鎬侊紝绾︿涪澶?浣嶆湁鏁堟暟瀛?-- $\\kappa \\approx 10^6$锛氫腑搴︾梾鎬侊紝绾︿涪澶?浣嶆湁鏁堟暟瀛?-- $\\kappa \\approx 10^{10}$锛氫弗閲嶇梾鎬侊紝鍑犱箮鏃犳硶鎭㈠鏈夋剰涔夌殑瑙?+**鏁板€肩ず渚嬶紙鐞嗚棰勬湡 鈫?鏈瀹炴祴锛?*锛?+- $\\kappa \\approx 10^3$锛氳交搴︾梾鎬侊紝绾︿涪澶?浣嶆湁鏁堟暟瀛?鈫?瀹炴祴 """ + _lost_str(1e3) + """
++- $\\kappa \\approx 10^6$锛氫腑搴︾梾鎬侊紝绾︿涪澶?浣嶆湁鏁堟暟瀛?鈫?瀹炴祴 """ + _lost_str(1e6) + """
++- $\\kappa \\approx 10^{10}$锛氫弗閲嶇梾鎬侊紝鍑犱箮鏃犳硶鎭㈠ 鈫?瀹炴祴 """ + _lost_str(1e10) + """
++锛?\\kappa = 1/\\varepsilon = 10^8$ 鍙槸閲忕骇鍒ゆ嵁锛氳澶勫疄娴嬭宸?""" + format(_err_map[1e8], '.2f') + """锛屽皻鏈埌 1
+ """))
+ else:
+     print("\n鐞嗚鍥為【锛?)
+@@ -276,8 +315,15 @@ results_summary = {
+     'vector_dimension': n,
+     'noise_level': float(noise_level),
+     'condition_numbers': [float(k) for k in kappas],
+-    'relative_errors': [float(round(e, 6)) for e in rel_errors],
+-    'theory_bounds': [float(round(b, 6)) for b in theory_bound],
++    # 鍏ㄧ簿搴︿繚瀛橈細鍘熷厛 round(e, 6) 浼氭妸 魏鈮?0^2 鐨勮鍘嬫垚 0.0锛屽綊妗ｅけ鍘讳俊鎭?+    'relative_errors': [float(e) for e in rel_errors],
++    'theory_bounds': [float(b) for b in theory_bound],
++    'data_rel_noise': [float(v) for v in data_rel_noise],
++    'measured_over_bound_ratio': [float(e / b) if b > 0 else None
++                                  for e, b in zip(rel_errors, theory_bound)],
++    'kappa_critical_rule': float(kappa_critical),
++    'demo_shared_noise': True,
++    'demo_relative_errors': {f'{kk:.0e}': float(recons[kk][1]) for kk in demo_kappas},
+ }
+ 
+ def _to_native(obj):

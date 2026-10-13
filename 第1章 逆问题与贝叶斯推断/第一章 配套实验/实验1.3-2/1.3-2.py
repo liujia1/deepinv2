@@ -71,7 +71,8 @@ y_noisy = y_clean + noise_sigma * np.random.randn(N)
 
 # ---- 4. 伪逆解 vs 截断 SVD 解 ----
 # 伪逆解（使用所有奇异值）
-x_pinv = Vt.T @ (np.diag(1.0 / sigma) @ (U.T @ y_noisy))
+# 注：diag(1/σ) @ v 等价于 v / σ 的逐元素除法，后者避免构造 1024×1024 对角阵
+x_pinv = Vt.T @ ((U.T @ y_noisy) / sigma)
 
 # 截断 SVD 解（保留前 k 个奇异值）
 truncation_levels = [50, 100, 200, 500]
@@ -79,7 +80,7 @@ x_trunc = {}
 psnr_vals = []
 for k in truncation_levels:
     k = min(k, len(sigma))
-    xk = Vt[:k, :].T @ (np.diag(1.0 / sigma[:k]) @ (U[:, :k].T @ y_noisy))
+    xk = Vt[:k, :].T @ ((U[:, :k].T @ y_noisy) / sigma[:k])
     x_trunc[k] = xk
     xk_img = np.clip(xk.reshape(n, n), 0, 1)
     psnr_vals.append(peak_signal_noise_ratio(x, xk_img))
@@ -131,7 +132,7 @@ axes[1, 1].axis('off')
 # 把硬编码的 best_k = truncation_levels[1] (=100)
 # 改为自动选择 PSNR 峰值对应的 k
 best_idx = np.argmax(psnr_vals)
-best_k = truncation_levels[best_idx]  # 大约会是 50~70
+best_k = truncation_levels[best_idx]  # 在本组候选 {50,100,200,500} 中 PSNR 峰值位于 k=200
 x_trunc_img = np.clip(x_trunc[best_k].reshape(n, n), 0, 1)
 psnr_trunc = psnr_vals[best_idx]
 axes[1, 2].imshow(x_trunc_img, cmap='gray')
@@ -147,7 +148,7 @@ plt.show()
 k_list = np.unique(np.logspace(0, np.log10(len(sigma)), 30).astype(int))
 psnr_k = []
 for k in k_list:
-    x_k = Vt[:k, :].T @ (np.diag(1.0 / sigma[:k]) @ (U[:, :k].T @ y_noisy))
+    x_k = Vt[:k, :].T @ ((U[:, :k].T @ y_noisy) / sigma[:k])
     psnr_k.append(peak_signal_noise_ratio(x, np.clip(x_k.reshape(n, n), 0, 1)))
 
 plt.figure(figsize=(8, 4))

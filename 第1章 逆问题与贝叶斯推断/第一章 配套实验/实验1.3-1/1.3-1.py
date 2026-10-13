@@ -18,8 +18,9 @@ if os.path.isdir(_gdrive):
     _chinese_path = os.path.join(_gdrive, '实验1.3-1', '.chinese')
     SAVE_DIR = os.path.join(_gdrive, '实验1.3-1')
 else:
-    _chinese_path = '.chinese'
     SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
+    # 用脚本所在目录拼路径，保证从仓库根目录运行也能找到 .chinese
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 sys.path.insert(0, _chinese_path)
 try:
     from chinese_font import setup_chinese_font
@@ -27,6 +28,16 @@ try:
 except ImportError:
     pass
 # ========================================================
+
+# ---- 数学符号渲染 ----
+# SimHei 缺 U+2212 数学减号与上标数字：默认 LogFormatter 的 \mathdefault{} 会回退到
+# 中文字体，使负指数刻度显示成叉框/豆腐块，故对数轴刻度统一改用纯 mathtext 渲染。
+plt.rcParams['mathtext.fontset'] = 'cm'
+plt.rcParams['axes.unicode_minus'] = False
+
+def _pow10_fmt(v, _pos):
+    e = int(round(np.log10(v)))
+    return '$10$' if e == 1 else f'$10^{{{e}}}$'
 
 np.random.seed(42)
 
@@ -71,6 +82,7 @@ print("-"*60)
 
 rel_errors = []
 theory_bound = []
+data_rel_noise = []   # 各 κ 下真实的 ‖δy‖/‖y‖（并非恒等于 1e-8，见循环内说明）
 
 for kappa in kappas:
     singular_values = singular_values_cache[kappa]
@@ -93,6 +105,8 @@ for kappa in kappas:
     # 直接用实际噪声范数 ‖δy‖，而非期望值 noise_level·√n
     delta_y_norm = np.linalg.norm(y_noisy - y)
     theory_bound.append(kappa * delta_y_norm / y_norm)
+    # 噪声按绝对量 1e-8 注入，而 ‖y‖ 随 σ 衰减变小 → 数据相对误差随 κ 缓慢漂移
+    data_rel_noise.append(delta_y_norm / y_norm)
 
 # ---- 2. 可视化 ----
 fig, axes = plt.subplots(1, 2, figsize=(14, 6))
@@ -108,16 +122,19 @@ kappa_critical = 1.0 / noise_level
 # 开头悬念对应的条件数 κ=10^10，正好超过临界点 1e8，是"完全失真"的典型
 kappa_hook = 1e10
 axes[0].axvline(kappa_critical, color='dimgray', linestyle=':', linewidth=2.0, alpha=0.8)
-# 在参考线旁添加注释：同时说明公式和含义
-axes[0].text(kappa_critical*1.3, 2e-4, 
-             f'κ = 1/ε = {kappa_critical:.0e}\n(误差≈1，开始失真)', 
+# 在参考线旁添加注释：κ=1/ε 是量级判据，实测值直接写进图里，避免"误差≈1"这类与曲线对不上的断言
+_err_map = dict(zip(kappas, rel_errors))
+_crit_note = (f'(量级判据；此处实测误差 {_err_map[kappa_critical]:.2f})'
+              if kappa_critical in _err_map else '(量级判据)')
+axes[0].text(kappa_critical*1.3, 2e-4,
+             f'κ = 1/ε = {kappa_critical:.0e}\n{_crit_note}',
              fontsize=8, color='darkred',
              bbox=dict(boxstyle='round,pad=0.4', facecolor='lightyellow', alpha=0.5))
 
 # 高亮开头悬念那一行：κ=10^10（数据仅 10^-8 误差，最坏放大到一团乱麻）
 axes[0].axvline(kappa_hook, color='purple', linestyle='-.', linewidth=1.5, alpha=0.7)
 axes[0].text(kappa_hook*1.15, 1e-2,
-             f'开头悬念：κ=10¹⁰\n(10⁻⁸ 误差 → 完全失真)',
+             '开头悬念：$\\kappa=10^{10}$\n($10^{-8}$ 误差 → 完全失真)',
              fontsize=8, color='purple',
              bbox=dict(boxstyle='round,pad=0.4', facecolor='lavender', alpha=0.6))
 
@@ -139,10 +156,15 @@ for kappa in [1e0, 1e3, 1e6, 1e10]:
 axes[1].set_xlabel(r'奇异值索引 $i$', fontsize=11)
 axes[1].set_ylabel(r'奇异值 $\sigma_i$', fontsize=11)
 # 将副标题整合到主标题中，使用换行符分隔
-axes[1].set_title(r'不同条件数的奇异值分布\n（小 $\sigma_i$ → $1/\sigma_i$ 爆炸 → 噪声放大）',
+axes[1].set_title(r'不同条件数的奇异值分布' + '\n' +
+                  r'（小 $\sigma_i$ → $1/\sigma_i$ 爆炸 → 噪声放大）',
                   fontsize=12, fontweight='bold')
 axes[1].legend(fontsize=9)
 axes[1].grid(True, alpha=0.3)
+# 对数轴刻度用纯 mathtext，避免 SimHei 缺字形把负指数显示成叉框
+axes[0].xaxis.set_major_formatter(plt.FuncFormatter(_pow10_fmt))
+axes[0].yaxis.set_major_formatter(plt.FuncFormatter(_pow10_fmt))
+axes[1].yaxis.set_major_formatter(plt.FuncFormatter(_pow10_fmt))
 
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '实验1_3_1_病态性.png'), dpi=150, bbox_inches='tight')
@@ -151,7 +173,9 @@ plt.show()
 # ===== 新增：同一信号、不同条件数下的重建对比（对应开头悬念 κ=10^10）=====
 # 固定一组可复现随机种子，让对比图稳定可重绘
 np.random.seed(123)
-# 用一条含丰富高频细节的波形作待重建信号：高频越密，κ=10^6 的"发钝"越明显
+# 用一条含丰富高频细节的波形作待重建信号，便于看清"重建偏离"落在哪些索引上
+# 注意：本实验正逆用同一个 D，x_hat = x + e/σ 恒成立 → 信号本身零衰减，
+# 图上看到的偏离 100% 来自被 1/σ_i 放大的噪声，不是"高频细节被抹平"
 t_demo = np.linspace(0, 1, n)
 x_demo = (np.sin(2 * np.pi * 6 * t_demo)
           + 0.5 * np.cos(2 * np.pi * 16 * t_demo)
@@ -178,12 +202,13 @@ fig2, ax2 = plt.subplots(1, 1, figsize=(11, 5))
 ax2.plot(t_demo, x_demo, color='black', linewidth=2.5, label='干净信号 x（基准）')
 # 各条件数重建：κ 越小越接近"能恢复"，越大越"一团乱麻"，颜色由蓝→红
 colors = {1e7: 'steelblue', 1e10: 'crimson'}
-tags = {1e7: '轻微发钝', 1e10: '一团乱麻'}
+# 偏离来自尾部小 σ_i 方向被放大的噪声（信号本身未被平滑），故不再称作"发钝"
+tags = {1e7: '仅尾部轻微噪声放大', 1e10: '一团乱麻'}
 for kk in demo_kappas:
     xr, rel = recons[kk]
     ax2.plot(t_demo, xr, color=colors[kk], alpha=0.85,
              label=f'κ={kk:.0e} 重建（{tags[kk]}，误差 {rel:.1e}）')
-ax2.set_xlabel('索引 / 位置', fontsize=11)
+ax2.set_xlabel('索引 / 位置（对角算子按索引衰减 $\sigma_i$，此处索引不等于频率）', fontsize=11)
 ax2.set_ylabel('信号幅度', fontsize=11)
 # 夹紧 y 轴到信号量级：κ=10^10 的乱麻线会"撞"到上下边界，直观体现彻底失真
 ax2.set_ylim(-1.6, 1.6)
@@ -206,7 +231,14 @@ print(f"{'κ(A)':>12s}  {'朴素误差':>12s}  {'理论丢失':>10s}  {'实际�
 print("-" * 52)
 
 # 基线精度：噪声水平决定的初始精度上限
-baseline_digits = round(-np.log10(noise_level))  # = 6，表示噪声本身的精度
+baseline_digits = round(-np.log10(noise_level))  # = 8，噪声本身给出的精度上限
+
+def _lost_str(k):
+    """把实测相对误差换算成"丢了几位有效数字"；误差 ≥1 记为完全失真"""
+    e = _err_map[k]
+    if e >= 1.0:
+        return '完全失真（误差>1）'
+    return f'约丢 {max(0, baseline_digits - int(round(-np.log10(e))))} 位有效数字'
 
 for kappa, err in zip(kappas, rel_errors):
     # 理论丢失：log10(κ)，衡量条件数本身的量级（上界估计）
@@ -230,13 +262,19 @@ print("实验结论：")
 print("="*60)
 print("1. 条件数 κ(A) 越大，误差放大越严重")
 print("2. 当 κ(A) 达到 10^10 以上时，重建误差远大于原始信号")
-print("3. 理论上界 κ·(‖δy‖/‖y‖) 为误差提供了保守估计")
+_ratios = [e / b for e, b, k in zip(rel_errors, theory_bound, kappas) if b > 0 and k > 1]
+print(f"3. 理论上界 κ·(‖δy‖/‖y‖) 很保守：κ>1 时实测误差仅为上界的 "
+      f"{min(_ratios):.1e}~{max(_ratios):.1e} 倍（最坏情形要求噪声全部落在 σ_min 方向；"
+      f"κ=1 时上界恰好取等）")
 print("4. 这就是为什么逆问题被称为'病态'的原因")
 print("5. 需要引入额外信息（如正则化）来改善重建效果")
-print("\n数值解读（参考1.3节）：")
-print("- κ ≈ 10^3：轻度病态，约丢失3位有效数字")
-print("- κ ≈ 10^6：中度病态，约丢失6位有效数字")
-print("- κ ≈ 10^10：严重病态，几乎无法恢复有意义的解")
+print("\n数值解读（取自本次实测）：")
+print(f"- κ ≈ 10^3：{_lost_str(1e3)}")
+print(f"- κ ≈ 10^6：{_lost_str(1e6)}")
+print(f"- κ ≈ 10^8：{_lost_str(1e8)}（κ=1/ε 仅为量级判据）")
+print(f"- κ ≈ 10^10：{_lost_str(1e10)}")
+print(f"- 数据相对误差 ‖δy‖/‖y‖ 随 κ 从 {data_rel_noise[0]:.2e} 漂到 {data_rel_noise[-1]:.2e}"
+      f"（噪声按绝对量注入，‖y‖ 随 σ 衰减变小，并非严格恒定 1e-8）")
 print("="*60)
 
 if _in_jupyter:
@@ -251,10 +289,11 @@ if _in_jupyter:
 - 逆向算子 $A^{-1}$ 像"高通滤波器"：放大被压制的高频噪声
 - 小奇异值方向 = 高频方向 → $1/\\sigma_i$ 巨大 → 噪声灾难性放大
 
-**数值示例**：
-- $\\kappa \\approx 10^3$：轻度病态，约丢失3位有效数字
-- $\\kappa \\approx 10^6$：中度病态，约丢失6位有效数字
-- $\\kappa \\approx 10^{10}$：严重病态，几乎无法恢复有意义的解
+**数值示例（理论预期 → 本次实测）**：
+- $\\kappa \\approx 10^3$：轻度病态，约丢失3位有效数字 → 实测 """ + _lost_str(1e3) + """
+- $\\kappa \\approx 10^6$：中度病态，约丢失6位有效数字 → 实测 """ + _lost_str(1e6) + """
+- $\\kappa \\approx 10^{10}$：严重病态，几乎无法恢复 → 实测 """ + _lost_str(1e10) + """
+（$\\kappa = 1/\\varepsilon = 10^8$ 只是量级判据：该处实测误差 """ + format(_err_map[1e8], '.2f') + """，尚未到 1
 """))
 else:
     print("\n理论回顾：")
@@ -276,8 +315,15 @@ results_summary = {
     'vector_dimension': n,
     'noise_level': float(noise_level),
     'condition_numbers': [float(k) for k in kappas],
-    'relative_errors': [float(round(e, 6)) for e in rel_errors],
-    'theory_bounds': [float(round(b, 6)) for b in theory_bound],
+    # 全精度保存：原先 round(e, 6) 会把 κ≤10^2 的行压成 0.0，归档失去信息
+    'relative_errors': [float(e) for e in rel_errors],
+    'theory_bounds': [float(b) for b in theory_bound],
+    'data_rel_noise': [float(v) for v in data_rel_noise],
+    'measured_over_bound_ratio': [float(e / b) if b > 0 else None
+                                  for e, b in zip(rel_errors, theory_bound)],
+    'kappa_critical_rule': float(kappa_critical),
+    'demo_shared_noise': True,
+    'demo_relative_errors': {f'{kk:.0e}': float(recons[kk][1]) for kk in demo_kappas},
 }
 
 def _to_native(obj):

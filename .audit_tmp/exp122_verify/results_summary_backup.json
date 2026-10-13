@@ -1,0 +1,7 @@
+{
+  "image_size": 128,
+  "num_projection_angles": 90,
+  "num_projection_angles_sparse": 30,
+  "rmse_fbp": 0.055378,
+  "psnr_fbp_dB": 25.13
+}
