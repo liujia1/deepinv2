@@ -13,25 +13,51 @@
       5
     ],
     "type_blur": "uniform",
-    "maxit": 500,
-    "burnin": 50,
-    "n_samples": 50,
+    "maxit": 10000,
+    "burnin": 500,
+    "thinning_step": 5,
+    "n_samples": 1899,
+    "epsilon": 0.00038446751249519417,
+    "delta": 6.0546094573510345e-06,
     "use_pnp": true,
-    "algorithm": "PnP-ULA"
+    "algorithm": "PnP-ULA",
+    "markov_kernel": "simple_unprojected（官方lab2简化核，无box投影/无λ尾项）",
+    "step_size_note": "PnP 简化核 δ=0.99/(L_net/ε+L_y)，位于均方稳定域 δ<2/L_total；严格未投影 PnP-ULA 理论上界为 4.103e-07（约为现取值的 1/15），本例靠后验质量远离[0,1]边界而实测稳定（与投影核仅差0.022 dB）",
+    "chain_length_note": "10000步为2026-10复核修订值（旧版500步仅到官方burn-in边界，PSNR≈28dB；万步链≈33.1dB，官方参考33.22dB）"
   },
   "results": {
     "initial_psnr": 21.61,
     "initial_nrmse": 0.11739999800920486,
     "initial_ssim": 0.6959,
-    "result_psnr": 28.14,
-    "result_nrmse": 0.05550000071525574,
-    "result_ssim": 0.8492,
-    "elapsed_time": 24.38
+    "result_psnr": 33.14,
+    "result_nrmse": 0.031099999323487282,
+    "result_ssim": 0.9202,
+    "elapsed_time": 447.94
   },
   "convergence_diagnosis": {
-    "ess_slow": 1.54,
-    "ess_med": 4.35,
-    "ess_fast": 29.9,
-    "chain_length": 49
+    "ess_slow": 2.77,
+    "ess_med": 68.38,
+    "ess_fast": 87.46,
+    "chain_length": 1899
+  },
+  "regional_std_audit": {
+    "mask_definition": "按真值梯度幅值(np.roll环绕差)：平坦<=40%分位，边缘>=80%分位",
+    "flat_region": {
+      "median": 0.01732085458934307,
+      "mean": 0.017965806648135185,
+      "p10": 0.016017114743590355,
+      "p90": 0.01983564905822277
+    },
+    "edge_region": {
+      "median": 0.029901906847953796,
+      "mean": 0.031495388597249985,
+      "p10": 0.02065596729516983,
+      "p90": 0.04387176036834717
+    },
+    "edge_flat_median_ratio": 1.7264,
+    "flat_std_over_noise_sigma": 6.972,
+    "std_gradient_pearson_corr": 0.5329,
+    "std_map_grain": 0.001394,
+    "note": "平坦区 std 是 5x5 模糊信息损失造成的后验固有量级，不随链长消失；grain 随 ESS 增大而减小，可用于区分固有 std 与短链估计颗粒"
   }
 }

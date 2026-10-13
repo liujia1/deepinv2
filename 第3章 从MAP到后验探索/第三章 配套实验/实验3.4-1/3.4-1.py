@@ -59,6 +59,9 @@ def soft_threshold(v, lam):
 def hard_threshold(v, lam):
     """近端算子 prox_{lam*||x||_0}(v)，阈值 tau = sqrt(2*lam)
     |v| < tau 的分量归零，|v| >= tau 的分量保留原值
+
+    [平局点约定] 当 |v| = tau 时目标值在 x=0 与 x=v 处相等（lam = v^2/2），
+    二者同为最小解；本实现按 >= 约定保留原值 v
     """
     tau = np.sqrt(2 * lam)
     return v * (np.abs(v) >= tau).astype(float)
@@ -143,11 +146,16 @@ if np.any(mask_shrink):
         fontsize=9, color='darkblue',
         arrowprops=dict(arrowstyle='->', color='darkblue', lw=1.2))
 
-# 标注归零区域
+# 标注归零区域（两个区域互斥，避免重叠配色造成歧义）
 axes[1].fill_between(v, -3, 3, where=(np.abs(v) <= lam),
-                     alpha=0.08, color='blue', label=r'归零区 $|v| \leq \lambda$')
-axes[1].fill_between(v, -3, 3, where=(np.abs(v) < np.sqrt(2 * lam)),
-                     alpha=0.08, color='red', label=r'归零区 $|v| < \sqrt{2\lambda}$')
+                     alpha=0.10, color='blue',
+                     label=r'共同归零区 $|v| \leq \lambda$')
+axes[1].fill_between(v, -3, 3,
+                     where=(np.abs(v) < np.sqrt(2 * lam)) & (np.abs(v) > lam),
+                     alpha=0.15, color='red', hatch='//', linewidth=0.0,
+                     label=r'硬阈值额外归零区 $\lambda < |v| < \sqrt{2\lambda}$')
+for _t in (-np.sqrt(2 * lam), np.sqrt(2 * lam)):
+    axes[1].axvline(x=_t, color='red', linestyle=':', linewidth=1.0, alpha=0.7)
 
 axes[1].axhline(y=0, color='gray', linewidth=0.5)
 axes[1].axvline(x=0, color='gray', linewidth=0.5)
@@ -173,6 +181,7 @@ print(f"    - |v| > λ 的分量向零收缩 λ（shrinking bias）")
 print(f"  ℓ₀ 硬阈值: prox_{{λ||x||₀}}(v)，阈值 τ = sqrt(2λ)")
 print(f"    - |v| < τ = sqrt(2λ) = {np.sqrt(2*lam):.2f} 的分量归零")
 print(f"    - |v| ≥ τ 的分量保留原值（无偏差）")
+print(f"    - 平局点 |v| = τ 时 0 与 v 同为最优解，按 ≥ 约定保留 v")
 print(f"  投影: max(v, 0)")
 print(f"    - 负分量归零，正分量保留")
 
@@ -211,8 +220,60 @@ for name, fn in prox_fns:
     # 恰好预示 IHT 因非凸只有临界点保证、无全局收敛结论
     dist_prox = np.linalg.norm(fn(v1) - fn(v2))
     ratio = dist_prox / dist_v
-    ok = "✅" if ratio <= 1.0 + 1e-10 else "❌"
-    print(f"  {ok} {name}: ratio = {ratio:.6f} {'≤' if ratio <= 1.0 + 1e-10 else '>'} 1.0")
+    if '硬阈值' in name:
+        mark, verdict = "⚠️", "经验≤1（ℓ₀非凸，不保证，见下方反例）"
+    else:
+        passed = ratio <= 1.0 + 1e-10
+        mark = "✅" if passed else "❌"
+        verdict = "≤ 1.0" if passed else "> 1.0"
+    print(f"  {mark} {name}: ratio = {ratio:.6f}  {verdict}")
+
+# ---- 硬阈值非扩张反例：阈值两侧各取一点，比值随 ε→0 发散 ----
+print(f"\n[硬阈值非扩张反例]  v1=τ-ε, v2=τ+ε（τ=√(2λ)={np.sqrt(2*lam):.4f}）")
+ce_records = []
+for _eps in (1e-1, 1e-2, 1e-3, 1e-4):
+    _v1 = np.array([np.sqrt(2 * lam) - _eps])
+    _v2 = np.array([np.sqrt(2 * lam) + _eps])
+    _r = float(np.linalg.norm(hard_threshold(_v1, lam) - hard_threshold(_v2, lam))
+               / np.linalg.norm(_v1 - _v2))
+    ce_records.append({'eps': float(_eps), 'ratio': round(_r, 4)})
+    print(f"  ε = {_eps:.0e}: 输入间距 {2*_eps:.5f}, 输出间距 {np.sqrt(2*lam)+_eps:.5f}, "
+          f"ratio = {_r:.1f}  (>1，非扩张被破坏)")
+print(f"  多维情形同样违约（仅 1 个坐标紧贴阈值即可）；ratio ≈ τ/(2ε) 无上界。")
+print(f"  故随机高斯对的经验 ratio≤1 只是抽样盲区（连续分布恰好骑跨阈值的概率为0），")
+print(f"  不能当作非扩张成立的证据——这正是 IHT 仅有临界点保证、无全局收敛结论的根源。")
+
+# ══════════════════════════════════════════════════════════
+# 3.5 近端最优性条件（次梯度）数值验证
+# ══════════════════════════════════════════════════════════
+# x* = prox_{λg}(v) ⟺ 0 ∈ λ∂g(x*) + (x* - v)（凸、下半连续 g）。
+# 可微情形直接算梯度残差；ℓ1 不可微，x*=0 处用次微分区间 [-λ,λ] 判定；
+# 非负投影用指示函数的 KKT 条件；ℓ0 非凸、无凸次梯度，改用目标值直接比较。
+print(f"\n[最优性条件] 0 ∈ λ∂g(x*) + (x* - v) 的残差（理论值应为 0）")
+vs = np.array([-2.3, -1.0, -0.4, 0.0, 0.4, 1.0, np.sqrt(2 * lam), 2.3])
+# ℓ2²（可微）：∂g(x*)=x*，残差 = λx* + x* - v
+x_l2 = shrinkage(vs, lam)
+res_l2 = np.abs(lam * x_l2 + x_l2 - vs)
+# ℓ1（不可微）：x*≠0 时 ∂g={sign(x*)}；x*=0 时 ∂g=[-1,1]，残差=max(0,|v|-λ)
+x_l1 = soft_threshold(vs, lam)
+res_l1 = np.where(x_l1 != 0,
+                  np.abs(lam * np.sign(x_l1) + x_l1 - vs),
+                  np.maximum(np.abs(vs) - lam, 0.0))
+# 非负投影 ι_{x≥0}：可行残差 max(0,-x*) + 对偶残差 max(0, v-x*)
+x_pj = projection_nonneg(vs)
+res_proj = np.maximum(-x_pj, 0.0) + np.maximum(vs - x_pj, 0.0)
+print(f"  ℓ₂² 收缩   最大残差: {res_l2.max():.2e}")
+print(f"  ℓ₁ 软阈值  最大残差: {res_l1.max():.2e}（x*=0 处按次微分区间判定）")
+print(f"  非负投影   最大残差: {res_proj.max():.2e}（可行性 + 对偶可行性）")
+# ℓ0：直接比较 φ(0)=½v² 与 φ(v)=λ（v≠0），严格小才归零，平局按 ≥ 约定保留 v；
+# 注意 v=0 时两个候选点重合于 x=0（φ 均为 0），输出自然为 0
+choose_zero = hard_threshold(vs, lam) == 0
+phi_at_zero = 0.5 * vs ** 2
+phi_at_v = np.where(vs != 0, lam, 0.0)
+predicted_zero = (vs == 0) | (phi_at_zero < phi_at_v)
+ok_l0 = bool(np.all(choose_zero == predicted_zero))
+print(f"  ℓ₀ 硬阈值: 目标值比较 φ(0)=½v² vs φ(v)=λ 与输出完全一致: {ok_l0}")
+print(f"             |v|=√(2λ) 时 φ(0)=φ(v) 平局，按 ≥ 约定保留 v")
 
 print("\n" + "=" * 60)
 print("【核心结论】")
@@ -225,6 +286,8 @@ print("   - 硬阈值 (l0): 归零+保留原值，无偏但非凸")
 print("   - 投影 (约束): 满足可行约束")
 print("3. 软阈值是 ISTA/FISTA 的核心操作: 先梯度步，再软阈值步")
 print("4. shrinking bias 是 l1 正则化的固有代价，可用硬阈值或重加权l1缓解")
+print("5. 非扩张性由凸性保证: ℓ0 硬阈值存在 ratio>1 的反例（随 ε→0 发散），")
+print("   故 IHT 仅有临界点保证、无全局收敛结论；随机抽样 ratio≤1 不构成证据")
 
 print("\n" + "=" * 60)
 print(f"实验完成。结果已保存至: {SAVE_DIR}")
@@ -242,7 +305,22 @@ for name, fn in prox_fns:
 results_summary = {
     'lam': float(round(lam, 2)),
     'n_test': n_test,
+    'seed': 42,
     'non_expansiveness': non_expansiveness,
+    'hard_threshold_nonexpansive': False,
+    'hard_threshold_counterexample': {
+        'setup': 'v1=sqrt(2*lam)-eps, v2=sqrt(2*lam)+eps（标量，多维同理）',
+        'ratios': ce_records,
+        'note': '硬阈值在阈值处不连续（||x||_0 非凸），ratio≈sqrt(2λ)/(2ε) 随 ε→0 发散，'
+                '非扩张不成立；随机高斯对的经验 ratio≤1 仅为抽样盲区，IHT 只有临界点保证'
+    },
+    'optimality_residual_0_in_lam_dg_plus_x_minus_v': {
+        'l2_shrinkage_max': float(round(res_l2.max(), 12)),
+        'l1_soft_threshold_max': float(round(res_l1.max(), 12)),
+        'nonneg_projection_max': float(round(res_proj.max(), 12)),
+        'l0_objective_value_check_passed': ok_l0,
+        'note': '凸算子次梯度/KKT 残差应≈0；ℓ0 非凸无凸次梯度，改用 φ(0) vs φ(v) 目标值比较'
+    },
 }
 
 def _to_native(obj):

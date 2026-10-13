@@ -243,7 +243,10 @@ for label, tau in taus:
     n_iter_actual = 50 if '发散' in label else max_iter
     x_opt, obj_hist = gradient_descent(x_init, lam, tau, n_iter_actual)
     # 发散情形下跳过PSNR计算（结果无意义）
-    if np.all(np.isfinite(x_opt)):
+    # 注意：不能只判 isfinite——2.1/L 跑50步尚未溢出为 inf，但目标已爆炸，
+    # clip 后仍会算出一个具有迷惑性的 PSNR（如12.21dB），与"发散无意义"口径矛盾。
+    # 凡标记为发散的案例一律置 None。
+    if '发散' not in label and np.all(np.isfinite(x_opt)):
         psnr_val = peak_signal_noise_ratio(x, np.clip(x_opt.reshape(n, n), 0, 1))
     else:
         psnr_val = None
@@ -406,7 +409,7 @@ print("1. 梯度下降收敛条件: tau < 2/L，其中 L 是 Lipschitz 常数")
 print("2. 最优步长 tau_opt = 1/L 在光滑凸优化中提供线性收敛")
 print("3. Lipschitz 常数 L = lambda_max( Hessian ) = ||A||^2 + lam")
 print("4. 步长过小: 收敛缓慢，需大量迭代")
-print("5. 步长接近上限: 可能振荡，需谨慎选择")
+print("5. 步长接近上限: x空间误差可能振荡（J曲线仍可单调下降，见本实验实测），需谨慎选择")
 print("6. 幂迭代法是估计 ||A|| 的实用方法")
 print("\n实验完成。结果已保存至:", SAVE_DIR)
 

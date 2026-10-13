@@ -4,9 +4,10 @@
   "sigma_noise": 0.1,
   "lam_bayes": 0.1262,
   "lam_bayes_noisy": 0.1327,
-  "lam_best": 0.1151,
-  "psnr_noisy": 20.12,
-  "psnr_bayes": 20.22,
-  "psnr_bayes_noisy": 20.22,
-  "psnr_best": 20.22
+  "lam_best": 0.0977,
+  "lam_best_raw": 0.1272,
+  "psnr_noisy": 20.122,
+  "psnr_bayes": 20.326,
+  "psnr_bayes_noisy": 20.317,
+  "psnr_best": 20.344
 }

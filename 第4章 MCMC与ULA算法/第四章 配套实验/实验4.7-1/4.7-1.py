@@ -23,6 +23,14 @@ PnP-ULA核心思想：
   - D(x) - x 近似 ∇(-log p(x))，即得分函数
   
   这就是"Plug-and-Play"思想：将去噪器"插入"采样算法，无需显式定义先验。
+
+链长说明（2026-10 复核修订，对照官方 lab2_PnP_sol.ipynb）：
+  默认 maxit=10000、burn-in=500、thinning=5（Colab GPU 约 8 分钟）。
+  早期版本仅跑 500 步，所得 PSNR≈28 dB 恰停在官方链 burn-in 边界，属于
+  未收敛瞬态；同一代码 10000 步可达 PSNR≈33.1 dB / SSIM≈0.92（官方参考
+  33.22 / 0.9212）。注意边缘像素本身混合极慢（最慢分量万步 ESS 仅 3~5），
+  可靠的逐像素 UQ 仍需 5×10⁵~10⁶ 步——这才是 MCMC 的固有算力代价，
+  与"500 步没收敛就收尾"不是一回事。
 """
 
 import math
@@ -100,8 +108,11 @@ _model_dir = os.path.join(SCRIPT_DIR, 'Pretrained_models')
 _model_path = os.path.join(_model_dir, 'RealSN_DnCNN_noise5.pth')
 from sampling_tools import *
 
-# 确定算法策略：优先 PnP-ULA（GPU+模型），备选盲箱约束先验（CPU/无模型）
-_use_pnp = _has_gpu and os.path.exists(_model_path)
+# 确定算法策略：优先 PnP-ULA（GPU+模型），备选盲箱约束先验（CPU/无模型）。
+# CPU 默认仍走 MYULA（DnCNN 万步链在 CPU 上实测约 0.8 秒/步、需 2~2.5 小时）；
+# 复核需要在 CPU 上跑完整 PnP-ULA 时，显式设置环境变量 FORCE_PNP_CPU=1。
+_force_pnp_cpu = (not _has_gpu) and os.environ.get('FORCE_PNP_CPU') == '1'
+_use_pnp = os.path.exists(_model_path) and (_has_gpu or _force_pnp_cpu)
 
 print("\n" + "=" * 60)
 print("【环境检查】")
@@ -110,7 +121,11 @@ print(f"  GPU可用: {_has_gpu}")
 print(f"  预训练模型: {'存在' if os.path.exists(_model_path) else '不存在'}")
 
 if _use_pnp:
-    print(f"\n  使用算法: PnP-ULA（GPU + 预训练 DnCNN 去噪器）")
+    if _has_gpu:
+        print(f"\n  使用算法: PnP-ULA（GPU + 预训练 DnCNN 去噪器）")
+    else:
+        print(f"\n  使用算法: PnP-ULA（CPU 强制模式 FORCE_PNP_CPU=1 + 预训练 DnCNN 去噪器）")
+        print(f"  警告: CPU 实测约 0.8 秒/步，10000 步约需 2~2.5 小时；常规使用请走 GPU/Colab")
     print(f"  PnP-ULA 是实验的完整实现，将展示深度学习先验的力量。")
 else:
     print(f"\n  [警告] 缺少 PnP-ULA 运行条件（GPU 或预训练模型）")
@@ -188,24 +203,41 @@ if _use_pnp:
     print(f"\n[先验配置] PnP-ULA: RealSN-DnCNN 去噪器")
     L_net = 1.0
     model = load_model(_model_path, device)
+    # 残差去噪器：model 输出的是噪声，x - model(x) 才是去噪图；
+    # Markov 核内再取一次 (denoise(X) - X) = -model(X)，双重负号与官方 lab2 一致
     denoise = lambda x: (x - model(x[None][None].to(device))[0][0]).detach()
-    # 步长上界取 PPnP-ULA 形式 1/(L_net/eps + L_y)。本实现用未投影的简化 PnP-ULA 核
-    # （无 box 投影、无 λ 尾项），而 δ = 1/L_total 仍在 Langevin 稳定域 (δ < 2/L_total) 内，故数值稳定
-    delta_max = (1.0) / (L_net / eps + L_y)
+    # 本实现采用官方 lab2 的【简化未投影核】（无 box 投影、无 λ 尾项），
+    # δ = 1/L_total 位于 Langevin 均方稳定域 (δ < 2/L_total) 内，实测数值稳定。
+    L_total = L_net / eps + L_y
+    delta_max = 1.0 / L_total
+    # 严格的【未投影 PnP-ULA】（含 λ 尾项，Hurault et al., 2022）理论上界为
+    #   λ* = 1/(2αL_net/ε + 4L_y),  δ < (1/3)/(αL_net/ε + L_y + 1/λ*)
+    # 简化核步长约为该严格上界的 15 倍：之所以仍稳定，是因为后验质量在 [0,1]
+    # 边界附近很少、官方投影核实测几乎不触发（两种核 10000 步结果仅差 0.022 dB）。
+    # 教学中如需严格理论保证，应改用带 box 投影的 PPnP-ULA 核。
+    _lam_star = 1.0 / (2.0 * alpha * L_net / eps + 4.0 * L_y)
+    delta_strict = (1.0 / 3.0) / (alpha * L_net / eps + L_y + 1.0 / _lam_star)
     print(f"正则化参数: ε = {eps:.6f}")
+    print(f"简化核 δ_max = 1/(L_net/ε+L_y) = {delta_max:.3e}")
+    print(f"严格未投影 PnP-ULA 理论上界 = {delta_strict:.3e}（简化核取值约为其 "
+          f"{delta_max / delta_strict:.0f} 倍，靠实测稳定性背书，使用时须知此差异）")
 else:
     # ---- 盲箱约束先验: 均匀先验 MYULA（替代方案） ----
     print(f"\n[先验配置] ULA + 盲箱约束先验 (均匀先验 MYULA)")
     print(f"  说明: 盲箱约束先验 p(x) ∝ 𝟙_[0,1]^n(x)，仅将像素值约束在 [0,1] 范围内")
     print(f"  不含空间正则化项（如 TV），效果不同于 PnP 的深度学习先验")
-    print(f"  参数: delta_max 设为 L_y 的 1/L_y（不含去噪器项）")
     lambd = 1.0 / (2.0 * L_y)  # Moreau-Yosida 正则化参数
-    delta_max = 1.0 / L_y  # 经验性宽松取值；严格MYULA理论上界为 1/(L_y+1/lambd)=1/(3*L_y)
-    print(f"Moreau-Yosida 参数: λ = {lambd:.6f}")
+    # MYULA 包络梯度 (1/λ)(Id-proj) 为 1/λ-Lipschitz，总 Lipschitz 常数 L_y+1/λ；
+    # 严格步长上界 δ < (1/3)/(L_y+1/λ)（λ=1/(2L_y) 时即 1/(9L_y)）。
+    # 早期版本误用 δ=1/L_y：相对 Lipschitz 稳定界 1/(L_y+1/λ)=1/(3L_y) 超出 3 倍，
+    # 相对此处带 1/3 安全系数的严格上界超出 9 倍，2026-10 复核修正。
+    delta_max = (1.0 / 3.0) / (L_y + 1.0 / lambd)
+    print(f"Moreau-Yosida 参数: λ = {lambd:.6e}")
+    print(f"严格步长上界 δ_max = (1/3)/(L_y+1/λ) = {delta_max:.3e}")
 
 delta_frac = 0.99
 delta = delta_max * delta_frac
-print(f"步长: δ = {delta:.6f} (δ_max = {delta_max:.6f})")
+print(f"实际步长: δ = {delta:.6e} = {delta_frac}·δ_max")
 
 # ══════════════════════════════════════════════════════════
 # PnP-ULA / TV-ULA Markov核
@@ -238,12 +270,14 @@ def Markov_kernel(X, delta):
 # ══════════════════════════════════════════════════════════
 # 主采样循环
 # ══════════════════════════════════════════════════════════
-maxit = 500
-burnin = int(maxit * 0.1)
-n_samples = int(50)
+# 链长口径与官方 lab2 一致：burn-in 500 步、每 5 步存 1 个样本。
+# 500 步短链只能到达官方 burn-in 边界（PSNR≈28 dB），10000 步才进入平台期（≈33.1 dB）。
+maxit = 10000
+burnin = 500
+thinning_step = 5
+n_samples = (maxit - burnin - 1) // thinning_step  # 1899（与下方留存循环严格 i_x>burnin 的口径一致）
 X = y.clone()
 MC_X = []
-thinning_step = max(1, int((maxit - burnin) / n_samples))
 
 psnr_values = []
 ssim_values = []
@@ -254,29 +288,41 @@ print("【采样】" + ("PnP-ULA" if _use_pnp else "盲箱约束 MYULA (替代�
 print("=" * 60)
 print(f"总迭代: {maxit}")
 print(f"Burn-in: {burnin} ({burnin/maxit*100:.0f}%)")
-print(f"采样数: {n_samples}")
+print(f"Thinning: 每 {thinning_step} 步留存 1 个样本，共 {n_samples} 个")
+if not _has_gpu:
+    if _use_pnp:
+        print(f"提示: CPU 强制 PnP 模式，实测约 0.8 秒/步，{maxit} 步约需 2~2.5 小时")
+    else:
+        print(f"提示: 当前为 CPU（MYULA 备选路径），{maxit} 步约数分钟；"
+              f"Colab 启用 GPU 后跑完整 PnP-ULA 仅约 8 分钟")
+
+# 指标抽算步长：万步链每步都算 SSIM 会多出数分钟开销，每 10 步抽算一次足以画收敛曲线
+METRIC_STRIDE = 10
+metric_iters = []
 
 start_time = time.time()
 for i_x in range(maxit):
     X = Markov_kernel(X, delta)
-    
+
     if i_x == burnin:
         post_meanvar = welford(X)
         count = 0
     elif i_x > burnin:
         post_meanvar.update(X)
-        
-        current_mean = post_meanvar.get_mean()
-        psnr_values.append(PSNR(x, current_mean))
-        ssim_values.append(SSIM(x, current_mean))
-        
+
+        if (i_x - burnin) % METRIC_STRIDE == 0:
+            current_mean = post_meanvar.get_mean()
+            metric_iters.append(i_x)
+            psnr_values.append(PSNR(x, current_mean))
+            ssim_values.append(SSIM(x, current_mean))
+
         if count == thinning_step - 1:
             MC_X.append(X.detach().cpu().numpy())
             count = 0
         else:
             count += 1
     
-    if (i_x + 1) % 100 == 0:
+    if (i_x + 1) % 500 == 0:
         print(f"  iter {i_x+1}/{maxit}")
 
 end_time = time.time()
@@ -366,6 +412,32 @@ post_mean = post_meanvar.get_mean().detach().cpu().numpy()
 post_var = post_meanvar.get_var().detach().cpu().numpy()
 post_std = np.sqrt(post_var)
 
+# 分区 std 审计（2026-10 复核新增，口径与 colab_verify_4.7-1.py 一致）：
+# 按【真值】梯度幅值划分——平坦=最低 40% 分位、边缘=最高 20% 分位。
+# 用于回答"平坦区后验 std 到底是近零还是有固有量级"，不依赖主观读图。
+_xn = x.detach().cpu().numpy()
+_gx = np.roll(_xn, -1, axis=1) - _xn
+_gy = np.roll(_xn, -1, axis=0) - _xn
+_grad_mag = np.sqrt(_gx ** 2 + _gy ** 2)
+_flat_mask = _grad_mag <= np.quantile(_grad_mag, 0.40)
+_edge_mask = _grad_mag >= np.quantile(_grad_mag, 0.80)
+
+def _region_std_stats(mask):
+    v = post_std[mask]
+    return {'median': float(np.median(v)), 'mean': float(np.mean(v)),
+            'p10': float(np.quantile(v, 0.10)), 'p90': float(np.quantile(v, 0.90))}
+
+_flat_stats = _region_std_stats(_flat_mask)
+_edge_stats = _region_std_stats(_edge_mask)
+_edge_flat_ratio = float(_edge_stats['median'] / _flat_stats['median'])
+# std 图的像素级估计颗粒：相邻像素差分中位数（随 ESS 增加而减小）
+_std_grain = float((np.median(np.abs(np.diff(post_std, axis=1)))
+                    + np.median(np.abs(np.diff(post_std, axis=0)))) / 2.0)
+_std_grad_corr = float(np.corrcoef(post_std.ravel(), _grad_mag.ravel())[0, 1])
+print(f"\n[分区std审计] 平坦区中位 {_flat_stats['median']:.4f}（{_flat_stats['median']/sigma.item():.2f}σ_obs），"
+      f"边缘区中位 {_edge_stats['median']:.4f}，边缘/平坦 {_edge_flat_ratio:.2f}，"
+      f"corr(std,梯度) {_std_grad_corr:.3f}，颗粒 {_std_grain:.5f}")
+
 fig, axes = plt.subplots(2, 4, figsize=(16, 8))
 
 axes[0, 0].imshow(x.detach().cpu().numpy(), cmap='gray')
@@ -383,9 +455,14 @@ else:
     axes[0, 2].set_title(r'后验均值 (MMSE, 盲箱约束先验)', fontsize=11)
 axes[0, 2].axis('off')
 
-axes[0, 3].imshow(post_std, cmap='hot')
-axes[0, 3].set_title(r'后验标准差 $\sigma$', fontsize=11)
+# 色标必须从 0 起并配 colorbar：若按数据自身最小值/最大值自动拉伸，
+# 平坦区会显得"全黑（不确定性≈0）"，而实测平坦区 σ≈0.015~0.017 是
+# 不随链长消失的平稳固有不确定性，量级约为边缘区的 60%，并非零。
+im_std = axes[0, 3].imshow(post_std, cmap='hot', vmin=0,
+                           vmax=float(np.percentile(post_std, 99.5)))
+axes[0, 3].set_title(r'后验标准差 $\sigma$（色标从0起）', fontsize=11)
 axes[0, 3].axis('off')
+fig.colorbar(im_std, ax=axes[0, 3], fraction=0.046, pad=0.04)
 
 snr_map = post_mean / (post_std + 1e-8)
 vmax = np.percentile(snr_map, 99)
@@ -398,14 +475,17 @@ axes[1, 1].set_title(r'变异系数 $\sigma/\mu$', fontsize=11)
 axes[1, 1].axis('off')
 
 if len(psnr_values) > 0:
-    axes[1, 2].plot(psnr_values)
+    axes[1, 2].plot(metric_iters, psnr_values)
+    axes[1, 2].axvline(burnin, color='r', ls='--', lw=1, alpha=0.6, label='burn-in')
     axes[1, 2].set_title(r'PSNR 收敛曲线', fontsize=11)
     axes[1, 2].set_xlabel(r'迭代', fontsize=10)
     axes[1, 2].set_ylabel(r'PSNR (dB)', fontsize=10)
     axes[1, 2].grid(True, alpha=0.3)
+    axes[1, 2].legend(fontsize=8)
 
 if len(ssim_values) > 0:
-    axes[1, 3].plot(ssim_values)
+    axes[1, 3].plot(metric_iters, ssim_values)
+    axes[1, 3].axvline(burnin, color='r', ls='--', lw=1, alpha=0.6, label='burn-in')
     axes[1, 3].set_title(r'SSIM 收敛曲线', fontsize=11)
     axes[1, 3].set_xlabel(r'迭代', fontsize=10)
     axes[1, 3].set_ylabel(r'SSIM', fontsize=10)
@@ -442,8 +522,13 @@ print("")
 print("2. Burn-in期：")
 print(f"   丢弃前 {burnin} 个样本（{burnin/maxit*100:.0f}%），确保链收敛到平稳分布")
 print("")
-print("3. 不确定性量化：")
-print("   后验标准差图显示：边缘处不确定性高，平坦区域不确定性低")
+print("3. 不确定性量化（2026-10 复核修正表述，数值见上方[分区std审计]）：")
+print("   后验标准差图显示：边缘处不确定性相对最高（边缘精确位置的后验多峰性）；")
+print(f"   平坦区域仍有 σ≈{_flat_stats['median']:.4f} 的平稳固有不确定性"
+      f"（约 {_flat_stats['median']/sigma.item():.1f} 倍观测噪声、边缘区的 {1/_edge_flat_ratio*100:.0f}%），")
+print("   它源于 5×5 模糊使每个观测像素混合 25 个未知像素（A 的小奇异值方向信息损失），")
+print("   把链长从 500 增到 10000 步也不会消失——不可解读为'平坦区不确定性为零'。")
+print("   短链方差图与长链的真正差异是估计颗粒（ESS 不足造成的椒盐噪声），而非平坦区水平。")
 print("   变异系数图显示：暗区相对不确定性更高")
 print("")
 print("4. 收敛诊断：")
@@ -452,7 +537,10 @@ if _HAS_STATS and len(MC_X) > 10:
     if ess_med > 100:
         print(f"   ESS = {ess_med:.1f} > 100，通常足够估计后验均值")
     else:
-        print(f"   ESS = {ess_med:.1f} < 100，样本量可能不足，建议增加迭代次数")
+        print(f"   ESS = {ess_med:.1f} < 100，逐像素 UQ 仍不可靠，建议增加迭代次数")
+    print(f"   最慢分量 ESS = {ess_slow:.1f}：这些分量多位于强边缘，混合慢是 MCMC 的")
+    print(f"   固有属性（10000 步滞后 500 次迭代 ACF 仍≈0.75），官方教程指出可靠 UQ")
+    print(f"   需 5×10⁵~10⁶ 次迭代；但后验均值在万步尺度已收敛（末10% PSNR 变动<0.1 dB）")
 else:
     print("   需要更多样本进行可靠的ESS估计")
 
@@ -489,9 +577,23 @@ results_summary = {
         'type_blur': type_blur,
         'maxit': maxit,
         'burnin': burnin,
+        'thinning_step': thinning_step,
         'n_samples': n_samples,
+        'epsilon': float(eps),
+        'delta': float(delta),
         'use_pnp': bool(_use_pnp),
-        'algorithm': 'PnP-ULA' if _use_pnp else 'ULA + 盲箱约束先验',
+        'algorithm': 'PnP-ULA' if _use_pnp else 'ULA + 盲箱约束先验 (MYULA)',
+        'markov_kernel': 'simple_unprojected（官方lab2简化核，无box投影/无λ尾项）'
+                         if _use_pnp else 'myula_box_projection',
+        'step_size_note': (
+            'PnP 简化核 δ=0.99/(L_net/ε+L_y)，位于均方稳定域 δ<2/L_total；'
+            f'严格未投影 PnP-ULA 理论上界为 {float(delta_strict):.3e}（约为现取值的 1/15），'
+            '本例靠后验质量远离[0,1]边界而实测稳定（与投影核仅差0.022 dB）'
+        ) if _use_pnp else (
+            'MYULA 严格上界 δ<(1/3)/(L_y+1/λ)，λ=1/(2L_y)（2026-10 复核修正，旧版误用1/L_y）'
+        ),
+        'chain_length_note': '10000步为2026-10复核修订值（旧版500步仅到官方burn-in边界，'
+                             'PSNR≈28dB；万步链≈33.1dB，官方参考33.22dB）',
     },
     'results': {
         'initial_psnr': float(round(PSNR(x, y), 2)),
@@ -512,6 +614,20 @@ if _HAS_STATS and len(MC_X) > 10:
         'ess_fast': float(round(ess_fast, 2)),
         'chain_length': len(MC_X),
     }
+
+# 分区 std 审计（2026-10 复核新增）：掩膜按【真值】梯度幅值定义，
+# 平坦=最低40%分位、边缘=最高20%分位；口径与 colab_verify_4.7-1.py 一致。
+results_summary['regional_std_audit'] = {
+    'mask_definition': '按真值梯度幅值(np.roll环绕差)：平坦<=40%分位，边缘>=80%分位',
+    'flat_region': _flat_stats,
+    'edge_region': _edge_stats,
+    'edge_flat_median_ratio': round(_edge_flat_ratio, 4),
+    'flat_std_over_noise_sigma': round(_flat_stats['median'] / float(sigma.item()), 3),
+    'std_gradient_pearson_corr': round(_std_grad_corr, 4),
+    'std_map_grain': round(_std_grain, 6),
+    'note': '平坦区 std 是 5x5 模糊信息损失造成的后验固有量级，不随链长消失；'
+            'grain 随 ESS 增大而减小，可用于区分固有 std 与短链估计颗粒',
+}
 
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
     json.dump(_to_native(results_summary), f, ensure_ascii=False, indent=2)

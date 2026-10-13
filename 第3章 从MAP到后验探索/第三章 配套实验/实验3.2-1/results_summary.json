@@ -31,7 +31,7 @@
     },
     "tau = 2.1/L (发散)": {
       "tau": 2.079208,
-      "psnr": 12.21,
+      "psnr": null,
       "convergent": false,
       "final_obj": 106975.0106,
       "iters_to_thresh_0p1pct": null

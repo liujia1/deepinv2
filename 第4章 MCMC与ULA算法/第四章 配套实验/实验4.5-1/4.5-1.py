@@ -14,12 +14,19 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import torch
-# 注：scipy.stats.geninvgauss 是精确的 GIG 采样器，但对 2·N·N 个分量抽样耗时极高
-#     (单帧 ~18s)，无法支撑教学所需的上千次 Gibbs 迭代；本实验改用等价的
-#     精确目标采样器 sample_gig_half（对数空间 MH）。复核中已用 5e4 样本/参数点
-#     独立验证其 E[z]、E[1/z] 与理论矩及 scipy 精确采样一致（接受率 0.71~0.84）。
+# 注：scipy.stats.geninvgauss 是精确的 GIG 采样器（Devroye 2001 精确拒绝法），
+#     但对 2·N·N 个分量抽样时数组参数走逐参数 Python 循环（无向量化），
+#     实测单帧 8~18s（依机器），撑不起上千次 Gibbs 迭代（v3 实跑 1000 帧
+#     MH 路线约 40min，scipy 路线仅 z 更新就需数小时）。故改用等价的精确
+#     目标采样器 sample_gig_half（对数空间 MH，150 步）。2026-10 独立复核：
+#     ① t≥0.03 时 5e4 样本下 E[z]、E[1/z] 与闭环理论矩（E[z]=t/λ+1/λ²、
+#       E[1/z]=λ/t）及 scipy 一致（|偏差|<1.5 SE）；
+#     ② t≲3e-3 近零梯度分量有瞬态偏差（E[z] 最多低估 ~40%，链中约占 18%），
+#       端到端对平坦区后验 std 影响 ~3% 以内；
+#     ③ 接受率指链平均 ~0.82（逐参数 0.57~0.85，随 t 增大而降低）。
 import os
 import sys
+import time
 import warnings
 import logging
 
@@ -101,44 +108,58 @@ else:
 # 1. 辅助函数
 # ══════════════════════════════════════════════════════════
 
-def CG(x, Ax, sigma, lamb, z, b, maxit=1000, tol=1e-9, verbose=0, warn=True):
+def CG(x, Ax, sigma, lamb, z, b, maxit=1000, tol=1e-9, verbose=0, warn=True,
+       n_restart=2):
     """共轭梯度求解 Ax=b（须在 float64 下调用，float32 对病态矩阵不稳定）。
 
     返回 (x, n_iter, converged, mean_r2)：
-      n_iter    —— 实际迭代次数；
-      converged —— 是否在 maxit 内达到 mean(r^2) < tol；
+      n_iter    —— 实际迭代次数（含重启轮次）；
+      converged —— 是否达到 mean(r^2) < tol；
       mean_r2   —— 终止时的 mean(r^2)。
     warn=False 时不发警告（用于 Gibbs 主循环：调用方自行统计触顶率并在循环末
     汇总报告，避免逐帧刷屏；信息不丢弃，计数与残差写入 JSON）。
+    n_restart：极端重尾帧（1/z 很大、条件数~1e9）下，Lanczos 基失去正交性会使
+    CG 假性停滞（残差卡在高位不动）。每跑满 maxit 步即以当前解为初值重启一次
+    （标准 restarted-CG），最多重启 n_restart 轮，总预算 maxit*(n_restart+1)；
+    绝大多数帧首轮即收敛，重启不产生额外开销。
     若迭代中出现非有限值（NaN/Inf，通常意味着精度不足），立即中止并标记，
     绝不静默返回垃圾解。
     """
-    r = b - Ax(sigma, lamb, z, x)
-    p = r
-    rsold = torch.sum(r**2)
-    R = torch.mean(r**2)
     n_iter = 0
-    converged = bool(R.item() < tol)
+    converged = False
     diverged = False
-    for it in range(maxit):
-        n_iter = it + 1
-        Ap = Ax(sigma, lamb, z, p)
-        alpha = rsold / torch.sum(p * Ap)
-        x = x + alpha * p
-        r = r - alpha * Ap
-        rsnew = torch.sum(r**2)
-        if not torch.isfinite(rsnew):
-            diverged = True
-            break
-        beta = rsnew / rsold
-        rsold = rsnew.clone()
-        p = r + beta * p
+    R = torch.tensor(float('nan'), dtype=x.dtype, device=x.device)
+    for _round in range(n_restart + 1):
+        r = b - Ax(sigma, lamb, z, x)
+        p = r
+        rsold = torch.sum(r**2)
         R = torch.mean(r**2)
         if R < tol:
             converged = True
             break
+        for it in range(maxit):
+            n_iter += 1
+            Ap = Ax(sigma, lamb, z, p)
+            alpha = rsold / torch.sum(p * Ap)
+            x = x + alpha * p
+            r = r - alpha * Ap
+            rsnew = torch.sum(r**2)
+            if not torch.isfinite(rsnew):
+                diverged = True
+                break
+            beta = rsnew / rsold
+            rsold = rsnew.clone()
+            p = r + beta * p
+            R = torch.mean(r**2)
+            if R < tol:
+                converged = True
+                break
+        if converged or diverged:
+            break
+        # 未收敛：以当前 x 为新初值重启（丢弃已失正交的搜索方向）
     if verbose > 0:
         print("CG: it = ", n_iter, ", mse = ", float(R))
+    total_budget = maxit * (n_restart + 1)
     if diverged:
         msg = (f"CG 出现 NaN/Inf 后中止（第 {n_iter} 步）：当前精度不足以处理该条件数，"
                f"必须使用 float64；请勿在此状态下使用返回值。")
@@ -147,7 +168,8 @@ def CG(x, Ax, sigma, lamb, z, b, maxit=1000, tol=1e-9, verbose=0, warn=True):
         return x, n_iter, False, float('nan')
     if not converged and warn:
         warnings.warn(
-            f"CG 触顶 maxit={maxit} 仍未收敛: mean(r^2)={float(R):.3e} >= tol={tol:.0e}；"
+            f"CG 用尽 {total_budget} 步(含{n_restart}次重启)仍未收敛: "
+            f"mean(r^2)={float(R):.3e} >= tol={tol:.0e}；"
             f"内层求解不精确会压缩后验方差，应增大 maxit 或引入预条件。",
             RuntimeWarning, stacklevel=2)
     return x, n_iter, converged, float(R)
@@ -229,10 +251,15 @@ _diff = abs(_ip_left - _ip_right)
 _norm = (_u_test * _u_test).sum().item()
 print(f"  <Du(u), p>={_ip_left:.4f}, <u, DTp(p)>={_ip_right:.4f}, 差={_diff:.2e}, 相对={_diff/max(_norm,1e-10):.2e}")
 print(f"  伴随关系成立: {'OK' if _diff / max(_norm, 1e-10) < 1e-10 else 'FAIL'}")
-# 额外验证: DTp(Du(u)) = -离散Laplace算子·u (内部点), 边界处因fill=0有数值差异
+# 额外验证: DTp(Du(u)) = -Δu（前向差分梯度 + 伴随散度 = 负的5点Laplace；这正是
+# Au 中二次型 u'DtD u = ||Du||^2 正定的原因）。注意比较的是 (4u-四邻域和) = -Δu，
+# 不要与 (邻域和-4u) = +Δu 弄反（解析场 u=i^2+j^2 内部点：DtD=-4, Δ=+4）。
 _Lap = DTp(Du(_u_test))
-_interior_err = (_Lap[1:-1, 1:-1] - ((_u_test[:-2, 1:-1] + _u_test[2:, 1:-1] + _u_test[1:-1, :-2] + _u_test[1:-1, 2:]) - 4*_u_test[1:-1, 1:-1])).abs().max().item()
-print(f"  DTp(Du(u))与5点Laplace差(内部点): {_interior_err:.2e} (应≈0, 边界fill方式决定边缘值)")
+_neg_lap5 = (4*_u_test[1:-1, 1:-1]
+             - (_u_test[:-2, 1:-1] + _u_test[2:, 1:-1]
+                + _u_test[1:-1, :-2] + _u_test[1:-1, 2:]))
+_interior_err = (_Lap[1:-1, 1:-1] - _neg_lap5).abs().max().item()
+print(f"  DTp(Du(u))与-5点Laplace差(内部点): {_interior_err:.2e} (应≈0)")
 
 # ══════════════════════════════════════════════════════════
 # 2. 合成图像与加噪
@@ -280,9 +307,16 @@ print("=" * 60)
 
 maxiter_hq = 50
 lamb_hq = 10.0
-# HQ路径z=clip(|Du|,1e-6)在平坦区同样病态（λ/z~1e7）；float64 下达到 mean(r^2)<1e-9
-# 实测中位约4000次、最大约5000次，故上限设6000（float32 下因精度不足无法达到该阈值）。
-CG_MAXIT_HQ = 6000
+# 内层CG统一精度/预算（全程float64）：
+#   tol=1e-7（绝对 mean(r^2)）对本问题已足够——实测单帧解与 tol=1e-9 参考的
+#   RMS 差约3e-7，仅为后验std(约0.05)的1e-5；复核中 tol=1e-7 与 tol=1e-10
+#   两条1000帧链的后验均值/std统计量一致到小数点后4位。取1e-9会多耗约15%迭代。
+#   极端重尾帧（残差假性停滞）由 CG 的 n_restart 重启打破，不靠放大tol掩盖。
+CG_TOL = 1e-7
+CG_N_RESTART = 2
+# HQ路径z=clip(|Du|,1e-6)在平坦区同样病态（λ/z~1e7）；达到tol中位约3000次，
+# 设单轮上限4000，重启后总预算12000（float32 下因精度不足无法达到该tol）。
+CG_MAXIT_HQ = 4000
 
 Au_hq = lambda sigma, lamb, z, u: lamb_hq * DTp(Du(u) / z) + u / sigma**2
 rhs_hq = f_ / sigma**2
@@ -291,12 +325,19 @@ print(f"\n[步骤1] 半二次最小化 MAP (lambda={lamb_hq}, {maxiter_hq} iters
 if not USE_CACHE:
     hq_cg_iters, hq_cg_capped, hq_cg_resid_max = [], 0, 0.0
     u_ = torch.from_numpy(f).to(DTYPE).to(device)  # float64，CPU
+    _t_hq = time.time()
     for it in range(maxiter_hq):
         diff_u = torch.abs(Du(u_))
         z_ = np.clip(diff_u.cpu().numpy(), a_min=1e-6, a_max=None)  # 移回CPU进行clip
         z_ = torch.from_numpy(z_).to(DTYPE).to(device)  # float64，CPU
+        # warn=False：逐次 warning 会在 notebook 里刷出几十行（且回车符无法覆盖
+        # warning 输出）；改为本行原地刷新进度，循环结束后一次性汇总触顶统计。
         u_, _it, _ok, _R = CG(u_, Au_hq, sigma, lamb_hq, z_, rhs_hq,
-                              maxit=CG_MAXIT_HQ, verbose=0)
+                              maxit=CG_MAXIT_HQ, tol=CG_TOL, verbose=0,
+                              n_restart=CG_N_RESTART, warn=False)
+        if not np.isfinite(_R) or not torch.isfinite(u_).all():
+            raise RuntimeError(
+                f"HQ 第{it+1}次内层CG数值发散(mean_r2={_R})；请确认全程使用float64。")
         hq_cg_iters.append(_it)
         hq_cg_capped += int(not _ok)
         hq_cg_resid_max = max(hq_cg_resid_max, _R)
@@ -304,12 +345,19 @@ if not USE_CACHE:
         diff_u = torch.abs(Du(u_))
         TV = lamb_hq * diff_u.sum()
         Dat = torch.sum((u_ - f_)**2 / (2 * sigma**2))
+        _flag = "  [触顶]" if not _ok else ""
+        # \r 原地刷新同一行（\x1b[K 清除行尾残留，Jupyter/Colab/终端均支持），
+        # 不留几十条刷屏记录
+        print(f"\r\x1b[K  HQ {it+1:>3}/{maxiter_hq}  CG迭代 {_it:>5}  "
+              f"mean(r^2) {_R:.1e}{_flag}  TV+Dat {(TV+Dat).item():.2f}"
+              f"  用时 {time.time()-_t_hq:.0f}s", end="", flush=True)
         if (it + 1) % 10 == 0:
-            print(f"  iter {it+1}: TV + Dat = {(TV + Dat).item():.6f}")
+            print(f"\n  iter {it+1}: TV + Dat = {(TV + Dat).item():.6f}")
 
     u_hq = u_
-    print(f"  半二次最小化完成 (CG触顶 {hq_cg_capped}/{maxiter_hq} 次, "
-          f"中位迭代 {int(np.median(hq_cg_iters))}, 最大残差 {hq_cg_resid_max:.2e})")
+    print(f"\n  半二次最小化完成 (CG触顶 {hq_cg_capped}/{maxiter_hq} 次, "
+          f"中位迭代 {int(np.median(hq_cg_iters))}, 最大残差 {hq_cg_resid_max:.2e}, "
+          f"用时 {time.time()-_t_hq:.0f}s)")
 else:
     print("  从缓存加载 MAP 结果")
 
@@ -327,13 +375,14 @@ else:
 # 两个关键点（float64 复核修订）：
 # ①近零梯度处 1/z 重尾使条件高斯矩阵条件数高达~1e9，内层CG必须 float64——float32
 #   下极端帧CG数值崩溃（残差可达1e11、采样步移欠冲~70%，静默污染样本）；
-# ②达到 mean(r^2)<1e-9 中位需约5000次CG，旧版 maxit=1000 每次触顶、静默压缩后验
-#   方差，故上限提至8000；float64 下仍有约3%~6%的极端重尾帧触顶，但这些帧残差已
-#   很小（<1e-7量级）、解质量可靠，触顶率统计写入 JSON，不逐帧报警。
+# ②tol=1e-7下单轮达到残差阈值中位需约4000~5000次CG，旧版 maxit=1000 每次触顶、
+#   静默压缩后验方差，故单轮上限提至8000；极少数极端重尾帧单轮内假性停滞
+#   （Lanczos失正交，实测残差可卡在0.1量级），由最多2次restart打破（总预算24000）。
+#   float64实测25帧链0触顶；触顶率仍统计写入JSON，不逐帧报警。
 
 maxiter_glm = 1000
 lamb_glm = 10.0  # 与lamb_hq保持一致，确保MAP与MMSE对比的公平性
-# 实测达到 mean(r^2)<1e-9 中位需约5000次CG、尾部可达约7000次；8000覆盖绝大多数情形。
+# 单轮上限8000；停滞帧由 CG 的 n_restart=2 兜底（总预算 8000*3=24000）。
 CG_MAXIT_GLM = 8000
 
 # Au_glm: GLM条件高斯的系统矩阵
@@ -351,6 +400,7 @@ if not USE_CACHE:
     cg_iters, cg_capped, cg_resid_max = [], 0, 0.0
     chain_mean, chain_energy = [], []
     u_ = torch.from_numpy(f).to(DTYPE).to(device)  # float64，CPU
+    _t_glm = time.time()
     for it in range(maxiter_glm):
         diff_u = torch.abs(Du(u_))
         tmp = diff_u.cpu().numpy().ravel()  # 移回CPU进行GIG采样
@@ -365,10 +415,11 @@ if not USE_CACHE:
         eta = torch.normal(0, 1, size=(3, N, N), dtype=DTYPE, device=device)
 
         rhs = DTp(eta[:2] / torch.sqrt(z_)) + eta[2] / sigma + f_ / sigma**2
-        # warn=False：极端1/z帧（约3%~6%）可能在8000次内未到1e-9，逐帧警告会刷屏；
-        # 这里自行统计，循环末汇总。若出现NaN/Inf（float64下不应发生）则立即报错。
+        # warn=False：逐帧警告会刷屏（1000帧）；触顶/残差在循环末汇总并写入JSON。
+        # 极端帧由CG内部restart兜底；若仍出现NaN/Inf（float64下不应发生）立即报错。
         u_, _cg_it, _cg_ok, _cg_R = CG(u_, Au_glm, sigma, lamb_glm, z_, rhs,
-                                       maxit=CG_MAXIT_GLM, verbose=0, warn=False)
+                                       maxit=CG_MAXIT_GLM, tol=CG_TOL, verbose=0,
+                                       warn=False, n_restart=CG_N_RESTART)
         if not np.isfinite(_cg_R) or not torch.isfinite(u_).all():
             raise RuntimeError(
                 f"Gibbs 第{it+1}帧内层CG数值发散(mean_r2={_cg_R})；请确认全程使用float64。")
@@ -388,8 +439,18 @@ if not USE_CACHE:
             chain_mean.append(float(u_.mean()))
             chain_energy.append(float(TV + Dat))
 
+        # 单行原地刷新：进度/阶段/本帧CG/触顶/已用与预计剩余时间（ETA按已完成
+        # 帧的平均耗时外推）；每 50 帧另起一行持久打印一次 TV+Dat。
+        _el = time.time() - _t_glm
+        _eta = _el / (it + 1) * (maxiter_glm - it - 1)
+        _phase = "burn-in" if it < n_burn_in else "采样"
+        _cflag = " [触顶]" if not _cg_ok else ""
+        print(f"\r\x1b[K  Gibbs {it+1:>4}/{maxiter_glm} ({_phase})  "
+              f"本帧CG {_cg_it:>5} mean(r^2) {_cg_R:.1e}{_cflag}  "
+              f"已用 {_el/60:.1f}min 预计剩余 {_eta/60:.1f}min",
+              end="", flush=True)
         if (it + 1) % 50 == 0:
-            print(f"  iter {it+1}: TV + Dat = {(TV + Dat).item():.6f}")
+            print(f"\n  iter {it+1}: TV + Dat = {(TV + Dat).item():.6f}")
 
     n_samples = maxiter_glm - n_burn_in
     u_avg_ = u_sum_ / n_samples
@@ -400,7 +461,10 @@ if not USE_CACHE:
         'n_samples_after_burnin': int(n_samples),
         'ess_scalar_mean': ess_mean, 'iat_scalar_mean': iat_mean,
         'ess_scalar_energy': ess_energy, 'iat_scalar_energy': iat_energy,
-        'cg_maxit': int(CG_MAXIT_GLM),
+        'cg_tol': float(CG_TOL),
+        'cg_maxit_per_round': int(CG_MAXIT_GLM),
+        'cg_n_restart': int(CG_N_RESTART),
+        'cg_total_budget': int(CG_MAXIT_GLM * (CG_N_RESTART + 1)),
         'cg_capped_count': int(cg_capped),
         'cg_capped_fraction': float(cg_capped / maxiter_glm),
         'cg_iter_median': float(np.median(cg_iters)),
@@ -409,7 +473,8 @@ if not USE_CACHE:
         'hq_cg_capped_count': int(hq_cg_capped),
         'hq_cg_resid_max': float(hq_cg_resid_max),
     }
-    print(f"  GLM Gibbs采样完成 (保留样本: {n_samples}, 总迭代={maxiter_glm}, burn-in={n_burn_in})")
+    print(f"\n  GLM Gibbs采样完成 (保留样本: {n_samples}, 总迭代={maxiter_glm}, "
+          f"burn-in={n_burn_in}, 用时 {(time.time()-_t_glm)/60:.1f}min)")
     print(f"  标量ESS: 图像均值 {ess_mean:.0f} (tau={iat_mean:.2f}), "
           f"后验能量 {ess_energy:.0f} (tau={iat_energy:.2f})")
     print(f"  内层CG: 触顶 {cg_capped}/{maxiter_glm} ({cg_capped/maxiter_glm:.1%}), "
@@ -541,7 +606,11 @@ metrics = {
 metrics.update(chain_diag)
 print("\n[量化指标]")
 for k, v in metrics.items():
-    print(f"  {k}: {v if v is None else (f'{v:.4f}' if isinstance(v, float) else v)}")
+    if isinstance(v, float) and v is not None:
+        _vs = f'{v:.2e}' if 0 < abs(v) < 1e-3 else f'{v:.4f}'
+    else:
+        _vs = v
+    print(f"  {k}: {_vs}")
 
 results_summary = {
     'experiment': '4.5-1',
@@ -554,9 +623,11 @@ results_summary = {
         'maxiter_hq': maxiter_hq,
         'maxiter_glm': maxiter_glm,
         'n_burn_in': n_burn_in,
-        'cg_maxit_hq': int(CG_MAXIT_HQ),
-        'cg_maxit_glm': int(CG_MAXIT_GLM),
-        'cg_tol_mean_r2': 1e-9,
+        'cg_maxit_hq_per_round': int(CG_MAXIT_HQ),
+        'cg_maxit_glm_per_round': int(CG_MAXIT_GLM),
+        'cg_n_restart': int(CG_N_RESTART),
+        'cg_tol_mean_r2': float(CG_TOL),
+        'dtype': str(DTYPE).replace('torch.', ''),
     },
     'metrics': metrics,
 }

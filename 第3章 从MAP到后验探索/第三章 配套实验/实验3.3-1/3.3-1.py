@@ -68,7 +68,8 @@ y = x + sigma_noise * np.random.randn(n, n)
 # 均值对噪声稳健（mean(y)≈mean(x)），可直接从含噪观测估计，无需 oracle。
 mu = float(np.mean(y))
 
-# 对含噪图像裁剪到 [0,1]，避免噪声导致的范围溢出影响 PSNR 计算
+# 含噪观测裁剪到 [0,1]，作为展示与 PSNR 评估的统一口径（图像去噪的标准做法）。
+# 注意：闭式解仍作用于未裁剪的 y（裁剪是非线性操作，不能代入收缩公式）。
 y_clipped = np.clip(y, 0, 1)
 
 # ══════════════════════════════════════════════════════════
@@ -81,11 +82,14 @@ y_clipped = np.clip(y, 0, 1)
 
 # 贝叶斯lambda (oracle): lam = sigma^2 / sigma_x^2，其中 sigma_x 用真实x估计
 lam_bayes = sigma_noise ** 2 / x_std ** 2
-# 重建用原始 y（未 clip），正则化会将结果约束到合理范围
+# 闭式解作用于未 clip 的原始 y；线性收缩只会把极值压向 mu，并不能保证结果落入 [0,1]
+# （本次重建范围约 [-0.24, 1.2]）。展示与 PSNR 评估统一在 clip 后的图像上进行，
+# 与含噪基线 y_clipped 保持同一口径，避免"clip 基线 vs 未 clip 重建"的不公平比较。
 x_bayes = mu + (y - mu) / (1 + lam_bayes)
+x_bayes_clipped = np.clip(x_bayes, 0, 1)
 
 psnr_noisy = peak_signal_noise_ratio(x, y_clipped, data_range=DATA_RANGE)
-psnr_bayes = peak_signal_noise_ratio(x, x_bayes, data_range=DATA_RANGE)
+psnr_bayes = peak_signal_noise_ratio(x, x_bayes_clipped, data_range=DATA_RANGE)
 
 # 【关键教学点】实际中 sigma_x 未知，只能用含噪观测 y 估计。
 # 由于 sigma_y^2 = sigma_x^2 + sigma_noise^2，
@@ -99,7 +103,8 @@ var_x_est_warning = var_x_est <= 0
 sigma_x_est = np.sqrt(max(var_x_est, 1e-8))
 lam_bayes_noisy = sigma_noise ** 2 / sigma_x_est ** 2
 x_bayes_noisy = mu + (y - mu) / (1 + lam_bayes_noisy)
-psnr_bayes_noisy = peak_signal_noise_ratio(x, x_bayes_noisy, data_range=DATA_RANGE)
+x_bayes_noisy_clipped = np.clip(x_bayes_noisy, 0, 1)
+psnr_bayes_noisy = peak_signal_noise_ratio(x, x_bayes_noisy_clipped, data_range=DATA_RANGE)
 
 print("=" * 60)
 print("实验3.3-1 Tikhonov正则化：闭式解与lambda的贝叶斯诠释")
@@ -117,11 +122,13 @@ print(f"  oracle贝叶斯 lam = {lam_bayes:.4f}: PSNR={psnr_bayes:.2f} dB (含�
 # ══════════════════════════════════════════════════════════
 # 3. lambda扫描：PSNR vs lambda曲线
 # ══════════════════════════════════════════════════════════
-lambdas = np.logspace(-4, 1, 50)
+# 加密扫描网格：5个数量级内取200点（相对步距约6%），避免粗网格使 lam_best 量化偏差过大
+lambdas = np.logspace(-4, 1, 200)
 psnr_list = []
 
 for lam in lambdas:
-    x_lam = mu + (y - mu) / (1 + lam)
+    # 与含噪基线同口径：重建结果统一 clip 到 [0,1] 后再计算 PSNR
+    x_lam = np.clip(mu + (y - mu) / (1 + lam), 0, 1)
     psnr_list.append(peak_signal_noise_ratio(x, x_lam, data_range=DATA_RANGE))
 
 psnr_list = np.array(psnr_list)
@@ -129,22 +136,48 @@ best_idx = np.argmax(psnr_list)
 lam_best = lambdas[best_idx]
 psnr_best = psnr_list[best_idx]
 
+# 理论 lambda = sigma^2/Var(x) 最小化的是"未 clip"的 MSE，因此再扫一条 raw 口径曲线。
+# 绘图用与 clip 相同的 200 点网格；理论验证用 801 点细网格（相对步距约0.4%），
+# 避免粗网格量化误差干扰"理论公式是否精确成立"的判断。
+psnr_list_raw = np.array([
+    peak_signal_noise_ratio(x, mu + (y - mu) / (1 + lam), data_range=DATA_RANGE)
+    for lam in lambdas
+])
+_raw_grid = np.logspace(-3, 0.5, 801)
+_raw_curve = np.array([
+    peak_signal_noise_ratio(x, mu + (y - mu) / (1 + lam), data_range=DATA_RANGE)
+    for lam in _raw_grid
+])
+lam_best_raw = _raw_grid[int(np.argmax(_raw_curve))]
+psnr_gap_clip = psnr_best - psnr_bayes  # oracle(理论lambda)在clip指标下距峰值的差距
+
 print(f"\n[lambda扫描结果]")
 print(f"  扫描范围: [{lambdas[0]:.4f}, {lambdas[-1]:.2f}]")
 if lam_best <= lambdas[0] * 1.1 or lam_best >= lambdas[-1] / 1.1:
     print(f"  ⚠️  最优lambda ({lam_best:.4f}) 接近扫描边界，范围可能需要调整")
 else:
     print(f"  ✅ 最优lambda ({lam_best:.4f}) 在扫描范围内")
-print(f"  最优lambda (PSNR): lam_best = {lam_best:.4f}, PSNR = {psnr_best:.2f} dB")
+print(f"  最优lambda (clip口径 PSNR): lam_best = {lam_best:.4f}, PSNR = {psnr_best:.2f} dB")
+print(f"  最优lambda (raw口径 PSNR) : lam_best_raw = {lam_best_raw:.4f}  (理论 lambda 最小化未clip的MSE)")
 print(f"  贝叶斯lambda (oracle): lam_bayes = sigma^2/sigma_x^2 = {lam_bayes:.4f}")
 print(f"  贝叶斯lambda对应PSNR: {psnr_bayes:.2f} dB")
 print(f"  贝叶斯lambda (含噪估计, 减噪声方差): lam_bayes_noisy = sigma^2/sigma_x_est^2 = {lam_bayes_noisy:.4f}")
 print(f"  含噪估计对应PSNR: {psnr_bayes_noisy:.2f} dB")
 
-if abs(lam_best - lam_bayes) / lam_bayes < 0.5:
-    print(f"  [验证] oracle贝叶斯lambda与最优lambda接近，验证了贝叶斯框架")
+# 稳健验证（不依赖单次实现的 lambda 点估计）：
+#   ① raw 口径下 lambda 最优值应与理论公式吻合（相对偏差<10%）；
+#   ② clip 口径下最优 lambda 系统性偏小（截断对欠正则化重建有额外收益），
+#      但峰值附近平台平坦，理论 lambda 处 PSNR 距峰值应 <0.05 dB。
+_rel_raw = abs(lam_best_raw - lam_bayes) / lam_bayes
+_rel_clip = abs(lam_best - lam_bayes) / lam_bayes
+if _rel_raw < 0.10 and psnr_gap_clip < 0.05:
+    print(f"  [验证] raw口径最优lambda与理论公式吻合(偏差{_rel_raw:.1%})，"
+          f"且理论lambda在clip口径下仅比峰值低{psnr_gap_clip:.3f}dB，贝叶斯框架成立")
 else:
-    print(f"  [提示] oracle贝叶斯lambda与最优lambda存在偏差")
+    print(f"  [提示] 理论lambda与最优lambda存在偏差(raw偏差{_rel_raw:.1%}, "
+          f"clip峰差{psnr_gap_clip:.3f}dB)")
+print(f"  [口径说明] clip口径最优lambda({lam_best:.4f})比理论值偏小{_rel_clip:.1%}是系统性现象，")
+print(f"             源于截断对噪声大的重建的额外收益；峰值平台平坦，PSNR实际差异可忽略。")
 
 print(f"  [关键教学点] sigma_x 使用真实x估计（oracle），实际中不可得。")
 print(f"             用含噪y估计时需要减去噪声方差：")
@@ -166,19 +199,24 @@ axes[0, 1].imshow(y_clipped, cmap='gray')
 axes[0, 1].set_title(r'含噪图像 $y = x + \epsilon$' + f'\nPSNR={psnr_noisy:.2f}dB')
 axes[0, 1].axis('off')
 
-axes[0, 2].imshow(np.clip(x_bayes, 0, 1), cmap='gray')
+axes[0, 2].imshow(x_bayes_clipped, cmap='gray')
 axes[0, 2].set_title(r'贝叶斯 $\lambda$ 重建 (oracle)' + f'\n$\lambda={lam_bayes:.4f}$\nPSNR={psnr_bayes:.2f}dB')
 axes[0, 2].axis('off')
 
 # 第二行：PSNR-λ曲线 → 剖面对比 → 误差图
-axes[1, 0].semilogx(lambdas, psnr_list, 'b-', linewidth=1.5, label=r'Tikhonov: $x=\mu+(y-\mu)/(1+\lambda)$')
+# 蓝线为 clip 口径（与含噪基线一致，左端点与基线重合）；灰线为未 clip 口径，
+# 其峰值对应理论 MSE 最优 lambda，可看出 clip 截断使峰值位置系统性左移。
+axes[1, 0].semilogx(lambdas, psnr_list, 'b-', linewidth=1.5,
+                    label=r'Tikhonov (clip口径): $x=\mu+(y-\mu)/(1+\lambda)$')
+axes[1, 0].semilogx(lambdas, psnr_list_raw, color='gray', linestyle='-', linewidth=1.0,
+                    alpha=0.7, label=r'未clip口径(理论MSE), 峰值$\lambda=' + f'{lam_best_raw:.4f}$')
 axes[1, 0].axhline(y=psnr_noisy, color='r', linestyle='--', alpha=0.5, label=f'含噪: {psnr_noisy:.1f}dB')
 axes[1, 0].axvline(x=lam_bayes, color='g', linestyle=':', linewidth=2,
                     label=r'oracle $\lambda=' + f'{lam_bayes:.4f}$')
 axes[1, 0].axvline(x=lam_bayes_noisy, color='orange', linestyle='-.', linewidth=1.5,
                     label=r'含噪估计 $\lambda=' + f'{lam_bayes_noisy:.4f}$')
 axes[1, 0].axvline(x=lam_best, color='b', linestyle='--', alpha=0.5,
-                    label=r'最优 $\lambda=' + f'{lam_best:.4f}$')
+                    label=r'clip最优 $\lambda=' + f'{lam_best:.4f}$')
 axes[1, 0].scatter([lam_bayes], [psnr_bayes], color='g', s=80, zorder=5, marker='*')
 axes[1, 0].scatter([lam_bayes_noisy], [psnr_bayes_noisy], color='orange', s=80, zorder=5, marker='*')
 axes[1, 0].scatter([lam_best], [psnr_best], color='b', s=80, zorder=5, marker='*')
@@ -256,7 +294,8 @@ print("2. lambda = sigma^2/sigma_x^2 是最优正则化参数的贝叶斯选择�
 print("3. lambda 过小 -> 欠正则化（噪声未被有效抑制）")
 print("4. lambda 过大 -> 过正则化（图像被拉向先验均值 mu）")
 print("5. PSNR-lambda曲线呈单峰形，最优lambda在峰值处")
-print("6. oracle贝叶斯lambda与PSNR最优lambda接近，验证贝叶斯框架的理论正确性")
+print("6. oracle贝叶斯lambda=sigma^2/Var(x)是未clip的MSE最优解（raw口径下与理论公式精确吻合）；")
+print("   clip口径的PSNR最优lambda因截断收益系统性偏小约20%，但峰值平台平坦，PSNR差<0.05dB")
 print("7. 实际中用含噪y估计sigma_x时需减去噪声方差，否则lambda系统性偏小")
 print("8. 先验均值必须取 mu≈mean(x)（亮图约0.5）而非0，否则收缩向0引入系统偏差，")
 print("   会使lambda偏大约4倍、PSNR反低于含噪观测（本实验初版即踩此坑）")
@@ -274,10 +313,12 @@ results_summary = {
     'lam_bayes': float(round(lam_bayes, 4)),
     'lam_bayes_noisy': float(round(lam_bayes_noisy, 4)),
     'lam_best': float(round(lam_best, 4)),
-    'psnr_noisy': float(round(psnr_noisy, 2)),
-    'psnr_bayes': float(round(psnr_bayes, 2)),
-    'psnr_bayes_noisy': float(round(psnr_bayes_noisy, 2)),
-    'psnr_best': float(round(psnr_best, 2)),
+    'lam_best_raw': float(round(lam_best_raw, 4)),
+    # 所有 PSNR 均在 clip 到 [0,1] 的图像上计算（含噪基线与各重建同口径），保留3位小数
+    'psnr_noisy': float(round(psnr_noisy, 3)),
+    'psnr_bayes': float(round(psnr_bayes, 3)),
+    'psnr_bayes_noisy': float(round(psnr_bayes_noisy, 3)),
+    'psnr_best': float(round(psnr_best, 3)),
 }
 
 def _to_native(obj):

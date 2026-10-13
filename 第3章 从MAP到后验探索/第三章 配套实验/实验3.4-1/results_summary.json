@@ -1,10 +1,41 @@
 {
   "lam": 1.0,
   "n_test": 10000,
+  "seed": 42,
   "non_expansiveness": {
     "ℓ₂² 收缩": 0.5,
     "ℓ₁ 软阈值": 0.391706,
     "ℓ₀ 硬阈值": 0.760203,
     "投影": 0.58598
+  },
+  "hard_threshold_nonexpansive": false,
+  "hard_threshold_counterexample": {
+    "setup": "v1=sqrt(2*lam)-eps, v2=sqrt(2*lam)+eps（标量，多维同理）",
+    "ratios": [
+      {
+        "eps": 0.1,
+        "ratio": 7.5711
+      },
+      {
+        "eps": 0.01,
+        "ratio": 71.2107
+      },
+      {
+        "eps": 0.001,
+        "ratio": 707.6068
+      },
+      {
+        "eps": 0.0001,
+        "ratio": 7071.5678
+      }
+    ],
+    "note": "硬阈值在阈值处不连续（||x||_0 非凸），ratio≈sqrt(2λ)/(2ε) 随 ε→0 发散，非扩张不成立；随机高斯对的经验 ratio≤1 仅为抽样盲区，IHT 只有临界点保证"
+  },
+  "optimality_residual_0_in_lam_dg_plus_x_minus_v": {
+    "l2_shrinkage_max": 0.0,
+    "l1_soft_threshold_max": 0.0,
+    "nonneg_projection_max": 0.0,
+    "l0_objective_value_check_passed": true,
+    "note": "凸算子次梯度/KKT 残差应≈0；ℓ0 非凸无凸次梯度，改用 φ(0) vs φ(v) 目标值比较"
   }
 }

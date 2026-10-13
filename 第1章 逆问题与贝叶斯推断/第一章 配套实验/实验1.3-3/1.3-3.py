@@ -55,6 +55,10 @@ def blur(x, h):
 sigma = 3.0
 h = gaussian_psf(n, sigma)
 
+def attenuation_theory(f):
+    # 连续高斯传递函数在格点 (f,f) 处的衰减：exp(-2π²σ²(f²+f²)/n²)
+    return np.exp(-2 * np.pi ** 2 * sigma ** 2 * (2 * f ** 2) / n ** 2)
+
 # ---- 2. 构造"幽灵"图像 ----
 # 高频振荡图案落在模糊算子的近似零空间中
 # 物理解释：高斯模糊在傅里叶域是低通滤波器，高频分量被强烈衰减
@@ -63,10 +67,11 @@ h = gaussian_psf(n, sigma)
 
 xx, yy = np.meshgrid(np.arange(n), np.arange(n))
 
-# 扫描不同频率，展示衰减规律
-# 去掉高频（28, 30），避免数值精度问题导致放大因子失真
-# 频率25时衰减已接近机器精度，足以展示指数增长趋势
-frequencies = [5, 10, 15, 20, 25]
+# 扫描不同频率，展示衰减规律（叠加解析理论曲线作对照）
+# 扫描上界取 20：f=20 的衰减 ~8.5e-16 已接近 float64 噪声地板（≈4×eps）；
+# f≥25 时理论衰减 ~1e-24 远低于浮点精度，实测值完全由核的 float64 舍入噪声支配，
+# 无法反映物理规律，故不再纳入扫描范围
+frequencies = [5, 10, 15, 20]
 attenuations = []
 
 for freq in frequencies:
@@ -95,10 +100,11 @@ Ad = blur(d, h)
 rel_meas_err = np.linalg.norm(Ad) / np.linalg.norm(Ax)
 rel_img_err = np.linalg.norm(d) / np.linalg.norm(x)
 
-# ---- 4. 计算各频率的误差放大因子 ----
-# 放大因子 = 图像相对差异 / 测量相对差异
-# 对于频率 f 的扰动，放大因子 ≈ 1 / attenuation(f)
-amplification_factors = [1.0 / a for a in attenuations]
+# ---- 4. 计算各频率的算子衰减倒数 ----
+# 衰减倒数 = ‖d‖/‖Ad‖ = 1/attenuation(f)，刻画算子对该频率方向的抹除程度
+# 注意与"放大因子"（图像相对差异/测量相对差异）区分：
+#   后者 = (‖d‖/‖Ad‖)·(‖Ax‖/‖x‖)，多乘了观测能量比 ‖Ax‖/‖x‖
+inverse_attenuations = [1.0 / a for a in attenuations]
 
 # 建立频率到索引的映射，避免线性搜索（O(n) → O(1)）
 freq_to_idx = {f: i for i, f in enumerate(frequencies)}
@@ -130,14 +136,21 @@ axes[0, 2].imshow(d, cmap='RdBu_r', vmin=-alpha, vmax=alpha)
 axes[0, 2].set_title(f'差异 d = x\' - x\n（高频分量，α={alpha}）')
 axes[0, 2].axis('off')
 
-axes[0, 3].plot(frequencies, attenuations, 'o-', linewidth=2, markersize=8)
+axes[0, 3].semilogy(frequencies, attenuations, 'o-', linewidth=2, markersize=8,
+                    label='实测 ‖Ad‖/‖d‖')
+f_dense = np.linspace(2, 24, 200)
+axes[0, 3].semilogy(f_dense, [attenuation_theory(ff) for ff in f_dense], 'g--',
+                    linewidth=1.5, label=r'理论 $\exp(-4\pi^2\sigma^2 f^2/n^2)$')
+axes[0, 3].axvline(20, color='gray', linestyle=':', alpha=0.9)
+axes[0, 3].text(20.3, 1e-13, 'f=20 起接近\nfloat64 噪声地板',
+                fontsize=8, color='gray')
 axes[0, 3].axvline(freq, color='red', linestyle='--', alpha=0.8,
                    label=f'选用频率={freq}')
 axes[0, 3].set_xlabel('空间频率')
-axes[0, 3].set_ylabel('衰减因子 ‖Ad‖/‖d‖')
-axes[0, 3].set_title('频率-衰减规律\n频率越高→越接近零空间')
-axes[0, 3].legend(fontsize=9)
-axes[0, 3].grid(True)
+axes[0, 3].set_ylabel('衰减因子 ‖Ad‖/‖d‖（对数）')
+axes[0, 3].set_title('频率-衰减规律（对数坐标）\n实测与理论吻合，频率越高越接近零空间')
+axes[0, 3].legend(fontsize=8)
+axes[0, 3].grid(True, which='both', alpha=0.3)
 
 ax_vmin, ax_vmax = Ax.min(), Ax.max()
 axes[1, 0].imshow(Ax, cmap='gray', vmin=ax_vmin, vmax=ax_vmax)
@@ -154,7 +167,7 @@ vmax_diff = np.abs(Ax_diff).max()
 if vmax_diff > 0:
     Ax_diff_norm = Ax_diff / vmax_diff  # 归一化到 [-1, 1]
     axes[1, 2].imshow(Ax_diff_norm, cmap='RdBu_r', vmin=-1, vmax=1)
-    axes[1, 2].set_title(f"Ax' - Ax（观测差异，已归一化）\n‖Ax'-Ax‖/‖Ax‖ = {rel_meas_err:.3%}\n（原始 max={vmax_diff:.2e}）")
+    axes[1, 2].set_title(f"Ax' - Ax（观测差异，已归一化）\n‖Ax'-Ax‖/‖Ax‖ = {rel_meas_err:.3e}\n（原始 max={vmax_diff:.2e}）")
 else:
     axes[1, 2].text(0.5, 0.5, '差异为零',
                     ha='center', va='center', transform=axes[1, 2].transAxes,
@@ -162,25 +175,29 @@ else:
     axes[1, 2].set_title(f"Ax' - Ax（观测差异）\n‖Ax'-Ax‖/‖Ax‖ = 0%")
 axes[1, 2].axis('off')
 
-# 方案 A：放大因子对比图（对数坐标，使不同量级的放大因子都可见）
+# 方案 A：衰减倒数对比图（对数坐标，使不同量级的值都可见）
 # 使用索引作为 x 位置，确保柱子均匀分布且完整显示
 x_positions = np.arange(len(frequencies))
-axes[1, 3].bar(x_positions, amplification_factors, color='steelblue', edgecolor='navy', width=0.6)
+axes[1, 3].bar(x_positions, inverse_attenuations, color='steelblue', edgecolor='navy', width=0.6)
 axes[1, 3].axvline(freq_to_idx[freq], color='red', linestyle='--', alpha=0.8, label=f'选用频率={freq}')
 axes[1, 3].set_xlabel('空间频率')
-axes[1, 3].set_ylabel('误差放大因子（对数坐标）')
-axes[1, 3].set_title('各频率的误差放大因子\n（图像差异/测量差异）')
+axes[1, 3].set_ylabel('算子衰减倒数 ‖d‖/‖Ad‖（对数坐标）')
+axes[1, 3].set_title('各频率的算子衰减倒数\n（=1/衰减因子；f=20 已近数值测量极限）')
 axes[1, 3].set_xticks(x_positions)
 axes[1, 3].set_xticklabels([str(f) for f in frequencies])  # 用频率值作为标签
 axes[1, 3].set_xlim(-0.5, len(frequencies) - 0.5)  # 确保所有柱子完整显示
 axes[1, 3].legend(fontsize=9)
 axes[1, 3].grid(True, axis='y', alpha=0.3)
 axes[1, 3].set_yscale('log')  # 对数坐标使小值可见
-# 标注选用频率对应的放大因子
-amp_val = amplification_factors[freq_to_idx[freq]]
+# 标注选用频率对应的衰减倒数
+amp_val = inverse_attenuations[freq_to_idx[freq]]
 axes[1, 3].text(freq_to_idx[freq], amp_val * 1.5,
                 f'{amp_val:.0f}×',
                 ha='center', fontsize=10, color='red', fontweight='bold')
+# 标注 f=20 柱为噪声地板边缘
+idx20 = freq_to_idx[20]
+axes[1, 3].text(idx20, inverse_attenuations[idx20] * 1.5, '≈噪声地板',
+                ha='center', fontsize=8, color='gray')
 
 # ---- 第三行：傅里叶幅度谱对比 ----
 # 展示幽灵分量在频域的位置，与衰减因子曲线形成呼应
@@ -231,26 +248,22 @@ print("\n" + "="*60)
 print("几乎幽灵验证")
 print("="*60)
 print(f"图像相对差异: ‖x - x'‖/‖x‖ = {rel_img_err:.1%}")
-print(f"测量相对差异: ‖Ax - Ax'‖/‖Ax‖ = {rel_meas_err:.3%}")
-print(f"放大因子: 图像差异/测量差异 = {rel_img_err / rel_meas_err:.0f} 倍")
+print(f"测量相对差异: ‖Ax - Ax'‖/‖Ax‖ = {rel_meas_err:.3e}")
+print(f"放大因子（图像相对差异/测量相对差异）= {rel_img_err / rel_meas_err:.3e} 倍")
 print("\n" + "="*60)
-print("频率 vs 衰减 vs 放大因子")
+print("频率 vs 衰减 vs 衰减倒数")
 print("="*60)
-print(f"{'频率':>6s}  {'衰减因子':>10s}  {'放大因子':>10s}")
-print("-" * 32)
-for f, a, amp in zip(frequencies, attenuations, amplification_factors):
-    if amp == np.inf:
-        amp_str = "∞"
-    else:
-        amp_str = f"{amp:.0f}×"
-    print(f"{f:6d}  {a:10.4f}  {amp_str:>10s}")
+print(f"{'频率':>6s}  {'衰减实测':>12s}  {'衰减理论':>12s}  {'‖d‖/‖Ad‖':>14s}")
+print("-" * 52)
+for f, a, inv_a in zip(frequencies, attenuations, inverse_attenuations):
+    print(f"{f:6d}  {a:12.4e}  {attenuation_theory(f):12.4e}  {inv_a:14.3e}")
 
 print("\n" + "="*60)
 print("实验结论：")
 print("="*60)
 print("1. 高频扰动（幽灵分量）在图像空间中差异巨大")
-print("2. 但经过正向算子（高斯模糊）后，观测差异极小")
-print("3. 频率越高，衰减越强，放大因子越大")
+print("2. 但经过正向算子（高斯模糊）后，观测差异极小（本例 ~3e-9 量级）")
+print("3. 在可测频率范围内，频率越高衰减越强，与解析理论曲线吻合")
 print("4. 这正是'不适定性'的本质：问题本身存在'幽灵'方向")
 print("5. 即使零噪声，不引入额外信息也无法唯一确定解")
 print("="*60)
@@ -284,11 +297,13 @@ results_summary = {
     'blur_sigma': float(sigma),
     'ghost_frequency': freq,
     'ghost_alpha': float(alpha),
-    'relative_image_error': float(round(rel_img_err, 6)),
-    'relative_measurement_error': float(round(rel_meas_err, 6)),
-    'amplification_factor': float(round(rel_img_err / rel_meas_err, 2)),
-    'frequency_attenuation': {str(f): float(round(a, 6)) for f, a in zip(frequencies, attenuations)},
-    'amplification_factors': {str(f): float(round(amp, 2)) if amp != np.inf else 'inf' for f, amp in zip(frequencies, amplification_factors)},
+    'relative_image_error': float(f"{rel_img_err:.6e}"),
+    'relative_measurement_error': float(f"{rel_meas_err:.6e}"),
+    'amplification_factor': float(f"{rel_img_err / rel_meas_err:.6e}"),
+    'frequency_attenuation': {str(f): float(f"{a:.6e}") for f, a in zip(frequencies, attenuations)},
+    'frequency_attenuation_theory': {str(f): float(f"{attenuation_theory(f):.6e}") for f in frequencies},
+    'operator_inverse_attenuation': {str(f): float(f"{ia:.6e}") if ia != np.inf else 'inf' for f, ia in zip(frequencies, inverse_attenuations)},
+    'note': 'f=20 衰减 ~8.5e-16 已接近 float64 噪声地板；更高频率的实测值由数值噪声支配，不可作为物理衰减证据，故扫描止于 f=20',
 }
 
 def _to_native(obj):
