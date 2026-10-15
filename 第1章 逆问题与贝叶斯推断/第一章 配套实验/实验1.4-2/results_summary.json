@@ -1,0 +1,27 @@
+{
+  "transform_matrix_shape": [
+    1024,
+    1024
+  ],
+  "condition_number": 47833.09765625,
+  "max_singular_value": 1.1386466026306152,
+  "min_singular_value": 2.3804575903341174e-05,
+  "log10_condition_number": 4.6797285079956055,
+  "data_fit_error_true": 0.045072275219108,
+  "data_fit_error_random": 0.03914453504894465,
+  "error_ratio_true_vs_random": 1.1514321261640112,
+  "mc_fresh_noise_seed": 2026,
+  "mc_fresh_noise_n": 500,
+  "mc_fresh_noise_median_error": 4.264677952525997,
+  "mc_fresh_noise_err_p05": 3.897592752769294,
+  "mc_fresh_noise_err_p95": 4.634493255684886,
+  "mc_fresh_noise_beat_true_fraction": 0.0,
+  "given_random_gray_percentile_in_mc": 0.0,
+  "diff_norm_x_random_vs_true": 11.112152738565017,
+  "diff_norm_after_A": 0.005927740925512838,
+  "n_near_null_directions_sigma_lt_1pct": 24,
+  "diff_energy_frac_in_near_null": 0.9999418390757508,
+  "lstsq_fit_error": 5.986779865160161e-14,
+  "lstsq_deviation_from_true": 84.50543080633986,
+  "x_true_norm": 19.88558081853735
+}

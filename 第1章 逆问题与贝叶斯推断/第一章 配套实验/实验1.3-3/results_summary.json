@@ -24,5 +24,7 @@
     "15": 299471000.0,
     "20": 1178275000000000.0
   },
+  "min_singular_value_analytic": 2.649521e-39,
+  "spectral_condition_number_analytic": 3.774267e+38,
   "note": "f=20 衰减 ~8.5e-16 已接近 float64 噪声地板；更高频率的实测值由数值噪声支配，不可作为物理衰减证据，故扫描止于 f=20"
 }

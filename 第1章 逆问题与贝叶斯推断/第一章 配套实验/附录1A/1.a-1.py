@@ -18,8 +18,9 @@ if os.path.isdir(_gdrive):
     _chinese_path = os.path.join(_gdrive, '附录1A', '.chinese')
     SAVE_DIR = os.path.join(_gdrive, '附录1A')
 else:
-    _chinese_path = '.chinese'
     SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
+    # 必须用绝对路径：相对路径依赖运行时工作目录，从脚本目录外启动会导入失败
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 sys.path.insert(0, _chinese_path)
 from chinese_font import setup_chinese_font
 setup_chinese_font(save_dir=_chinese_path)
@@ -57,7 +58,8 @@ def safe_normalize(arr):
 mse_vals, psnr_vals, ssim_vals = [], [], []
 for y in noisy_images:
     mse_vals.append(mean_squared_error(x, y))
-    psnr_vals.append(peak_signal_noise_ratio(x, y))
+    # 显式声明 data_range：图像值域为 [0,1]，峰值 MAX=1（与教材 PSNR 定义一致，避免依赖库按 dtype 推断）
+    psnr_vals.append(peak_signal_noise_ratio(x, y, data_range=1.0))
     ssim_vals.append(structural_similarity(x, y, data_range=1.0, win_size=7))
 
 # ---- 4. 可视化 ----

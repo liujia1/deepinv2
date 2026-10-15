@@ -82,6 +82,7 @@ print(f"图像形状: {maomi_gray.shape}")
 x_true = maomi_gray.ravel()
 y_obs = maomi_mohu.ravel()
 x_random = random_gray.ravel()
+n_pix = x_true.size
 
 # ---- 3. 计算似然（数据拟合误差）----
 # 似然函数 p(y|x) ∝ exp(-||Ax - y||₂² / 2σ²)
@@ -97,30 +98,69 @@ print("\n" + "="*60)
 print("似然的关键洞察：似然只关心数据拟合，不关心 x 是否合理")
 print("="*60)
 print("\n数据拟合误差 ||Ax - y||_2 (L2范数):")
-print(f"  真实图像 x_true:  {error_true:.4f}")
-print(f"  随机噪声 x_random: {error_random:.4f}")
+print(f"  真实图像 x_true:   {error_true:.4f}")
+print(f"  对照图像 x_random: {error_random:.4f}")
 print(f"\n比值: {error_true / error_random:.2f} 倍")
 
-if error_random < error_true:
-    print("\n⚠️ 随机噪声的数据拟合误差更小！")
-    print("   这意味着在似然意义下，随机噪声比真实图像'更合理'")
-    print("   但随机噪声显然不是一张有意义的图像")
-    print(f"\n💡 原因分析：")
-    print(f"   - A 的条件数 κ(A) = {condition_number:.2e}，属于{'高度' if condition_number > 1e10 else '严重' if condition_number > 1e6 else '轻度'}病态")
-    print(f"   - A 严重损失高频信息，使得多个不同的 x 产生相似的 Ax")
-    print(f"   - 随机噪声恰好'运气好'，其模糊结果与观测 y 的误差更小")
-    print(f"   - 这正是 1.3 节讨论的'病态性导致不稳定性'的体现")
-else:
-    print("\n✓ 真实图像的数据拟合误差更小")
-    print(f"\n💡 说明：")
-    print(f"   - A 的条件数 κ(A) = {condition_number:.2e}")
-    print(f"   - 虽然 A 是病态的，但本次随机噪声未能在数据拟合上超越真实图像")
-    print(f"   - 这并不影响结论：似然无法区分'有意义'和'无意义'的解")
-    print(f"   - 可以尝试多次随机噪声，或增大 A 的病态程度")
-    print(f"   - 关键点是：两者的误差可能相当，说明似然的局限性")
+# ---- 3.5 三项诊断：厘清 x_random 为何能拟合数据 ----
+# 诊断一：全新随机噪声并不会“碰巧”拟合更好（固定种子，可复现）
+rng = np.random.default_rng(2026)
+N_MC = 500
+X_mc = rng.uniform(0.0, 1.0, size=(n_pix, N_MC))
+E_mc = np.linalg.norm(A @ X_mc - y_obs[:, None], axis=0)
+frac_beat = float((E_mc < error_true).mean())
+pct_given = float((E_mc < error_random).mean())
+
+# 诊断二：x_random 与 x_true 的差落在 A 的哪些奇异方向上
+d_diff = x_random - x_true
+Ad_diff = A @ d_diff
+coef = Vt @ d_diff
+mask_small = s < 0.01 * s[0]
+n_small = int(mask_small.sum())
+energy_frac_small = float(np.sum(coef[mask_small] ** 2) / np.sum(coef ** 2))
+
+# 诊断三：最小二乘解——拟合完美，却离真值很远
+x_ls = np.linalg.lstsq(A, y_obs, rcond=None)[0]
+ls_fit_error = float(np.linalg.norm(A @ x_ls - y_obs))
+ls_x_error = float(np.linalg.norm(x_ls - x_true))
+x_true_norm = float(np.linalg.norm(x_true))
+
+print("\n" + "-"*60)
+print("诊断一：重新抽随机噪声，现象不会重现")
+print("-"*60)
+print(f"  {N_MC} 张 uniform[0,1] 随机噪声图（seed=2026）:")
+print(f"    拟合误差中位数 {np.median(E_mc):.4f}，5–95 分位 "
+      f"[{np.percentile(E_mc, 5):.4f}, {np.percentile(E_mc, 95):.4f}]")
+print(f"    误差小于真实图像的比例: {frac_beat:.1%}")
+print(f"  给定 x_random 的误差 {error_random:.4f} 处于该分布的 {pct_given:.1%} 分位")
+print(f"  → 它不是“运气好的随机噪声”，而是被构造出来的对照样本")
+
+print("\n" + "-"*60)
+print("诊断二：构造原理——差值藏在 A 的近零空间里")
+print("-"*60)
+print(f"  ||x_random - x_true||   = {np.linalg.norm(d_diff):.4f}   （像素级看是噪声）")
+print(f"  ||A(x_random - x_true)|| = {np.linalg.norm(Ad_diff):.6f} （经 A 后几乎消失）")
+print(f"  差值能量落在 σ < 1%·σ_max 的 {n_small} 个方向上的比例: {energy_frac_small:.2%}")
+print(f"  若差值是独立随机噪声，||A·diff|| 应为 {np.median(E_mc):.2f} 量级——相差约 "
+      f"{np.median(E_mc) / max(np.linalg.norm(Ad_diff), 1e-12):.0f} 倍")
+
+print("\n" + "-"*60)
+print("诊断三：病态性的直接后果——完美拟合 ≠ 接近真值")
+print("-"*60)
+print(f"  最小二乘解 ||A x_ls - y|| = {ls_fit_error:.2e} （几乎完美拟合）")
+print(f"  但 ||x_ls - x_true|| = {ls_x_error:.4f}，为 ||x_true|| = {x_true_norm:.4f} 的 "
+      f"{ls_x_error / x_true_norm:.0%}")
+print(f"  → 数据端微小误差经 A⁻¹ 放大为解端巨大偏差，这才是 κ(A) 的意义")
+
+print("\n💡 正确的归因：")
+print(f"   - κ(A) = {condition_number:.2e}，按脚本自身判据属“轻度病态”")
+print(f"     A 并未“严重损失高频”：{n_pix} 个奇异值中仅 {n_small} 个衰减到 1% 以下")
+print(f"   - 但只要存在这些近零方向，就有无穷多个“像素级像噪声、")
+print(f"     数据上却与真值同样好”的解，似然对它们一视同仁")
+print(f"   - 局限的根源是 A 的近零空间（不适定性），而非随机噪声的运气")
 
 # ---- 4. 可视化 ----
-fig, axes = plt.subplots(2, 3, figsize=(14, 9))
+fig, axes = plt.subplots(3, 3, figsize=(14, 13.5))
 
 # 第一行：原始图像
 axes[0, 0].imshow(maomi_gray, cmap='gray', vmin=0, vmax=1)
@@ -132,7 +172,7 @@ axes[0, 1].set_title('观测数据 $y$\n（模糊的猫咪图像）')
 axes[0, 1].axis('off')
 
 axes[0, 2].imshow(random_gray, cmap='gray', vmin=0, vmax=1)
-axes[0, 2].set_title('随机噪声 $x_{random}$\n（无意义的噪声图像）')
+axes[0, 2].set_title('对照图像 $x_{random}$\n（像素级似噪声，实为构造样本）')
 axes[0, 2].axis('off')
 
 # 第二行：变换结果和矩阵A可视化
@@ -145,18 +185,49 @@ from scipy.ndimage import zoom
 # 使用双线性插值将 1024x1024 缩小到 32x32（缩放因子 32/1024 = 1/32）
 A_resized = zoom(A, 32/1024, order=1)  # order=1 表示双线性插值
 im = axes[1, 1].imshow(A_resized, cmap='RdBu_r', aspect='auto')
-axes[1, 1].set_title(f'变换矩阵 $A$（1024×1024 缩放到 32×32）\n$\\kappa(A) = {condition_number:.2e}$')
+axes[1, 1].set_title(f'变换矩阵 $A$（1024×1024 缩放到 32×32）\n$\\kappa(A) = {condition_number:.2e}$（轻度病态）')
 axes[1, 1].axis('off')
 # 添加颜色条
 cbar = plt.colorbar(im, ax=axes[1, 1], fraction=0.046, pad=0.04)
 cbar.set_label('矩阵元素值', fontsize=8)
 
 axes[1, 2].imshow(Ax_random.reshape(32, 32), cmap='gray')
-axes[1, 2].set_title(f'$A \\cdot x_{{random}}$\n$||Ax - y||_2 = {error_random:.4f}$')
+axes[1, 2].set_title(f'$A \\cdot x_{{random}}$\n$||Ax - y||_2 = {error_random:.4f}$（与 $A x_{{true}}$ 几乎不可分辨）')
 axes[1, 2].axis('off')
 
-plt.suptitle('似然的局限：数据拟合好 ≠ 图像有意义\n' + 
-             ('随机噪声的数据拟合误差更小，但它显然不是真实图像' if error_random < error_true else ''),
+# 第三行：三项诊断
+# (a) 全新随机噪声的拟合误差分布 vs 真值/对照样本
+axes[2, 0].hist(E_mc, bins=40, color='lightsteelblue', edgecolor='steelblue')
+axes[2, 0].axvline(error_true, color='tab:green', ls='--', lw=2,
+                   label=f'$x_{{true}}$: {error_true:.4f}')
+axes[2, 0].axvline(error_random, color='tab:red', ls='--', lw=2,
+                   label=f'$x_{{random}}$（构造）: {error_random:.4f}')
+axes[2, 0].set_yscale('log')
+axes[2, 0].set_xlabel('$||A x - y||_2$')
+axes[2, 0].set_ylabel('频数（对数轴）')
+axes[2, 0].set_title(f'诊断一：{N_MC} 张全新随机噪声图的拟合误差（seed=2026）\n'
+                     f'最小也达 {E_mc.min():.2f}，无一小于真值误差（0/{N_MC}）')
+axes[2, 0].legend(fontsize=9, loc='upper right')
+axes[2, 0].annotate('两虚线在左端 ≈ 0.04，\n比新抽噪声小约 100 倍\n（构造样本才能做到）',
+                    xy=(0.35, 0.32), xycoords='axes fraction', fontsize=9)
+
+# (b) 差值 d = x_random - x_true 的能量在奇异方向上的分布
+axes[2, 1].scatter(s, coef ** 2, s=6, c=np.where(mask_small, 'tab:red', 'tab:blue'))
+axes[2, 1].set_xscale('log')
+axes[2, 1].set_yscale('log')
+axes[2, 1].set_xlabel('奇异值 $\\sigma_j$（对数轴）')
+axes[2, 1].set_ylabel('$|v_j^T d|^2$（对数轴）')
+axes[2, 1].set_title('诊断二：差值能量谱\n'
+                     f'红色（{n_small} 个近零方向）占能量 {energy_frac_small:.2%}')
+
+# (c) 最小二乘解：完美拟合但远离真值
+axes[2, 2].imshow(x_ls.reshape(32, 32), cmap='gray')
+axes[2, 2].set_title('诊断三：最小二乘解 $x_{ls}$（无裁剪显示）\n'
+                     f'$||Ax_{{ls}}-y|| = {ls_fit_error:.0e}$，而 $||x_{{ls}}-x_{{true}}|| = {ls_x_error:.1f}$')
+axes[2, 2].axis('off')
+
+plt.suptitle('似然的局限：数据拟合好 ≠ 图像有意义\n'
+             '对照样本由真值加近零空间噪声构造而成；根源是 A 的近零空间（不适定性），而非随机噪声的运气',
              fontsize=14)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '实验1_4_2_似然的局限.png'), dpi=150, bbox_inches='tight')
@@ -168,11 +239,16 @@ print("结论")
 print("="*60)
 print("似然函数 p(y|x) 只衡量'数据拟合程度'，即 ||Ax - y||_2 的大小。")
 print("它无法区分：")
-print("  - 一个与数据拟合好的'有意义'图像（如真实猫咪）")
-print("  - 一个与数据拟合好的'无意义'图像（如随机噪声）")
+print("  - 与数据拟合好的'有意义'图像（真实猫咪）")
+print("  - 与数据拟合好的'无意义'图像（如本实验中构造的噪声样本）")
 print("\n这正是不适定性的后果：")
-print("  算子 A 的信息损失使得多个不同的 x 能产生相似的 Ax")
-print("  仅靠似然无法从中选出'正确'的 x")
+print(f"  算子 A 存在近零空间（{n_pix} 个方向中 {n_small} 个衰减到 1% 以下）")
+print("  真值 + 近零空间扰动 仍与数据拟合同样好，仅靠似然无法从中选出'正确'的 x")
+print("\n需要说明的是：")
+print("  本实验的 x_random 并非'碰巧拟合好'的随机噪声——重新抽样的")
+print(f"  随机噪声无一能接近真值的拟合水平（误差中位数 {np.median(E_mc):.2f} vs {error_true:.4f}）")
+print("  它是按'真值 + 近零空间噪声'构造的对照样本，这正说明：")
+print("  似然的局限来自 A 的结构（不适定性），而不是噪声的运气")
 print("\n解决方案：引入先验 p(x)")
 print("  先验编码了我们对'什么样的图像更合理'的知识")
 print("  后验 = 似然 × 先验，同时考虑数据拟合和图像合理性")
@@ -181,13 +257,27 @@ print("  后验 = 似然 × 先验，同时考虑数据拟合和图像合理性"
 import json
 results_summary = {
     'transform_matrix_shape': list(A.shape),
-    'condition_number': float(round(condition_number, 4)),
-    'max_singular_value': float(round(s[0], 6)),
-    'min_singular_value': float(round(s[-1], 6)),
-    'log10_condition_number': float(round(np.log10(condition_number), 2)),
-    'data_fit_error_true': float(round(error_true, 6)),
-    'data_fit_error_random': float(round(error_random, 6)),
-    'error_ratio_true_vs_random': float(round(error_true / error_random, 4)),
+    'condition_number': float(condition_number),
+    'max_singular_value': float(s[0]),
+    'min_singular_value': float(s[-1]),
+    'log10_condition_number': float(np.log10(condition_number)),
+    'data_fit_error_true': float(error_true),
+    'data_fit_error_random': float(error_random),
+    'error_ratio_true_vs_random': float(error_true / error_random),
+    'mc_fresh_noise_seed': 2026,
+    'mc_fresh_noise_n': N_MC,
+    'mc_fresh_noise_median_error': float(np.median(E_mc)),
+    'mc_fresh_noise_err_p05': float(np.percentile(E_mc, 5)),
+    'mc_fresh_noise_err_p95': float(np.percentile(E_mc, 95)),
+    'mc_fresh_noise_beat_true_fraction': frac_beat,
+    'given_random_gray_percentile_in_mc': pct_given,
+    'diff_norm_x_random_vs_true': float(np.linalg.norm(d_diff)),
+    'diff_norm_after_A': float(np.linalg.norm(Ad_diff)),
+    'n_near_null_directions_sigma_lt_1pct': n_small,
+    'diff_energy_frac_in_near_null': energy_frac_small,
+    'lstsq_fit_error': ls_fit_error,
+    'lstsq_deviation_from_true': ls_x_error,
+    'x_true_norm': x_true_norm,
 }
 
 def _to_native(obj):

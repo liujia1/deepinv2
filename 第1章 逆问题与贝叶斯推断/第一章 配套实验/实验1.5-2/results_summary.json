@@ -1,0 +1,18 @@
+{
+  "image_size": 32,
+  "noise_sigma": 0.05,
+  "prior_sigma": 0.5,
+  "bayesian_lambda": 0.01,
+  "psnr_posterior_mean_dB": 17.71,
+  "lambda_sweep_max_psnr_dB": 18.08,
+  "lambda_sweep_best_lambda": 0.026827,
+  "psnr_noisy_obs_dB": 16.83,
+  "posterior_var_mean": 0.227046,
+  "posterior_var_rel_spread": 7.823761060436298e-15,
+  "frequentist_opt_lambda_fixed_phantom": 0.07445,
+  "lambda_demo_psnr": {
+    "lambda_0.0001": 3.49,
+    "lambda_0.01": 17.71,
+    "lambda_10": 11.88
+  }
+}

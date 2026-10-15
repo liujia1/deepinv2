@@ -1,0 +1,20 @@
+{
+  "image_size": 128,
+  "blur_sigma": 2.0,
+  "noise_level": 0.1,
+  "lambda_tikhonov_blur": 0.126151,
+  "psnr_blurred_dB": 18.29,
+  "psnr_tikhonov_blur_dB": 20.25,
+  "psnr_improvement_dB": 1.96,
+  "posterior_energy_MAP": 38305.91,
+  "posterior_energy_truth": 42906.0,
+  "psnr_lambda_demo": {
+    "lambda_0.001": 7.11,
+    "lambda_0.100": 20.88,
+    "lambda_1.000": 10.27
+  },
+  "psnr_bayes_lambda_dB": 18.91,
+  "lambda_bayes_denoise": 0.126151,
+  "psnr_sweep_best_lambda": 0.025929,
+  "psnr_sweep_max_dB": 19.88
+}

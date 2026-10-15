@@ -1,4 +1,4 @@
-﻿import numpy as np
+import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -106,6 +106,13 @@ rel_img_err = np.linalg.norm(d) / np.linalg.norm(x)
 #   后者 = (‖d‖/‖Ad‖)·(‖Ax‖/‖x‖)，多乘了观测能量比 ‖Ax‖/‖x‖
 inverse_attenuations = [1.0 / a for a in attenuations]
 
+# 离散算子的谱条件数（解析值）：高斯模糊由 DFT 对角化，最大奇异值 = 1（DC），
+# 最小奇异值在对角 Nyquist 角点 (n/2, n/2)。它严格为正，故有限网格上不存在
+# "精确零空间"，但小到 ~1e-39 —— 条件数 ~1e38 意味着这些方向在有限精度下
+# 已实际不可分辨，这正是"几乎零空间 / almost-ghost"的定量含义
+h_min = attenuation_theory(n // 2)
+spectral_cond = 1.0 / h_min
+
 # 建立频率到索引的映射，避免线性搜索（O(n) → O(1)）
 freq_to_idx = {f: i for i, f in enumerate(frequencies)}
 
@@ -114,6 +121,7 @@ print(f"- 图像尺寸: {n}x{n}")
 print(f"- 高斯模糊核: σ=3.0")
 print(f"- 幽灵分量频率: {freq}")
 print(f"- 扫描频率范围: {frequencies[0]} ~ {frequencies[-1]}")
+print(f"- 算子谱条件数（解析）: ≈{spectral_cond:.2e}（最小奇异值 {h_min:.2e}，严格为正）")
 print("-"*60)
 
 # ---- 5. 可视化 ----
@@ -124,12 +132,16 @@ D_fft = np.abs(np.fft.fftshift(np.fft.fft2(d)))
 
 fig, axes = plt.subplots(3, 4, figsize=(18, 13))
 
-axes[0, 0].imshow(x, cmap='gray', vmin=0, vmax=1)
+# 两图共用同一色标，取两幅图像的真实值域：确保灰度严格可比且不削顶。
+# x' 含负的幽灵分量（值域约 [-0.30, 1.28]），不能沿用 [0,1]，否则正负峰值均被截断
+img_vmin = min(float(x.min()), float(x_prime.min()))
+img_vmax = max(float(x.max()), float(x_prime.max()))
+axes[0, 0].imshow(x, cmap='gray', vmin=img_vmin, vmax=img_vmax)
 axes[0, 0].set_title('图像 x')
 axes[0, 0].axis('off')
 
-axes[0, 1].imshow(x_prime, cmap='gray', vmin=0, vmax=1)
-axes[0, 1].set_title(f"图像 x'（x + 幽灵分量）\n‖x-x'‖/‖x‖ = {rel_img_err:.1%}")
+axes[0, 1].imshow(x_prime, cmap='gray', vmin=img_vmin, vmax=img_vmax)
+axes[0, 1].set_title(f"图像 x'（x + 幽灵分量，与左图共用色标）\n‖x-x'‖/‖x‖ = {rel_img_err:.1%}")
 axes[0, 1].axis('off')
 
 axes[0, 2].imshow(d, cmap='RdBu_r', vmin=-alpha, vmax=alpha)
@@ -162,12 +174,15 @@ axes[1, 1].set_title("Ax'（x' 的观测）")
 axes[1, 1].axis('off')
 
 Ax_diff = Ax_prime - Ax
-# 对差异进行归一化，确保即使值很小也能清晰显示
+# 差异绝对值仅 ~1e-9，直接显示会整图全黑，故按自身峰值归一化以展示空间结构；
+# 注意：归一化只用于"看清纹理"，不代表差异幅度——幅度一律以标题中的相对误差为准
 vmax_diff = np.abs(Ax_diff).max()
 if vmax_diff > 0:
     Ax_diff_norm = Ax_diff / vmax_diff  # 归一化到 [-1, 1]
     axes[1, 2].imshow(Ax_diff_norm, cmap='RdBu_r', vmin=-1, vmax=1)
-    axes[1, 2].set_title(f"Ax' - Ax（观测差异，已归一化）\n‖Ax'-Ax‖/‖Ax‖ = {rel_meas_err:.3e}\n（原始 max={vmax_diff:.2e}）")
+    axes[1, 2].set_title(f"Ax' - Ax（按峰值归一化，仅展示空间结构）\n"
+                         f"幅度以相对误差为准：‖Ax'-Ax‖/‖Ax‖ = {rel_meas_err:.3e}\n"
+                         f"（归一化前 max={vmax_diff:.2e}）")
 else:
     axes[1, 2].text(0.5, 0.5, '差异为零',
                     ha='center', va='center', transform=axes[1, 2].transAxes,
@@ -227,11 +242,21 @@ mask = r <= r_max
 radial_X = np.bincount(r[mask].ravel(), X_fft[mask].ravel()) / np.bincount(r[mask].ravel())
 radial_D = np.bincount(r[mask].ravel(), D_fft[mask].ravel()) / np.bincount(r[mask].ravel())
 
+# |FFT(d)| 理论上只含 4 个峰（棋盘纹的四个频率分量），其余频点的非零值（~1e-13）
+# 全部来自 FFT 浮点舍入。扣掉 4 个峰后取平均，作为噪声地板参考，避免把高半径处
+# 的水平平台误读为真实信号频谱
+_d_mag_raw = np.abs(np.fft.fft2(d))
+for _a, _b in ((freq, freq), (freq, n - freq), (n - freq, freq), (n - freq, n - freq)):
+    _d_mag_raw[_a, _b] = 0.0
+d_fft_noise_floor = float(_d_mag_raw.mean())
+
 axes[2, 3].semilogy(radial_X, 'b-', linewidth=2, label='|FFT(x)|', alpha=0.7)
 axes[2, 3].semilogy(radial_D, 'r-', linewidth=2, label='|FFT(d)|', alpha=0.7)
 # 棋盘纹 sin(2πf·x)·sin(2πf·y) 的傅里叶峰在径向频率 f√2 处
 freq_radial = freq * np.sqrt(2)
 axes[2, 3].axvline(freq_radial, color='red', linestyle='--', alpha=0.8, label=f'幽灵径向频率≈{freq_radial:.1f}')
+axes[2, 3].axhline(d_fft_noise_floor, color='gray', linestyle=':', linewidth=1.5,
+                   label=f'FFT 舍入噪声地板 ≈{d_fft_noise_floor:.0e}（非信号）')
 axes[2, 3].set_xlabel('空间频率（径向）')
 axes[2, 3].set_ylabel('平均幅度（对数）')
 axes[2, 3].set_title('径向平均频谱\n与衰减因子曲线呼应')
@@ -265,30 +290,33 @@ print("1. 高频扰动（幽灵分量）在图像空间中差异巨大")
 print("2. 但经过正向算子（高斯模糊）后，观测差异极小（本例 ~3e-9 量级）")
 print("3. 在可测频率范围内，频率越高衰减越强，与解析理论曲线吻合")
 print("4. 这正是'不适定性'的本质：问题本身存在'幽灵'方向")
-print("5. 即使零噪声，不引入额外信息也无法唯一确定解")
+print(f"5. 离散算子没有精确零空间（最小奇异值≈{h_min:.1e} > 0），但谱条件数≈{spectral_cond:.1e}")
+print("   即使零噪声，高频方向在浮点精度下也已实际不可分辨；不引入先验等额外信息，恢复无法稳定进行")
 print("="*60)
 
 if _in_jupyter:
-    display(Markdown(r"""
+    display(Markdown(rf"""
 **理论回顾**：
 - **几乎幽灵**（almost-ghost）：两个图像 $x$ 和 $x'$，测量几乎相同但视觉截然不同
 - **根本原因**：差异 $d = x' - x$ 落在 $A$ 的近似零空间中，$\|Ad\| \ll \|d\|$
+- **严格地说**：有限离散网格上奇异值全部为正（最小约 {h_min:.0e}），不存在精确零空间；但谱条件数约 {spectral_cond:.0e}，高频方向在浮点精度下不可分辨
 - **核心结论**：不适定性不是算法的缺陷，而是问题本身的内在性质
 
 **物理直觉**：
 - 高斯模糊在傅里叶域是低通滤波器，高频分量被强烈衰减
 - 高频幽灵分量对应模糊算子的小奇异值方向
-- 算子 $A$ 抹去了幽灵方向上的信息，逆问题无法区分这些方向
+- 算子 $A$ 抹去了幽灵方向上的信息，逆问题无法稳定地区分这些方向
 """))
 else:
     print("\n理论回顾：")
     print("- 几乎幽灵（almost-ghost）：两个图像 x 和 x'，测量几乎相同但视觉截然不同")
     print("- 根本原因：差异 d = x' - x 落在 A 的近似零空间中，‖Ad‖ ≪ ‖d‖")
+    print(f"- 严格地说：奇异值全部为正（最小约 {h_min:.0e}），无精确零空间；但谱条件数约 {spectral_cond:.0e}，高频方向实际不可分辨")
     print("- 核心结论：不适定性不是算法的缺陷，而是问题本身的内在性质")
     print("\n物理直觉：")
     print("- 高斯模糊在傅里叶域是低通滤波器，高频分量被强烈衰减")
     print("- 高频幽灵分量对应模糊算子的小奇异值方向")
-    print("- 算子 A 抹去了幽灵方向上的信息，逆问题无法区分这些方向")
+    print("- 算子 A 抹去了幽灵方向上的信息，逆问题无法稳定地区分这些方向")
 
 # ===== 保存数值结果 =====
 import json
@@ -302,24 +330,13 @@ results_summary = {
     'amplification_factor': float(f"{rel_img_err / rel_meas_err:.6e}"),
     'frequency_attenuation': {str(f): float(f"{a:.6e}") for f, a in zip(frequencies, attenuations)},
     'frequency_attenuation_theory': {str(f): float(f"{attenuation_theory(f):.6e}") for f in frequencies},
-    'operator_inverse_attenuation': {str(f): float(f"{ia:.6e}") if ia != np.inf else 'inf' for f, ia in zip(frequencies, inverse_attenuations)},
+    'operator_inverse_attenuation': {str(f): float(f"{ia:.6e}") for f, ia in zip(frequencies, inverse_attenuations)},
+    # 谱条件数（解析）：最大奇异值 1（DC）/ 最小奇异值（对角 Nyquist 角点，严格为正）
+    'min_singular_value_analytic': float(f"{h_min:.6e}"),
+    'spectral_condition_number_analytic': float(f"{spectral_cond:.6e}"),
     'note': 'f=20 衰减 ~8.5e-16 已接近 float64 噪声地板；更高频率的实测值由数值噪声支配，不可作为物理衰减证据，故扫描止于 f=20',
 }
 
-def _to_native(obj):
-    import numpy as np
-    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
-    if isinstance(obj, (np.integer,)): return int(obj)
-    if isinstance(obj, (np.floating,)): return float(obj)
-    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
-    try:
-        import torch
-        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
-    except: pass
-    return obj
-
-results_summary = {k: _to_native(v) for k, v in results_summary.items()}
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
     json.dump(results_summary, f, ensure_ascii=False, indent=2)
 print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

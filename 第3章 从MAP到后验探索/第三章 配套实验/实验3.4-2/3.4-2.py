@@ -126,21 +126,34 @@ y = forward(x_true) + sigma_noise * np.random.randn(n)
 L_exact = float(np.max(np.abs(H_fft)) ** 2)
 
 # 幂迭代验证（通用方法，适用于任意无法对角化的 A）
+# 注意：高斯模糊传递函数在低频段高度聚簇（次大/最大特征值≈0.998），
+# 幂迭代误差每轮仅按该比值缩小，50 轮远远不够——主估计取 1000 轮，
+# 同时保留 50 轮读数，用于展示"谱聚簇 → 幂迭代收敛慢"这一现象
+n_power_iter = 1000
 np.random.seed(0)
 v_pi = np.random.randn(n)
 v_pi = v_pi / np.linalg.norm(v_pi)
-for _ in range(50):
+L_power_50 = None
+for _it in range(1, n_power_iter + 1):
     w = adjoint(forward(v_pi))
     w_norm = np.linalg.norm(w)
     v_pi = w / w_norm
+    if _it == 50:
+        L_power_50 = float(np.sum(v_pi * adjoint(forward(v_pi))))
 L_power = float(np.sum(v_pi * adjoint(forward(v_pi))))   # Rayleigh 商
+
+# 谱聚簇程度：次大特征值/最大特征值——正是幂迭代的误差收缩因子
+_eigs_ATA = np.sort(np.abs(H_fft) ** 2)
+spec_ratio = float(_eigs_ATA[-2] / _eigs_ATA[-1])
 
 gamma = 0.99 / L_exact       # 步长取 0.99/L_f，略小于收敛上限 1/L_f
 
 print("\n[参数设定]")
 print(f"  信号长度 n={n}（分段常值，含跳变），模糊核 sigma_blur={sigma_blur}，噪声 sigma={sigma_noise}")
 print(f"  L1 权重 lambda={lam}")
-print(f"  L_f: 频域精确值 {L_exact:.6f}，幂迭代估计 {L_power:.6f}（二者应一致）")
+print(f"  L_f: 频域精确值 {L_exact:.6f}，幂迭代估计 {L_power:.6f}（{n_power_iter} 轮，二者应一致）")
+print(f"  （幂迭代 50 轮仅 {L_power_50:.6f}：λ2/λ1={spec_ratio:.4f}，"
+      f"模糊传递函数低频聚簇，幂迭代收敛慢属正常现象）")
 print(f"  步长 gamma = 0.99/L_f = {gamma:.4f}")
 
 # ══════════════════════════════════════════════════════════
@@ -230,15 +243,24 @@ F_star = float(curve_ref[-1])
 
 gap_ista = np.maximum(curve_ista - F_star, 1e-15)   # 数值下限保护
 gap_fista = np.maximum(curve_fista - F_star, 1e-15)
-gap0 = float(curve_ista[0] - F_star)                # 初始偏差基准：第一步后的 F(x_1)-F*（两法共用同一基准）
-print(f"  参考最优值 F* ≈ {F_star:.6f}（FISTA {ref_iter} 次估计）")
-print(f"  初始偏差 F(x0) - F* = {gap0:.4f}")
 
-# 达容差判停：F(x_k) - F* <= tol_rel * (F(x0) - F*)
-# 容差取初始偏差的 2%：既保证 ISTA 在 2000 次内可达（其 O(1/k) 速率较慢），
+# 相对 gap 基准取【首步后】F(x_1)-F*，而非 F(x_0)-F*：
+# x_0=0 时 F(x_0)=0.5*||y||^2，而第一步软阈值即消除约 99% 的初始 gap；
+# 若以 F(x_0) 为基，百分之几的容差在第 1 步就已满足，对两法毫无区分度。
+# ISTA/FISTA 首步完全相同（y_0=x_0），故该基准对两法公平。
+F_x0 = 0.5 * float(np.sum(y ** 2))
+gap_base = float(curve_ista[0] - F_star)           # F(x_1)-F*，停机判停的相对基准
+print(f"  参考最优值 F* ≈ {F_star:.6f}（FISTA {ref_iter} 次估计）")
+print(f"  F(x0)={F_x0:.4f} → F(x1)={curve_ista[0]:.4f}（首步消除 "
+      f"{(1 - gap_base / (F_x0 - F_star)) * 100:.1f}% 的 F(x0)-F*）")
+print(f"  相对 gap 基准取首步后 F(x1)-F* = {gap_base:.4f}"
+      f"（以 F(x0) 为基的百分之几容差首步即满足、无区分度，故不用）")
+
+# 达容差判停：F(x_k) - F* <= tol_rel * (F(x_1) - F*)
+# 容差取首步后偏差的 2%：既保证 ISTA 在 2000 次内可达（其 O(1/k) 速率较慢），
 # 又是足够实际的精度要求；更紧的容差只会放大两者的迭代数差距，不改变结论方向
 tol_rel = 2e-2
-tol_abs = tol_rel * gap0
+tol_abs = tol_rel * gap_base
 
 
 def first_reach(gap, tol):
@@ -261,17 +283,18 @@ def fit_loglog_slope(gap, k_start, k_end):
 
 
 # 斜率拟合窗口（实验确定性种子下固定）：
-# - ISTA 局部斜率直到 k≈1500 才逼近 -1（k=500 处约 -0.6），k=500~2000 为过渡段平均
-# - FISTA 在中前段（k=50~300）局部斜率已达 -2.3~-3.1，全窗口均陡于理论 -2；
-#   k>500 后活跃集逐步固定、问题在支撑集上呈（弱）强凸性，收敛快于 O(1/k^2)
-#   （尾部局部斜率达 -6 量级，见 Beck 10.6 节），拟合窗口取中前段是对 FISTA 最保守的取法
+# - ISTA 局部斜率直到 k≈1500 才逼近 -1（k=500 处约 -0.6），k=500~2000 为过渡段平均，实测 -0.98
+# - FISTA 启动段（k≲100）动量尚未建立，局部斜率仅约 -1.4；k≈100~800 实测 -2.3~-3.0；
+#   k>800 后活跃集逐步固定、问题在支撑集上呈（弱）强凸性，收敛进一步加快
+#   （尾部局部斜率达 -5~-9，见 Beck《First-Order Methods》10.6 节）。
+#   窗口 k=50~300 覆盖了较慢的启动段，是对 FISTA 最保守的取法，平均 -2.24，不慢于理论最坏阶 -2
 slope_ista, fit_rng_ista = fit_loglog_slope(gap_ista, 500, max_iter)
 slope_fista, fit_rng_fista = fit_loglog_slope(gap_fista, 50, 300)
 
-rel_ista = gap_ista[k_ista - 1] / gap0
-rel_fista = gap_fista[k_fista - 1] / gap0
+rel_ista = gap_ista[k_ista - 1] / gap_base
+rel_fista = gap_fista[k_fista - 1] / gap_base
 
-print(f"\n[收敛对比]  容差: F(x_k)-F* <= {tol_rel:.0e}*(F(x0)-F*) = {tol_abs:.3e}")
+print(f"\n[收敛对比]  容差: F(x_k)-F* <= {tol_rel:.0e}*(F(x1)-F*) = {tol_abs:.3e}")
 print(f"  ISTA : 达容差 {k_ista} 次 | 停时相对偏差 {rel_ista:.2e} | "
       f"log-log 斜率 {slope_ista:.3f}（k={fit_rng_ista[0]}~{fit_rng_ista[1]}）")
 print(f"  FISTA: 达容差 {k_fista} 次 | 停时相对偏差 {rel_fista:.2e} | "
@@ -296,18 +319,19 @@ fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
 # ---- 左上：log-log 收敛曲线（主图）----
 k_arr = np.arange(1, max_iter + 1)
-# 参考斜率线：从各自第 100 次迭代锚定，斜率 -1 与 -2
+# 参考斜率线：从各自第 100 次迭代锚定——只用于【示意斜率】，并非理论预测线
+# （理论界 2L||x0-x*||^2/(k+1)^2 含与问题相关的大常数，不与实测曲线重合）
 anchor_ista = gap_ista[99]
 anchor_fista = gap_fista[99]
-ref_1k = anchor_ista * 100 / k_arr            # O(1/k) 参考
-ref_1k2 = anchor_fista * 100 ** 2 / k_arr ** 2  # O(1/k^2) 参考
+ref_1k = anchor_ista * 100 / k_arr            # 斜率 -1 示意
+ref_1k2 = anchor_fista * 100 ** 2 / k_arr ** 2  # 斜率 -2 示意
 
 axes[0, 0].loglog(k_arr, gap_ista, 'b-', linewidth=2, label=r'ISTA: $F(x_k)-F^*$')
 axes[0, 0].loglog(k_arr, gap_fista, 'r-', linewidth=2, label=r'FISTA: $F(x_k)-F^*$')
-axes[0, 0].loglog(k_arr, ref_1k, 'b--', alpha=0.4, label=r'$O(1/k)$ 参考')
-axes[0, 0].loglog(k_arr, ref_1k2, 'r--', alpha=0.4, label=r'$O(1/k^2)$ 参考')
+axes[0, 0].loglog(k_arr, ref_1k, 'b--', alpha=0.4, label=r'斜率 $-1$ 示意（$k=100$ 锚定）')
+axes[0, 0].loglog(k_arr, ref_1k2, 'r--', alpha=0.4, label=r'斜率 $-2$ 示意（$k=100$ 锚定）')
 axes[0, 0].axhline(tol_abs, color='gray', linestyle=':', linewidth=1,
-                   label=f'容差 {tol_rel:.0e}·(F(x0)-F*)')
+                   label=f'容差 {tol_rel:.0e}·$F(x_1)-F^*$')
 axes[0, 0].set_xlabel(r'迭代次数 $k$')
 axes[0, 0].set_ylabel(r'$F(x_k) - F^*$')
 axes[0, 0].set_title(f'收敛曲线 (log-log)：ISTA 实测斜率 {slope_ista:.2f}，'
@@ -326,26 +350,60 @@ axes[0, 1].set_title(r'前 100 次迭代：FISTA 早期领先')
 axes[0, 1].legend(fontsize=10)
 axes[0, 1].grid(True, alpha=0.3)
 
-# ---- 左下：任务示意——真信号与无噪模糊观测 ----
-# 注：LASSO 解因正则偏差与病态反卷积本身含振荡伪影，此处展示任务而非解；
-# 算法收敛质量由左上收敛曲线与"与最优解偏差"度量
+# ---- 左下：直面 LASSO 的 MAP 解本身——真信号 vs 参考解 ----
+# 不回避重建结果：L1 先验偏好"稀疏尖峰"，而真信号稠密分段常值（零分量 0%），
+# 优化器便以"尖刺被模糊抹平成平台"的方式降低 ||x||_1，解含剧烈高频振荡。
+# 这不是算法失败（目标收敛正常，见左上），而是先验-信号失配——正是 3.5 节 TV 先验的动机
 t_axis = np.arange(n)
-y_clean = forward(x_true)
-axes[1, 0].plot(t_axis, x_true, 'k-', linewidth=2, label='真信号 $x_{true}$', alpha=0.7)
-axes[1, 0].plot(t_axis, y_clean, 'g-', linewidth=1.2, label=r'模糊观测 $Ax_{true}$（无噪）')
+
+
+def _tv(z):
+    """全变分 TV(x)=Σ|x_{i+1}-x_i|：分段常值信号应很小，振荡信号很大"""
+    return float(np.sum(np.abs(np.diff(z))))
+
+
+tv_true = _tv(x_true)
+tv_ref = _tv(x_ref)
+err_ref_true = np.linalg.norm(x_ref - x_true) / np.linalg.norm(x_true)
+Ax_ref = forward(x_ref)
+resid = y - Ax_ref
+resid_rms = float(np.sqrt(np.mean(resid ** 2)))
+
+axes[1, 0].plot(t_axis, x_true, 'k-', linewidth=2, label='真信号 $x_{true}$', alpha=0.8)
+axes[1, 0].plot(t_axis, x_ref, 'r-', linewidth=0.7,
+                label=f'LASSO 解 $x^*$（FISTA {ref_iter} 次参考解）')
 axes[1, 0].set_xlabel('样本索引')
 axes[1, 0].set_ylabel('幅值')
-axes[1, 0].set_title('任务：从模糊观测中恢复分段常值信号（去卷积）')
+axes[1, 0].set_title('L1 去卷积的 MAP 解：高频振荡伪影'
+                     f'（TV {tv_true:.1f}→{tv_ref:.1f}，'
+                     f'$\\|x^*-x_{{true}}\\|/\\|x_{{true}}\\|$={err_ref_true:.2f}）')
 axes[1, 0].legend(fontsize=9, loc='upper right')
 axes[1, 0].grid(True, alpha=0.3)
+axes[1, 0].text(0.02, 0.03,
+                '真信号稠密分段常值、并不稀疏；L1 稀疏先验失配 →\n'
+                '“稀疏尖刺被模糊抹平成平台”，振荡是 MAP 解的真实形态（3.5 节 TV 正对此症）',
+                transform=axes[1, 0].transAxes, fontsize=8.5, va='bottom',
+                bbox=dict(boxstyle='round,pad=0.35', fc='white', ec='gray', alpha=0.85))
 
-# ---- 右下：含噪观测 y ----
-axes[1, 1].plot(t_axis, y, 'g-', linewidth=0.8)
+# ---- 右下：观测空间拟合——y 与 Ax*（振荡的 x* 同样解释得好数据：去卷积病态性）----
+axes[1, 1].plot(t_axis, y, color='green', linewidth=0.8, alpha=0.7,
+                label=r'含噪观测 $y$')
+axes[1, 1].plot(t_axis, Ax_ref, 'r--', linewidth=1.0,
+                label=r'$Ax^*$（LASSO 解的正演拟合）')
 axes[1, 1].set_xlabel('样本索引')
-axes[1, 1].set_ylabel('幅值')
-axes[1, 1].set_title(r'含噪模糊观测 $y = Ax_{true} + \eta$'
-                     f'（$\\sigma$={sigma_noise}）')
+axes[1, 1].set_ylabel('观测幅值')
+axes[1, 1].set_title(f'观测空间拟合良好：残差 RMS {resid_rms:.3f}'
+                     f'≈{resid_rms / sigma_noise:.1f}$\\sigma$；'
+                     r'$Ax^*$ 贴合 $y$ 但 $x^*$ 剧烈振荡——去卷积病态性')
 axes[1, 1].grid(True, alpha=0.3)
+ax_resid = axes[1, 1].twinx()
+ax_resid.plot(t_axis, resid, color='darkorange', linewidth=0.6, alpha=0.9,
+              label=r'残差 $y-Ax^*$')
+ax_resid.set_ylabel('残差', color='darkorange')
+ax_resid.tick_params(axis='y', labelcolor='darkorange')
+_h1, _l1 = axes[1, 1].get_legend_handles_labels()
+_h2, _l2 = ax_resid.get_legend_handles_labels()
+axes[1, 1].legend(_h1 + _h2, _l1 + _l2, fontsize=9, loc='upper right')
 
 plt.suptitle(r'实验3.4-2: ISTA vs FISTA 收敛速率对比'
              r'（$\lambda=0.1$, $\gamma=0.99/L_f$, 最大 2000 次）',
@@ -518,20 +576,27 @@ results = {
     'experiment': '实验3.4-2 ISTA 与 FISTA 的收敛速率对比（1D 信号去卷积）',
     'scene': {
         'signal_length': n,
-        'signal_type': '分段常值（随机段长15~40，幅值±0.3~1.0）',
+        'signal_type': '分段常值（随机段长15~40，幅值±0.3~1.0；稠密、非稀疏）',
         'blur_sigma': sigma_blur,
         'noise_sigma': sigma_noise,
         'lambda': lam,
         'L_exact': L_exact,
         'L_power_iteration': L_power,
+        'power_iterations': n_power_iter,
+        'L_power_iteration_50_for_comparison': float(L_power_50),
+        'spectral_ratio_lambda2_lambda1': spec_ratio,
         'gamma': gamma,
         'max_iter': max_iter,
         'ref_iter_for_F_star': ref_iter,
         'tol_relative': tol_rel,
+        'tol_baseline': 'F(x1)-F*（首步后；首步软阈值消除约99%的F(x0)-F*，以F(x0)为基的百分之几容差首步即满足、无区分度）',
+        'F_at_x0': float(F_x0),
+        'F_at_x1': float(curve_ista[0]),
+        'F_star': float(F_star),
         'tol_abs': float(tol_abs),
     },
     'convergence': {
-        'gap0': float(gap0),
+        'gap_baseline_Fx1_minus_Fstar': float(gap_base),
         'k_ista_to_tol': k_ista,
         'k_fista_to_tol': k_fista,
         'speedup_ratio': float(speedup),
@@ -541,10 +606,20 @@ results = {
         'measured_slope_fista': float(slope_fista),
         'slope_fit_range_ista': f'k={fit_rng_ista[0]}~{fit_rng_ista[1]}',
         'slope_fit_range_fista': f'k={fit_rng_fista[0]}~{fit_rng_fista[1]}',
+        'slope_note': 'FISTA 启动段(k≲100)约-1.4，k≈100~800 为-2.3~-3.0；'
+                      'k>800 活跃集固定、支撑集(弱)强凸，尾部-5~-9；'
+                      '50~300 平均-2.24 是覆盖启动段的保守读数',
     },
     'reconstruction': {
         'dist_to_opt_ista': float(err_ista),
         'dist_to_opt_fista': float(err_fista),
+        'dist_ref_to_true': float(err_ref_true),
+        'TV_true': float(tv_true),
+        'TV_ref': float(tv_ref),
+        'residual_rms': resid_rms,
+        'residual_rms_over_sigma': float(resid_rms / sigma_noise),
+        'note': 'L1先验与稠密分段常值真信号失配：MAP解含高频振荡、TV远大于真信号，'
+                '但观测空间残差仅约2σ；属先验失配而非算法失败（见3.5节TV先验）',
     },
     'output_files': [out_path1, out_path2],
 }
@@ -557,13 +632,16 @@ print("【核心结论】")
 print("=" * 60)
 print("1. ISTA 每步 = 梯度步（沿光滑数据项下降）+ 近端步（软阈值施加稀疏性）")
 print("2. FISTA 在 ISTA 基础上加 Nesterov 外推动量，每步只多一次向量加法")
-print(f"3. 达到容差 F(x_k)-F* <= {tol_rel:.0e}*(F(x0)-F*) 所需迭代："
-      f"ISTA {k_ista} 次 vs FISTA {k_fista} 次，加速 {speedup:.2f} 倍")
+print(f"3. 达到容差 F(x_k)-F* <= {tol_rel:.0e}*(F(x1)-F*) 所需迭代："
+      f"ISTA {k_ista} 次 vs FISTA {k_fista} 次，加速 {speedup:.2f} 倍"
+      f"（基准为首步后；以 F(x0) 为基两法均首步达标、无区分度）")
 print(f"4. log-log 斜率：ISTA {slope_ista:.3f} ≈ -1（O(1/k)）；FISTA {slope_fista:.3f}，"
-      f"不慢于理论 -2（O(1/k^2) 为最坏情形上界，该问题上中段略陡，"
-      f"k>500 后活跃集固定、收敛进一步加快）")
+      f"不慢于理论最坏阶 -2（启动段 k≲100 约 -1.4，k≈100~800 为 -2.3~-3.0，"
+      f"k>800 活跃集固定后进一步加快；O(1/k^2) 是最坏情形上界）")
 print(f"5. 2000 次迭代后与最优解的偏差：ISTA {err_ista:.4f}，FISTA {err_fista:.4f}"
       f"（解同一问题最优解相同，FISTA 快得多）")
+print(f"6. 但 LASSO 解与真信号偏差 {err_ref_true:.2f}、TV {tv_true:.1f}→{tv_ref:.1f}："
+      f"L1 与稠密分段常值信号失配，振荡伪影是 MAP 解的真实形态（动机见 3.5 节 TV）")
 print(f"\n实验完成。结果已保存至: {SAVE_DIR}")
 print("  - 步骤1_ISTA_vs_FISTA收敛对比.png")
 print("  - 步骤2_梯度步近端步迭代轨迹.png")

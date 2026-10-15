@@ -176,26 +176,71 @@ x_true = resize(shepp_logan_phantom(), (n, n), order=1,
 sigma = 0.15
 y = x_true + sigma * np.random.randn(n, n)
 
-lam_tv = 0.15
-lam_tikh = 0.5  # 接近 H1 自身 PSNR 最优 λ（扫描 argmax≈0.55，0.5 与之差<0.02dB），对比基线公平
+# ---- 正则化参数选择：两种方法严格同口径 ----
+# 在同一张含噪图上按 PSNR 对 λ 扫描、各自取 argmax，对比的是
+# "TV 与 H1 各自在最优正则强度下的表现"，避免单方调参、另一方不调的不公平。
+# 注意：用真解 PSNR 选 λ 属于 oracle 选参，仅用于教学演示（两种方法口径完全
+#       一致）；实际应用应在独立的验证图像/噪声实现上选 λ（差异原理、SURE 等）。
+SCAN_ITERS_TV = 300   # 选参扫描步数；argmax 对步数不敏感（300→1000 步结论不变）
+lam_tv_grid = np.round(np.arange(0.05, 0.251, 0.01), 2)
+lam_h1_grid = np.round(np.arange(0.10, 1.501, 0.05), 2)
+
+psnr_tv_curve, psnr_h1_curve = {}, {}
+print(f"\n[正则化参数选择] 同一含噪图上按 PSNR 扫描择优"
+      f"（TV 每个 λ 跑 {SCAN_ITERS_TV} 步，共 {len(lam_tv_grid)} 个 λ）...")
+for L in lam_tv_grid:
+    xi = chambolle_pock_tv_denoise(y, float(L), maxiter=SCAN_ITERS_TV)
+    psnr_tv_curve[float(L)] = round(float(peak_signal_noise_ratio(
+        x_true, np.clip(xi, None, 1))), 3)
+for L in lam_h1_grid:
+    xi = h1_tikhonov_denoise(y, float(L))
+    psnr_h1_curve[float(L)] = round(float(peak_signal_noise_ratio(
+        x_true, np.clip(xi, 0, 1))), 3)
+lam_tv = float(max(psnr_tv_curve, key=psnr_tv_curve.get))
+lam_tikh = float(max(psnr_h1_curve, key=psnr_h1_curve.get))
+print(f"  TV : λ* = {lam_tv:.2f}, PSNR = {psnr_tv_curve[lam_tv]:.2f} dB "
+      f"（扫描区间 {lam_tv_grid[0]:.2f}–{lam_tv_grid[-1]:.2f}）")
+print(f"  H1: λ* = {lam_tikh:.2f}, PSNR = {psnr_h1_curve[lam_tikh]:.2f} dB "
+      f"（扫描区间 {lam_h1_grid[0]:.2f}–{lam_h1_grid[-1]:.2f}）")
 
 print(f"\n[参数设定]")
 print(f"  图像尺寸: {n} x {n}")
 print(f"  噪声标准差: σ = {sigma}")
-print(f"  TV 正则化参数: λ_tv = {lam_tv}")
-print(f"  H1-Tikhonov 正则化参数: λ_tikh = {lam_tikh}")
+print(f"  TV 正则化参数: λ_tv = {lam_tv:.2f}（PSNR 扫描择优）")
+print(f"  H1-Tikhonov 正则化参数: λ_tikh = {lam_tikh:.2f}（PSNR 扫描择优）")
 print(f"  Chambolle-Pock 最大迭代: 500")
 print(f"  步长: L2 = 8.0, σ = τ = 1/√(L2) ≈ {1.0/np.sqrt(8.0):.3f}")
 
 # ---- TV去噪 ----
 print(f"\n[运行 Chambolle-Pock TV去噪...]")
 x_tv = chambolle_pock_tv_denoise(y, lam_tv, maxiter=500)
-print(f"  完成")
+# 收敛性核验：以 2000 步解为参考，确认 500 步已充分收敛
+x_tv_ref = chambolle_pock_tv_denoise(y, lam_tv, maxiter=2000)
+tv_rel_change = float(np.linalg.norm(x_tv - x_tv_ref)
+                     / max(np.linalg.norm(x_tv_ref), 1e-12))
+print(f"  完成（500 步 vs 2000 步参考解: 相对变化 {tv_rel_change:.2e}）")
 
 # ---- H1-Tikhonov去噪（DFT域） ----
 print(f"\n[运行 H1-Tikhonov去噪 (DFT域闭式解)...]")
 x_tikh = h1_tikhonov_denoise(y, lam_tikh)
 print(f"  完成")
+
+# ---- 定量指标（绘图前先算，供标题/JSON 统一引用，避免两处口径漂移） ----
+psnr_noisy = peak_signal_noise_ratio(x_true, y)
+psnr_tikh = peak_signal_noise_ratio(x_true, np.clip(x_tikh, 0, 1))
+psnr_tv = peak_signal_noise_ratio(x_true, np.clip(x_tv, None, 1))
+psnr_tv_ref = peak_signal_noise_ratio(x_true, np.clip(x_tv_ref, None, 1))
+
+# 差异图"边缘集中"的定量验证：用真解梯度幅值划分边缘带与平坦区
+_gx, _gy = np.gradient(x_true)
+_eg = np.sqrt(_gx**2 + _gy**2)
+_thr = np.quantile(_eg[_eg > 1e-6], 0.90)
+_edge_mask = _eg > max(_thr, 0.02)
+_flat_mask = _eg < 0.005
+_diff_map = np.abs(x_tv - x_tikh)
+diff_edge = float(_diff_map[_edge_mask].mean())
+diff_flat = float(_diff_map[_flat_mask].mean())
+diff_edge_to_flat_ratio = diff_edge / diff_flat
 
 # ══════════════════════════════════════════════════════════
 # 5. 可视化
@@ -211,20 +256,20 @@ axes[1].set_title(r'含噪 ($\sigma=' + str(sigma) + r'$)', fontsize=11)
 
 axes[2].imshow(x_tikh, cmap='gray')
 axes[2].set_title(
-    r'H1-Tikhonov去噪 ($\lambda=' + str(lam_tikh) + r'$)'
-    + '\n' + r'(均匀平滑，边缘模糊)',
+    f'H1-Tikhonov去噪 ($\\lambda={lam_tikh:.2f}$)'
+    '\n(均匀平滑，边缘模糊)',
     fontsize=11)
 
 axes[3].imshow(x_tv, cmap='gray')
 axes[3].set_title(
-    r'TV去噪 ($\lambda=' + str(lam_tv) + r'$)'
-    + '\n' + r'(保边缘，分段光滑)',
+    f'TV去噪 ($\\lambda={lam_tv:.2f}$)'
+    '\n(保边缘，分段光滑)',
     fontsize=11)
 
-diff = np.abs(x_tv - x_tikh)
-axes[4].imshow(diff, cmap='hot', vmin=0, vmax=0.1)
+axes[4].imshow(_diff_map, cmap='hot', vmin=0, vmax=0.1)
 axes[4].set_title(r'差异 $|\mathrm{TV} - \mathrm{Tikhonov}|$'
-                  + '\n' + r'(边缘带略高 1.25×，整体弥散)', fontsize=11)
+                  f'\n(边缘带/平坦区 ≈ {diff_edge_to_flat_ratio:.2f}×，整体仍弥散)',
+                  fontsize=11)
 
 for ax in axes:
     ax.axis('off')
@@ -239,24 +284,14 @@ plt.close()
 # 6. 结果输出
 # ══════════════════════════════════════════════════════════
 
-# 差异图"边缘集中"的定量验证：用真解梯度幅值划分边缘带与平坦区
-_gx, _gy = np.gradient(x_true)
-_eg = np.sqrt(_gx**2 + _gy**2)
-_thr = np.quantile(_eg[_eg > 1e-6], 0.90)
-_edge_mask = _eg > max(_thr, 0.02)
-_flat_mask = _eg < 0.005
-_diff_map = np.abs(x_tv - x_tikh)
-diff_edge = _diff_map[_edge_mask].mean()
-diff_flat = _diff_map[_flat_mask].mean()
-
-psnr_noisy = peak_signal_noise_ratio(x_true, y)
-psnr_tikh = peak_signal_noise_ratio(x_true, np.clip(x_tikh, 0, 1))
-psnr_tv = peak_signal_noise_ratio(x_true, np.clip(x_tv, None, 1))  # x_tv已保证非负，只需clip上界
+# psnr_*、diff_edge/flat 等指标已在第 4 节绘图前统一计算，避免两处口径漂移
 
 print(f"\n[PSNR 对比]")
 print(f"  含噪图像:      {psnr_noisy:.2f} dB")
 print(f"  H1-Tikhonov:   {psnr_tikh:.2f} dB")
-print(f"  TV (Chambolle-Pock): {psnr_tv:.2f} dB")
+print(f"  TV (Chambolle-Pock, 500步): {psnr_tv:.2f} dB")
+print(f"    └ 2000步参考解: {psnr_tv_ref:.2f} dB，500步差距 {psnr_tv - psnr_tv_ref:+.3f} dB，"
+      f"相对解变化 {tv_rel_change:.1e}（500 步已充分收敛）")
 
 print(f"\n[算法机制]")
 print(f"  Chambolle-Pock 三步迭代:")
@@ -267,16 +302,16 @@ print(f"        f = 0.5‖x-y‖² → x^{{k+1}} = (x^k + τ D^T p^{{k+1}} + τ 
 print(f"    (3) 外推步: x_bar^{{k+1}} = 2x^{{k+1}} - x^k")
 
 print(f"\n[H1-Tikhonov vs TV 对比]")
-print(f"  H1-Tikhonov (λ={lam_tikh}):")
+print(f"  H1-Tikhonov (λ={lam_tikh:.2f}):")
 print(f"    - 正则项: (λ/2)‖Dx‖₂² → 惩罚梯度的 L2 范数")
 print(f"    - 特点: 均匀平滑，边缘模糊")
 print(f"    - 求解: DFT 域闭式解（O(n log n)）")
-print(f"  TV (λ={lam_tv}):")
-print(f"    - 正则项: λ‖Dx‖_{2,1} → 惩罚梯度的 L1 范数")
+print(f"  TV (λ={lam_tv:.2f}):")
+print(f"    - 正则项: λ‖Dx‖_{{2,1}} → 惩罚梯度的 L1 范数")
 print(f"    - 特点: 保边缘，分段光滑（允许跳变）")
 print(f"    - 求解: Chambolle-Pock 迭代（O(n) 每步）")
 print(f"  差异图定量: 边缘带 mean|diff| = {diff_edge:.4f}, 平坦区 mean|diff| = {diff_flat:.4f}, "
-      f"比值 = {diff_edge / diff_flat:.2f}x")
+      f"比值 = {diff_edge_to_flat_ratio:.2f}x")
 print(f"  最强差异出现在边缘处，但平坦区差异并不为零（H1 保留平滑噪声纹理、TV 呈分段常数），")
 print(f"  验证 TV 保边性的同时说明差异图并非完全'集中'于边缘")
 
@@ -300,14 +335,24 @@ import json
 results_summary = {
     'n': n,
     'sigma': float(round(sigma, 2)),
+    'random_seed': 42,
     'lam_tv': float(round(lam_tv, 4)),
     'lam_tikh': float(round(lam_tikh, 4)),
+    'lam_selection': ('PSNR argmax on the same noisy image (oracle), identical '
+                      'protocol for TV and H1; for real use select lambda on '
+                      'independent data (discrepancy principle, SURE, CV)'),
+    'lam_tv_scan_iters': SCAN_ITERS_TV,
+    'lam_tv_scan_psnr': psnr_tv_curve,
+    'lam_tikh_scan_psnr': psnr_h1_curve,
     'psnr_noisy': float(round(psnr_noisy, 2)),
     'psnr_tikh': float(round(psnr_tikh, 2)),
     'psnr_tv': float(round(psnr_tv, 2)),
+    'psnr_tv_500_iter': float(round(psnr_tv, 2)),
+    'psnr_tv_2000_iter': float(round(psnr_tv_ref, 2)),
+    'tv_rel_change_500_vs_2000': float(round(tv_rel_change, 6)),
     'diff_edge_mean': float(round(diff_edge, 4)),
     'diff_flat_mean': float(round(diff_flat, 4)),
-    'diff_edge_to_flat_ratio': float(round(diff_edge / diff_flat, 2)),
+    'diff_edge_to_flat_ratio': float(round(diff_edge_to_flat_ratio, 2)),
 }
 
 def _to_native(obj):

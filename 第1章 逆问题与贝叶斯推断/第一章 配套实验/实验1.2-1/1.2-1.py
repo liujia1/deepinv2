@@ -27,19 +27,29 @@ n = x.shape[0]
 
 # ---- 2. 构建高斯 PSF 和模糊算子 ----
 def gaussian_psf(size, sigma, radius):
-    """生成截断高斯 PSF，并按循环卷积约定放在数组原点 (0,0)。
+    """生成截断高斯 PSF，并按循环卷积约定把峰放在数组原点 (0,0)。
+
+    放置方式：先把核居中铺到全尺寸网格，再用 ifftshift 平移，使核峰严格位于
+    (0,0)——正偏移落在索引 1..radius，负偏移折叠到数组末尾 size-radius..size-1。
+    切勿直接 h[:s, :s] = k：那样峰实际落在 (radius, radius)，模糊结果会整体
+    平移 radius 个像素并产生错位的边界绕回（频域 |H| 与同核反演精度不受影响，
+    所以该错误此前被"正向-逆向同核"掩盖了）。
 
     注意：核必须截断到有限支撑（此处 radius=3σ），不能铺满整个 512×512 网格。
-    若在整个网格上按高斯取值，|H(k)| 的动态范围会一路衰减到 1e-160 并下溢为 0，
-    使绝大多数频点落入"数值阻带"（Y 被浮点舍入误差支配），即便无噪声也谈不上精确可逆。
+    若按周期方式铺满整网格高斯，其传递函数极端光滑：空间域尾部在约 37σ 外
+    下溢为 0，FFT 又因大数对消/舍入再损失约 15 位有效数字。实测 |H(k)| 最小
+    非零值约 1.6e-160，并出现 20 个精确零频点（除法直接 0/0），约 78% 的频点
+    |H(k)| < 1e-15、被浮点舍入误差支配，即便无噪声也谈不上精确可逆。
     """
     s = 2 * radius + 1
     ax = np.arange(-radius, radius + 1)
     xx, yy = np.meshgrid(ax, ax)
     k = np.exp(-(xx ** 2 + yy ** 2) / (2 * sigma ** 2))
     k = k / k.sum()
-    h = np.zeros((size, size))
-    h[:s, :s] = k          # 峰在 (0,0)；数组末尾对应负偏移，符合 DFT 循环卷积约定
+    k_padded = np.zeros((size, size))
+    c = size // 2
+    k_padded[c - radius:c + radius + 1, c - radius:c + radius + 1] = k
+    h = np.fft.ifftshift(k_padded)   # 峰严格位于 (0,0)，符合 DFT 循环卷积约定
     return h
 
 def blur_operator(x, h):
@@ -154,6 +164,11 @@ import json
 # 相对误差保留足够位数：无噪声情形是机器精度量级（~1e-8），round(...,6) 会被压成 0
 _rel_clean = float(np.linalg.norm(x_deconv_clean - x) / np.linalg.norm(x))
 _rel_noisy = float(np.linalg.norm(np.clip(x_deconv_noisy, 0, 1) - x) / np.linalg.norm(x))
+# 未裁剪量：图中为可读性裁剪到 [0,1]，但 1/H(k) 的真实放大倍数只能从未裁剪结果读出
+# （相对误差 ~1.3e6、std ~7e5、峰值 ~±2.7e6），必须与裁剪后指标一并存档
+_rel_noisy_raw = float(np.linalg.norm(x_deconv_noisy - x) / np.linalg.norm(x))
+_std_noisy_raw = float(x_deconv_noisy.std())
+_peak_abs_noisy_raw = float(np.abs(x_deconv_noisy).max())
 
 def _psnr(img):
     mse = float(np.mean((np.clip(img, 0, 1) - x) ** 2))
@@ -171,6 +186,10 @@ results_summary = {
     'psnr_clean_db': _psnr(x_deconv_clean),
     'reconstruction_error_noisy': _rel_noisy,
     'psnr_noisy_db': _psnr(x_deconv_noisy),
+    # 以下为未裁剪结果（图中裁剪仅为显示需要）：这三个量才是 1/H(k) 放大的真实量级
+    'reconstruction_error_noisy_unclipped': _rel_noisy_raw,
+    'reconstruction_std_noisy_unclipped': _std_noisy_raw,
+    'reconstruction_peak_abs_noisy_unclipped': _peak_abs_noisy_raw,
 }
 
 def _to_native(obj):

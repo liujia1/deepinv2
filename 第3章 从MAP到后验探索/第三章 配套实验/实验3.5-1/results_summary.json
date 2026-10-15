@@ -41,8 +41,51 @@
     6.0
   ],
   "gap_lbfgs_minus_ref": 0.008184,
-  "t_grid": 0.392,
-  "t_rand": 0.665,
-  "t_opt": 0.022305,
-  "t_ref": 0.038
+  "t_grid": 0.2,
+  "t_rand": 0.231,
+  "t_opt": 0.027606,
+  "t_ref": 0.034,
+  "rank_A": 3,
+  "f_target": 10.0,
+  "admm_iters": 1002,
+  "admm_primal_res": 0.0,
+  "admm_dual_res": 0.0,
+  "optimality_certificate": {
+    "subgrad_coef_sh": [
+      -0.5,
+      -0.5
+    ],
+    "lstsq_residual": 2.465190328815662e-32,
+    "zero_in_subdifferential": true
+  },
+  "lbfgsb_multistart": {
+    "默认容差": {
+      "n_starts": 20,
+      "f_min": 8.250003,
+      "f_median": 8.267448,
+      "f_max": 8.338324,
+      "reach_Fstar_rate": 0.0,
+      "termination": {
+        "CONVERGENCE": 20
+      }
+    },
+    "紧容差": {
+      "n_starts": 20,
+      "f_min": 8.25,
+      "f_median": 8.25,
+      "f_max": 8.279073,
+      "reach_Fstar_rate": 0.55,
+      "termination": {
+        "CONVERGENCE": 15,
+        "ABNORMAL": 4,
+        "STOP": 1
+      }
+    }
+  },
+  "rmse_vs_target": {
+    "grid": 0.440959,
+    "random": 0.602678,
+    "lbfgsb": 0.626798,
+    "admm_ref": 0.612372
+  }
 }

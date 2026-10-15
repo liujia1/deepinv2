@@ -2,6 +2,10 @@
   "image_size": 128,
   "num_projection_angles": 90,
   "num_projection_angles_sparse": 30,
-  "rmse_fbp": 0.055378,
-  "psnr_fbp_dB": 25.13
+  "rmse_fbp": 0.032349,
+  "psnr_fbp_dB": 29.8,
+  "rmse_fbp_clipped": 0.031952,
+  "psnr_fbp_clipped_dB": 29.91,
+  "negative_pixel_fraction_raw": 0.1573,
+  "metric_note": "rmse_fbp/psnr_fbp_dB 基于 iradon 原始输出（含振铃负值）；_clipped 为截断[0,1]后的显示口径"
 }

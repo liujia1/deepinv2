@@ -2,20 +2,27 @@
   "experiment": "实验3.4-2 ISTA 与 FISTA 的收敛速率对比（1D 信号去卷积）",
   "scene": {
     "signal_length": 256,
-    "signal_type": "分段常值（随机段长15~40，幅值±0.3~1.0）",
+    "signal_type": "分段常值（随机段长15~40，幅值±0.3~1.0；稠密、非稀疏）",
     "blur_sigma": 2.0,
     "noise_sigma": 0.05,
     "lambda": 0.1,
     "L_exact": 1.0,
-    "L_power_iteration": 0.9897594646799062,
+    "L_power_iteration": 0.9999458586919227,
+    "power_iterations": 1000,
+    "L_power_iteration_50_for_comparison": 0.9897594646799062,
+    "spectral_ratio_lambda2_lambda1": 0.9975933292998781,
     "gamma": 0.99,
     "max_iter": 2000,
     "ref_iter_for_F_star": 20000,
     "tol_relative": 0.02,
+    "tol_baseline": "F(x1)-F*（首步后；首步软阈值消除约99%的F(x0)-F*，以F(x0)为基的百分之几容差首步即满足、无区分度）",
+    "F_at_x0": 51.83520723891882,
+    "F_at_x1": 14.745949254214107,
+    "F_star": 14.266143568618881,
     "tol_abs": 0.009596113711904514
   },
   "convergence": {
-    "gap0": 0.47980568559522574,
+    "gap_baseline_Fx1_minus_Fstar": 0.47980568559522574,
     "k_ista_to_tol": 1230,
     "k_fista_to_tol": 94,
     "speedup_ratio": 13.085106382978724,
@@ -24,11 +31,18 @@
     "measured_slope_ista": -0.9815819935242219,
     "measured_slope_fista": -2.2357311205549752,
     "slope_fit_range_ista": "k=500~2000",
-    "slope_fit_range_fista": "k=50~300"
+    "slope_fit_range_fista": "k=50~300",
+    "slope_note": "FISTA 启动段(k≲100)约-1.4，k≈100~800 为-2.3~-3.0；k>800 活跃集固定、支撑集(弱)强凸，尾部-5~-9；50~300 平均-2.24 是覆盖启动段的保守读数"
   },
   "reconstruction": {
     "dist_to_opt_ista": 0.5054771546605793,
-    "dist_to_opt_fista": 0.01844154258637924
+    "dist_to_opt_fista": 0.01844154258637924,
+    "dist_ref_to_true": 1.187983493005252,
+    "TV_true": 5.966355363416618,
+    "TV_ref": 197.4590214552215,
+    "residual_rms": 0.10834659164112813,
+    "residual_rms_over_sigma": 2.1669318328225624,
+    "note": "L1先验与稠密分段常值真信号失配：MAP解含高频振荡、TV远大于真信号，但观测空间残差仅约2σ；属先验失配而非算法失败（见3.5节TV先验）"
   },
   "output_files": [
     "D:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.4-2\\步骤1_ISTA_vs_FISTA收敛对比.png",

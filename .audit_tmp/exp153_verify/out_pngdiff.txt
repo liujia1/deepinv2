@@ -1,0 +1,8 @@
+﻿OLD(褰掓。) size=181025  chunks=['IHDR', 'tEXt', 'pHYs', 'IDAT', 'IDAT', 'IDAT', 'IEND']
+   tEXt: b'Software\x00Matplotlib version3.10.9, https://matplotlib.org/'
+NEW(閲嶈窇) size=181062  chunks=['IHDR', 'tEXt', 'pHYs', 'IDAT', 'IDAT', 'IDAT', 'IEND']
+   tEXt: b'Software\x00Matplotlib version3.10.9, https://matplotlib.org/'
+CHUNK 宸紓: IDAT (old len=49781 new len=49818)
+shape old=(740, 2085, 3) new=(740, 2085, 3)
+鍍忕礌涓嶅悓鐨勭偣鏁?= 147 / 1542900  (0.0095%)  鏈€澶ч€氶亾宸?= 255
+  宸紓鍒嗗竷: y[20..39] x[769..780]
