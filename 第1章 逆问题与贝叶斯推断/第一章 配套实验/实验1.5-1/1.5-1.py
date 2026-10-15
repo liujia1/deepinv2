@@ -14,6 +14,9 @@
   - 绘制随数据量 {0,2,10,50,500} 演化的后验密度曲线，观察移动与收拢
   - 附加 4 万次蒙特卡洛重演：把"种子 42 这一次抽样的运气"量化下来（正文里那几个
     重演数字必须能从本脚本复现，不能只写在正文里）
+  - 重演同时给出后验均值抽样分布的三个尺度（偏差 O(1/n)、波动 O(1/sqrt(n))、
+    "位于真值上方"的概率不消失而趋于 0.5）与 95% 可信区间对真值的覆盖率，
+    防止把"均值路径非单调"误读成"这种现象会随 n 按 1/n 消失"
   - 图为双面板：左为完整密度轴（看收拢），右为局部放大（看小样本时曲线如何从
     平坦先验慢慢"鼓"起来——线性轴上这一差别只有约 10 个像素，单面板看不见）
 
@@ -91,9 +94,9 @@ for n in n_flips_list:
                     'prior_weight': (a + b) / (a + b + n)})
     print(f"{n:>10} | {heads:>6} / {tails:<6} | {mean:>12.4f} | {var:>12.6f}")
 
-print(f"\n观察：数据从 0 增到 {N_MAX}，后验均值从先验均值 {prior_mean:.4f} 收敛到 "
-      f"{results[-1]['mean']:.4f}（真值 {theta_true}），方差收缩 "
-      f"{results[0]['var'] / results[-1]['var']:.0f} 倍。")
+print(f"\n观察：数据从 0 增到 {N_MAX}，后验均值从先验均值 {prior_mean:.4f} 移动到 "
+      f"{results[-1]['mean']:.4f}（落在真值 {theta_true} 附近；有限样本下它是随机量而非极限值），"
+      f"方差收缩 {results[0]['var'] / results[-1]['var']:.0f} 倍。")
 print("      均值是否逐级上升取决于这一次抽样的运气（见下方重演）；方差才是稳定收缩的量。")
 
 # ---- 画图：随着数据增多，后验从又宽又平 -> 又尖又锁定在 0.7 ----
@@ -141,7 +144,8 @@ mc_rng = np.random.default_rng(MC_SEED)
 mc_flips = mc_rng.random((N_MC, N_MAX)) < theta_true
 
 mc_replay = {'n_replays': N_MC, 'mc_seed': MC_SEED, 'by_n': []}
-print(f"{'数据量 n':>10} | {'均值中位数':>12} | {'P(均值=先验)':>14} | {'解析值':>10} | {'P(均值>真值)':>13}")
+print(f"{'数据量 n':>8} | {'均值中位数':>10} | {'P(=先验) MC':>11} | {'解析':>8} | "
+      f"{'P(>真值) MC':>11} | {'解析':>8}")
 print("-" * 70)
 for n in n_flips_list[1:]:
     h = mc_flips[:, :n].sum(1)
@@ -150,12 +154,38 @@ for n in n_flips_list[1:]:
     # 均值回到先验均值 0.5 等价于正面数恰为 n/2，这是解析可得的量，不必靠重演估
     p_eq_exact = float(binom.pmf(n // 2, n, theta_true)) if n % 2 == 0 else 0.0
     p_gt = float(np.mean(m > theta_true))
+    # P(均值>真值) 同样有解析值：(a+h)/(a+b+n) > θ 等价于 h > θ(a+b+n) - a（h 为整数）
+    h_min = int(np.floor(theta_true * (a + b + n) - a)) + 1
+    p_gt_exact = float(binom.sf(h_min - 1, n, theta_true))
+    # 把后验均值视为随机量（H~Binom(n,θ)）：先验导致的系统偏差 O(1/n)，抽样波动 O(1/sqrt(n))
+    mean_exp = (a + n * theta_true) / (a + b + n)
+    bias_exact = mean_exp - theta_true
+    sd_exact = float(np.sqrt(n * theta_true * (1.0 - theta_true))) / (a + b + n)
     med = float(np.median(m))
     mc_replay['by_n'].append({'n': n, 'median_mean': med,
                               'prob_mean_equals_prior': p_eq,
                               'prob_mean_equals_prior_exact': p_eq_exact,
-                              'prob_mean_exceeds_true': p_gt})
-    print(f"{n:>10} | {med:>12.4f} | {p_eq:>14.4f} | {p_eq_exact:>10.4f} | {p_gt:>13.4f}")
+                              'prob_mean_exceeds_true': p_gt,
+                              'prob_mean_exceeds_true_exact': p_gt_exact,
+                              'mc_mean_of_posterior_mean': float(np.mean(m)),
+                              'mean_expectation_exact': float(mean_exp),
+                              'mean_bias_exact': float(bias_exact),
+                              'mc_sd_of_posterior_mean': float(np.std(m)),
+                              'mean_sd_exact': sd_exact})
+    print(f"{n:>8} | {med:>10.4f} | {p_eq:>11.4f} | {p_eq_exact:>8.4f} | "
+          f"{p_gt:>11.4f} | {p_gt_exact:>8.4f}")
+
+# 偏差/波动两个尺度：解析值与 MC 实测对照（结论第 5 条引用的数字出自这里）
+print(f"\n后验均值的抽样尺度（H~Binom(n,θ) 下的精确分布；MC 值用于交叉验证）：")
+print(f"{'数据量 n':>8} | {'MC 均值':>9} | {'理论期望':>9} | {'偏差(精确)':>11} | "
+      f"{'MC 标准差':>10} | {'理论标准差':>10}")
+print("-" * 72)
+for _r in mc_replay['by_n']:
+    print(f"{_r['n']:>8} | {_r['mc_mean_of_posterior_mean']:>9.4f} | "
+          f"{_r['mean_expectation_exact']:>9.4f} | {_r['mean_bias_exact']:>+11.5f} | "
+          f"{_r['mc_sd_of_posterior_mean']:>10.4f} | {_r['mean_sd_exact']:>10.4f}")
+print("偏差 (1-2θ)/(2+n) 按 1/n 消退；波动 sqrt(nθ(1-θ))/(2+n) 按 1/sqrt(n) 收拢；")
+print("但上表 P(均值>真值) 随 n 趋于 0.5——穿越不消失，只是摆幅越来越小。")
 
 # 均值路径的随机性：非单调、以及"冲过真值再回落"有多常见
 ms_ck = np.stack([(a + mc_flips[:, :n].sum(1)) / (a + b + n) for n in n_flips_list], 1)
@@ -200,6 +230,26 @@ mc_replay['variance_monotonicity'] = {
     'prob_stepwise_increase_somewhere': p_stepwise_inc,
     'stepwise_counterexample': {'Beta(1,3)_var': v_tt, 'Beta(2,3)_var': v_tth},
 }
+
+# 95% 后验可信区间的频率覆盖率：检验"收拢"是否锁对了地方
+# （区间变窄本身不说明问题，覆盖率达到名义水平才意味着不确定性被正确量化）
+CI_LEVEL = 0.95
+ci_records = []
+print(f"\n{CI_LEVEL:.0%} 后验可信区间对真值 {theta_true} 的覆盖率（{N_MC} 条路径）：")
+print(f"{'数据量 n':>8} | {'覆盖率':>8} | {'名义水平':>8}")
+print("-" * 32)
+for n in n_flips_list[1:]:
+    _h = mc_flips[:, :n].sum(1)
+    _lo = beta.ppf((1 - CI_LEVEL) / 2, a + _h, b + n - _h)
+    _hi = beta.ppf(1 - (1 - CI_LEVEL) / 2, a + _h, b + n - _h)
+    cov = float(np.mean((_lo <= theta_true) & (theta_true <= _hi)))
+    ci_records.append({'n': n, 'nominal_level': CI_LEVEL, 'coverage': cov})
+    print(f"{n:>8} | {cov:>8.4f} | {CI_LEVEL:>8.2f}")
+print("小 n 明显偏离名义水平（n=2 为 100% 超覆盖、n=10 为 92.4% 欠覆盖）：区间族随观测")
+print("计数整数值跳变（格子效应）；n>=50 起偏差缩到 0.7 个百分点以内，随 n 振荡着趋近 95%。")
+print("覆盖率达标后，'后验越收越窄'才等价于'真值被锁定在越来越小的区间里'。")
+mc_replay['credible_interval'] = ci_records
+
 # 种子 42 这一次"均值停在 0.5"的解析概率（对应正文的"运气"说法）
 p_seed42 = {
     'P_first2_exactly_1_head': float(binom.pmf(1, 2, theta_true)),
@@ -218,8 +268,12 @@ print("1. Beta 先验 + 伯努利似然 -> Beta 后验（共轭），更新只�
 print("2. 数据越多，后验越窄、越锁向真实值 0.7；最初的均匀先验（Beta(1,1)）不再起作用")
 print("3. 这与 1.5 节'世界人口估计（Poisson-Gamma 共轭）'是同一个故事：先验被数据稀释")
 print("4. 这就是贝叶斯'信念更新'的全部精髓：数据按量级逐步稀释先验的话语权，并收拢不确定性")
-print("5. 但均值走的路径并不单调：小样本时先验权重 2/(2+n) 还很大，均值可能停在先验附近")
-print("   甚至冲过真值再回落——这是抽样的固有随机性（见上方重演），随 n 增大按 1/n 消失")
+_p_gt_max = next(_r['prob_mean_exceeds_true_exact'] for _r in mc_replay['by_n'] if _r['n'] == N_MAX)
+print("5. 但均值走的路径并不单调：小样本时先验权重 2/(2+n) 还很大，均值可能停在先验附近、")
+print("   甚至冲过真值再回落——这是抽样的固有随机性（见上方重演），要分三个尺度看：")
+print("   先验造成的偏差 (1-2θ)/(2+n) 按 1/n 消退，波动幅度 sqrt(nθ(1-θ))/(2+n) 按 1/sqrt(n) 收拢，")
+print(f"   但'位于真值上方'的概率不消失（n={N_MAX} 时解析值仍有 {_p_gt_max:.3f}，n→∞ 趋于 0.5）：")
+print("   穿越一直在发生，只是偏离幅度越来越小——按 1/n 消退的是先验权重与偏差，不是穿越事件本身。")
 
 # ===== 保存数值结果 =====
 import json

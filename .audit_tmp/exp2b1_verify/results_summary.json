@@ -1,0 +1,35 @@
+{
+  "image_size": 128,
+  "noise_sigma": 0.1,
+  "psnr_noisy_dB": 20.37,
+  "psnr_tv_dB": 25.89,
+  "psnr_tgv_dB": 7.5,
+  "ssim_noisy": 0.3522,
+  "ssim_tv": 0.7619,
+  "ssim_tgv": 0.0809,
+  "alpha0": 0.3,
+  "alpha1": 0.15,
+  "alpha0_alpha1_ratio": 2.0,
+  "sensitivity_alpha_ratio": {
+    "ratio_0.5": {
+      "psnr_dB": 7.55,
+      "ssim": 0.0858
+    },
+    "ratio_1.0": {
+      "psnr_dB": 7.53,
+      "ssim": 0.0831
+    },
+    "ratio_2.0": {
+      "psnr_dB": 7.5,
+      "ssim": 0.0809
+    },
+    "ratio_4.0": {
+      "psnr_dB": 7.47,
+      "ssim": 0.0795
+    },
+    "ratio_8.0": {
+      "psnr_dB": 7.45,
+      "ssim": 0.0785
+    }
+  }
+}

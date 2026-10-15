@@ -2,19 +2,231 @@
   "image_size": 128,
   "blur_sigma": 2.0,
   "noise_level": 0.1,
-  "lambda_tikhonov_blur": 0.126151,
-  "psnr_blurred_dB": 18.29,
-  "psnr_tikhonov_blur_dB": 20.25,
-  "psnr_improvement_dB": 1.96,
-  "posterior_energy_MAP": 38305.91,
-  "posterior_energy_truth": 42906.0,
-  "psnr_lambda_demo": {
-    "lambda_0.001": 7.11,
-    "lambda_0.100": 20.88,
-    "lambda_1.000": 10.27
+  "data_range": 0.969827,
+  "image_mean_mu": 0.506114,
+  "image_var_tau2": 0.07927,
+  "image_second_moment_E_x2": 0.335421,
+  "lambda_zero_mean_blur": 0.029813,
+  "lambda_centered_blur": 0.126151,
+  "mu_hat_from_noisy_blur": 0.506261,
+  "operator_norm_power_iter_100": 0.99774,
+  "psnr_noisy_blur_dB": 18.29,
+  "psnr_tikhonov_zero_mean_blur_dB": 20.09,
+  "psnr_tikhonov_centered_blur_dB": 22.19,
+  "psnr_improvement_zero_mean_dB": 1.8,
+  "psnr_improvement_centered_dB": 3.9,
+  "gd_zero_mean": {
+    "iters": 172,
+    "rel_grad": 9.8e-08,
+    "converged": true
   },
-  "psnr_bayes_lambda_dB": 18.91,
-  "lambda_bayes_denoise": 0.126151,
-  "psnr_sweep_best_lambda": 0.025929,
-  "psnr_sweep_max_dB": 19.88
+  "gd_centered": {
+    "iters": 61,
+    "rel_grad": 8.03e-08,
+    "converged": true
+  },
+  "posterior_energy_zero_mean_model": {
+    "MAP": {
+      "data": 7761.2,
+      "reg": 7802.9,
+      "total": 15564.1
+    },
+    "truth": {
+      "data": 8242.5,
+      "reg": 8192.0,
+      "total": 16434.5
+    },
+    "init": {
+      "data": 8717.1,
+      "reg": 7926.2,
+      "total": 16643.2
+    },
+    "truth_data_term_expectation_N_half": 8192.0
+  },
+  "psnr_lambda_demo_converged_GD": {
+    "lambda_0.001": {
+      "psnr_dB": 6.72,
+      "iters": 4085,
+      "rel_grad": 9.99e-08,
+      "converged": true
+    },
+    "lambda_0.100": {
+      "psnr_dB": 20.88,
+      "iters": 66,
+      "rel_grad": 9.21e-08,
+      "converged": true
+    },
+    "lambda_1.000": {
+      "psnr_dB": 10.27,
+      "iters": 78,
+      "rel_grad": 9.45e-08,
+      "converged": true
+    }
+  },
+  "blur_lambda_psnr_sweep": {
+    "grid_lambda": [
+      0.005012,
+      0.00598,
+      0.007134,
+      0.008511,
+      0.010155,
+      0.012115,
+      0.014454,
+      0.017245,
+      0.020575,
+      0.024547,
+      0.029286,
+      0.034941,
+      0.041687,
+      0.049736,
+      0.059338,
+      0.070795,
+      0.084463,
+      0.10077,
+      0.120226,
+      0.143439,
+      0.171133,
+      0.204174,
+      0.243594,
+      0.290625,
+      0.346737,
+      0.413682,
+      0.493552,
+      0.588844,
+      0.702533,
+      0.838172,
+      1.0
+    ],
+    "psnr_zero_mean_dB": [
+      13.52,
+      14.25,
+      14.98,
+      15.69,
+      16.39,
+      17.07,
+      17.73,
+      18.37,
+      18.97,
+      19.53,
+      20.05,
+      20.49,
+      20.86,
+      21.13,
+      21.29,
+      21.3,
+      21.16,
+      20.86,
+      20.4,
+      19.8,
+      19.07,
+      18.24,
+      17.35,
+      16.41,
+      15.46,
+      14.51,
+      13.58,
+      12.69,
+      11.83,
+      11.02,
+      10.27
+    ],
+    "psnr_centered_dB": [
+      13.52,
+      14.25,
+      14.98,
+      15.69,
+      16.39,
+      17.08,
+      17.75,
+      18.39,
+      19.01,
+      19.59,
+      20.14,
+      20.64,
+      21.1,
+      21.49,
+      21.81,
+      22.05,
+      22.21,
+      22.27,
+      22.22,
+      22.07,
+      21.8,
+      21.43,
+      20.97,
+      20.43,
+      19.82,
+      19.17,
+      18.5,
+      17.82,
+      17.15,
+      16.49,
+      15.87
+    ],
+    "zero_mean_model": {
+      "plugin_lambda": 0.029813,
+      "plugin_psnr_dB": 20.09,
+      "empirical_best_lambda": 0.070795,
+      "empirical_best_psnr_dB": 21.3
+    },
+    "centered_model": {
+      "plugin_lambda": 0.126151,
+      "plugin_psnr_dB": 22.19,
+      "empirical_best_lambda": 0.10077,
+      "empirical_best_psnr_dB": 22.27
+    },
+    "note": "A!=I 时最优标量 lambda 依赖信号谱与算子谱交互，白先验误设下插件 lambda 偏离经验最优；A=I 时仅依赖边际矩"
+  },
+  "denoise": {
+    "mu_hat_from_noisy": 0.505733,
+    "lambda_zero_mean": 0.029813,
+    "lambda_centered": 0.126151,
+    "psnr_noisy_dB": 19.76,
+    "psnr_naive_mismatch_dB": 18.91,
+    "psnr_zero_mean_consistent_dB": 19.88,
+    "psnr_centered_consistent_dB": 20.28,
+    "psnr_sweep_grid_best_zero_mean": {
+      "lambda": 0.02873,
+      "psnr_dB": 19.88
+    },
+    "psnr_sweep_grid_best_centered": {
+      "lambda": 0.121153,
+      "psnr_dB": 20.28
+    },
+    "psnr_exact_scalar_optimum": {
+      "lambda": 0.02934,
+      "psnr_dB": 19.88
+    },
+    "monte_carlo_200": {
+      "psnr_noisy_mean": 19.73,
+      "psnr_naive_mean": 18.91,
+      "psnr_zero_mean_mean": 19.86,
+      "psnr_centered_mean": 20.24,
+      "psnr_exact_per_realization_mean": 19.86,
+      "lambda_star_mean": 0.029953
+    },
+    "white_scalar_prior_theory_gain_cap_dB": {
+      "zero_mean": 0.128,
+      "centered": 0.516
+    },
+    "TV": {
+      "weight": 0.075,
+      "psnr_dB": 28.16,
+      "gain_dB": 8.41
+    },
+    "psnr_over_regularized_lambda1_dB": 10.37
+  },
+  "synthetic_iid_control": {
+    "native_data_range": 2.2436,
+    "lambda_bayes": 0.126151,
+    "lambda_exact_scalar": 0.126233,
+    "lambda_grid_best": 0.121153,
+    "psnr_noisy_native_dB": 27.02,
+    "psnr_bayes_native_dB": 27.54,
+    "psnr_grid_best_native_dB": 27.54,
+    "psnr_noisy_unit_range_dB": 20.01,
+    "psnr_bayes_unit_range_dB": 20.52,
+    "psnr_grid_best_unit_range_dB": 20.52,
+    "note": "叠加图统一使用 data_range=1.0；native 与 unit 相差 20log10(range) 属纯口径效应"
+  }
 }

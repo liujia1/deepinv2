@@ -21,6 +21,8 @@
   12. 添加 Tikhonov λ 的注释说明（使用 ground truth 方差）
   13. 修正 ESS 阈值语义
   14. 补充 LASSO λ 的调参说明
+  15. 修正 Tikhonov 最优 λ 的方差口径：λ=σ²/σ_x² 中 σ_x² 应为每坐标方差
+      （原代码误用 E||x||²=两坐标之和，λ 偏小约 2 倍，非理论最优；修正后 λ≈0.0597）
 """
 
 import numpy as np
@@ -70,9 +72,10 @@ def sample_cross_distribution(n_samples, rng):
 x = sample_cross_distribution(N, rng)
 y = x + sigma_eps * rng.standard_normal((N, 2))
 
-var_x = np.mean(np.sum(x**2, axis=1))
+var_x_total = np.mean(np.sum(x**2, axis=1))  # E||x||²: 两坐标二阶矩之和
+var_x = np.mean(x**2)                          # 每坐标方差 σ_x²（Tikhonov 逐坐标收缩 y/(1+λ) 的公式口径）
 lambda_tikh_optimal = sigma_eps**2 / var_x
-print(f"[参数] 十字形分布方差: {var_x:.4f}")
+print(f"[参数] 十字形分布: E||x||²={var_x_total:.4f}, 每坐标方差 σ_x²={var_x:.4f}")
 print(f"[参数] Tikhonov 理论最优 λ = σ²/σ²_x = {sigma_eps**2:.4f}/{var_x:.4f} = {lambda_tikh_optimal:.4f}")
 print(f"        注: 此处使用 ground truth 方差计算 λ，仅用于教学展示理论最优性能")
 print(f"        实际场景中 x 未知，需从数据估计方差或交叉验证调参")

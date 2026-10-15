@@ -68,8 +68,8 @@ x_true = np.sin(2 * np.pi * 3 * t) + 0.5 * np.cos(2 * np.pi * 7 * t)
 
 sigma_psf = 4.0               # 频域高斯核标准差（小 => 严重低通 => 病态）
 k = np.fft.fftfreq(n) * n     # 频率坐标
+# H 实值且偶对称（自伴实卷积）；与复数 FFT 相乘时会自动提升为复数，无需显式 astype
 H = np.exp(-0.5 * (k / sigma_psf) ** 2)  # 频域传递函数，高频 -> 0
-H = H.astype(complex)
 
 # 正向生成含噪观测 y = A x + noise
 X = np.fft.fft(x_true)
@@ -92,7 +92,10 @@ neg_log_lik_list = []
 residuals = []           # 留给后面"按定义独立复算"用
 
 for i in range(n_candidates):
-    # 扰动幅度从 0（完美拟合）到较大（拟合差），均匀采样
+    # 扰动幅度从 0（候选=真实解、无扰动）到较大（拟合差），均匀采样。
+    # 注意 scale=0 时残差恰为不可约噪声本身（||noise||^2≈243，并非 0），
+    # 不能称为"完美拟合"：真实解只最小化期望风险，在这一份有限含噪样本上
+    # 未必是 ls 最小者（本样本 argmin 落在候选 27，路径3 有专门演示）。
     scale = (i / (n_candidates - 1)) * 2.0
     x_cand = x_true + scale * cand_rng.standard_normal(n)
     residual = y - np.real(np.fft.ifft(H * np.fft.fft(x_cand)))
@@ -183,7 +186,8 @@ fig, ax = plt.subplots(1, 2, figsize=(14, 5))
 # 画在同一纵轴上必然分开 2 倍（不是"重合"）；真正该重合的是
 # 实测 −ln p（橙虚线）与预测 (1/(2σ²))·‖y−Ax‖²（灰点线）。
 ax[0].plot(least_squares_list, label=r'$\|y - A x\|^2$（最小二乘）', linewidth=2)
-ax[0].plot(neg_log_lik_list, '--', label=r'$-\ln p(y|x)$（负对数似然，实测）', linewidth=2)
+ax[0].plot(neg_log_lik_list, '--',
+           label=r'$-\ln p(y|x)$（负对数似然，实测，已去掉与 $x$ 无关的加常数）', linewidth=2)
 ax[0].plot(factor * least_squares_list, ':', color='gray', linewidth=2.5,
            label=r'预测 $\frac{1}{2\sigma^2}\|y-Ax\|^2$（与橙虚线重合）')
 ax[0].set_xlabel('候选解索引')
@@ -262,7 +266,8 @@ def _to_native(obj):
     try:
         import torch
         if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
-    except: pass
+    except Exception:
+        pass  # 环境无 torch 或对象不是张量：落入下方默认返回
     return obj
 
 results_summary = {k: _to_native(v) for k, v in results_summary.items()}

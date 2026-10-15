@@ -1,0 +1,14 @@
+{
+  "num_samples": 1000,
+  "noise_sigma": 0.1,
+  "lambda_tikhonov_optimal": 0.059732,
+  "lambda_lasso": 0.08,
+  "nrmse_identity_pct": 24.32,
+  "nrmse_tikhonov_pct": 23.42,
+  "nrmse_lasso_pct": 21.6,
+  "nrmse_bayes_pct": 17.55,
+  "ess_mean": 199.67,
+  "ess_min": 43.43,
+  "low_ess_count": 0,
+  "ess_threshold": 3.0
+}

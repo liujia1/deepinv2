@@ -1,0 +1,20 @@
+{
+  "grid_size": 100,
+  "prior_correlation_length": 0.1,
+  "prior_variance": 1.0,
+  "noise_sigma": 1.0,
+  "noise_variance": 1.0,
+  "closed_form_max_error": 0.46357566,
+  "lambda_values": [
+    0.1,
+    1.0,
+    10.0
+  ],
+  "coverage_rates": [
+    0.46,
+    1.0,
+    1.0
+  ],
+  "bayesian_lambda": 1.0,
+  "optimal_lambda_ratio": 1.0
+}

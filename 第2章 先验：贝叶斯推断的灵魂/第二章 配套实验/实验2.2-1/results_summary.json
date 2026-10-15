@@ -1,33 +1,128 @@
 {
   "image_size": 64,
   "noise_level": 0.1,
+  "image_stats_true_for_teaching_only": {
+    "mean": 0.5061291472183125,
+    "std": 0.2755100751435255,
+    "var": 0.07590580150559106,
+    "rms2_E_x2": 0.3320725151695273
+  },
+  "plugin_estimates_from_observation": {
+    "mu_y": 0.5077855801309483,
+    "rms2_hat_E_x2": 0.33362024402315543,
+    "var_hat": 0.07577404863423173,
+    "note": "噪声方差已知时 E[y^2]=E[x^2]+sigma^2, var(y)=var(x)+sigma^2"
+  },
   "psnr_noisy_dB": 20.03,
   "ssim_noisy": 0.4272,
-  "tikhonov_data": {
-    "lambda": 0.131742,
-    "psnr_dB": 19.17,
-    "ssim": 0.4445
-  },
-  "tikhonov_prior": {
-    "lambda": 0.01,
-    "psnr_dB": 20.1,
-    "ssim": 0.4289
+  "tikhonov": {
+    "1_subjective_sigma_x_1": {
+      "model": "N(0,sigma_x^2 I), sigma_x=1 (主观先验)",
+      "lambda": 0.01,
+      "psnr_dB": 20.1,
+      "ssim": 0.4289
+    },
+    "2_empirical_bayes_zero_mean": {
+      "model": "N(0,sigma_x^2 I), sigma_x^2=E[x^2] 插件估计",
+      "lambda": 0.029974,
+      "psnr_dB": 20.17,
+      "ssim": 0.4322
+    },
+    "3_empirical_bayes_centered": {
+      "model": "N(mu,sigma_x^2 I), mu=y_mean, sigma_x^2=Var(x) 插件估计, 先去均值",
+      "lambda": 0.131971,
+      "psnr_dB": 20.56,
+      "ssim": 0.4419
+    },
+    "4_misuse_no_centering": {
+      "model": "反面教材：lambda=sigma^2/Var(x) 却套零均值闭式解、不中心化",
+      "lambda": 0.131971,
+      "psnr_dB": 19.17,
+      "ssim": 0.4446
+    }
   },
   "sobolev": {
     "lambda_0.05": {
-      "psnr_dB": 21.51,
-      "ssim": 0.4703,
-      "converged_iters": 6
-    },
-    "lambda_0.10": {
-      "psnr_dB": 22.6,
-      "ssim": 0.5044,
-      "converged_iters": 8
+      "periodic_dft_iter_psnr_dB": 21.51,
+      "periodic_dft_iter_ssim": 0.4703,
+      "periodic_dft_exact_psnr_dB": 21.51,
+      "periodic_dft_exact_ssim": 0.4703,
+      "mirror_dct_psnr_dB": 21.5,
+      "mirror_dct_ssim": 0.4701,
+      "converged_iters": 25,
+      "iter_vs_exact_max_abs_diff": 1.9734214262712158e-14,
+      "boundary_ring4px_mse_dft": 0.007247882720627674,
+      "boundary_ring4px_mse_dct": 0.0073555410947745755,
+      "interior_mse_dft": 0.0070024194628877144,
+      "interior_mse_dct": 0.0070024194564451666
     },
     "lambda_0.20": {
-      "psnr_dB": 24.02,
-      "ssim": 0.5562,
-      "converged_iters": 11
+      "periodic_dft_iter_psnr_dB": 24.02,
+      "periodic_dft_iter_ssim": 0.5562,
+      "periodic_dft_exact_psnr_dB": 24.02,
+      "periodic_dft_exact_ssim": 0.5562,
+      "mirror_dct_psnr_dB": 24.09,
+      "mirror_dct_ssim": 0.5558,
+      "converged_iters": 57,
+      "iter_vs_exact_max_abs_diff": 1.548483563595937e-13,
+      "boundary_ring4px_mse_dft": 0.004330819114403301,
+      "boundary_ring4px_mse_dct": 0.004059806818371732,
+      "interior_mse_dft": 0.003847830754232753,
+      "interior_mse_dct": 0.003847825588589449
+    },
+    "lambda_0.50": {
+      "periodic_dft_iter_psnr_dB": 25.37,
+      "periodic_dft_iter_ssim": 0.6455,
+      "periodic_dft_exact_psnr_dB": 25.37,
+      "periodic_dft_exact_ssim": 0.6455,
+      "mirror_dct_psnr_dB": 25.86,
+      "mirror_dct_ssim": 0.647,
+      "converged_iters": 117,
+      "iter_vs_exact_max_abs_diff": 4.120870311652425e-13,
+      "boundary_ring4px_mse_dft": 0.003688130282165984,
+      "boundary_ring4px_mse_dct": 0.002387959069635921,
+      "interior_mse_dft": 0.002660856507274862,
+      "interior_mse_dct": 0.002660655634959659
+    },
+    "lambda_1.00": {
+      "periodic_dft_iter_psnr_dB": 24.91,
+      "periodic_dft_iter_ssim": 0.703,
+      "periodic_dft_exact_psnr_dB": 24.91,
+      "periodic_dft_exact_ssim": 0.703,
+      "mirror_dct_psnr_dB": 25.83,
+      "mirror_dct_ssim": 0.7092,
+      "converged_iters": 215,
+      "iter_vs_exact_max_abs_diff": 8.28059842916673e-13,
+      "boundary_ring4px_mse_dft": 0.0044843576337969355,
+      "boundary_ring4px_mse_dct": 0.0018465124584950158,
+      "interior_mse_dft": 0.0028478763705822615,
+      "interior_mse_dct": 0.002845708090646667
+    },
+    "lambda_2.00": {
+      "periodic_dft_iter_psnr_dB": 23.41,
+      "periodic_dft_iter_ssim": 0.7174,
+      "periodic_dft_exact_psnr_dB": 23.41,
+      "periodic_dft_exact_ssim": 0.7174,
+      "mirror_dct_psnr_dB": 24.57,
+      "mirror_dct_ssim": 0.7321,
+      "converged_iters": 406,
+      "iter_vs_exact_max_abs_diff": 1.696143225871083e-12,
+      "boundary_ring4px_mse_dft": 0.0063390405943502415,
+      "boundary_ring4px_mse_dct": 0.0018571785265111783,
+      "interior_mse_dft": 0.004010516613362003,
+      "interior_mse_dct": 0.00399387370957969
     }
+  },
+  "best_lambda_oracle_by_psnr_to_truth": {
+    "periodic_dft_lambda": 0.5,
+    "mirror_dct_lambda": 0.5,
+    "note": "oracle 选择：使用了真值 PSNR，实际应用中需交叉验证/无监督准则"
+  },
+  "boundary_comparison": {
+    "periodic": "np.roll / DFT，图像对边周期拼接",
+    "mirror": "Neumann / DCT-II，镜像延拓",
+    "ring_width_px": 4,
+    "figure_lambda": 1.0,
+    "conclusion": "内部区域MSE两者一致；大λ下周期边界边缘MSE显著更高，伪影源于边界建模而非频域方法本身"
   }
 }

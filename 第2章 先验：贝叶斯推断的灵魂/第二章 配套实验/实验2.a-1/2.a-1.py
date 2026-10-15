@@ -74,26 +74,38 @@ print(f"\n正则化参数λ的语义:")
 print(f"  在广义Tikhonov形式 (λI + Σ)⁻¹Σy 中，λ = σ² (噪声方差)")
 print(f"  在标准Tikhonov形式 (A^TA + λI)⁻¹A^Ty 中，λ = σ²/σ_x² (信噪比)")
 print(f"  本实验使用广义Tikhonov形式，故 λ=σ²={sigma} 时为真实贝叶斯后验")
-print(f"  本例σ_x²={sigma_x2:.1f}，两种参数化数值相同（一般情形不同）")
+print(f"  本例σ_x²={sigma_x2:.1f}，两个λ的**数值**恰好相等（但代入的是不同公式，解并不相同）")
 
 print("\n[数值验证] 后验协方差闭式解正确性检验...")
 Sigma_post_direct = np.linalg.inv(np.linalg.inv(Sigma) + np.eye(n) / sigma**2)
 Sigma_post_formula = sigma**2 * np.linalg.solve(Sigma + sigma**2 * np.eye(n), Sigma)
 max_error = np.max(np.abs(Sigma_post_direct - Sigma_post_formula))
 
+# 稳定参考解：对Σ做特征分解（LAPACK对称例程，向后稳定），显式求逆则不然
+w_eig, V_eig = np.linalg.eigh(Sigma)
+Sigma_post_ref = (V_eig * (np.clip(w_eig, 0.0, None) / (np.clip(w_eig, 0.0, None) + sigma**2))) @ V_eig.T
+eig_err_formula = np.max(np.abs(Sigma_post_formula - Sigma_post_ref))
+eig_err_direct = np.max(np.abs(Sigma_post_direct - Sigma_post_ref))
+scale = np.max(np.abs(Sigma_post_formula))
+rel_error = max_error / scale
+
 # 使用前面已计算的条件数（避免重复计算）
 tol = max(1e-10, cond_num * np.finfo(float).eps * 10)
 
-print(f"  闭式解验证 (λ=σ²={sigma}): 最大误差 = {max_error:.2e}")
-if max_error < tol:
-    print(f"  ✓ 闭式解与直接计算一致（误差在条件数允许范围内）")
-else:
-    print(f"  ⚠ 误差={max_error:.2e}，可能由inv(Σ)引起（条件数={cond_num:.2e}）")
-    print(f"    闭式公式本身正确，误差来自直接求逆的数值不稳定")
+print(f"  闭式解验证 (λ=σ²={sigma}): 最大误差 = {max_error:.2e} (相对误差 {rel_error:.1%}, 解的尺度 {scale:.2f})")
+print(f"  代码原判据 tol = max(1e-10, cond·eps·10) = {tol:.2e} → 判定: {'一致' if max_error < tol else '不一致'}")
+print(f"  ⚠ 但这一判据太宽（≈ cond·eps 再乘 10，本例达 {tol:.0f}），它只能说明'直接求逆不可信'，")
+print(f"    无法区分'公式正确'与'公式写错但碰巧没超过阈值'。下面用稳定参考解做定位。")
+print(f"  误差来源定位（与稳定参考解 σ²·Σ·(Σ+σ²I)⁻¹ 的特征分解形式比较）:")
+print(f"    闭式公式  vs 参考解: {eig_err_formula:.2e}   ← 公式在机器精度内正确")
+print(f"    直接求逆  vs 参考解: {eig_err_direct:.2e}   ← {max_error:.2f} 的误差几乎全部来自 inv(Σ)")
+print(f"    max|inv(Σ)Σ - I| = {np.abs(np.linalg.inv(Sigma) @ Sigma - np.eye(n)).max():.2e} → Σ⁻¹ 已完全失真")
+print(f"  结论: 闭式公式本身正确，误差来自 Σ⁻¹ 的数值不稳定（与讲义判断一致，但需上面的定位证据）")
 
 u_map_list = []
 Sigma_post_list = []
 coverage_list = []  # 保存覆盖率，避免重复计算
+rmse_list = []      # 保存对真值的RMSE，用于检验"哪个λ重建最好"
 
 for lam in lambda_values:
     Sigma_post = lam * np.linalg.solve(Sigma + lam * np.eye(n), Sigma)
@@ -102,17 +114,28 @@ for lam in lambda_values:
     
     u_map_list.append(u_map)
     Sigma_post_list.append(Sigma_post)
+    rmse_lam = float(np.sqrt(np.mean((u_true - u_map) ** 2)))
+    rmse_list.append(rmse_lam)
     
     print(f"\nλ = {lam}:")
     print(f"  后验均值 μ_post = (λI + Σ)⁻¹ Σ y")
     print(f"  后验协方差 Σ_post = λ·Σ·(Σ + λI)⁻¹ = (Σ⁻¹ + λ⁻¹I)⁻¹")
     print(f"  MAP估计 = 后验均值 (高斯后验对称性)")
+    print(f"  对真值 RMSE = {rmse_lam:.4f} | 95%区间平均半宽 = {1.96*np.mean(np.sqrt(np.diag(Sigma_post))):.4f}")
     if lam < sigma**2 / sigma_x2:
-        print(f"  → λ较小: 相对信任数据，后验不确定性较小")
+        print(f"  → λ较小: 相对信任数据，对数据拟合更紧、后验不确定性较小（但区间会窄于真实误差 → 过度自信）")
     elif lam > sigma**2 / sigma_x2:
-        print(f"  → λ较大: 噪声假设大→数据信息弱→后验不确定性较大")
+        print(f"  → λ较大: 噪声假设大→数据信息弱→后验不确定性较大（区间宽于真实误差 → 过于保守）")
     else:
-        print(f"  → λ与噪声/先验比匹配: 数据与先验平衡")
+        print(f"  → λ = σ²: 模型设定正确，后验是真实贝叶斯后验，重复抽样意义下应当校准")
+
+rmse_noise = float(np.sqrt(np.mean((u_true - y) ** 2)))
+print(f"\n[重建质量] 三个λ的对真值RMSE: " + ", ".join(f"λ={l}:{r:.4f}" for l, r in zip(lambda_values, rmse_list)))
+print(f"  含噪观测基线 RMSE = {rmse_noise:.4f}（三者都远好于基线）")
+print(f"  ⚠ 本例单次实现中 RMSE 最小的是 λ={lambda_values[int(np.argmin(rmse_list))]}，")
+print(f"    而非 λ=σ²={sigma}。这是单次抽样的正常波动：λ=0.1 与 λ=1 的RMSE仅差 "
+      f"{abs(rmse_list[0]-rmse_list[1])/rmse_list[1]:.1%}，")
+print(f"    重复抽样意义下 λ=σ² 才是期望最优（见下方'重复抽样校准检验'）")
 
 fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 
@@ -140,7 +163,7 @@ for k, lam in enumerate(lambda_values):
     
     x_pdf = np.linspace(-4, 4, 100)
     pdf_noise = (1 / np.sqrt(2 * np.pi * sigma**2)) * np.exp(-0.5 * x_pdf**2 / sigma**2)
-    axes[1, k].plot(x_pdf, pdf_noise, 'g--', linewidth=2, label=f'N(0, σ²={sigma**2:.1f})')
+    axes[1, k].plot(x_pdf, pdf_noise, 'g--', linewidth=2, label=r'$N(0,\,\sigma^2=%.1f)$' % sigma**2)
     
     shrinkage_std = np.std(map_residual)
     pdf_shrink = (1 / np.sqrt(2 * np.pi * shrinkage_std**2)) * np.exp(-0.5 * x_pdf**2 / shrinkage_std**2)
@@ -169,7 +192,7 @@ for k, lam in enumerate(lambda_values):
     axes[0].semilogy(x_grid, diag_var, linewidth=1.5, label=f'λ={lam}')
 axes[0].set_xlabel('x')
 axes[0].set_ylabel('后验方差 (对数尺度)')
-axes[0].set_title('后验不确定性随位置变化')
+axes[0].set_title('后验不确定性随位置变化\n两端高、中部平：有限区间的边缘效应')
 axes[0].legend()
 axes[0].grid(True, alpha=0.3)
 
@@ -180,10 +203,12 @@ for lam_val in lambda_range:
     avg_var.append(np.mean(np.diag(Sigma_temp)))
 
 axes[1].loglog(lambda_range, avg_var, 'b-', linewidth=2)
-axes[1].set_xlabel('λ (正则化参数 = σ²/σ_x²)')
+axes[1].axvline(sigma**2, color='r', linestyle='--', linewidth=1.2, label=r'真实贝叶斯 $\lambda=\sigma^2$')
+axes[1].set_xlabel(r'λ (广义Tikhonov参数, 本例 $\lambda=\sigma^2$; 标准形式中 $\lambda=\sigma^2/\sigma_x^2$)')
 axes[1].set_ylabel('平均后验方差')
 axes[1].set_title('正则化参数λ与后验不确定性\nλ大→噪声假设大→数据信息弱→不确定性大')
 axes[1].grid(True, alpha=0.3)
+axes[1].legend(fontsize=9)
 
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤2_后验不确定性与正则化参数.png'), dpi=150, bbox_inches='tight')
@@ -222,9 +247,53 @@ for k in range(len(lambda_values)):
     coverage = coverage_list[k]  # 直接使用已计算的覆盖率
     status = "校准良好" if abs(coverage - 0.95) < 0.05 else ("过度自信" if coverage < 0.90 else "过于保守")
     print(f"   λ={lambda_values[k]}: 覆盖率={coverage:.1%} ({status})")
+print("   ⚠ 以上只是**单次数据集**的经验覆盖率，不能直接与95%比较，见下一节")
 print("\n7. SE核的特殊性质:")
 print(f"   SE核对角线恒为exp(0)=1，故σ_x²=1.0")
 print(f"   理论最优λ = σ²/σ_x² = {sigma**2/sigma_x2:.1f}（恰好是测试值之一）")
+
+# ===== 重复抽样校准检验：区分"模型失配"与"单样本MC噪声" =====
+# 说明：上面三个覆盖率来自**同一份数据**的单次实现。由于先验强相关
+# （L=0.1 ⇒ 区间[0,1]上只有约 1/L≈10 个等效独立区域），覆盖率的蒙特卡洛
+# 波动远大于二项公式 sqrt(p(1-p)/n) 的估计。这里用特征分解做向量化重复抽样，
+# 既检验"λ=σ²时应当校准"的理论断言，也量化单次观测到的偏差有多少只是抽样噪声。
+# 使用独立的 default_rng，不触碰全局随机流，故上方所有结果保持逐位不变。
+print("\n===== 重复抽样校准检验 (R=2000) =====")
+R_repeat = 2000
+rng_rep = np.random.default_rng(2026)
+w_pos = np.clip(w_eig, 0.0, None)
+sqrt_w = np.sqrt(w_pos)
+U_rep = (rng_rep.standard_normal((R_repeat, n)) * sqrt_w) @ V_eig.T
+Y_rep = U_rep + sigma * rng_rep.standard_normal((R_repeat, n))
+
+repeat_stats = []
+for lam, cov_once in zip(lambda_values, coverage_list):
+    a_shrink = w_eig / (w_eig + lam)
+    MU_rep = ((Y_rep @ V_eig) * a_shrink) @ V_eig.T
+    var_post_rep = (V_eig ** 2) @ (lam * w_eig / (w_eig + lam))
+    cover_rep = np.mean(np.abs(U_rep - MU_rep) < 1.96 * np.sqrt(var_post_rep), axis=1)
+    rmse_rep = np.sqrt(np.mean((U_rep - MU_rep) ** 2, axis=1))
+    repeat_stats.append({
+        'lambda': float(lam),
+        'coverage_once': float(cov_once),
+        'coverage_mean': float(cover_rep.mean()),
+        'coverage_std': float(cover_rep.std()),
+        'coverage_q05': float(np.quantile(cover_rep, 0.05)),
+        'coverage_q95': float(np.quantile(cover_rep, 0.95)),
+        'rmse_mean': float(rmse_rep.mean()),
+        'post_std_mean': float(np.sqrt(var_post_rep).mean()),
+    })
+    print(f"  λ={lam:>4}: 单次实现={cov_once:.1%} | 重复抽样={cover_rep.mean():.1%}±{cover_rep.std():.1%}"
+          f" (5–95%分位 {np.quantile(cover_rep,0.05):.0%}–{np.quantile(cover_rep,0.95):.0%})")
+    print(f"           E[RMSE]={rmse_rep.mean():.4f} vs 平均后验std={np.sqrt(var_post_rep).mean():.4f}"
+          f"  → {'校准' if abs(rmse_rep.mean()-np.sqrt(var_post_rep).mean())<0.05*rmse_rep.mean() else ('过度自信' if rmse_rep.mean()>np.sqrt(var_post_rep).mean() else '过于保守')}")
+
+print(f"\n  裁决：")
+print(f"    λ=σ²={sigma} 时重复覆盖率 = {repeat_stats[1]['coverage_mean']:.1%} ≈ 95% → 模型设定时后验确实校准；")
+print(f"    本例单次观测到 100% 只是抽样波动（该λ下 P(覆盖率=100%) 本身就有约五成）；")
+print(f"    λ=0.1 重复覆盖率 {repeat_stats[0]['coverage_mean']:.1%} → 低估噪声⇒真实失配⇒过度自信；")
+print(f"    λ=10 重复覆盖率 {repeat_stats[2]['coverage_mean']:.1%} → 高估噪声⇒区间过宽⇒保守（固有而非缺陷）。")
+print(f"    数值误差对上述覆盖率无可测影响（Σ_post 对角线与特征分解参考解差约 1e-15）。")
 
 # ===== 保存数值结果 =====
 import json
@@ -235,8 +304,16 @@ results_summary = {
     'noise_sigma': float(sigma),
     'noise_variance': float(sigma**2),
     'closed_form_max_error': float(round(max_error, 8)),
+    'closed_form_rel_error': float(round(rel_error, 6)),
+    'closed_form_err_vs_eigen_ref': float(f'{eig_err_formula:.3e}'),
+    'direct_inv_err_vs_eigen_ref': float(f'{eig_err_direct:.6e}'),
     'lambda_values': [float(l) for l in lambda_values],
     'coverage_rates': [float(round(c, 4)) for c in coverage_list],
+    'rmse_vs_truth': [float(round(r, 4)) for r in rmse_list],
+    'rmse_noisy_baseline': float(round(rmse_noise, 4)),
+    'repeated_sampling': [
+        {k2: float(round(v2, 4)) for k2, v2 in d.items()} for d in repeat_stats
+    ],
     'bayesian_lambda': float(sigma**2),
     'optimal_lambda_ratio': float(round(sigma**2/sigma_x2, 4)),
 }

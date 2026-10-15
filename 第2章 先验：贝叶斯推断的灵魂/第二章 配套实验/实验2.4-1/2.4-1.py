@@ -467,7 +467,10 @@ def plot_denoise_trajectory_and_energy(model, x_gt_test, save_path,
             energies.append((t, E_total))
             if t in snapshot_set:
                 x_clip = torch.clamp(x_curr, 0.0, 1.0)
-                psnr_t = compute_psnr(x_clip, x_gt)
+                # PSNR 口径与图2/JSON 一致：t=0 帧是含噪观测本身，用截断前计算；
+                # 其余帧是恢复结果，截断到 [0,1] 后计算
+                psnr_src = x_curr if t == 0 else x_clip
+                psnr_t = compute_psnr(psnr_src, x_gt)
                 snapshots.append((t, x_clip.detach().clone(), psnr_t))
             if t < num_steps:
                 x_curr = model.forward_denoise_unrolled(
@@ -488,21 +491,21 @@ def plot_denoise_trajectory_and_energy(model, x_gt_test, save_path,
         ax = snap_axes[col]
         ax.imshow(x_t.squeeze().cpu().numpy(), cmap='gray')
         if t == 0:
-            ax.set_title("含噪输入 ($\\it{y}$)\nPSNR: 20.01dB",
+            ax.set_title(f"含噪输入 ($y$)\nPSNR: {psnr_t:.2f}dB",
                          color=_white(), fontsize=11, pad=8)
         elif t == num_steps:
-            ax.set_title(f"第 {t} 步迭代  $\\it{{x}}_{{\\it{{t}}}}$\n"
+            ax.set_title(f"第 {t} 步迭代  $x_{{\\it t}}$\n"
                          f"PSNR: {psnr_t:.2f}dB",
                          color=_white(), fontsize=11, pad=8)
         else:
-            ax.set_title(f"第 {t} 步迭代($\\it{{x}}_{{\\it{{t}}}}$)",
+            ax.set_title(f"第 {t} 步迭代($x_{{\\it t}}$)",
                          color=_white(), fontsize=11, pad=8)
         ax.axis('off')
 
     # 最后一帧: 干净真值
     ax_gt = snap_axes[-1]
     ax_gt.imshow(x_gt.squeeze().cpu().numpy(), cmap='gray')
-    ax_gt.set_title(r"干净真值 ($\it{x}^\ast$)",
+    ax_gt.set_title(r"干净真值 ($x^{\ast}$)",
                      color=_white(), fontsize=11, pad=8)
     ax_gt.axis('off')
 
@@ -543,9 +546,9 @@ def plot_denoise_trajectory_and_energy(model, x_gt_test, save_path,
                   arrowprops=dict(arrowstyle='->', color='red', lw=1.2,
                                   shrinkA=4, shrinkB=8))
 
-    ax_e.set_xlabel("迭代步数 ($\\it{t}$)", fontsize=11, color=_white())
-    ax_e.set_ylabel(r"平均后验能量 $E(\it{x}_t)$", fontsize=11, color=_white())
-    ax_e.set_title("后验能量下降曲线: $E(\\it{x}_t)$ = 数据保真项 + 先验惩罚项",
+    ax_e.set_xlabel("迭代步数 ($t$)", fontsize=11, color=_white())
+    ax_e.set_ylabel(r"平均后验能量 $E(x_t)$", fontsize=11, color=_white())
+    ax_e.set_title("后验能量下降曲线: $E(x_t)$ = 数据保真项 + 先验惩罚项",
                    color=_white(), fontsize=12, pad=8)
     ax_e.tick_params(colors=_white())
     for spine in ax_e.spines.values():

@@ -1,0 +1,31 @@
+﻿======================================================================
+[1] Sigma 结构检查
+  对称性误差 |Sigma - Sigma^T|max = 0.00e+00
+  与 by-lag Toeplitz 重构误差 = 8.88e-16
+  => Sigma 是对称 Toeplitz 矩阵（平稳核 + 均匀网格）
+  特征值范围: [-5.248e-15, 23.870]
+  大于 1e-12 的特征值个数（数值秩）: 31
+  大于 1e-8  的特征值个数: 25
+  条件数(2范数) = -4.548e+15
+
+  各 λ 下 Sigma_post 对角线统计：
+  λ= 0.1: diag min=0.01050638 max=0.03357044 极差=2.306e-02 相对变化=1.992e+00
+  λ= 1.0: diag min=0.07770269 max=0.17876902 极差=1.011e-01 相对变化=1.209e+00
+  λ=10.0: diag min=0.39753319 max=0.58044746 极差=1.829e-01 相对变化=4.429e-01
+
+======================================================================
+[2] 闭式公式误差来源分析
+  max|direct - formula| = 4.636e-01   （讲义值 4.64e-01）
+python.exe : Traceback (most recent call last):
+所在位置 行:1 字符: 50
++ ... a1_verify"; & "D:\works\deepinv\.audit_tmp\venv042\Scripts\python.exe ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last) 
+   ::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "D:\works\deepinv\.audit_tmp\exp2a1_verify\diag_2a1.py", line 48, in <mo
+dule>
+    print(f"  公式解的方程残差 ||(Σ+σ\xb2I)Sp - σ\xb2Σ||_max = {res_formula:.3e}")
+UnicodeEncodeError: 'gbk' codec can't encode character '\xb2' in position 17: i
+llegal multibyte sequence

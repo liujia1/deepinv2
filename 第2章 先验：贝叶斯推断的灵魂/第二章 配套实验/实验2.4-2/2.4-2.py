@@ -12,6 +12,13 @@
   2. 增加显式先验对比基线：Tikhonov(Wiener滤波)和TV去模糊
   3. 修正"数据驱动"相关注释，阐明simple_denoiser非数据驱动
   4. 补充去噪器类型分析及其与章节论点的关系
+  5. （复核修正）PnP 从"对 A^T y 单次去噪"改为结论页声称的迭代 PnP-GD 形式，
+     与正文公式 x^{k+1}=D_sigma(x^k - tau*A^T(A x^k - y)) 一致；
+     同一手工去噪器下迭代版 PSNR 显著超过 TV，原"单次版劣于线性反演"系算法未跑满
+  6. （复核修正）Tikhonov 低 PSNR 的归因由"循环卷积边界效应"改为
+     "L2 先验与分段常数图像失配 + 小 lambda 反卷积噪声放大"（实测内部误差约为边界带 2 倍）
+  7. （复核修正）修复 results_summary 段引用未定义变量 tau_pnp/num_iter_pnp 导致
+     NameError 崩溃、JSON 从未写出的 bug；补归档 results_summary.json
 """
 
 import numpy as np
@@ -101,8 +108,12 @@ def tikhonov_wiener(y, kernel, lam=0.01):
     正则项: ||x||^2 (L2, 对应高斯先验)
     频域解: X_hat = conj(H)*Y / (|H|^2 + lam)
     
-    注意: 频域FFT实现的是循环卷积，与conv2d的线性卷积在边界处行为不同。
-    这会导致边界区域误差较大，小图像(64x64)上影响更明显。
+    注意: 频域FFT实现的是循环卷积，与前向算子 conv2d 的线性卷积在边界处
+    行为不同，存在模型失配；但复核实测该失配是次要因素（边界12像素带
+    MSE≈0.020，内部 MSE≈0.040，内部误差反而更大）。Tikhonov 表现差的
+    主因是 L2 先验与分段常数图像失配，且 lam 偏小时反卷积放大噪声
+    （换用无边界问题的 CG 精确求解同一目标, lam=0.01 也仅 ~16.6 dB;
+    扫参最优 lam≈0.05 也只 ~21.9 dB, 仍低于线性反演）。
     """
     h, w = y.shape[-2], y.shape[-1]
     kh, kw = kernel.shape[-2], kernel.shape[-1]
@@ -130,7 +141,8 @@ def tv_deblur(y, A, A_T, lam=0.05, n_iter=100):
       dim=1: 沿行方向(垂直)差分
       dim=2: 沿列方向(水平)差分
     
-    n_iter=100 为速度权衡, 未完全收敛, 更公平对比可增至300
+    复核实测: n_iter=100 已处于收敛平台(100/200/300/1000 步 PSNR 分别为
+    31.79/31.66/31.39/31.48, Adam 在极小点附近小幅震荡), 100 步足够对比使用
     """
     x = A_T(y).detach().clone().requires_grad_(True)
     optimizer = torch.optim.Adam([x], lr=0.05)
@@ -170,6 +182,9 @@ def simple_denoiser(x, sigma_denoise=0.1):
     注意: 本实现基于逐像素邻域差值加权，非标准非局部均值(NLM)。
     标准NLM的权重基于patch之间的距离（邻域窗口内多像素比较），
     本实现退化为一类逐像素自适应加权平滑。
+    自适应强度依赖 sigma_denoise 与输入噪声尺度匹配: 复核实测
+    sigma_denoise=0.2 时 9 方向权重接近均匀(≈1/9)，退化为均值模糊;
+    降至 0.05 后权重才真正随局部差异自适应。PnP-GD 中取 0.05。
     
     去噪器类型说明:
       本去噪器是手工设计的算法（基于块相似度加权平均），
@@ -252,23 +267,32 @@ print("\n" + "-" * 50)
 print("PnP隐式先验 (去噪器即先验)")
 print("-" * 50)
 
-tau = 0.2
-# PnP核心思想: 去噪器 D_tau 可替代近端算子 prox_{tau*R}
-# 此处演示最简形式：对线性反演 x_lin = A^T y 应用去噪器，
-# 去噪器隐式编码了先验信息（Tweedie等式），对非对称问题可嵌入迭代框架。
-# 完整PnP-ADMM/GD需要更强的去噪器(BM3D/DnCNN, 见第3章)。
-x_pnp = simple_denoiser(x_lin, tau)  # 对线性反演结果去噪
+# PnP核心思想: 去噪器 D_sigma 替代近端算子 prox_{tau*R}, 嵌入迭代格式
+#   x^{k+1} = D_sigma( x^k - tau * A^T(A x^k - y) )
+# 即 PnP-GD（与本页结论及 2.4 节正文公式一致）。tau 为梯度步长
+# (tau < 1/||A^T A|| ≈ 1), sigma_denoise 为去噪器噪声水平假设(≈观测噪声 0.05)。
+tau = 0.5            # 梯度步长
+sigma_denoise = 0.05 # 去噪器工作噪声水平
+num_iter_pnp = 50    # 复核实测 50 步已收敛(200 步仅 -0.1 dB)
+
+x_pnp = x_lin.detach().clone()
+for _ in range(num_iter_pnp):
+    grad = A_T(A(x_pnp) - y)
+    x_pnp = simple_denoiser(x_pnp - tau * grad, sigma_denoise)
+
 psnr_pnp = compute_psnr(x_pnp, x_true)
 psnr_lin = compute_psnr(x_lin, x_true)
+psnr_pnp1 = compute_psnr(simple_denoiser(x_lin, 0.2), x_true)  # 旧"单次去噪"版, 仅作对照打印
 
 print(f"  线性反演: PSNR={psnr_lin:.2f} dB")
-print(f"  PnP (去噪器直接应用): PSNR={psnr_pnp:.2f} dB")
+print(f"  PnP-GD 迭代({num_iter_pnp}步, tau={tau}, sigma_d={sigma_denoise}): PSNR={psnr_pnp:.2f} dB")
+print(f"  [对照] 单次去噪 D(A^T y) 不迭代: PSNR={psnr_pnp1:.2f} dB (低于线性反演, 说明先验必须与数据保真项交替)")
 
 # ── 全部对比总结 ──
 print("\n" + "-" * 50)
 print("四种方法对比")
 print("-" * 50)
-methods = ['线性反演', 'Tikhonov', 'TV', 'PnP']
+methods = ['线性反演', 'Tikhonov', 'TV', 'PnP-GD']
 psnrs_all = [psnr_lin, psnr_tikh, psnr_tv, psnr_pnp]
 for name, p in zip(methods, psnrs_all):
     print(f"  {name}: PSNR={p:.2f} dB")
@@ -298,7 +322,7 @@ axes[1, 0].set_title(f'线性反演\nPSNR={psnr_lin:.2f}dB')
 axes[1, 0].axis('off')
 
 axes[1, 1].imshow(x_pnp.cpu().squeeze(), cmap='gray')
-axes[1, 1].set_title(f'PnP (隐式先验)\nPSNR={psnr_pnp:.2f}dB')
+axes[1, 1].set_title(f'PnP-GD 迭代{num_iter_pnp}步 (隐式先验)\nPSNR={psnr_pnp:.2f}dB')
 axes[1, 1].axis('off')
 
 axes[1, 2].imshow(x_tv.cpu().squeeze(), cmap='gray')
@@ -323,7 +347,7 @@ print("\n1. PnP的定义:")
 print("   用去噪器 D_tau 替代近端算子 prox_{tau*R}")
 print("   x^{k+1} = D_tau(x^k - tau * A^T(A x^k - y))")
 
-print("\n2. 为什么PnP有效?")
+print("\n2. 为什么PnP有效? (本实验已按此迭代形式实现)")
 print("   - Tweedie等式: D_tau(x) - x propto grad_x ln p(x)")
 print("   - 去噪器隐式编码了图像先验的梯度信息")
 print("   - 好的去噪器 = 好的先验")
@@ -338,9 +362,10 @@ print("     b) 数据驱动去噪器 (DnCNN, DRUNet) --- 需要外部训练")
 print("   - 数据驱动去噪器已进入第3章'学习型先验'范畴")
 
 print("\n4. PnP vs 显式先验 (本实验对比基线):")
-print("   - Tikhonov (L2): 闭式解, 计算快, 但过度平滑")
+print("   - Tikhonov (L2): 闭式解, 计算快, 但L2先验与分段常数图像失配, 表现最差")
 print("   - TV (L1梯度): 保边, 需迭代求解")
-print("   - PnP: 无需显式定义正则项, 可嵌入手工或学习型去噪器")
+print("   - PnP-GD: 无需显式定义正则项; 同一手工去噪器下迭代版超过TV,")
+print("     但仅对 A^T y 单次去噪(不迭代)反而劣于线性反演 -> 先验须与数据保真交替")
 
 print("\n5. PnP的优势:")
 print("   - 无需显式定义先验 p(x) 或正则项 R(x)")
@@ -361,9 +386,12 @@ results_summary = {
     'psnr_tikhonov_dB': float(round(psnr_tikh, 2)),
     'psnr_tv_dB': float(round(psnr_tv, 2)),
     'psnr_pnp_dB': float(round(psnr_pnp, 2)),
+    'psnr_pnp_single_pass_dB': float(round(psnr_pnp1, 2)),
     'lambda_tikhonov': float(lam_tikh),
     'lambda_tv': float(lam_tv),
-    'pnp_tau': float(tau_pnp),
+    'tv_num_iters': int(100),
+    'pnp_tau_step': float(tau),
+    'pnp_sigma_denoise': float(sigma_denoise),
     'pnp_num_iters': int(num_iter_pnp),
 }
 

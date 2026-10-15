@@ -1,0 +1,13 @@
+{
+  "psnr_linear_dB": 22.81,
+  "psnr_tikhonov_dB": 14.78,
+  "psnr_tv_dB": 31.79,
+  "psnr_pnp_dB": 33.57,
+  "psnr_pnp_single_pass_dB": 22.36,
+  "lambda_tikhonov": 0.01,
+  "lambda_tv": 0.05,
+  "tv_num_iters": 100,
+  "pnp_tau_step": 0.5,
+  "pnp_sigma_denoise": 0.05,
+  "pnp_num_iters": 50
+}

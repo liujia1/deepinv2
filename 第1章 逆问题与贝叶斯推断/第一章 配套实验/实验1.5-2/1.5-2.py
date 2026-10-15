@@ -95,8 +95,8 @@ var_spread = (post_var.max() - post_var.min()) / post_var.mean()
 # （均值≈0.173 非零、E[x²]≈0.073 ≠ σ_x²=0.25），因此峰值偏移是系统性的：
 # 30 个独立噪声种子的扫描显示 argmax λ 全部落在 [0.020, 0.036]、
 # 0% ≤ 0.01，并非单次噪声实现的运气；对该 phantom 的频率派期望 MSE
-# 最优 λ（下方特征分解计算）≈ 0.074。好在峰顶平坦，λ* 处 PSNR 仅比
-# 峰值低约 0.4 dB，"附近最优"的结论仍成立。
+# 最优 λ（下方特征分解计算）≈ 0.027，与多种子 argmax 的中位数一致。
+# 好在峰顶平坦，λ* 处 PSNR 仅比峰值低约 0.4 dB，"附近最优"的结论仍成立。
 # 扫描时直接算 MSE（不 clip），避免 clip 掩盖负值导致的误差低估
 # 注：λ<1e-4 时系统极度病态，PSNR 下降同时包含数值误差的贡献
 lambdas_sweep = np.logspace(-5, 1, 50)  # 峰值在 λ≈0.01，1e1 已足够
@@ -107,12 +107,15 @@ for l in lambdas_sweep:
     psnrs.append(10 * np.log10(1.0 / mse) if mse > 1e-12 else float('-inf'))
 
 # 频率派期望 MSE 最优 λ（固定 phantom、对噪声平均），作为峰值偏移来源的参考
+# 注意：偏差项在 A^T A 特征基下的投影系数是 (1-f)⊙(V^T x)，
+# 不能写成 V^T A^T x——那会额外乘上 |a|≤1 的算子特征值，把 |a|≈0 的
+# 高频偏差整项抹掉，使最优 λ 被高估约 2.7 倍（旧版 0.074 的教训）
 evals_AtA, V_AtA = np.linalg.eigh(AtA)
-VtAtx = V_AtA.T @ (A.T @ x_vec)
+Vtx = V_AtA.T @ x_vec
 best_l_freq, best_emse = None, np.inf
-for l in np.logspace(-4, 0.5, 200):
+for l in np.logspace(-4, 0.5, 1000):
     filt = evals_AtA / (evals_AtA + l)
-    bias = V_AtA @ ((1 - filt) * VtAtx)
+    bias = V_AtA @ ((1 - filt) * Vtx)
     emse = (np.sum(bias**2)
             + sigma_noise**2 * np.sum(evals_AtA / (evals_AtA + l)**2)) / N
     if emse < best_emse:

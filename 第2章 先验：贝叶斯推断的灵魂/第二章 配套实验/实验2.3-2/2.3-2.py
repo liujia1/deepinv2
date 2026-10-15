@@ -68,10 +68,12 @@ def log_posterior_skew(x, y, b, sigma):
 x_range_a = np.linspace(-5, 8, 3000)
 log_p_a = log_posterior_skew(x_range_a, y_obs, b, sigma)
 p_a = np.exp(log_p_a - log_p_a.max())
-p_a = p_a / (p_a.sum() * (x_range_a[1] - x_range_a[0]))
+p_a = p_a / _trapz(p_a, x_range_a)  # 与矩计算统一用梯形法归一化，避免矩形/梯形混用
 
-map_idx_a = np.argmax(p_a)
-x_map_a = x_range_a[map_idx_a]
+# MAP：Laplace 先验 + 高斯似然的解析众数为软阈值 x* = sign(y)·max(|y|-σ²/b, 0)
+x_map_a = float(np.sign(y_obs) * max(abs(y_obs) - sigma ** 2 / b, 0.0))  # 精确值 = 0.75
+map_idx_a = np.argmin(np.abs(x_range_a - x_map_a))  # 绘图取最近网格点
+x_map_a_grid = float(x_range_a[np.argmax(p_a)])     # 网格 argmax（离散近似，供对照）
 x_mmse_a = _trapz(x_range_a * p_a, x_range_a)
 
 
@@ -80,6 +82,8 @@ x_mmse_a = _trapz(x_range_a * p_a, x_range_a)
 # ══════════════════════════════════════════════════════════
 # 像素值应为 0 或 1，噪声使其后验呈双峰混合
 # p(x|y) = 0.6 * N(x; μ1=0, σ=0.15) + 0.4 * N(x; μ2=1, σ=0.15)
+# 说明：此处直接给定双峰后验密度以示意“多峰”情形，并非由先验×似然显式计算得到；
+#      故不存在单独的“观测 y”输入，两峰权重 0.6/0.4 即为后验混合权重。
 mu1, sigma1, w1 = 0.0, 0.15, 0.6
 mu2, sigma2, w2 = 1.0, 0.15, 0.4
 
@@ -197,7 +201,7 @@ print("=" * 70)
 print("实验2.3-2 偏斜/多峰后验下 MMSE vs MAP 分歧可视化")
 print("=" * 70)
 print(f"\n[子图(a) 偏斜后验] Laplace 先验(b={b}) + 高斯似然(σ={sigma})，观测 y={y_obs}")
-print(f"  MAP  = {x_map_a:.4f}  (后验峰值，相对观测 y 向零收缩)")
+print(f"  MAP  = {x_map_a:.4f}  (解析软阈值 x*=y-σ²/b，相对观测 y 向零收缩；网格 argmax 近似 {x_map_a_grid:.4f})")
 print(f"  MMSE = {x_mmse_a:.4f}  (后验均值，被右侧尾部质量拉远)")
 print(f"  分歧: MMSE - MAP = {x_mmse_a - x_map_a:.4f}")
 print("  核心观察: MAP 选后验峰值(最可能值)，相对观测 y 向零收缩；MMSE 取后验均值，")
@@ -234,11 +238,13 @@ results_summary = {
     'title': '偏斜/多峰后验下 MMSE vs MAP 分歧可视化',
     'skewed_posterior': {
         'prior': 'Laplace', 'b': b, 'likelihood_sigma': sigma, 'y_obs': y_obs,
-        'MAP': float(x_map_a), 'MMSE': float(x_mmse_a),
+        'MAP': x_map_a, 'MAP_grid_argmax': x_map_a_grid,
+        'MMSE': float(x_mmse_a),
         'divergence_MMSE_minus_MAP': float(x_mmse_a - x_map_a),
     },
     'bimodal_posterior': {
         'prior': 'binary_mixture',
+        'posterior_construction': 'directly specified mixture density (illustrative), NOT derived from prior x likelihood',
         'w1': w1, 'mu1': mu1, 'sigma1': sigma1,
         'w2': w2, 'mu2': mu2, 'sigma2': sigma2,
         'MAP': float(x_map_b), 'MMSE': float(x_mmse_b),

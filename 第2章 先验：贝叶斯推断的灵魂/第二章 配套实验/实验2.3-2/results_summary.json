@@ -6,12 +6,14 @@
     "b": 0.8,
     "likelihood_sigma": 1.0,
     "y_obs": 2.0,
-    "MAP": 0.7479159719906638,
-    "MMSE": 0.9992353564979838,
-    "divergence_MMSE_minus_MAP": 0.25131938450731994
+    "MAP": 0.75,
+    "MAP_grid_argmax": 0.7479159719906638,
+    "MMSE": 0.9992353564979484,
+    "divergence_MMSE_minus_MAP": 0.24923535649794837
   },
   "bimodal_posterior": {
     "prior": "binary_mixture",
+    "posterior_construction": "directly specified mixture density (illustrative), NOT derived from prior x likelihood",
     "w1": 0.6,
     "mu1": 0.0,
     "sigma1": 0.15,

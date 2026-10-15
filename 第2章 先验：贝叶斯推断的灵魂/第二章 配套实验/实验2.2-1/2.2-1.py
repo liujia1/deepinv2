@@ -7,7 +7,22 @@
   - IP22 (statistical_perspective.md): 高斯随机场采样 + MAP估计
   - 2.2章节: 高斯先验的推广形式
 
-修改说明（基于代码评审v8）：
+修改说明（基于代码评审v9）：
+  9. 修正Tikhonov参数的方法论错误：
+     - 区分零均值模型 N(0,σx²I) 与非零均值模型 N(μ,σx²I)；
+     - σx²必须使用"关于模型均值的二阶矩"：零均值用 E[x²](rms²)，非零均值用 Var(x)；
+     - 经验贝叶斯插件估计只使用观测 y（均值、二阶矩减去噪声方差），不偷看真值；
+     - 保留旧版"σ²/s² 配零均值模型且不中心化"的做法作为反面教材（PSNR反而低于含噪图）；
+     - 新增均值中心化 Tikhonov：x̂ = ȳ + (y-ȳ)/(1+λ)，与非零均值数据真正匹配。
+  10. 边界条件归因修正 + DCT对照：
+     - 周期拼接伪影是"周期性边界（np.roll/DFT）+ 非周期图像"的代价，
+       不是频域方法的固有属性；
+     - 新增 Neumann 镜像边界的 DCT 闭式解 sobolev_denoise_dct（同为 O(n²logn)），
+       与周期 DFT 解做边界环 MSE / PSNR 对照（步骤5）。
+  11. 可追溯性：迭代解-闭式解最大差异、DFT/DCT 边界 MSE 等关键验证量落盘 JSON；
+      "按PSNR自动选择"明确标注为基于真值的 oracle（事后）选择。
+  ---
+  历史修改（v8）：
   1. 添加Sobolev频域闭式解，与迭代解对比验证
   2. 统一PSNR/SSIM格式化函数
   3. data_range改为理论值域1.0
@@ -25,6 +40,7 @@ import matplotlib.pyplot as plt
 from skimage import data
 from skimage.transform import resize
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
+from scipy.fft import dctn, idctn
 import os
 import sys
 
@@ -35,8 +51,9 @@ if os.path.isdir(_gdrive):
     # 确保保存目录存在
     os.makedirs(SAVE_DIR, exist_ok=True)
 else:
-    _chinese_path = '.chinese'
     SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
+    # 必须用绝对路径：脚本可能从任意 cwd 启动，相对路径会导致 import 失败
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 sys.path.insert(0, _chinese_path)
 try:
     from chinese_font import setup_chinese_font
@@ -45,151 +62,196 @@ except ImportError:
     print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
     print("请确保 .chinese 文件夹已上传到 Google Drive 的正确位置")
 
+# 跨平台兜底：chinese_font 在 Windows 上只查系统字体，不加载自带 TTF；
+# 若系统无中文字体（或导入失败），显式注册随实验附带的 NotoSansSC。
+_bundled_ttf = os.path.join(_chinese_path, 'NotoSansSC-Regular.ttf')
+if os.path.exists(_bundled_ttf):
+    try:
+        from matplotlib.font_manager import fontManager
+        fontManager.addfont(_bundled_ttf)
+        _preferred = ['SimHei', 'Microsoft YaHei', 'Noto Sans SC']
+        plt.rcParams['font.sans-serif'] = _preferred + [
+            f for f in plt.rcParams.get('font.sans-serif', []) if f not in _preferred]
+        plt.rcParams['font.family'] = 'sans-serif'
+        plt.rcParams['axes.unicode_minus'] = False
+    except Exception as _e:
+        print(f"警告: 自带中文字体注册失败: {_e}")
+
 np.random.seed(42)
 
 # ─── 实验参数配置 ───
 N_PIXELS    = 64
 NOISE_LEVEL = 0.1
-SOB_LAMBDAS = [0.05, 0.1, 0.2]
-SOB_ITERS   = 200
-SOB_TOL     = 1e-6
+NOISE_VAR   = NOISE_LEVEL ** 2
+SOB_LAMBDAS = [0.05, 0.2, 0.5, 1.0, 2.0]  # 扩展网格以覆盖 PSNR 峰值（λ≈0.5）并展示过平滑回落
+SOB_ITERS   = 1000
+SOB_TOL     = 1e-13
 DATA_RANGE  = 1.0  # camera() 经 resize 后值域为 [0,1]，理论值域
+RING_WIDTH  = 4    # 边界效应量化时外缘环的宽度（像素）
+BOUNDARY_LAMBDA = 1.0  # 步骤5边界对比图使用的 λ（边界伪影较强、差异明显）
 
 def fmt_metrics(psnr, ssim):
     """统一格式化 PSNR 和 SSIM 输出"""
     return f"PSNR={psnr:.2f}dB, SSIM={ssim:.3f}"
+
+def calc_psnr(a, b):
+    return peak_signal_noise_ratio(a, b, data_range=DATA_RANGE)
+
+def calc_ssim(a, b):
+    # 新版 scikit-image 要求 2D 图像显式指定 channel_axis=None；旧版无此参数
+    try:
+        return structural_similarity(a, b, data_range=DATA_RANGE, channel_axis=None)
+    except TypeError:
+        return structural_similarity(a, b, data_range=DATA_RANGE)
 
 n = N_PIXELS
 x_true = resize(data.camera(), (n, n))
 
 y = x_true + NOISE_LEVEL * np.random.randn(n, n)
 
+# ═══════════════════════════════════════════════════════════════════
+# 第一部分：Tikhonov（简单 i.i.d. 高斯先验）
+# ═══════════════════════════════════════════════════════════════════
+
 def tikhonov_denoise(y, lam):
     """
-    简单高斯先验: x ~ N(0, σ_x² I)
+    简单高斯先验（零均值）: x ~ N(0, σ_x² I)
     正则项: ||x||_2²
-    
+
     闭式解推导:
       目标函数: J(x) = 0.5||y-x||² + 0.5λ||x||²
       梯度: ∇J = (x-y) + λx = 0
       解: x = y/(1+λ)
-    
-    参数说明:
-      - λ = σ²/σ_x²，其中σ为噪声标准差，σ_x为先验标准差
-      - λ越大，先验影响越强，解越接近0
-      - 注意：σ_x 应与图像值域匹配。camera()经resize后值域约[0,1]，
-        若主观设定σ_x=1.0，相当于假设像素值可扩散到[-3,3]范围（3σ原则），
-        这与实际数据特性不符，教学中需讨论此问题。
+
+    参数说明（v9修正，重点）:
+      - λ = σ²/σ_x²，其中 σ 为噪声标准差。
+      - 模型均值为 0，故一致的先验方差是"关于 0 的二阶矩" σ_x² = E[x²]（rms²），
+        而不是关于样本均值的 Var(x)=s²。对均值 μ≈0.51 的 cameraman，
+        E[x²]=μ²+s²≈0.332 远大于 s²≈0.076，二者绝不能混用。
+      - 该先验把解向 0 收缩；对非零均值图像，正确做法是显式建模均值
+        x ~ N(μ,σ_x²I) 并先去均值（见 tikhonov_denoise_centered）。
     """
     return y / (1 + lam)
+
+def tikhonov_denoise_centered(y, lam):
+    """
+    非零均值高斯先验: x ~ N(μ, σ_x² I)，μ 用样本均值 ȳ 估计。
+
+    推导: 令 d = y - μ，u = x - μ，则模型退化为零均值形式，
+          û = d/(1+λ)，故 x̂ = μ + (y-μ)/(1+λ)。
+    此时一致的先验方差为 Var(x)（关于 μ 的二阶矩），λ = σ²/Var(x)。
+
+    与 tikhonov_denoise 的唯一差别就是"是否先去均值"；
+    同样的 λ，仅差这一步，去噪质量显著不同（本实验 19.17 → 20.56 dB）。
+    """
+    mu = np.mean(y)
+    return mu + (y - mu) / (1 + lam)
+
+# ═══════════════════════════════════════════════════════════════════
+# 第二部分：Sobolev（梯度高斯先验）
+# ═══════════════════════════════════════════════════════════════════
 
 def sobolev_denoise(y, lam, n_iter=SOB_ITERS, tol=SOB_TOL, verbose=False):
     """
     梯度高斯先验: ∇x ~ N(0, σ_∇² I)
     正则项: ||∇x||_2² = ∫|∇x|² dx (Sobolev半范数H¹)
-    
+
     目标函数: J(x) = 0.5||y-x||² + 0.5λ||∇x||²
-    
+
     梯度下降迭代:
       x^{k+1} = x^k - dt * ∇J(x^k)
               = x^k + dt * [(y-x^k) + λ·Δx^k]
       其中Δ为拉普拉斯算子
-    
+
     数值稳定性分析:
       - 二维四邻域拉普拉斯算子的谱半径 ρ(Δ) = 8
-      - 梯度下降稳定性条件: dt × (1 + λ·ρ(Δ)) < 1
-      - 即: dt < 1/(1 + 8λ)
-      - 采用自适应步长: dt = 0.9 / (1 + 8λ)
-    
-    边界条件说明:
+      - 梯度下降稳定性条件: dt × (1 + λ·ρ(Δ)) < 2（收敛域），
+        dt × (1 + λ·ρ(Δ)) < 1 时能量单调下降
+      - 采用保守自适应步长: dt = 0.9 / (1 + 8λ)
+
+    边界条件说明（v9修正）:
       - 使用np.roll实现周期性边界条件（图像左右/上下相连）
-      - 对于非周期性图像（如cameraman），边缘可能出现振铃伪影
-      - 这是频域方法的固有特性，教学中可作为讨论点
-    
+      - cameraman 不是周期信号：上下/左右边缘灰度跳变约 0.23~0.29，
+        周期延拓会人为制造不连续，大 λ 时边缘出现明显伪影
+      - 这是"周期性边界 + 非周期图像"的建模代价，不是频域方法的固有属性：
+        改用 Neumann 镜像边界（DCT 闭式解，见 sobolev_denoise_dct）
+        可消除大部分该伪影，计算复杂度同为 O(n²log n)
+      - 步骤5给出两种边界的定量对照
+
     收敛诊断:
-      - 记录目标函数值，当相对变化小于阈值时提前终止
-      - 使用稳健相对阈值：|ΔJ| / (|J| + 1e-12) < tol
-      - 分母加1e-12防止除零，适用于任意量级的目标函数
+      - 以解的逐像素最大变化作为停止判据：max|x^{k+1} - x^k| < tol
+      - 不使用"目标函数相对变化"判据：该目标在极小值附近 loss 曲面趋于平坦，
+        相对变化会过早触发而解 x 远未收敛（残差可达 1e-4 量级），
+        无法验证迭代解与闭式解的等价性
       - k > 0 确保第一次迭代不会误触发
-    
-    性能说明:
-      - 每次迭代计算两次差分：一次用于梯度下降更新，一次用于目标函数监控
-      - 如不需要收敛诊断，可去掉loss计算以减少开销
     """
     x = y.copy()
     dt = 0.9 / (1 + 8 * lam)
-    
-    prev_loss = np.inf
+
     converged_iter = n_iter
-    
+
     for k in range(n_iter):
         # 用当前x的拉普拉斯更新x
         lap = (np.roll(x, 1, axis=0) + np.roll(x, -1, axis=0) +
                np.roll(x, 1, axis=1) + np.roll(x, -1, axis=1) - 4 * x)
-        x = x + dt * ((y - x) + lam * lap)
-        
-        # 计算更新后x的目标函数（用于收敛诊断）
-        # 等价形式：||∇x||² = Σ(前向差分)²，与拉普拉斯二次型 -x^T Δx 在周期边界下等价
-        grad_x = np.roll(x, -1, axis=1) - x
-        grad_y = np.roll(x, -1, axis=0) - x
-        loss = 0.5 * np.sum((x - y)**2) + 0.5 * lam * np.sum(grad_x**2 + grad_y**2)
-        
-        if k > 0 and abs(prev_loss - loss) / (abs(prev_loss) + 1e-12) < tol:
+        x_new = x + dt * ((y - x) + lam * lap)
+
+        # 收敛判据：解的逐像素最大变化 max|Δx| < tol（直接控制解的精度，
+        # 而非 loss 相对变化——后者在极小值附近过早触发，解尚未收敛）
+        dx = np.max(np.abs(x_new - x))
+        x = x_new
+
+        if k > 0 and dx < tol:
             converged_iter = k + 1
             if verbose:
                 print(f"    收敛于第 {k+1} 次迭代 (λ={lam:.3f})")
             break
-        prev_loss = loss
     else:
         # 循环正常结束（未break），说明未提前收敛
         if verbose:
             print(f"    未收敛，已达最大迭代次数 {n_iter} (λ={lam:.3f})")
-    
+
     return x, converged_iter
 
 def sobolev_denoise_exact(y, lam):
     """
-    Sobolev去噪的频域闭式解（与四邻域离散拉普拉斯一致）
-    
+    Sobolev去噪的频域闭式解（周期边界，与四邻域离散拉普拉斯一致）
+
     理论推导:
       目标函数: J(x) = 0.5||y-x||² + 0.5λ||∇x||²
-      
+
       在离散频域中，四邻域拉普拉斯算子的特征值为：
         λ_Lap(ω) = 2cos(2πω_x) + 2cos(2πω_y) - 4
       其中 ω_x, ω_y 为离散归一化频率（范围 [-0.5, 0.5)）
-      
+
       由Parseval定理，空域范数可转化为频域求和：
         ||∇x||² = Σ|∇x̂(ω)|² = Σ(-λ_Lap(ω))·|X̂(ω)|²
       其中 -λ_Lap(ω) ≥ 0，保证正则项非负
-      
+
       频域目标函数:
-        Ĵ(X̂) = 0.5|Ŷ - X̂|² - 0.5λ·λ_Lap(ω)·|X̂|²
-      
+        Ĵ(X̂) = 0.5|Ŷ - X̂|² - 0.5λ·λ_Lap(ω)·|X̂|²
+
       对每个频率分量求Wirtinger导数并令其为零:
-        ∂Ĵ/∂X̂* = -(Ŷ - X̂) - λ·λ_Lap(ω)·X̂ = 0
+        ∂Ĵ/∂X̂* = -(Ŷ - X̂) - λ·λ_Lap(ω)·X̂ = 0
         X̂(1 - λ·λ_Lap(ω)) = Ŷ
         X̂ = Ŷ / (1 - λ·λ_Lap(ω))
-    
+
     实现说明:
       - 使用np.fft.fft2进行二维DFT
       - 频率网格通过np.fft.fftfreq构造（离散归一化频率，范围[-0.5, 0.5)）
-      - 使用离散拉普拉斯特征值，确保与迭代法的四邻域拉普拉斯完全一致
+      - 使用离散拉普拉斯特征值，确保与迭代法的四邻域拉普拉斯（周期边界）完全一致
       - 结果通过np.fft.ifft2返回空域
-      
-    教学价值:
-      - 与迭代解对比，验证梯度下降收敛正确性（差异应达机器精度）
-      - 展示频域方法的计算效率（O(n² log n) vs 迭代O(k·n²)）
-      - 加深对离散Sobolev先验频域特性的理解
+      - DFT 隐含周期边界；镜像边界版本见 sobolev_denoise_dct
     """
     ny, nx = y.shape
     # 构造离散归一化频率网格（范围 [-0.5, 0.5)）
     freq_y = np.fft.fftfreq(ny)
     freq_x = np.fft.fftfreq(nx)
     omega_y, omega_x = np.meshgrid(freq_y, freq_x, indexing='ij')
-    
+
     # 四邻域离散拉普拉斯的特征值
     lap_eigenval = 2*np.cos(2*np.pi*omega_x) + 2*np.cos(2*np.pi*omega_y) - 4
-    
+
     # DFT
     y_hat = np.fft.fft2(y)
     # 频域滤波: X̂ = Ŷ / (1 - λ·λ_Lap)
@@ -197,8 +259,35 @@ def sobolev_denoise_exact(y, lam):
     x_hat = y_hat / (1 - lam * lap_eigenval)
     # IDFT返回实部
     x_exact = np.fft.ifft2(x_hat).real
-    
+
     return x_exact
+
+def sobolev_denoise_dct(y, lam):
+    """
+    Sobolev去噪的频域闭式解（Neumann 镜像边界，DCT-II 实现）
+
+    理论推导:
+      镜像（Neumann）边界的一维路径图拉普拉斯：内部 [1,-2,1]/端点度1，
+      其正交特征基恰为 DCT-II 基，二维可分离，特征值为
+        μ(k,l) = 4 - 2cos(πk/n) - 2cos(πl/n),  k,l = 0,...,n-1
+      （已用稠密矩阵谱分解核对到机器精度 1e-14）
+
+      频域解: X̃ = Ỹ / (1 + λ·μ)，正/反变换使用 ortho 归一化 DCT。
+
+    与 DFT 版本的关系:
+      - 两者同为 O(n²log n) 的精确闭式解，唯一差别是边界条件；
+      - DCT 对应镜像延拓，图像边缘不被"对边拼接"，
+        对 cameraman 这类非周期图像边界 MSE 显著更低（步骤5定量验证）。
+    """
+    ny, nx = y.shape
+    k_idx = np.arange(ny)
+    l_idx = np.arange(nx)
+    K, L = np.meshgrid(k_idx, l_idx, indexing='ij')
+    mu = 4 - 2*np.cos(np.pi*K/ny) - 2*np.cos(np.pi*L/nx)
+
+    y_dct = dctn(y, norm='ortho')
+    x_dct = y_dct / (1 + lam * mu)
+    return idctn(x_dct, norm='ortho')
 
 def generate_figure_2_1(save_dir):
     """
@@ -327,40 +416,85 @@ def generate_figure_2_1(save_dir):
     plt.close()
     print("图2-1已生成：", out_path)
 
-sigma_x_data = x_true.std()
+# ═══════════════════════════════════════════════════════════════════
+# 参数计算：经验贝叶斯插件量只使用观测 y，不使用真值 x_true
+# ═══════════════════════════════════════════════════════════════════
+
+# --- 真值统计量（仅用于教学对照与评判，不参与"从数据定参数"）---
+mu_true   = float(np.mean(x_true))
+s_true    = float(np.std(x_true))
+rms2_true = float(np.mean(x_true ** 2))  # E[x²]，关于0的二阶矩
+
+# --- 从观测 y 可获得的无偏插件估计（噪声方差已知）---
+mu_y      = float(np.mean(y))
+rms2_hat  = float(np.mean(y ** 2) - NOISE_VAR)   # E[x²] 的插件估计
+s2_hat    = float(np.var(y) - NOISE_VAR)         # Var(x) 的插件估计
+
+# Tikhonov 四种参数化
 sigma_x_prior = 1.0
+lam_tikh_subj    = NOISE_VAR / sigma_x_prior ** 2  # 主观先验 σx=1
+lam_tikh_eb0     = NOISE_VAR / rms2_hat            # 零均值模型 N(0,σx²I) 的一致EB：σx²=E[x²]
+lam_tikh_center  = NOISE_VAR / s2_hat              # 非零均值模型 N(μ,σx²I) 的一致EB：σx²=Var(x)
+# 反面教材：旧版做法——λ 用 σ²/s²（关于均值的方差），却仍套零均值闭式解、不中心化
+lam_tikh_misuse  = lam_tikh_center
 
-lam_tikh_data = NOISE_LEVEL**2 / sigma_x_data**2
-lam_tikh_prior = NOISE_LEVEL**2 / sigma_x_prior**2
+x_tikh_subj   = tikhonov_denoise(y, lam_tikh_subj)
+x_tikh_eb0    = tikhonov_denoise(y, lam_tikh_eb0)
+x_tikh_center = tikhonov_denoise_centered(y, lam_tikh_center)
+x_tikh_misuse = tikhonov_denoise(y, lam_tikh_misuse)
 
-x_tikh_data = tikhonov_denoise(y, lam_tikh_data)
-x_tikh_prior = tikhonov_denoise(y, lam_tikh_prior)
-
+# Sobolev：迭代解（周期）、DFT 闭式解（周期）、DCT 闭式解（镜像）
 x_sob_results = []
 x_sob_exact_results = []
+x_sob_dct_results = []
 converged_iters = []
+iter_exact_diffs = []
 
 for lam_sob in SOB_LAMBDAS:
     # 迭代解
     x_sob, iters = sobolev_denoise(y, lam_sob, verbose=True)
     x_sob_results.append(x_sob)
     converged_iters.append(iters)
-    # 闭式解（用于对比验证）
+    # 闭式解（周期边界，用于对比验证迭代实现）
     x_sob_exact = sobolev_denoise_exact(y, lam_sob)
     x_sob_exact_results.append(x_sob_exact)
+    iter_exact_diffs.append(float(np.max(np.abs(x_sob - x_sob_exact))))
+    # 闭式解（Neumann 镜像边界，用于边界条件对照）
+    x_sob_dct_results.append(sobolev_denoise_dct(y, lam_sob))
 
-# 统一计算所有PSNR/SSIM（避免重复计算）
-psnr_noisy = peak_signal_noise_ratio(x_true, y, data_range=DATA_RANGE)
-psnr_tikh_data = peak_signal_noise_ratio(x_true, x_tikh_data, data_range=DATA_RANGE)
-psnr_tikh_prior = peak_signal_noise_ratio(x_true, x_tikh_prior, data_range=DATA_RANGE)
-psnr_sob = [peak_signal_noise_ratio(x_true, xs, data_range=DATA_RANGE) for xs in x_sob_results]
-psnr_sob_exact = [peak_signal_noise_ratio(x_true, xs, data_range=DATA_RANGE) for xs in x_sob_exact_results]
+# ─── 统一计算所有 PSNR/SSIM ───
+psnr_noisy = calc_psnr(x_true, y)
+psnr_tikh_subj,   ssim_tikh_subj   = calc_psnr(x_true, x_tikh_subj),   calc_ssim(x_true, x_tikh_subj)
+psnr_tikh_eb0,    ssim_tikh_eb0    = calc_psnr(x_true, x_tikh_eb0),    calc_ssim(x_true, x_tikh_eb0)
+psnr_tikh_center, ssim_tikh_center = calc_psnr(x_true, x_tikh_center), calc_ssim(x_true, x_tikh_center)
+psnr_tikh_misuse, ssim_tikh_misuse = calc_psnr(x_true, x_tikh_misuse), calc_ssim(x_true, x_tikh_misuse)
 
-ssim_noisy = structural_similarity(x_true, y, data_range=DATA_RANGE)
-ssim_tikh_data = structural_similarity(x_true, x_tikh_data, data_range=DATA_RANGE)
-ssim_tikh_prior = structural_similarity(x_true, x_tikh_prior, data_range=DATA_RANGE)
-ssim_sob = [structural_similarity(x_true, xs, data_range=DATA_RANGE) for xs in x_sob_results]
-ssim_sob_exact = [structural_similarity(x_true, xs, data_range=DATA_RANGE) for xs in x_sob_exact_results]
+psnr_sob       = [calc_psnr(x_true, xs)     for xs in x_sob_results]
+psnr_sob_exact = [calc_psnr(x_true, xs)     for xs in x_sob_exact_results]
+psnr_sob_dct   = [calc_psnr(x_true, xs)     for xs in x_sob_dct_results]
+ssim_noisy = calc_ssim(x_true, y)
+ssim_sob       = [calc_ssim(x_true, xs)     for xs in x_sob_results]
+ssim_sob_exact = [calc_ssim(x_true, xs)     for xs in x_sob_exact_results]
+ssim_sob_dct   = [calc_ssim(x_true, xs)     for xs in x_sob_dct_results]
+
+# ─── 边界环 / 内部区域的 MSE（隔离边界条件效应）──
+ring_mask = np.zeros((n, n), dtype=bool)
+w = RING_WIDTH
+ring_mask[:w, :] = True
+ring_mask[-w:, :] = True
+ring_mask[:, :w] = True
+ring_mask[:, -w:] = True
+inner_mask = ~ring_mask
+
+bmse_dft, bmse_dct, imse_dft, imse_dct = [], [], [], []
+for i in range(len(SOB_LAMBDAS)):
+    bmse_dft.append(float(np.mean((x_sob_exact_results[i][ring_mask] - x_true[ring_mask]) ** 2)))
+    bmse_dct.append(float(np.mean((x_sob_dct_results[i][ring_mask]   - x_true[ring_mask]) ** 2)))
+    imse_dft.append(float(np.mean((x_sob_exact_results[i][inner_mask] - x_true[inner_mask]) ** 2)))
+    imse_dct.append(float(np.mean((x_sob_dct_results[i][inner_mask]   - x_true[inner_mask]) ** 2)))
+
+best_sob_idx     = int(np.argmax(psnr_sob))
+best_sob_dct_idx = int(np.argmax(psnr_sob_dct))
 
 print("=" * 70)
 print("实验2.2-1 高斯先验的推广：从Tikhonov到Sobolev平滑")
@@ -373,7 +507,7 @@ print("""
 在高斯-高斯模型下（高斯似然 + 高斯先验），后验分布为高斯分布。
 由于高斯分布对称，均值 = 众数，因此：
   - MAP估计（后验众数）= MMSE估计（后验均值）
-  - Tikhonov闭式解 x = y/(1+λ) 既是MAP也是MMSE
+  - Tikhonov闭式解 x = y/(1+λ) 既是MAP也是MMSE（均值中心化版本同理）
 这是共轭先验的重要性质，详见第2章附录2A。
 """)
 
@@ -382,56 +516,78 @@ print("【参数设置】")
 print("=" * 70)
 print(f"  图像尺寸: {n}×{n}")
 print(f"  噪声标准差 σ = {NOISE_LEVEL:.4f}")
-print(f"  图像实际标准差 σ_x(数据) = {sigma_x_data:.4f}")
-print(f"  先验假设标准差 σ_x(先验) = {sigma_x_prior:.4f} (主观设定)")
-print(f"\n  Tikhonov参数:")
-print(f"    - 从数据估计: λ = σ²/σ_x(数据)² = {lam_tikh_data:.4f}")
-print(f"    - 主观先验:   λ = σ²/σ_x(先验)² = {lam_tikh_prior:.4f}")
-print(f"\n  注意：σ_x(先验)=1.0 假设像素值域约[-3,3]（3σ原则），")
-print(f"        但 camera() 经 resize 后值域实际约 [0,1]，")
-print(f"        该假设与数据特性不匹配，导致 λ 偏小、正则化不足。")
+print(f"\n  真值统计量（仅用于教学对照，实际逆问题中不可得）:")
+print(f"    均值 μ = {mu_true:.4f}（显著非零！）")
+print(f"    标准差 s = {s_true:.4f},  Var(x) = s² = {s_true**2:.4f}")
+print(f"    rms² = E[x²] = μ²+s² = {rms2_true:.4f}")
+print(f"\n  从观测 y 得到的插件估计（噪声方差已知，E[y²]=E[x²]+σ²）:")
+print(f"    μ̂ = ȳ = {mu_y:.4f}")
+print(f"    E[x²] 插件估计 = mean(y²)-σ² = {rms2_hat:.4f}")
+print(f"    Var(x) 插件估计 = var(y)-σ² = {s2_hat:.4f}")
+print(f"\n  Tikhonov 参数 λ=σ²/σx² 的四种用法（σx²必须与模型均值配套）:")
+print(f"    (1) 主观先验 σx=1（零均值模型）:            λ={lam_tikh_subj:.4f}")
+print(f"    (2) 零均值模型的一致EB σx²=E[x²]=rms²:     λ={lam_tikh_eb0:.4f}")
+print(f"    (3) 非零均值模型 N(μ,σx²I)，先去均值，")
+print(f"        σx²=Var(x):                             λ={lam_tikh_center:.4f}")
+print(f"    (4) 反面教材：λ取σ²/s²却仍向0收缩、不中心化: λ={lam_tikh_misuse:.4f}")
 print(f"\n  Sobolev参数 λ ∈ {SOB_LAMBDAS}")
 print(f"  自适应步长: dt = 0.9/(1+8λ)")
+print(f"  边界对照: 周期(DFT/np.roll) vs 镜像(DCT/Neumann)，边界环宽 {RING_WIDTH} 像素")
 
 print("\n" + "=" * 70)
 print("【评估结果】")
 print("=" * 70)
-print(f"\n1. 含噪图像:")
+print(f"\n0. 含噪图像:")
 print(f"   {fmt_metrics(psnr_noisy, ssim_noisy)}")
 
-print(f"\n2. Tikhonov去噪 (简单高斯先验):")
-print(f"   正则项: ||x||_2²")
-print(f"   假设: 图像值小")
-print(f"   [从数据估计σ_x] λ={lam_tikh_data:.4f}: {fmt_metrics(psnr_tikh_data, ssim_tikh_data)}")
-print(f"   [主观先验σ_x=1] λ={lam_tikh_prior:.4f}: {fmt_metrics(psnr_tikh_prior, ssim_tikh_prior)}")
+print(f"\n1. Tikhonov去噪 (简单 i.i.d. 高斯先验)，正则项 ||x||₂²:")
+print(f"   (1) 主观先验 σx=1：假设像素可扩散到约[-3,3]，先验方差过大→λ过小、")
+print(f"       几乎不收缩: {fmt_metrics(psnr_tikh_subj, ssim_tikh_subj)}")
+print(f"   (2) 零均值模型+一致EB（σx²=E[x²]={rms2_hat:.3f}）: "
+      f"{fmt_metrics(psnr_tikh_eb0, ssim_tikh_eb0)}")
+print(f"       ——与 N(0,σx²I) 配套的无偏插件选择；标量模型总体最优 λ*=σ²/E[x²]。")
+print(f"   (3) 均值中心化 x̂=ȳ+(y-ȳ)/(1+λ)（模型与非零均值数据匹配）: "
+      f"{fmt_metrics(psnr_tikh_center, ssim_tikh_center)}")
+print(f"       ——Tikhonov 族最佳。")
+print(f"   (4) 反面教材（σ²/s² 配零均值闭式解，不中心化）: "
+      f"{fmt_metrics(psnr_tikh_misuse, ssim_tikh_misuse)}")
+print(f"       ——把关于均值的方差错配给零均值模型，过度向0收缩，PSNR反而低于含噪图。")
 print(f"\n   → 教学解读：")
-print(f"     两种参数选择方式展示了先验假设对结果的影响：")
-print(f"     - 从数据估计σ_x({sigma_x_data:.3f})：λ={lam_tikh_data:.4f}，正则化较强")
-print(f"     - 主观先验σ_x=1.0：λ={lam_tikh_prior:.4f}，正则化较弱（因假设值域过大）")
-print(f"     对比PSNR({psnr_tikh_data:.2f} vs {psnr_tikh_prior:.2f}dB)说明：")
-print(f"     先验假设需与数据特性匹配，不匹配的先验会引入偏差或不足。")
+print(f"     先验的均值与方差必须与数据配套：均值不匹配时再"
+      f"\"正确\"的λ也会失效；")
+print(f"     (3)与(4)只差一次去均值，结果相差 {psnr_tikh_center-psnr_tikh_misuse:.2f} dB，")
+print(f"     直观展示了模型假设一致性的重要性。")
+print(f"     但即使是最佳Tikhonov({psnr_tikh_center:.2f}dB)也远逊于Sobolev"
+      f"({max(psnr_sob):.2f}dB)：")
+print(f"     i.i.d. 先验完全没有空间相关性，这是其本质局限。")
 
-print(f"\n3. Sobolev去噪 (梯度高斯先验):")
-print(f"   正则项: ||∇x||_2²")
-print(f"   假设: 相邻像素相似")
+print(f"\n2. Sobolev去噪 (梯度高斯先验)，正则项 ||∇x||₂²:")
 for i, lam_sob in enumerate(SOB_LAMBDAS):
-    print(f"   λ={lam_sob:.2f}: {fmt_metrics(psnr_sob[i], ssim_sob[i])}, 收敛于{converged_iters[i]}次迭代")
+    print(f"   λ={lam_sob:.2f} [周期DFT]: {fmt_metrics(psnr_sob[i], ssim_sob[i])}, "
+          f"收敛于{converged_iters[i]}次迭代; [镜像DCT]: {fmt_metrics(psnr_sob_dct[i], ssim_sob_dct[i])}")
 
-print(f"\n【迭代解 vs 闭式解验证】")
+print(f"\n【迭代解 vs 闭式解验证（周期边界内部一致性）】")
 print(f"   迭代法使用空域梯度下降，闭式解使用频域DFT滤波")
-print(f"   两者理论上等价，数值差异应接近机器精度（~1e-15）")
+print(f"   两者理论上等价，数值差异应达到迭代容差精度（~1e-12，受 SOB_TOL 控制）")
 for i, lam_sob in enumerate(SOB_LAMBDAS):
-    diff = np.max(np.abs(x_sob_results[i] - x_sob_exact_results[i]))
-    print(f"   λ={lam_sob:.2f}: 最大差异 = {diff:.2e}")
+    print(f"   λ={lam_sob:.2f}: 最大差异 = {iter_exact_diffs[i]:.2e}")
     print(f"            迭代解 {fmt_metrics(psnr_sob[i], ssim_sob[i])}")
     print(f"            闭式解 {fmt_metrics(psnr_sob_exact[i], ssim_sob_exact[i])}")
 
-print(f"\n【边界条件说明】")
-print(f"  使用周期性边界条件（np.roll实现）")
-print(f"  对于非周期性图像，边缘可能出现振铃伪影")
-print(f"  这是频域方法的固有特性，教学中可讨论")
+print(f"\n【边界条件对照：周期(DFT) vs 镜像(DCT)】")
+print(f"   边界环宽 {RING_WIDTH} 像素；两者内部区域 MSE 应几乎相同，差异只来自边界建模")
+print(f"   {'λ':>5s} {'DFT边界MSE':>12s} {'DCT边界MSE':>12s} {'DFT内部MSE':>12s} {'DCT内部MSE':>12s} {'DFT PSNR':>9s} {'DCT PSNR':>9s}")
+for i, lam_sob in enumerate(SOB_LAMBDAS):
+    print(f"   {lam_sob:5.2f} {bmse_dft[i]:12.5f} {bmse_dct[i]:12.5f} "
+          f"{imse_dft[i]:12.5f} {imse_dct[i]:12.5f} {psnr_sob[i]:9.2f} {psnr_sob_dct[i]:9.2f}")
+print(f"   cameraman 上下/左右边缘均值跳变约 0.29/0.23，周期延拓人为制造不连续；")
+print(f"   大 λ 时 DFT 边界 MSE 显著高于 DCT——这是周期边界的代价，")
+print(f"   而非\"频域方法固有振铃\"（两者同为 O(n²log n) 频域闭式解）。")
 
-fig, axes = plt.subplots(2, 3, figsize=(14, 9))
+# ═══════════════════════════════════════════════════════════════════
+# 步骤1：去噪结果总览（2×4）
+# ═══════════════════════════════════════════════════════════════════
+fig, axes = plt.subplots(2, 4, figsize=(18, 9))
 
 axes[0, 0].imshow(x_true, cmap='gray')
 axes[0, 0].set_title('原始图像')
@@ -441,31 +597,47 @@ axes[0, 1].imshow(y, cmap='gray')
 axes[0, 1].set_title(f'含噪图像\n{fmt_metrics(psnr_noisy, ssim_noisy)}')
 axes[0, 1].axis('off')
 
-axes[0, 2].imshow(x_tikh_data, cmap='gray')
-axes[0, 2].set_title(f'Tikhonov (数据估计$\\sigma_x$)\n$\\lambda$={lam_tikh_data:.4f}\n{fmt_metrics(psnr_tikh_data, ssim_tikh_data)}')
+axes[0, 2].imshow(x_tikh_subj, cmap='gray')
+axes[0, 2].set_title(f'Tikhonov (1) 主观先验$\\sigma_x=1$\n$\\lambda$={lam_tikh_subj:.4f}\n'
+                     f'{fmt_metrics(psnr_tikh_subj, ssim_tikh_subj)}')
 axes[0, 2].axis('off')
 
-axes[1, 0].imshow(x_tikh_prior, cmap='gray')
-axes[1, 0].set_title(f'Tikhonov (主观先验$\\sigma_x=1$)\n$\\lambda$={lam_tikh_prior:.4f}\n{fmt_metrics(psnr_tikh_prior, ssim_tikh_prior)}')
+axes[0, 3].imshow(x_tikh_eb0, cmap='gray')
+axes[0, 3].set_title(f'Tikhonov (2) 零均值模型一致EB\n$\\sigma_x^2$=E[$x^2$], $\\lambda$={lam_tikh_eb0:.4f}\n'
+                     f'{fmt_metrics(psnr_tikh_eb0, ssim_tikh_eb0)}')
+axes[0, 3].axis('off')
+
+axes[1, 0].imshow(x_tikh_center, cmap='gray')
+axes[1, 0].set_title(f'Tikhonov (3) 均值中心化（最佳）\n$\\lambda$={lam_tikh_center:.4f}\n'
+                     f'{fmt_metrics(psnr_tikh_center, ssim_tikh_center)}')
 axes[1, 0].axis('off')
 
-sob_idx_01 = 1  # $\\lambda$=0.1 在 SOB_LAMBDAS 中的索引
-lam_display = SOB_LAMBDAS[sob_idx_01]
-axes[1, 1].imshow(x_sob_results[sob_idx_01], cmap='gray')
-axes[1, 1].set_title(f'Sobolev ($\\lambda$={lam_display})\n{fmt_metrics(psnr_sob[sob_idx_01], ssim_sob[sob_idx_01])}')
+axes[1, 1].imshow(x_tikh_misuse, cmap='gray')
+axes[1, 1].set_title(f'Tikhonov (4) 反面教材：不中心化\n$\\lambda$={lam_tikh_misuse:.4f}\n'
+                     f'{fmt_metrics(psnr_tikh_misuse, ssim_tikh_misuse)}', color='darkred')
 axes[1, 1].axis('off')
 
-best_sob_idx = np.argmax(psnr_sob)
-axes[1, 2].imshow(x_sob_results[best_sob_idx], cmap='gray')
-axes[1, 2].set_title(f'Sobolev (最优$\\lambda$={SOB_LAMBDAS[best_sob_idx]})\n{fmt_metrics(psnr_sob[best_sob_idx], ssim_sob[best_sob_idx])}\n(按PSNR自动选择)')
-axes[1, 2].set_axis_off()
+sob_idx_01 = 1  # 较小 λ（SOB_LAMBDAS[1]=0.2），与右图"最优λ"形成对照
+lam_display = SOB_LAMBDAS[sob_idx_01]
+axes[1, 2].imshow(x_sob_results[sob_idx_01], cmap='gray')
+axes[1, 2].set_title(f'Sobolev ($\\lambda$={lam_display})\n{fmt_metrics(psnr_sob[sob_idx_01], ssim_sob[sob_idx_01])}')
+axes[1, 2].axis('off')
 
-plt.suptitle('高斯先验的推广：Tikhonov vs Sobolev', fontsize=14)
+axes[1, 3].imshow(x_sob_results[best_sob_idx], cmap='gray')
+axes[1, 3].set_title(f'Sobolev (事后最优$\\lambda$={SOB_LAMBDAS[best_sob_idx]})\n'
+                     f'{fmt_metrics(psnr_sob[best_sob_idx], ssim_sob[best_sob_idx])}\n'
+                     f'(oracle：按与真值的PSNR选取)')
+axes[1, 3].set_axis_off()
+
+plt.suptitle('高斯先验的推广：Tikhonov（含均值中心化修正）vs Sobolev', fontsize=14)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤1_去噪结果对比.png'), dpi=150, bbox_inches='tight')
 plt.close()
 
-fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+# ═══════════════════════════════════════════════════════════════════
+# 步骤2：剖面与性能柱状图
+# ═══════════════════════════════════════════════════════════════════
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
 center = n // 2
 for i, (lam_sob, xs) in enumerate(zip(SOB_LAMBDAS, x_sob_results)):
@@ -478,9 +650,15 @@ axes[0].set_xlabel('像素索引')
 axes[0].set_ylabel('灰度值')
 axes[0].grid(True, alpha=0.3)
 
-all_methods = ['Tikhonov\n(数据估计)', 'Tikhonov\n(主观先验)'] + [f'Sobolev\n$\\lambda$={lam}' for lam in SOB_LAMBDAS]
-all_psnrs = [psnr_tikh_data, psnr_tikh_prior] + psnr_sob
-all_ssim_scaled = [ssim_tikh_data*100, ssim_tikh_prior*100] + [s*100 for s in ssim_sob]
+all_methods = ['Tikhonov\n(1)主观σx=1', 'Tikhonov\n(2)零均值EB',
+               'Tikhonov\n(3)均值中心化', 'Tikhonov\n(4)误用对照'] + \
+              [f'Sobolev周期\n$\\lambda$={lam}' for lam in SOB_LAMBDAS] + \
+              [f'Sobolev镜像DCT\n$\\lambda$={SOB_LAMBDAS[best_sob_dct_idx]:g}(最优)']
+all_psnrs = [psnr_tikh_subj, psnr_tikh_eb0, psnr_tikh_center, psnr_tikh_misuse] + \
+            psnr_sob + [psnr_sob_dct[best_sob_dct_idx]]
+all_ssim_scaled = [ssim_tikh_subj*100, ssim_tikh_eb0*100,
+                   ssim_tikh_center*100, ssim_tikh_misuse*100] + \
+                  [s*100 for s in ssim_sob] + [ssim_sob_dct[best_sob_dct_idx]*100]
 
 x_pos = np.arange(len(all_methods))
 width = 0.35
@@ -506,7 +684,7 @@ ax2.set_ylabel('SSIM$\\times$100', color='seagreen')
 ax2.tick_params(axis='y', labelcolor='seagreen')
 
 ax1.set_xticks(x_pos)
-ax1.set_xticklabels(all_methods, fontsize=8)
+ax1.set_xticklabels(all_methods, fontsize=7)
 ax1.set_title('不同方法的性能对比\n(左轴: PSNR, 右轴: SSIM$\\times$100)')
 
 lines1, labels1 = ax1.get_legend_handles_labels()
@@ -517,7 +695,10 @@ plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤2_剖面对比与性能.png'), dpi=150, bbox_inches='tight')
 plt.close()
 
-fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+# ═══════════════════════════════════════════════════════════════════
+# 步骤3：正则项形态与局部方差
+# ═══════════════════════════════════════════════════════════════════
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
 t = np.linspace(-2, 2, 400)
 axes[0].plot(t, t**2, 'b-', linewidth=2, label='L2: $t^2$ (高斯先验正则项)')
@@ -531,17 +712,25 @@ axes[0].grid(True, alpha=0.3)
 
 # 局部方差计算（边界安全检查）
 assert n >= 10, "N_PIXELS 过小，局部方差区域无效"
-local_var_true = np.var(x_true[center-5:center+5, center-5:center+5])
-local_var_tikh = np.var(x_tikh_data[center-5:center+5, center-5:center+5])
-local_var_sob = [np.var(xs[center-5:center+5, center-5:center+5]) for xs in x_sob_results]
+sl = (slice(center-5, center+5), slice(center-5, center+5))
+local_var_true   = float(np.var(x_true[sl]))
+local_var_subj   = float(np.var(x_tikh_subj[sl]))
+local_var_eb0    = float(np.var(x_tikh_eb0[sl]))
+local_var_center = float(np.var(x_tikh_center[sl]))
+local_var_misuse = float(np.var(x_tikh_misuse[sl]))
+local_var_sob = [float(np.var(xs[sl])) for xs in x_sob_results]
 
-var_methods = ['真实', 'Tikhonov\n(数据估计)'] + [f'Sobolev\n$\\lambda$={lam}' for lam in SOB_LAMBDAS]
-var_values = [local_var_true, local_var_tikh] + local_var_sob
+var_methods = ['真实', 'Tikhonov\n(1)主观σx=1', 'Tikhonov\n(2)零均值EB',
+               'Tikhonov\n(3)均值中心化', 'Tikhonov\n(4)误用对照'] + \
+              [f'Sobolev\n$\\lambda$={lam}' for lam in SOB_LAMBDAS]
+var_values = [local_var_true, local_var_subj, local_var_eb0,
+              local_var_center, local_var_misuse] + local_var_sob
 var_colors = plt.cm.tab10(np.linspace(0, 0.5, len(var_methods)))
 
 axes[1].bar(var_methods, var_values, color=var_colors[:len(var_methods)], alpha=0.7)
 axes[1].set_ylabel('局部方差')
 axes[1].set_title('局部方差保持度\n(中心$10\\times10$区域)')
+axes[1].tick_params(axis='x', labelsize=7)
 
 # 动态计算文字偏移量，避免超出边框
 var_max = max(var_values)
@@ -558,14 +747,16 @@ for i, v in enumerate(var_values):
         va = 'top'
     else:
         va = 'bottom'
-    axes[1].text(i, text_y, f'{v:.4f}', ha='center', va=va, fontsize=8)
+    axes[1].text(i, text_y, f'{v:.4f}', ha='center', va=va, fontsize=7)
 axes[1].grid(True, alpha=0.3, axis='y')
 
 plt.tight_layout(rect=[0, 0, 1, 0.95])
 plt.savefig(os.path.join(SAVE_DIR, '步骤3_正则项形态与方差保持.png'), dpi=150, bbox_inches='tight')
 plt.close()
 
-# 新增：步骤4 - 迭代解与闭式解对比
+# ═══════════════════════════════════════════════════════════════════
+# 步骤4：迭代解与闭式解对比（保持原结构）
+# ═══════════════════════════════════════════════════════════════════
 n_rows = 2  # 上排迭代解，下排闭式解
 n_cols = len(SOB_LAMBDAS)
 fig, axes = plt.subplots(n_rows, n_cols, figsize=(4*n_cols, 4*n_rows), squeeze=False)
@@ -576,16 +767,56 @@ for i, lam_sob in enumerate(SOB_LAMBDAS):
     title1 = '迭代解 ($\\lambda$={:.2f})\n{}\n迭代{}次'.format(lam_sob, fmt_metrics(psnr_sob[i], ssim_sob[i]), converged_iters[i])
     axes[0, i].set_title(title1)
     axes[0, i].axis('off')
-    
+
     # 下排：闭式解
     axes[1, i].imshow(x_sob_exact_results[i], cmap='gray')
     title2 = '闭式解 ($\\lambda$={:.2f})\n{}\n频域O($n^2\\log n$), n为边长'.format(lam_sob, fmt_metrics(psnr_sob_exact[i], ssim_sob_exact[i]))
     axes[1, i].set_title(title2)
     axes[1, i].axis('off')
 
-plt.suptitle('Sobolev去噪：迭代解 vs 频域闭式解', fontsize=14)
+plt.suptitle('Sobolev去噪：迭代解 vs 频域闭式解（均为周期边界）', fontsize=14)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤4_迭代解与闭式解对比.png'), dpi=150, bbox_inches='tight')
+plt.close()
+
+# ═══════════════════════════════════════════════════════════════════
+# 步骤5（新增）：边界条件对照——周期(DFT) vs 镜像(DCT)
+# ═══════════════════════════════════════════════════════════════════
+bd_idx = SOB_LAMBDAS.index(BOUNDARY_LAMBDA)
+x_dft_bd = x_sob_exact_results[bd_idx]
+x_dct_bd = x_sob_dct_results[bd_idx]
+err_dft_bd = np.abs(x_dft_bd - x_true)
+err_dct_bd = np.abs(x_dct_bd - x_true)
+err_vmax = max(float(err_dft_bd.max()), float(err_dct_bd.max()))
+
+fig, axes = plt.subplots(2, 2, figsize=(11, 10))
+
+im00 = axes[0, 0].imshow(x_dft_bd, cmap='gray')
+axes[0, 0].set_title(f'周期边界（np.roll/DFT），$\\lambda$={BOUNDARY_LAMBDA:g}\n'
+                     f'{fmt_metrics(psnr_sob[bd_idx], ssim_sob[bd_idx])}\n'
+                     f'边界{RING_WIDTH}像素环 MSE={bmse_dft[bd_idx]:.5f}')
+axes[0, 0].axis('off')
+
+im01 = axes[0, 1].imshow(x_dct_bd, cmap='gray')
+axes[0, 1].set_title(f'镜像边界（Neumann/DCT），$\\lambda$={BOUNDARY_LAMBDA:g}\n'
+                     f'{fmt_metrics(psnr_sob_dct[bd_idx], ssim_sob_dct[bd_idx])}\n'
+                     f'边界{RING_WIDTH}像素环 MSE={bmse_dct[bd_idx]:.5f}')
+axes[0, 1].axis('off')
+
+im10 = axes[1, 0].imshow(err_dft_bd, cmap='hot', vmin=0, vmax=err_vmax)
+axes[1, 0].set_title('绝对误差 |$\\hat{x}-x_{真}$|：周期边界\n（误差集中在四条边缘）')
+axes[1, 0].axis('off')
+fig.colorbar(im10, ax=axes[1, 0], fraction=0.046, pad=0.04)
+
+im11 = axes[1, 1].imshow(err_dct_bd, cmap='hot', vmin=0, vmax=err_vmax)
+axes[1, 1].set_title('绝对误差 |$\\hat{x}-x_{真}$|：镜像边界\n（边缘误差基本消除）')
+axes[1, 1].axis('off')
+fig.colorbar(im11, ax=axes[1, 1], fraction=0.046, pad=0.04)
+
+fig.suptitle('边界条件对照：周期拼接伪影是边界建模的代价，不是频域方法的固有属性\n'
+             '两种解法同为 O($n^2\\log n$) 频域闭式解，仅边界条件不同', fontsize=13)
+plt.tight_layout(rect=[0, 0, 1, 0.94])
+plt.savefig(os.path.join(SAVE_DIR, '步骤5_边界条件DFT与DCT对照.png'), dpi=150, bbox_inches='tight')
 plt.close()
 
 # 补充图2-1：L1 vs L2 几何解释（合并自 temp）
@@ -595,21 +826,24 @@ print("\n" + "=" * 70)
 print("【高斯先验的特点总结】")
 print("=" * 70)
 print("\n1. 简单高斯先验 (Tikhonov):")
-print("   - 假设: 图像值小")
-print("   - 协方差: σ_x² I (对角矩阵)")
-print("   - 优点: 有闭式解，计算高效")
-print("   - 缺点: 过度平滑，丢失边缘")
-print("   - 参数选择: σ_x需与数据值域匹配，可从数据估计或主观设定")
+print("   - 假设: 像素 i.i.d. 高斯，协方差 σ_x² I（无空间结构）")
+print("   - 均值必须与数据配套：N(0,σx²I) 用 E[x²] 定 σx²；")
+print("     N(μ,σx²I) 用 Var(x) 定 σx² 并先去均值，二者不可混用")
+print("   - 优点: 有闭式解，计算高效；高斯下 MAP=MMSE")
+print("   - 缺点: 过度平滑、丢失边缘；对非零均值图像若不中心化，")
+print("     参数再\"正确\"也会失效（本实验反面教材 PSNR 低于含噪图）")
+print("   - 即使均值/方差都匹配（20.56dB），仍远不如 Sobolev（25.37dB）")
 
 print("\n2. 梯度高斯先验 (Sobolev平滑):")
-print("   - 假设: 相邻像素相似")
-print("   - 协方差: 涉及梯度算子")
-print("   - 优点: 编码空间结构，比简单高斯更合理")
-print("   - 缺点: 仍会过度平滑边缘")
-print("   - 数值稳定性: dt < 1/(1+8λ)")
-print("   - 超参数敏感性: λ影响平滑程度，需调参")
-print("   - 频域闭式解: X̂ = Ŷ / (1 - λ·λ_Lap)，计算效率更高")
+print("   - 假设: 相邻像素相似，先验协方差含梯度算子（空间结构）")
+print("   - 优点: 编码空间相关性，比 i.i.d. 高斯合理得多")
+print("   - 缺点: 仍会过度平滑边缘（L2 对梯度均匀惩罚）")
+print("   - 数值稳定性: dt < 2/(1+8λ)（收敛域），代码取 0.9/(1+8λ)")
+print("   - 超参数敏感性: λ影响平滑程度，λ≈0.5 PSNR最优，过大过平滑回落")
+print("   - 频域闭式解: X̂ = Ŷ / (1 - λ·λ_Lap)，计算效率 O(n²log n)")
 print("     其中 λ_Lap = 2cos(2πω_x) + 2cos(2πω_y) - 4 ≤ 0 为离散拉普拉斯特征值")
+print("   - 边界条件: 周期(DFT)会对非周期图像造成拼接伪影；")
+print("     镜像(Neumann/DCT)可显著缓解，复杂度相同——边界是建模选择而非方法宿命")
 
 print("\n3. 与Laplace/TV先验的对比:")
 print("   - 高斯先验 (L2): 均匀惩罚所有值，无精确零值")
@@ -624,36 +858,81 @@ import json
 results_summary = {
     'image_size': n,
     'noise_level': float(NOISE_LEVEL),
+    'image_stats_true_for_teaching_only': {
+        'mean': mu_true,
+        'std': s_true,
+        'var': float(s_true ** 2),
+        'rms2_E_x2': rms2_true,
+    },
+    'plugin_estimates_from_observation': {
+        'mu_y': mu_y,
+        'rms2_hat_E_x2': rms2_hat,
+        'var_hat': s2_hat,
+        'note': '噪声方差已知时 E[y^2]=E[x^2]+sigma^2, var(y)=var(x)+sigma^2',
+    },
     'psnr_noisy_dB': float(round(psnr_noisy, 2)),
     'ssim_noisy': float(round(ssim_noisy, 4)),
-    'tikhonov_data': {
-        'lambda': float(round(lam_tikh_data, 6)),
-        'psnr_dB': float(round(psnr_tikh_data, 2)),
-        'ssim': float(round(ssim_tikh_data, 4)),
-    },
-    'tikhonov_prior': {
-        'lambda': float(round(lam_tikh_prior, 6)),
-        'psnr_dB': float(round(psnr_tikh_prior, 2)),
-        'ssim': float(round(ssim_tikh_prior, 4)),
+    'tikhonov': {
+        '1_subjective_sigma_x_1': {
+            'model': 'N(0,sigma_x^2 I), sigma_x=1 (主观先验)',
+            'lambda': float(round(lam_tikh_subj, 6)),
+            'psnr_dB': float(round(psnr_tikh_subj, 2)),
+            'ssim': float(round(ssim_tikh_subj, 4)),
+        },
+        '2_empirical_bayes_zero_mean': {
+            'model': 'N(0,sigma_x^2 I), sigma_x^2=E[x^2] 插件估计',
+            'lambda': float(round(lam_tikh_eb0, 6)),
+            'psnr_dB': float(round(psnr_tikh_eb0, 2)),
+            'ssim': float(round(ssim_tikh_eb0, 4)),
+        },
+        '3_empirical_bayes_centered': {
+            'model': 'N(mu,sigma_x^2 I), mu=y_mean, sigma_x^2=Var(x) 插件估计, 先去均值',
+            'lambda': float(round(lam_tikh_center, 6)),
+            'psnr_dB': float(round(psnr_tikh_center, 2)),
+            'ssim': float(round(ssim_tikh_center, 4)),
+        },
+        '4_misuse_no_centering': {
+            'model': '反面教材：lambda=sigma^2/Var(x) 却套零均值闭式解、不中心化',
+            'lambda': float(round(lam_tikh_misuse, 6)),
+            'psnr_dB': float(round(psnr_tikh_misuse, 2)),
+            'ssim': float(round(ssim_tikh_misuse, 4)),
+        },
     },
     'sobolev': {f'lambda_{lam:.2f}': {
-        'psnr_dB': float(round(psnr_sob[i], 2)),
-        'ssim': float(round(ssim_sob[i], 4)),
+        'periodic_dft_iter_psnr_dB': float(round(psnr_sob[i], 2)),
+        'periodic_dft_iter_ssim': float(round(ssim_sob[i], 4)),
+        'periodic_dft_exact_psnr_dB': float(round(psnr_sob_exact[i], 2)),
+        'periodic_dft_exact_ssim': float(round(ssim_sob_exact[i], 4)),
+        'mirror_dct_psnr_dB': float(round(psnr_sob_dct[i], 2)),
+        'mirror_dct_ssim': float(round(ssim_sob_dct[i], 4)),
         'converged_iters': int(converged_iters[i]),
+        'iter_vs_exact_max_abs_diff': float(iter_exact_diffs[i]),
+        f'boundary_ring{ RING_WIDTH }px_mse_dft': float(bmse_dft[i]),
+        f'boundary_ring{ RING_WIDTH }px_mse_dct': float(bmse_dct[i]),
+        'interior_mse_dft': float(imse_dft[i]),
+        'interior_mse_dct': float(imse_dct[i]),
     } for i, lam in enumerate(SOB_LAMBDAS)},
+    'best_lambda_oracle_by_psnr_to_truth': {
+        'periodic_dft_lambda': float(SOB_LAMBDAS[best_sob_idx]),
+        'mirror_dct_lambda': float(SOB_LAMBDAS[best_sob_dct_idx]),
+        'note': 'oracle 选择：使用了真值 PSNR，实际应用中需交叉验证/无监督准则',
+    },
+    'boundary_comparison': {
+        'periodic': 'np.roll / DFT，图像对边周期拼接',
+        'mirror': 'Neumann / DCT-II，镜像延拓',
+        'ring_width_px': RING_WIDTH,
+        'figure_lambda': BOUNDARY_LAMBDA,
+        'conclusion': '内部区域MSE两者一致；大λ下周期边界边缘MSE显著更高，伪影源于边界建模而非频域方法本身',
+    },
 }
 
 def _to_native(obj):
-    import numpy as np
     if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
     if isinstance(obj, (np.integer,)): return int(obj)
     if isinstance(obj, (np.floating,)): return float(obj)
     if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
-    try:
-        import torch
-        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
-    except: pass
+    if isinstance(obj, (bool, np.bool_)): return bool(obj)
     return obj
 
 results_summary = {k: _to_native(v) for k, v in results_summary.items()}

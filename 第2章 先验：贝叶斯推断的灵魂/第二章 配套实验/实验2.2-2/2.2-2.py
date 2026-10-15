@@ -11,11 +11,21 @@
   - 实验2.2-1：作为对照（高斯先验→岭回归）
 
 修改说明：
-  1. 一维稀疏信号 + 加噪观测，构造可手算的 MAP 问题
-  2. 同 λ 下对比 LASSO (L1) 与 Ridge (L2) 的系数估计
-  3. 用软阈值(soft-thresholding)闭式解展示 Laplace 的"硬置零"机制
-  4. 输出三张图：①先验密度对比 ②系数估计对比 ③软阈值函数
+  1. 一维稀疏信号 + 加噪观测，构造可手算的 MAP 问题；SNR 严格按向量能量定标
+  2. 同 λ（与噪声水平匹配）下对比 LASSO (L1) 与 Ridge (L2) 的系数估计
+  3. 用软阈值(soft-thresholding)闭式解展示 Laplace 的"硬置零"机制，并附 λ 扫描
+  4. Part A 输出图1-图3；Part B 输出图4-图5，并新增图6（30 seed 稳健性验证）
   5. Part B：1D 压缩感知下 IHT / 重加权 ℓ¹ / OMP 三种逼近 ℓ⁰ 算法
+
+修订记录（2026-10 复核修正）：
+  - 修复 SNR 定标 bug：旧实现 σ = ‖信号‖/10^(SNR/20) 漏除 √维度，
+    Part A 实际向量 SNR 仅 3.4dB（标称 20dB）、Part B 仅 11.2dB（标称 30dB）；
+    现统一改为 σ = ‖信号‖/(√维度 · 10^(SNR/20))。
+  - λ 改为随噪声水平选取（Part A: λ=0.1≈1.9σ；Part B: λ=1.2σ），
+    旧的固定 λ=0.6/0.1 在正确 SNR 下属于严重过正则。
+  - 支撑集指标从单侧"恢复率(=召回率)"改为双侧 recall/precision/误报/漏检，
+    避免 Ridge 靠"全部非零"白拿 100%。
+  - 新增 30 个随机种子的稳健性验证（图6 + JSON），替代旧版仅凭单 seed 的文字断言。
 """
 
 import numpy as np
@@ -69,13 +79,16 @@ except ImportError:
     print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
 # ========================================================
 
-np.random.seed(42)
-
 # ─── 实验参数配置 ───
+SIGNAL_SEED = 7        # 稀疏信号随机种子
+NOISE_SEED  = 42       # 观测噪声随机种子
 N        = 50          # 信号维度
 K        = 5           # 真实非零系数个数（稀疏度）
-LAMBDA   = 0.6         # 正则强度（L1 与 L2 共用同一 λ 以便公平对比）
-SNR_DB   = 20          # 观测信噪比
+SNR_DB   = 20          # 目标观测信噪比（向量能量口径）
+# 正则强度（L1 与 L2 共用同一 λ 以便公平对比）：
+# 20dB 下 σ≈0.054，取 λ=0.1（≈1.9σ），既能清掉绝大多数纯噪声分量，
+# 又能保住最弱的真峰（其观测量级约 2.6σ）。旧值 0.6≈11σ 属过正则。
+LAMBDA   = 0.1
 GRID     = 200         # 绘图网格密度
 
 # ─── 构造稀疏真值 x* 与观测 y = x* + 噪声 ───
@@ -87,15 +100,17 @@ def make_sparse_signal(n, k, seed=0):
     x[idx] = rng.uniform(-2.5, 2.5, size=k)
     return x, idx
 
-x_true, support = make_sparse_signal(N, K, seed=7)
-# 加性高斯噪声，按目标 SNR 定标
-sig = np.linalg.norm(x_true) / (10 ** (SNR_DB / 20))
-noise = np.random.normal(0, sig, size=N)
+x_true, support = make_sparse_signal(N, K, seed=SIGNAL_SEED)
+# 加性高斯噪声，按"向量 SNR"定标：SNR = 20log10(‖x‖/‖e‖)，而 E‖e‖² = N·σ²
+# 故 σ = ‖x‖ / (√N · 10^(SNR/20))（旧实现漏除 √N，实际 SNR 只有 3.4dB）
+sig = np.linalg.norm(x_true) / (np.sqrt(N) * 10 ** (SNR_DB / 20))
+noise = np.random.RandomState(NOISE_SEED).normal(0, sig, size=N)
 y = x_true + noise
+snr_realized = 20 * np.log10(np.linalg.norm(x_true) / np.linalg.norm(noise))
 
 # ─── 闭式 MAP 估计 ───
-# 似然 ~ N(0,1)：负对数似然 = ||y - x||^2
-# 高斯先验 N(0, 1/λ) → L2 惩罚 λ||x||^2/2 → Ridge 闭式解 x = y / (1+λ)
+# 似然 x ~ N(y,1)：负对数似然 ∝ ½||y - x||^2（数据项统一取 ½，使 L1/L2 在同 λ 下可比）
+# 高斯先验 N(0, 1/λ) → L2 惩罚 (λ/2)||x||^2 → Ridge 闭式解 x = y / (1+λ)
 # Laplace 先验 → L1 惩罚 λ|x| → 软阈值 x = sign(y)·max(|y|-λ, 0)
 def ridge_estimate(y, lam):
     return y / (1.0 + lam)
@@ -106,24 +121,47 @@ def lasso_estimate(y, lam):
 x_ridge = ridge_estimate(y, LAMBDA)
 x_lasso = lasso_estimate(y, LAMBDA)
 
-# ─── 评估：恢复误差 + 支撑恢复率 ───
-def support_recovery(x_hat, x_true, tol=1e-6):
+# ─── 评估：恢复误差 + 支撑集双侧指标（召回/精确率/误报/漏检）───
+def support_pr(x_hat, x_true, tol=1e-6):
+    """返回 (召回率, 精确率, 真阳TP, 误报FP, 漏检FN)。
+    旧版只算召回率：Ridge 因 50 个分量全非零而白拿 100%——单侧指标会误导。"""
     true_sup = np.abs(x_true) > tol
     est_sup = np.abs(x_hat) > tol
-    if true_sup.sum() == 0:
-        return 1.0
-    return np.mean(est_sup[true_sup])  # 真支撑中被正确检出的比例
+    tp = int(np.sum(true_sup & est_sup))
+    fp = int(np.sum(~true_sup & est_sup))
+    fn = int(np.sum(true_sup & ~est_sup))
+    recall = tp / max(int(true_sup.sum()), 1)        # 真支撑中被正确检出的比例
+    precision = tp / max(tp + fp, 1)                 # 报为非零的分量中真是支撑的比例
+    return recall, precision, tp, fp, fn
 
-mse_ridge = np.mean((x_ridge - x_true) ** 2)
-mse_lasso = np.mean((x_lasso - x_true) ** 2)
-rec_ridge = support_recovery(x_ridge, x_true)
-rec_lasso = support_recovery(x_lasso, x_true)
-n_zero_ridge = int(np.sum(np.abs(x_ridge) < 1e-6))
-n_zero_lasso = int(np.sum(np.abs(x_lasso) < 1e-6))
+def evaluate(x_hat, x_true):
+    recall, precision, tp, fp, fn = support_pr(x_hat, x_true)
+    return {
+        'MSE': float(np.mean((x_hat - x_true) ** 2)),
+        'support_recall': float(recall),
+        'support_precision': float(precision),
+        'support_hits': tp,
+        'false_positives': fp,
+        'misses': fn,
+        'exact_zero_count': int(np.sum(np.abs(x_hat) < 1e-6)),
+    }
 
-print(f"λ={LAMBDA}  SNR={SNR_DB}dB")
-print(f"Ridge(L2): MSE={mse_ridge:.4f}  支撑恢复率={rec_ridge:.2%}  精确置零数={n_zero_ridge}")
-print(f"LASSO(L1): MSE={mse_lasso:.4f}  支撑恢复率={rec_lasso:.2%}  精确置零数={n_zero_lasso}")
+met_ridge = evaluate(x_ridge, x_true)
+met_lasso = evaluate(x_lasso, x_true)
+mse_ridge = met_ridge['MSE']
+mse_lasso = met_lasso['MSE']
+rec_ridge = met_ridge['support_recall']
+rec_lasso = met_lasso['support_recall']
+n_zero_ridge = met_ridge['exact_zero_count']
+n_zero_lasso = met_lasso['exact_zero_count']
+
+print(f"目标SNR={SNR_DB}dB  实际向量SNR={snr_realized:.1f}dB  σ={sig:.4f}  λ={LAMBDA}")
+print(f"Ridge(L2): MSE={mse_ridge:.4f}  召回={rec_ridge:.0%}  精确率="
+      f"{met_ridge['support_precision']:.0%}  误报={met_ridge['false_positives']}  "
+      f"精确置零={n_zero_ridge}")
+print(f"LASSO(L1): MSE={mse_lasso:.4f}  召回={rec_lasso:.0%}  精确率="
+      f"{met_lasso['support_precision']:.0%}  误报={met_lasso['false_positives']}  "
+      f"精确置零={n_zero_lasso}")
 
 # ─── 图1：先验密度对比（几何/概率视角）───
 fig, ax = plt.subplots(figsize=(7, 4.5))
@@ -181,22 +219,36 @@ plt.close(fig)
 
 print("已保存：图1_先验密度对比.png / 图2_系数估计对比.png / 图3_软阈值函数.png")
 
+# ─── λ 扫描：把"置零能力 vs 误杀弱峰"的权衡变成可核验数据 ───
+lam_grid = np.linspace(0.01, 0.30, 30)
+_fields = ('MSE', 'support_recall', 'support_precision', 'exact_zero_count')
+sweep = {'lambda': [], 'LASSO_L1': {f: [] for f in _fields},
+                          'Ridge_L2': {f: [] for f in _fields}}
+print("\nλ 扫描（LASSO 召回/精确率/置零数 与 Ridge MSE）：")
+for L in lam_grid:
+    ml = evaluate(lasso_estimate(y, L), x_true)
+    mr = evaluate(ridge_estimate(y, L), x_true)
+    sweep['lambda'].append(round(float(L), 4))
+    for key, met in (('LASSO_L1', ml), ('Ridge_L2', mr)):
+        for f in _fields:
+            sweep[key][f].append(float(met[f]))
+    print(f"  λ={L:5.2f}  LASSO: MSE={ml['MSE']:.5f} 召回={ml['support_recall']:.0%} "
+          f"精确率={ml['support_precision']:.0%} 置零={ml['exact_zero_count']:2d} | "
+          f"Ridge: MSE={mr['MSE']:.5f} 置零={mr['exact_zero_count']}")
+
 # ─── Part A 结果保存为 JSON ───
 part_a_results = {
+    'target_snr_db': SNR_DB,
+    'realized_snr_db': float(snr_realized),
+    'sigma': float(sig),
     'lambda': LAMBDA,
-    'snr_db': SNR_DB,
     'N': N,
     'K': K,
-    'Ridge_L2': {
-        'MSE': float(mse_ridge),
-        'support_recovery_rate': float(rec_ridge),
-        'exact_zero_count': n_zero_ridge,
-    },
-    'LASSO_L1': {
-        'MSE': float(mse_lasso),
-        'support_recovery_rate': float(rec_lasso),
-        'exact_zero_count': n_zero_lasso,
-    },
+    'signal_seed': SIGNAL_SEED,
+    'noise_seed': NOISE_SEED,
+    'Ridge_L2': met_ridge,
+    'LASSO_L1': met_lasso,
+    'lambda_sweep': sweep,
 }
 
 
@@ -226,25 +278,33 @@ def make_cs_problem(n, k, m, snr, seed=0):
     # 高斯随机测量矩阵（归一化列，近似满足 RIP）
     A = rng.standard_normal((m, n))
     A = A / np.linalg.norm(A, axis=0, keepdims=True)
-    sigma = np.linalg.norm(A @ alpha) / (10 ** (snr / 20))
+    # 按"向量 SNR"定标：E‖e‖² = m·σ²，故 σ = ‖Aα‖/(√m·10^(SNR/20))
+    # 旧实现漏除 √m（30dB 实际只有约 11dB）
+    sigma = np.linalg.norm(A @ alpha) / (np.sqrt(m) * 10 ** (snr / 20))
     noise = rng.standard_normal(m) * sigma
     y = A @ alpha + noise
-    return A, y, alpha, idx
+    return A, y, alpha, idx, sigma
 
 
-A_b, y_b, alpha_true, support_b = make_cs_problem(N_B, K_B, M_B, SNR_B, seed=SEED_B)
+A_b, y_b, alpha_true, support_b, sigma_b = make_cs_problem(N_B, K_B, M_B, SNR_B, seed=SEED_B)
+# 实际向量 SNR；重加权 ℓ¹ 的初始正则强度取约 1.2σ，随测量噪声水平自适应
+snr_b_realized = 20 * np.log10(np.linalg.norm(A_b @ alpha_true) /
+                               np.linalg.norm(y_b - A_b @ alpha_true))
+LAM_RW = 1.2 * sigma_b
 
 
 # ─── 算法 1：迭代硬阈值 IHT ───
-def IHT(A, y, K_max, max_iter=500, tol=1e-8, record_err=None, alpha_ref=None):
+def IHT(A, y, K_max, max_iter=500, tol=1e-8, record_err=None, alpha_ref=None, verbose=True):
     """交替做梯度步 + 硬阈值（只保留绝对值最大的 K_max 个分量）。
-    步长取 1/L，L=‖A‖₂²（谱范数平方），保证在欠定情形下收敛。"""
+    步长取 1/L，L=‖A‖₂²（谱范数平方）：RIP 条件下的标准安全步长。
+    注意：在测量数偏少（RIP 边界附近）时，固定步长 IHT 可能停滞在错误支撑上，
+    并不保证每次都恢复成功——实践中常用归一化 IHT（带线搜）或 HTP。"""
     m, n = A.shape
     At = A.T
     L = np.linalg.norm(A, 2) ** 2
     step = 1.0 / L
     alpha = np.zeros(n)
-    for _ in tqdm(range(max_iter), desc='IHT', leave=False):
+    for _ in tqdm(range(max_iter), desc='IHT', leave=False, disable=not verbose):
         grad = At @ (y - A @ alpha)
         alpha_new = alpha + step * grad  # 梯度步（步长 1/L）
         # 硬阈值：保留绝对值最大的 K_max 个分量，其余置零
@@ -261,16 +321,20 @@ def IHT(A, y, K_max, max_iter=500, tol=1e-8, record_err=None, alpha_ref=None):
 
 
 # ─── 算法 2：重加权 ℓ¹（IRL1）───
-def Reweighted_L1(A, y, n_outer=12, eps=1e-2, lam=0.1, max_inner=300, record_err=None, alpha_ref=None):
-    """外层迭代更新权重 w_i = 1/(|α_i|+ε)，内层用 ISTA 软阈值求解 ℓ¹ 子问题。"""
+def Reweighted_L1(A, y, n_outer=12, eps=1e-2, lam=0.1, max_inner=1000,
+                  record_err=None, alpha_ref=None, verbose=True):
+    """外层迭代更新权重 w_i = 1/(|α_i|+ε)，内层用 ISTA 软阈值求解加权 ℓ¹ 子问题。
+    lam 为初始（未加权）正则强度，应随测量噪声 σ 选取（本实验取 1.2σ）。
+    max_inner=1000：λ 较小时 ISTA 收缩慢，300 步会提前停滞（与紧解相差约 0.017），
+    1000 步经 FISTA 对照验证已收敛到 1e-5 以内。"""
     m, n = A.shape
     At = A.T
     L = np.linalg.norm(A, 2) ** 2  # Lipschitz 常数（用于 ISTA 步长）
     step = 1.0 / L
     alpha = np.zeros(n)
     w = np.ones(n)
-    for _ in tqdm(range(n_outer), desc='Reweighted l1', leave=False):
-        for _ in tqdm(range(max_inner), desc='  ISTA', leave=False):
+    for _ in tqdm(range(n_outer), desc='Reweighted l1', leave=False, disable=not verbose):
+        for _ in tqdm(range(max_inner), desc='  ISTA', leave=False, disable=not verbose):
             grad = At @ (y - A @ alpha)
             soft = np.sign(alpha + step * grad) * np.maximum(
                 np.abs(alpha + step * grad) - step * lam * w, 0.0)
@@ -285,13 +349,13 @@ def Reweighted_L1(A, y, n_outer=12, eps=1e-2, lam=0.1, max_inner=300, record_err
 
 
 # ─── 算法 3：正交匹配追踪 OMP ───
-def OMP(A, y, K_max, tol=1e-6):
+def OMP(A, y, K_max, tol=1e-6, verbose=True):
     """贪心法：每步挑一个最能降低残差的基础原子，逐步搭起支撑集后做最小二乘。"""
     m, n = A.shape
     residual = y.copy()
     idx_set = []
     alpha = np.zeros(n)
-    for _ in tqdm(range(K_max), desc='OMP', leave=False):
+    for _ in tqdm(range(K_max), desc='OMP', leave=False, disable=not verbose):
         corr = A.T @ residual
         new_idx = int(np.argmax(np.abs(corr)))
         if new_idx in idx_set:
@@ -307,33 +371,97 @@ def OMP(A, y, K_max, tol=1e-6):
 
 
 # ─── 运行三种算法 ───
-alpha_rw   = Reweighted_L1(A_b, y_b, n_outer=12, eps=1e-2, lam=0.1)
 alpha_omp  = OMP(A_b, y_b, K_B)
-# alpha_iht 在下方收敛曲线段通过 IHT(..., record_err=...) 一并计算
+# alpha_iht / alpha_rw 在下方收敛曲线段通过 IHT/Reweighted_L1(..., record_err=...) 一并计算
 
 # 收敛曲线：IHT 每步相对误差 + 重加权 ℓ¹ 外层相对误差
 iht_errs = []
 alpha_iht = IHT(A_b, y_b, K_B, max_iter=200, record_err=iht_errs, alpha_ref=alpha_true)
 
 rw_errs = []
-alpha_rw = Reweighted_L1(A_b, y_b, n_outer=12, eps=1e-2, lam=0.1, record_err=rw_errs, alpha_ref=alpha_true)
+alpha_rw = Reweighted_L1(A_b, y_b, n_outer=12, eps=1e-2, lam=LAM_RW,
+                         record_err=rw_errs, alpha_ref=alpha_true)
 
 
-# ─── 评估：恢复相对误差 + 非零个数 ───
+# ─── 评估：恢复相对误差 + 非零个数 + 支撑命中/误报/漏检 ───
 def rel_err(a_hat, a_true):
     return np.linalg.norm(a_hat - a_true) / np.linalg.norm(a_true)
 
 def n_nonzero(a_hat, tol=1e-6):
     return int(np.sum(np.abs(a_hat) > tol))
 
-results_b = {
-    'IHT (硬阈值→ℓ⁰)':      (alpha_iht, rel_err(alpha_iht, alpha_true), n_nonzero(alpha_iht)),
-    'Reweighted ℓ¹':        (alpha_rw,  rel_err(alpha_rw,  alpha_true), n_nonzero(alpha_rw)),
-    'OMP (贪婪)':           (alpha_omp, rel_err(alpha_omp, alpha_true), n_nonzero(alpha_omp)),
+def eval_cs(a_hat, a_true):
+    """压缩感知恢复的完整指标（复用 Part A 的双侧支撑集统计）。"""
+    recall, precision, tp, fp, fn = support_pr(a_hat, a_true)
+    return {
+        'relative_error': float(rel_err(a_hat, a_true)),
+        'recovered_nonzeros': n_nonzero(a_hat),
+        'support_recall': float(recall),
+        'support_precision': float(precision),
+        'support_hits': tp,
+        'false_positives': fp,
+        'misses': fn,
+    }
+
+_alphas_b = {
+    'IHT (硬阈值→ℓ⁰)': alpha_iht,
+    'Reweighted ℓ¹':   alpha_rw,
+    'OMP (贪婪)':      alpha_omp,
 }
-print(f"\n[Part B] N={N_B} K={K_B} M={M_B} SNR={SNR_B}dB  真支撑大小={len(support_b)}")
-for name, (a, e, nz) in results_b.items():
-    print(f"  {name:18s} 相对误差={e:.4f}  恢复非零个数={nz}")
+metrics_b = {name: eval_cs(a, alpha_true) for name, a in _alphas_b.items()}
+# 图4 仍按 (估计, 相对误差, 非零数) 三元组使用
+results_b = {name: (a, metrics_b[name]['relative_error'],
+                          metrics_b[name]['recovered_nonzeros'])
+             for name, a in _alphas_b.items()}
+print(f"\n[Part B] N={N_B} K={K_B} M={M_B} 目标SNR={SNR_B}dB 实际SNR={snr_b_realized:.1f}dB "
+      f"σ={sigma_b:.4f} λ_RW={LAM_RW:.4f} 真支撑大小={len(support_b)}")
+for name in _alphas_b:
+    m = metrics_b[name]
+    print(f"  {name:18s} 相对误差={m['relative_error']:.4f}  非零={m['recovered_nonzeros']:2d}  "
+          f"命中={m['support_hits']:2d}  误报={m['false_positives']}  漏检={m['misses']}")
+
+# ─── 30 个随机种子的稳健性验证（旧版只凭单 seed 文字断言，此处固化为可核验数据）───
+N_SEEDS = 30
+FAIL_THRESH = 0.1   # 相对误差 > 0.1 记为一次恢复失败
+_ALGO_NAMES = list(_alphas_b.keys())
+
+def run_multi_seed(n_seeds=N_SEEDS):
+    stats = {nm: {'relative_error': [], 'support_hits': [], 'false_positives': [],
+                  'recovered_nonzeros': []} for nm in _ALGO_NAMES}
+    for s in tqdm(range(n_seeds), desc='多seed验证'):
+        A_s, y_s, at_s, _, sig_s = make_cs_problem(N_B, K_B, M_B, SNR_B, seed=s)
+        lam_s = 1.2 * sig_s   # 每个 seed 都按自身噪声水平定 λ，保持准则一致
+        alphas = [
+            IHT(A_s, y_s, K_B, max_iter=200, verbose=False),
+            Reweighted_L1(A_s, y_s, n_outer=12, eps=1e-2, lam=lam_s, verbose=False),
+            OMP(A_s, y_s, K_B, verbose=False),
+        ]
+        for nm, a in zip(_ALGO_NAMES, alphas):
+            m = eval_cs(a, at_s)
+            for key in ('relative_error', 'support_hits', 'false_positives', 'recovered_nonzeros'):
+                stats[nm][key].append(m[key])
+    return stats
+
+seed_stats = run_multi_seed()
+multi_seed_summary = {}
+print(f"\n[多seed验证] seeds=0..{N_SEEDS - 1}，真实 SNR≈{SNR_B}dB，失败阈值 rel>{FAIL_THRESH}")
+for nm, st in seed_stats.items():
+    e = np.array(st['relative_error'])
+    h = np.array(st['support_hits'])
+    fp = np.array(st['false_positives'])
+    summary = {
+        'relative_error_mean': float(e.mean()),
+        'relative_error_std': float(e.std()),
+        'relative_error_min': float(e.min()),
+        'relative_error_max': float(e.max()),
+        'support_hits_mean': float(h.mean()),
+        'zero_fp_seed_ratio': float(np.mean(fp == 0)),
+        f'failure_rate_rel_gt_{FAIL_THRESH}': float(np.mean(e > FAIL_THRESH)),
+    }
+    multi_seed_summary[nm] = summary
+    print(f"  {nm:18s} rel={e.mean():.4f}±{e.std():.4f} [{e.min():.4f}~{e.max():.4f}]  "
+          f"命中={h.mean():.1f}/10  零误报seed={summary['zero_fp_seed_ratio']:.0%}  "
+          f"失败率={summary[f'failure_rate_rel_gt_{FAIL_THRESH}']:.0%}")
 
 # ─── 图4：四合一茎叶图——真值 vs 三算法恢复 ───
 fig, axes = plt.subplots(1, 4, figsize=(16, 4), sharey=True)
@@ -370,29 +498,64 @@ fig.tight_layout()
 fig.savefig(os.path.join(SAVE_DIR, '图5_收敛曲线.png'), dpi=120)
 plt.close(fig)
 
-print("已保存：图4_1D恢复对比.png / 图5_收敛曲线.png")
+# ─── 图6：30 个随机种子下的稳健性（误差分布 + 支撑命中）───
+fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+colors_b = ['tab:red', 'tab:green', 'tab:blue']
+short_names = ['IHT', 'Reweighted $\\ell^1$', 'OMP']
+data_err = [seed_stats[nm]['relative_error'] for nm in _ALGO_NAMES]
+bp = axes[0].boxplot(data_err, labels=short_names, patch_artist=True, showmeans=True,
+                     meanprops=dict(marker='D', markerfacecolor='yellow', markeredgecolor='black'))
+for patch, c in zip(bp['boxes'], colors_b):
+    patch.set_facecolor(c)
+    patch.set_alpha(0.35)
+axes[0].set_yscale('log')
+axes[0].set_ylabel('相对恢复误差（30 个 seed 的分布，对数轴）')
+axes[0].set_title(f'误差分布（菱形=均值；rel>{FAIL_THRESH} 记为失败）')
+axes[0].grid(alpha=0.3, which='both', axis='y')
+
+xs = np.arange(3)
+hits_mean = [np.mean(seed_stats[nm]['support_hits']) for nm in _ALGO_NAMES]
+hits_std = [np.std(seed_stats[nm]['support_hits']) for nm in _ALGO_NAMES]
+axes[1].bar(xs, hits_mean, yerr=hits_std, color=colors_b, alpha=0.6, capsize=5)
+axes[1].axhline(K_B, color='gray', ls='--', lw=1, label=f'真支撑大小 K={K_B}')
+axes[1].set_xticks(xs)
+axes[1].set_xticklabels(short_names)
+axes[1].set_ylim(0, 11)
+axes[1].set_ylabel('正确命中的支撑数（均值±标准差）')
+axes[1].set_title('支撑集命中数（满分 10）')
+axes[1].legend(fontsize=9)
+axes[1].grid(alpha=0.3, axis='y')
+fig.suptitle(f'{N_SEEDS} 个随机种子的稳健性验证（真实 SNR={SNR_B}dB, '
+             f'$M={M_B}<N={N_B}$, 每 seed 独立生成问题）', fontsize=12)
+fig.tight_layout()
+fig.savefig(os.path.join(SAVE_DIR, '图6_多seed稳健性.png'), dpi=120)
+plt.close(fig)
+
+print("已保存：图4_1D恢复对比.png / 图5_收敛曲线.png / 图6_多seed稳健性.png")
 
 # ─── Part B 结果保存为 JSON ───
 part_b_results = {
     'N': N_B,
     'K': K_B,
     'M': M_B,
-    'snr_db': SNR_B,
+    'target_snr_db': SNR_B,
+    'realized_snr_db': float(snr_b_realized),
+    'sigma': float(sigma_b),
+    'rw_lambda': float(LAM_RW),
+    'seed': SEED_B,
     'true_support_size': int(len(support_b)),
-    'algorithms': {
-        'IHT (硬阈值→ℓ⁰)': {
-            'relative_error': float(rel_err(alpha_iht, alpha_true)),
-            'recovered_nonzeros': n_nonzero(alpha_iht),
-        },
-        'Reweighted ℓ¹': {
-            'relative_error': float(rel_err(alpha_rw, alpha_true)),
-            'recovered_nonzeros': n_nonzero(alpha_rw),
-        },
-        'OMP (贪婪)': {
-            'relative_error': float(rel_err(alpha_omp, alpha_true)),
-            'recovered_nonzeros': n_nonzero(alpha_omp),
-        },
-    },
+    'algorithms': metrics_b,
+}
+
+# ─── 多 seed 验证结果 ───
+multi_seed_results = {
+    'n_seeds': N_SEEDS,
+    'seeds': list(range(N_SEEDS)),
+    'target_snr_db': SNR_B,
+    'rw_lambda_rule': '1.2 * sigma（随每个 seed 的噪声水平自适应）',
+    'failure_threshold_rel': FAIL_THRESH,
+    'summary': multi_seed_summary,
+    'raw_per_seed': seed_stats,
 }
 
 # ─── 合并 A / B 两 Part 结果，统一写入 results.json ───
@@ -401,6 +564,7 @@ all_results = {
     'title': 'Laplace先验的稀疏魔力：从 ℓ¹ 到 ℓ⁰',
     'part_A_L1_soft_threshold': part_a_results,
     'part_B_l0_approximation': part_b_results,
+    'multi_seed_validation': multi_seed_results,
 }
 with open(os.path.join(SAVE_DIR, 'results.json'), 'w', encoding='utf-8') as f:
     json.dump(all_results, f, ensure_ascii=False, indent=2)
