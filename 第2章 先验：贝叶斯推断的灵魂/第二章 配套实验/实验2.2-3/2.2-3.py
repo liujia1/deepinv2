@@ -14,6 +14,18 @@
   - 补充参数选参依据说明
   - 修正：Sobolev λ 由 0.15（欠正则、几乎未去噪）调至 2.5（其 SSIM 最优点），
     使"Sobolev 过度平滑磨边 vs TV 保边"的定性对比名副其实，配图不再自相矛盾
+
+复核修订（数值严谨性）：
+  - Sobolev 闭式解由周期边界(FFT)改为 Neumann 边界(DCT-II)：denoise_tv_chambolle
+    在边界处将外推梯度置零，实际采用的是 Neumann（零法向梯度）边界而非周期边界，
+    改用 DCT 后两者口径一致，并消除了周期卷绕在图像对边引入的伪影
+  - 两处 Chambolle 调用显式指定 eps=1e-8, max_num_iter=5000：skimage 默认
+    eps=2e-4 在本实验规模下约 8 次迭代即停机，得到的并非收敛的 ROF/MAP 解
+  - 参数重标定至各自最优工作点：Sobolev λ 2.5→2.9（Neumann 口径下的 SSIM 最优点），
+    TV α 0.15→0.08（PSNR 最优点≈0.07、SSIM 最优点≈0.09 的折中；原 0.15 已处
+    过正则侧，会人为放大阶梯效应）
+  - find_staircase_position 更名为 find_edge_position：该启发式实际定位的是
+    "TV 保边而 Sobolev 磨边"差异最大的强边缘（用于选取剖面图所在行），并非阶梯区
 """
 
 import numpy as np
@@ -25,6 +37,7 @@ from skimage.util import random_noise
 from skimage.restoration import denoise_tv_chambolle
 from skimage.transform import resize
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
+from scipy.fft import dct, idct, dctn, idctn
 import os
 import sys
 
@@ -60,34 +73,39 @@ camera_noisy = random_noise(camera, mode='gaussian', var=sigma**2, rng=42)
 
 def sobolev_denoise(y, lam):
     """
-    Sobolev去噪闭式解（周期边界，与 denoise_tv_chambolle 保持一致）
-    
-    目标函数: J(x) = 0.5||y-x||² + 0.5λ||∇x||²
-    频域解: X(ω) = Y(ω) / (1 - λ·Δ̂(ω))
-    
-    其中 Δ̂(ω) = 2(cos(ωx) + cos(ωy) - 2) 是离散Laplacian的特征值。
-    
+    Sobolev去噪闭式解（Neumann边界，与 denoise_tv_chambolle 的边界处理一致）
+
+    目标函数: J(x) = 0.5||y-x||² + 0.5λ||∇x||²，边界处 ∂x/∂n = 0
+    频域解(DCT-II): X_k = Y_k / (1 - λ·μ_k)
+
+    其中 μ_k = 2(cos(kx·π/n) + cos(ky·π/n) - 2) ∈ [-8, 0] 是 Neumann 边界下
+    离散Laplacian的特征值，故分母恒 ≥ 1。
+
+    注：denoise_tv_chambolle 在边界处将外推梯度置零，对应 Neumann 边界；
+    DCT-II 恰好对角化该边界条件下的 Laplacian，保证两种先验使用同一口径。
+    （早期版本误用 FFT 周期边界，会把图像对边视为相邻并产生卷绕伪影。）
+
     Args:
         y: 输入图像，必须为方形（行数=列数）
         lam: 正则化参数
     """
     assert y.shape[0] == y.shape[1], "sobolev_denoise 仅支持方形图像"
     n = y.shape[0]
-    freq = np.fft.fftfreq(n) * 2 * np.pi
-    fx, fy = np.meshgrid(freq, freq)
-    lap_eig = 2 * (np.cos(fx) + np.cos(fy) - 2)
+    w = np.pi * np.arange(n) / n
+    lap_eig = 2 * (np.cos(w[:, None]) + np.cos(w[None, :]) - 2)
     denom = 1 - lam * lap_eig
-    return np.real(np.fft.ifft2(np.fft.fft2(y) / denom))
+    return idctn(dctn(y, type=2, norm='ortho') / denom, type=2, norm='ortho')
 
-def find_staircase_position(tv_img, sob_img, margin=20, window_size=7):
+def find_edge_position(tv_img, sob_img, margin=20, window_size=7):
     """
-    找到阶梯效应最明显的位置
-    
-    方法：阶梯效应的特征是"TV有梯度但Sobolev平滑"的区域。
-    使用 (grad_tv - grad_sob) 作为核心指标，排除真实边缘（两者梯度都大）。
-    
+    找到"TV 保边而 Sobolev 磨边"差异最显著的强边缘位置（用于选取剖面图行）
+
+    方法：打分 = max(|∇TV| - |∇Sob|, 0) × 局部 |TV - Sob|。
+    该量在真实强边缘处最大（TV 保留梯度、Sobolev 抹平梯度），
+    因此返回的是强边缘位置而非阶梯效应区；阶梯效应由后续合成信号专门展示。
+
     Returns:
-        tuple: (stair_x, stair_y) - matplotlib坐标系下的位置，x=列，y=行
+        tuple: (edge_x, edge_y) - matplotlib坐标系下的位置，x=列，y=行
     """
     from scipy.ndimage import uniform_filter
     
@@ -114,13 +132,19 @@ def find_staircase_position(tv_img, sob_img, margin=20, window_size=7):
     
     return (max_idx[1], max_idx[0])
 
-lam_sob = 2.5   # Sobolev 去噪最优工作点（SSIM≈0.70），此时才真正体现其"磨平边缘"
+# Sobolev：取 Neumann 口径下的 SSIM 最优工作点（λ≈2.9），此时磨边效应最具代表性
+lam_sob = 2.9
 camera_sob = sobolev_denoise(camera_noisy, lam_sob)
 
-alpha_tv = 0.15
-camera_tv = denoise_tv_chambolle(camera_noisy, weight=alpha_tv)
+# TV：取 PSNR 最优(≈0.07)与 SSIM 最优(≈0.09)折中的 α=0.08；
+# 显式收紧收敛容差（默认 eps=2e-4 在 128×128 上约 8 次迭代即停机，并非 ROF 收敛解）
+alpha_tv = 0.08
+TV_EPS = 1e-8
+TV_MAX_ITER = 5000
+camera_tv = denoise_tv_chambolle(camera_noisy, weight=alpha_tv,
+                                 eps=TV_EPS, max_num_iter=TV_MAX_ITER)
 
-staircase_pos = find_staircase_position(camera_tv, camera_sob)
+edge_pos = find_edge_position(camera_tv, camera_sob)
 
 psnr_noisy = peak_signal_noise_ratio(camera, camera_noisy, data_range=DATA_RANGE)
 psnr_sob = peak_signal_noise_ratio(camera, camera_sob, data_range=DATA_RANGE)
@@ -137,12 +161,15 @@ print("=" * 70)
 print("\n【参数设置】")
 print(f"  图像尺寸: {n}×{n}")
 print(f"  噪声标准差 σ = {sigma}")
-print(f"\n  参数选择说明:")
-print(f"    - Sobolev λ = {lam_sob}：调至其 SSIM 最优的去噪工作点")
-print(f"    - TV α = {alpha_tv}：调至保边与去噪平衡的工作点")
-print(f"    注：两者量纲不同，λ惩罚||∇x||²，α惩罚||∇x||₁，不能直接比较数值。")
-print(f"    本实验将各自调至接近最优的工作点，以便在公平的噪声抑制水平下")
-print(f"    对比二者的边缘保持行为（Sobolev 磨边 vs TV 保边）。")
+print(f"\n  参数选择说明（两种先验均取各自的最优工作点）:")
+print(f"    - Sobolev λ = {lam_sob}：Neumann 口径下的 SSIM 最优点")
+print(f"      （其 PSNR 最优点在 λ≈0.7，本实验关注结构保持，故按 SSIM 选参）")
+print(f"    - TV α = {alpha_tv}：PSNR 最优(≈0.07)与 SSIM 最优(≈0.09)的折中")
+print(f"    - Chambolle 收敛容差 eps={TV_EPS}、上限 {TV_MAX_ITER} 次迭代")
+print(f"      （默认 eps=2e-4 会在约 8 次迭代时提前停机，得不到收敛的 ROF 解）")
+print(f"    注：两者量纲不同，λ惩罚||∇x||²，α惩罚||∇x||₁，数值不能直接比较。")
+print(f"    二者均使用 Neumann 边界；对比的是各自最佳工作点下的边缘保持行为")
+print(f"    （Sobolev 磨边 vs TV 保边），残余噪声水平接近但不要求严格相等。")
 
 print("\n【去噪结果对比】")
 print(f"  含噪图像: PSNR = {psnr_noisy:.2f} dB, SSIM = {ssim_noisy:.3f}")

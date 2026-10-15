@@ -72,17 +72,21 @@ def divergence_backward(p_h, p_v):
     这是 gradient_forward 的伴随算子（负梯度）:
     div(p) = -D^* p，满足 <Dx, p> = <x, -div(p)>
     
-    实现方式:
-    div[i,j] = p_h[i,j-1] - p_h[i,j] + p_v[i-1,j] - p_v[i,j]
+    实现方式（严格为 gradient_forward 的负伴随，满足 <Dx,p> = <x,-div p>）:
+    div[i,j] = (p_h[i,j] - p_h[i,j-1]) + (p_v[i,j] - p_v[i-1,j])
+    超出边界的 p 值视为 0（零边界），故末列/末行自然落到 -p_h[i,-2]、-p_v[-2,j]。
     
-    边界处理: 超出边界的p值视为0（零边界）
+    注意: 必须与 gradient_forward 的前向差分严格配套。若误写成
+    p[i,j-1]-p[i,j] 得到的是 +D^T 而非 -D^T，Chambolle-Pock 会发散。
     """
     h, w = p_h.shape
     div = np.zeros((h, w))
-    div[:, 1:] += p_h[:, :-1]   # 加 p_h[i,j-1]
-    div -= p_h                  # 减 p_h[i,j]（含边界，边界处p_h已为0）
-    div[1:, :] += p_v[:-1, :]   # 加 p_v[i-1,j]
-    div -= p_v                  # 减 p_v[i,j]（含边界，边界处p_v已为0）
+    # 水平: -D_h^T p_h
+    div[:, :-1] += p_h[:, :-1]
+    div[:, 1:] -= p_h[:, :-1]
+    # 垂直: -D_v^T p_v
+    div[:-1, :] += p_v[:-1, :]
+    div[1:, :] -= p_v[:-1, :]
     return div
 
 def symmetrized_gradient_forward(w_h, w_v):
@@ -105,35 +109,26 @@ def symmetrized_gradient_forward(w_h, w_v):
 
 def symmetrized_divergence_backward(q_1, q_2, q_3):
     """
-    对称梯度算子的伴随（负散度）
+    对称梯度算子的伴随（负散度）: 返回 -E^T q
     
-    注意: q_3 的交叉项贡献方向如下（这是对称梯度算子的数学性质）:
-    - dq3_dv（q_3的垂直方向差分）加到 div_w_h（w_h的散度）
-    - dq3_dh（q_3的水平方向差分）加到 div_w_v（w_v的散度）
-    
-    这种交叉方向是刻意的数学设计，因为对称梯度 E(w) 的 (1,2) 分量
-    同时包含 ∂h w_v 和 ∂v w_h，其伴随算子自然产生交叉贡献。
+    E(w) 的三个分量: E1=∂h w_h, E2=∂v w_v, E3=0.5(∂h w_v + ∂v w_h)。
+    其负伴随按分量组装（每个差分都用与 symmetrized_gradient_forward
+    严格配套的 -D^T，否则 Chambolle-Pock 发散）:
+    - w_h 分量: -D_h^T q_1 + 0.5*(-D_v^T q_3)   （q_3 经 ∂v w_h 交叉贡献 w_h）
+    - w_v 分量: -D_v^T q_2 + 0.5*(-D_h^T q_3)   （q_3 经 ∂h w_v 交叉贡献 w_v）
     """
-    h, w = q_1.shape
-    div_w_h = np.zeros_like(q_1)
-    div_w_v = np.zeros_like(q_2)
-    
-    div_w_h[:, 1:] += q_1[:, :-1]
-    div_w_h -= q_1
-    
-    div_w_v[1:, :] += q_2[:-1, :]
-    div_w_v -= q_2
-    
-    dq3_dh = np.zeros_like(q_3)
-    dq3_dv = np.zeros_like(q_3)
-    dq3_dh[:, 1:] += 0.5 * q_3[:, :-1]
-    dq3_dh -= 0.5 * q_3
-    dq3_dv[1:, :] += 0.5 * q_3[:-1, :]
-    dq3_dv -= 0.5 * q_3
-    
-    div_w_h += dq3_dv
-    div_w_v += dq3_dh
-    
+    def minus_DhT(p):
+        o = np.zeros_like(p)
+        o[:, :-1] += p[:, :-1]
+        o[:, 1:] -= p[:, :-1]
+        return o
+    def minus_DvT(p):
+        o = np.zeros_like(p)
+        o[:-1, :] += p[:-1, :]
+        o[1:, :] -= p[:-1, :]
+        return o
+    div_w_h = minus_DhT(q_1) + 0.5 * minus_DvT(q_3)
+    div_w_v = minus_DvT(q_2) + 0.5 * minus_DhT(q_3)
     return div_w_h, div_w_v
 
 def tgv_denoise_primal_dual(y, alpha0, alpha1, n_iter=500, tau=0.25, sigma=0.25):
@@ -199,8 +194,9 @@ def tgv_denoise_primal_dual(y, alpha0, alpha1, n_iter=500, tau=0.25, sigma=0.25)
         div_q_h, div_q_v = symmetrized_divergence_backward(q_1, q_2, q_3)
         
         x_new = (x + tau * div_p + tau * y) / (1 + tau)
-        w_h_new = w_h + tau * (div_q_h - p_h)
-        w_v_new = w_v + tau * (div_q_v - p_v)
+        # ∇_w L = -p + E^T q，故下降步 w - tau*∇_w = w + tau*(p - E^T q) = w + tau*(p + div_q)
+        w_h_new = w_h + tau * (div_q_h + p_h)
+        w_v_new = w_v + tau * (div_q_v + p_v)
         
         x_bar = x_new + theta * (x_new - x)
         w_h_bar = w_h_new + theta * (w_h_new - w_h)
@@ -257,7 +253,10 @@ n = 128
 camera = resize(data.camera(), (n, n))
 
 sigma_noise = 0.1
-camera_noisy = random_noise(camera, mode='gaussian', var=sigma_noise**2)
+try:  # skimage>=0.22 用 rng；显式传种子保证跨版本可复现
+    camera_noisy = random_noise(camera, mode='gaussian', var=sigma_noise**2, rng=42)
+except TypeError:
+    camera_noisy = random_noise(camera, mode='gaussian', var=sigma_noise**2, seed=42)
 
 alpha_tv = 0.2
 camera_tv = denoise_tv_chambolle(camera_noisy, weight=alpha_tv)
@@ -405,11 +404,11 @@ fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 for i, (ratio, img) in enumerate(zip(alpha_ratios[:5], tgv_results[:5])):
     ax = axes[i // 3, i % 3]
     ax.imshow(img, cmap='gray')
-    ax.set_title(f'α₀/α₁ = {ratio:.1f}\nPSNR={psnr_results[i]:.2f}dB, SSIM={ssim_results[i]:.3f}')
+    ax.set_title(f'$\\alpha_0/\\alpha_1$ = {ratio:.1f}\nPSNR={psnr_results[i]:.2f}dB, SSIM={ssim_results[i]:.3f}')
     ax.axis('off')
 
 axes[1, 2].plot(alpha_ratios, psnr_results, 'bo-', linewidth=2, markersize=8, label='PSNR')
-axes[1, 2].set_xlabel('α₀/α₁')
+axes[1, 2].set_xlabel('$\\alpha_0/\\alpha_1$')
 axes[1, 2].set_ylabel('PSNR (dB)', color='blue')
 axes[1, 2].tick_params(axis='y', labelcolor='blue')
 axes[1, 2].grid(True, alpha=0.3)
@@ -419,7 +418,7 @@ ax2.set_ylabel('SSIM', color='red')
 ax2.tick_params(axis='y', labelcolor='red')
 axes[1, 2].set_title('参数敏感性分析')
 
-plt.suptitle('TGV参数敏感性：α₀/α₁对去噪效果的影响', fontsize=14)
+plt.suptitle('TGV参数敏感性：$\\alpha_0/\\alpha_1$对去噪效果的影响', fontsize=14)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤4_参数敏感性分析.png'), dpi=150, bbox_inches='tight')
 if not SILENT_MODE:
@@ -453,11 +452,11 @@ for i, s in enumerate(ssims):
     axes[1].text(i, s + 0.02, f'{s:.3f}', ha='center', fontsize=10)
 
 table_data = [
-    ['惩罚项', '||∇x||₁', 'α₁||∇x-w||₁ + α₀||Ew||₁'],
+    ['惩罚项', r'$\|\nabla x\|_1$', r'$\alpha_1\|\nabla x-w\|_1+\alpha_0\|Ew\|_1$'],
     ['偏好解', '分段常数', '分段仿射'],
     ['渐变区域', '阶梯效应', '自然渐变'],
     ['边缘保持', '能', '能'],
-    ['参数数量', '1个 (α)', '2个 (α₀, α₁)'],
+    ['参数数量', r'1个 ($\alpha$)', r'2个 ($\alpha_0$, $\alpha_1$)'],
     ['计算复杂度', '低', '较高'],
 ]
 axes[2].axis('off')

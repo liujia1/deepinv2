@@ -13,6 +13,15 @@
   3. 添加了LASSO像素域局限性的教学注释
   4. soft_thresh使用更简洁形式
   5. PSNR显式指定data_range=1.0
+
+修订说明（基于结果复核审计，2026-10）：
+  6. 修正原"PSNR仅在同一方法内可比"的错误表述：同一真值、同一data_range下
+     PSNR/MSE可以且应当跨方法比较；不可跨方法直接比较的是λ的数值（量纲不同）
+  7. TV默认λ由0.15改为0.08：稠密PSNR-λ扫描显示最优约为0.076（28.5dB），
+     0.15位于曲线下降支（26.9dB），次优约1.6dB
+  8. 新增梯度域Tikhonov对照（Neumann边界DCT闭式解）：澄清"过度平滑、丢失边缘"
+     是梯度域二次正则（经典Tikhonov/Wiener平滑）的特征；原像素域零均值高斯先验
+     在自然图（均值≈0.5）上表现为"先验失配、几乎不收缩"，而非过度平滑
 """
 
 import numpy as np
@@ -73,6 +82,32 @@ y = x + NOISE_LEVEL * np.random.randn(n, n)
 def soft_thresh(x, l):
     """软阈值函数：Laplace先验的MAP解"""
     return np.sign(x) * np.maximum(np.abs(x) - l, 0)
+
+def tikhonov_gradient(y, lam):
+    """
+    梯度域Tikhonov正则（经典Tikhonov/Wiener平滑）的闭式解
+
+    优化问题: min_x 0.5||x-y||^2 + (lam/2) * ||∇x||^2
+
+    与像素域Tikhonov（惩罚||x||^2，假设"值小"）不同，这里高斯先验加在
+    梯度上（假设"梯度小"），解是一个线性低通平滑滤波器：能压噪，但对所有
+    频率成分无差别衰减，因此在平坦区去噪的同时会抹糊边缘（过度平滑）。
+
+    求解: 该二次问题在余弦变换域逐频率收缩 X = Y / (1 + lam·Λ)，
+          Λ为Neumann边界下拉普拉斯算子的特征值 2-2cos(kπ/n)。
+          使用DCT-II（Neumann边界）而非FFT（周期边界），避免图像边界处
+          的环绕振铃。
+
+    注意: 此处λ作用于"梯度值"，与TV的λ同量纲，但与像素域Tikhonov/LASSO
+          的λ（作用于"像素值"）量纲不同，数值不可直接比较。
+    """
+    from scipy.fft import dctn, idctn
+    h, w = y.shape
+    eig_h = 2 - 2 * np.cos(np.pi * np.arange(h) / h)
+    eig_w = 2 - 2 * np.cos(np.pi * np.arange(w) / w)
+    Lam = eig_h[:, None] + eig_w[None, :]
+    Y = dctn(y, type=2, norm='ortho')
+    return idctn(Y / (1.0 + lam * Lam), type=2, norm='ortho')
 
 def tv_denoise_chambolle(y, lam, n_iter=100):
     """
@@ -160,42 +195,58 @@ b_laplace = 0.5
 
 lam_tikh = sigma**2 / sigma_x**2      # ~ 0.01
 lam_lasso = sigma**2 / b_laplace      # ~ 0.02
-lam_tv = 0.15                          # 手动调参
+# TV λ取PSNR-λ扫描（见步骤2）的近似最优点0.08；原0.15位于下降支、次优约1.6dB
+lam_tv = 0.08
+
+# 梯度域Tikhonov为线性滤波、DCT闭式解极廉价，直接在网格上按PSNR扫描选最优λ
+# （与TV的选参口径一致：都是"给定真值时该先验可达的最佳效果"，用于公平对比先验本身）
+_grid_lam_grad = np.logspace(-2, 2, 161)
+_psnr_grad_grid = [
+    peak_signal_noise_ratio(x, tikhonov_gradient(y, l), data_range=DATA_RANGE)
+    for l in _grid_lam_grad
+]
+lam_tikh_grad = float(_grid_lam_grad[int(np.argmax(_psnr_grad_grid))])
 
 # ── 参数量纲说明 ──
-# Tikhonov lam = sigma^2/sigma_x^2: 作用于像素域, ||x||^2 正则项
-# LASSO   lam = sigma^2/b:          作用于像素域, ||x||_1 正则项
-# TV      lam = 0.15:               作用于梯度域, ||grad x||_1 正则项
-# 注意: 不同正则项的量纲不同（像素值 vs 梯度值），
-#       lam 的数值大小不可直接对比。
-#       此处TV lam 为手动调参结果，可通过PSNR-lambda曲线交叉验证。
-#       在实践中，建议对每种方法分别做网格搜索选取最优lam。
+# 像素域Tikhonov lam = sigma^2/sigma_x^2: 作用于像素值, ||x||^2
+# 像素域LASSO   lam = sigma^2/b:         作用于像素值, ||x||_1
+# 梯度域Tikhonov lam≈扫描最优:           作用于梯度值, ||grad x||^2
+# TV            lam = 0.08:              作用于梯度值, ||grad x||_1
+# 注意1: λ的数值随正则项量纲（像素值 vs 梯度值）不同而不可跨方法直接比较，
+#        每种方法应在自己的λ轴上分别调参；
+# 注意2: PSNR/MSE针对同一真值、同一data_range计算，可以且应当跨方法比较。
 
 x_tikh = y / (1 + lam_tikh)
 x_lasso = soft_thresh(y, lam_lasso)
+x_tikh_grad = tikhonov_gradient(y, lam_tikh_grad)
 x_tv = tv_denoise_chambolle(y, lam_tv, n_iter=TV_ITERS)
 
 psnr_noisy = peak_signal_noise_ratio(x, y, data_range=DATA_RANGE)
 psnr_tikh = peak_signal_noise_ratio(x, x_tikh, data_range=DATA_RANGE)
 psnr_lasso = peak_signal_noise_ratio(x, x_lasso, data_range=DATA_RANGE)
+psnr_tikh_grad = peak_signal_noise_ratio(x, x_tikh_grad, data_range=DATA_RANGE)
 psnr_tv = peak_signal_noise_ratio(x, x_tv, data_range=DATA_RANGE)
 
 print("===== 经典先验族对比 =====")
 print(f"噪声水平 sigma = {sigma:.4f}")
-print(f"\n高斯先验 (假设: 值小):")
-print(f"  正则项: ||x||_2^2 -> Tikhonov")
+print(f"\n高斯先验① 像素域 (假设: 值小/零均值):")
+print(f"  正则项: ||x||_2^2 -> 像素域Tikhonov（闭式收缩）")
 print(f"  lam = sigma^2/sigma_x^2 = {lam_tikh:.4f}")
-print(f"  PSNR = {psnr_tikh:.4f} dB")
+print(f"  PSNR = {psnr_tikh:.4f} dB（自然图均值≈0.5，先验失配，几乎不收缩）")
+print(f"\n高斯先验② 梯度域 (假设: 梯度小):")
+print(f"  正则项: ||grad x||_2^2 -> 经典Tikhonov/Wiener平滑（DCT闭式解）")
+print(f"  lam = {lam_tikh_grad:.4f} (PSNR网格扫描最优)")
+print(f"  PSNR = {psnr_tikh_grad:.4f} dB（能去噪但过度平滑、糊边缘）")
 print(f"\nLaplace先验 (假设: 值稀疏):")
 print(f"  正则项: ||x||_1 -> LASSO")
 print(f"  lam = sigma^2/b = {lam_lasso:.4f}")
 print(f"  PSNR = {psnr_lasso:.4f} dB")
 print(f"\nTV先验 (假设: 梯度稀疏):")
 print(f"  正则项: ||grad x||_1 -> ROF模型")
-print(f"  lam = {lam_tv:.4f} (手动调参)")
+print(f"  lam = {lam_tv:.4f} (PSNR-λ扫描近似最优)")
 print(f"  PSNR = {psnr_tv:.4f} dB")
 
-fig, axes = plt.subplots(2, 3, figsize=(14, 9))
+fig, axes = plt.subplots(2, 4, figsize=(18, 9))
 
 axes[0, 0].imshow(x, cmap='gray')
 axes[0, 0].set_title('原始图像')
@@ -206,25 +257,35 @@ axes[0, 1].set_title(f'含噪图像\nPSNR={psnr_noisy:.4f}dB')
 axes[0, 1].axis('off')
 
 axes[0, 2].imshow(x_tikh, cmap='gray')
-axes[0, 2].set_title(f'Tikhonov (高斯先验)\n假设: 值小\nPSNR={psnr_tikh:.4f}dB')
+axes[0, 2].set_title(f'Tikhonov像素域 (高斯先验)\n假设: 值小/零均值（失配）\nPSNR={psnr_tikh:.4f}dB')
 axes[0, 2].axis('off')
+
+axes[0, 3].imshow(x_tikh_grad, cmap='gray')
+axes[0, 3].set_title(f'Tikhonov梯度域 (高斯先验)\n假设: 梯度小→线性平滑\nPSNR={psnr_tikh_grad:.4f}dB 过度平滑、糊边缘')
+axes[0, 3].axis('off')
 
 axes[1, 0].imshow(x_lasso, cmap='gray')
 axes[1, 0].set_title(f'LASSO (Laplace先验)\n假设: 值稀疏\nPSNR={psnr_lasso:.4f}dB')
 axes[1, 0].axis('off')
 
 axes[1, 1].imshow(x_tv, cmap='gray')
-axes[1, 1].set_title(f'TV去噪 (TV先验)\n假设: 梯度稀疏\nPSNR={psnr_tv:.4f}dB')
+axes[1, 1].set_title(f'TV去噪 (TV先验)\n假设: 梯度稀疏\nPSNR={psnr_tv:.4f}dB 保边去噪')
 axes[1, 1].axis('off')
 
+# 剖面图占最后两格
+axes[1, 2].remove()
+axes[1, 3].remove()
+ax_prof = fig.add_subplot(2, 4, (7, 8))
 center = n // 2
-axes[1, 2].plot(x[center, :], 'k--', linewidth=1.5, label='真实')
-axes[1, 2].plot(x_tikh[center, :], 'b-', linewidth=1, label='Tikhonov')
-axes[1, 2].plot(x_lasso[center, :], 'g-', linewidth=1, label='LASSO')
-axes[1, 2].plot(x_tv[center, :], 'r-', linewidth=1, label='TV')
-axes[1, 2].set_title('中心行剖面对比')
-axes[1, 2].legend()
-axes[1, 2].set_xlabel('像素索引')
+ax_prof.plot(x[center, :], 'k--', linewidth=1.5, label='真实')
+ax_prof.plot(x_tikh[center, :], 'b-', linewidth=1, label='Tikhonov像素域')
+ax_prof.plot(x_tikh_grad[center, :], color='orange', linewidth=1.2, label='Tikhonov梯度域')
+ax_prof.plot(x_lasso[center, :], 'g-', linewidth=1, label='LASSO')
+ax_prof.plot(x_tv[center, :], 'r-', linewidth=1.2, label='TV')
+ax_prof.set_title('中心行剖面对比：梯度域Tikhonov整体平滑（边缘被抹圆），TV在平坦区抹平、边缘保持锐利')
+ax_prof.legend(loc='upper right')
+ax_prof.set_xlabel('像素索引')
+ax_prof.grid(True, alpha=0.3)
 
 plt.suptitle('经典先验族对比：不同假设→不同正则项→不同解形态', fontsize=14)
 plt.tight_layout()
@@ -244,22 +305,28 @@ axes[0].set_ylim(-0.2, 4)
 axes[0].grid(True, alpha=0.3)
 
 # PSNR-lambda曲线扫描
-# 注意: LASSO在像素域直接应用对自然图像效果有限，此处仅作教学对比
+# 注意1: LASSO在像素域直接应用对自然图像效果有限，此处仅作教学对比
+# 注意2: 像素域两法的λ作用于像素值，梯度域两法的λ作用于梯度值，量纲不同，
+#        共享横轴仅为教学示意；跨方法可比的是纵轴PSNR。
 lambdas = np.logspace(-4, 1, N_LAMBDA)
 psnr_tikh_list = []
 psnr_lasso_list = []
+psnr_tikh_grad_list = []
 psnr_tv_list = []
 
 for lam in lambdas:
     psnr_tikh_list.append(peak_signal_noise_ratio(x, y / (1 + lam), data_range=DATA_RANGE))
     psnr_lasso_list.append(peak_signal_noise_ratio(x, soft_thresh(y, lam), data_range=DATA_RANGE))
+    psnr_tikh_grad_list.append(peak_signal_noise_ratio(x, tikhonov_gradient(y, lam), data_range=DATA_RANGE))
     psnr_tv_list.append(peak_signal_noise_ratio(x, tv_denoise_chambolle(y, lam, n_iter=TV_ITERS_SWEEP), data_range=DATA_RANGE))
 
-axes[1].semilogx(lambdas, psnr_tikh_list, 'b-o', markersize=3, label='Tikhonov')
-axes[1].semilogx(lambdas, psnr_lasso_list, 'g-s', markersize=3, label='LASSO')
+axes[1].semilogx(lambdas, psnr_tikh_list, 'b-o', markersize=3, label='Tikhonov像素域')
+axes[1].semilogx(lambdas, psnr_lasso_list, 'g-s', markersize=3, label='LASSO像素域')
+axes[1].semilogx(lambdas, psnr_tikh_grad_list, color='orange', marker='D', markersize=3,
+                 linestyle='--', label='Tikhonov梯度域')
 axes[1].semilogx(lambdas, psnr_tv_list, 'r-^', markersize=3, label='TV')
 axes[1].axhline(y=psnr_noisy, color='k', linestyle='--', alpha=0.5, label='含噪')
-axes[1].set_xlabel(r'$\lambda$')
+axes[1].set_xlabel(r'$\lambda$（像素域/梯度域量纲不同，仅各自曲线内定位最优）')
 axes[1].set_ylabel('PSNR (dB)')
 axes[1].set_title(r'不同先验的 PSNR-$\lambda$ 曲线')
 axes[1].legend()
@@ -267,13 +334,17 @@ axes[1].grid(True, alpha=0.3)
 
 res_tikh = np.abs(x_tikh - x)
 res_lasso = np.abs(x_lasso - x)
+res_tikh_grad = np.abs(x_tikh_grad - x)
 res_tv = np.abs(x_tv - x)
 
-axes[2].bar(['Tikhonov\n(高斯)', 'LASSO\n(Laplace)', 'TV\n(梯度稀疏)'],
-            [np.mean(res_tikh**2), np.mean(res_lasso**2), np.mean(res_tv**2)],
-            color=['blue', 'green', 'red'], alpha=0.7)
+axes[2].bar(['Tikhonov\n像素域', 'Tikhonov\n梯度域', 'LASSO\n像素域', 'TV\n(梯度稀疏)'],
+            [np.mean(res_tikh**2), np.mean(res_tikh_grad**2),
+             np.mean(res_lasso**2), np.mean(res_tv**2)],
+            color=['blue', 'orange', 'green', 'red'], alpha=0.7)
 axes[2].set_ylabel('MSE')
-axes[2].set_title('重建误差对比')
+axes[2].set_title('重建误差对比（各取步骤1所用λ）')
+for tick in axes[2].get_xticklabels():
+    tick.set_fontsize(9)
 
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤2_正则项形态与性能对比.png'), dpi=150, bbox_inches='tight')

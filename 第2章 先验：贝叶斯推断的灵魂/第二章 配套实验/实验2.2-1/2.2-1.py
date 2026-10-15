@@ -684,7 +684,7 @@ ax2.set_ylabel('SSIM$\\times$100', color='seagreen')
 ax2.tick_params(axis='y', labelcolor='seagreen')
 
 ax1.set_xticks(x_pos)
-ax1.set_xticklabels(all_methods, fontsize=7)
+ax1.set_xticklabels(all_methods, fontsize=7, rotation=20, ha='right')
 ax1.set_title('不同方法的性能对比\n(左轴: PSNR, 右轴: SSIM$\\times$100)')
 
 lines1, labels1 = ax1.get_legend_handles_labels()
@@ -730,7 +730,8 @@ var_colors = plt.cm.tab10(np.linspace(0, 0.5, len(var_methods)))
 axes[1].bar(var_methods, var_values, color=var_colors[:len(var_methods)], alpha=0.7)
 axes[1].set_ylabel('局部方差')
 axes[1].set_title('局部方差保持度\n(中心$10\\times10$区域)')
-axes[1].tick_params(axis='x', labelsize=7)
+axes[1].set_xticks(np.arange(len(var_methods)))
+axes[1].set_xticklabels(var_methods, fontsize=7, rotation=20, ha='right')
 
 # 动态计算文字偏移量，避免超出边框
 var_max = max(var_values)
