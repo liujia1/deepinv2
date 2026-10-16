@@ -1,7 +1,7 @@
 """
 实验2.4-2 Plug-and-Play先验：去噪器即先验
 对应章节：2.4 从显式先验到隐式先验
-知识点：PnP概念；去噪器=先验；DPIR算法；隐式先验 vs 显式先验对比
+知识点：PnP概念；去噪器=先验；PnP-GD迭代；隐式先验 vs 显式先验对比
 
 素材来源：
   - examples/blind-inverse-problems/demo_blind_deblurring.py (PnP部分)
@@ -19,6 +19,17 @@
      "L2 先验与分段常数图像失配 + 小 lambda 反卷积噪声放大"（实测内部误差约为边界带 2 倍）
   7. （复核修正）修复 results_summary 段引用未定义变量 tau_pnp/num_iter_pnp 导致
      NameError 崩溃、JSON 从未写出的 bug；补归档 results_summary.json
+  8. （第二轮复核修正）TV 基线由 Adam(lr=0.05,100步,lambda=0.05) 改为
+     L-BFGS+强Wolfe(解至收敛, lambda=0.03 扫参最优)。原"100步已到收敛平台"
+     系固定学习率 Adam 在极小点附近停滞，并非 TV 模型上限；PnP 对调优 TV 的
+     真实优势为 16 seed 平均 +0.4 dB、胜率 75%（旧口径 1.78 dB 含弱基线水分）
+  9. （第二轮复核修正）"单次去噪劣于线性反演"系稻草人对照：旧对照硬编码
+     sigma=0.2（去噪器此时退化为均值模糊），与迭代版 sigma=0.05 不同口径。
+     改为以 sigma=0.05 为主对照（实测稳定小幅优于线性反演），sigma=0.2 仅作
+     "去噪器强度失配"演示；结论改写为"迭代把约+0.4 dB放大到约+10 dB"
+ 10. （第二轮复核修正）新增 16 个独立噪声实现的均值/标准差/胜率统计与
+     稳健性图；弱化"隐式性才是收益来源"的过度归因（本实验手工去噪器编码的
+     是与 TV 同族的保边先验，无"同先验、仅形式不同"的对照）
 """
 
 import numpy as np
@@ -132,40 +143,72 @@ def tikhonov_wiener(y, kernel, lam=0.01):
     return x.unsqueeze(0)  # shape: (1, H, W) 与 x_true 一致
 
 
-def tv_deblur(y, A, A_T, lam=0.05, n_iter=100):
+def tv_deblur(y, A, A_T, lam=0.03, max_iter=500):
     """
     TV去模糊: min_x 0.5||Ax-y||^2 + lam * TV(x)
     正则项: TV(x) = sum_i |(nabla x)_i| (梯度L1, 对应TV先验)
-    
+
     x 形状为 (C, H, W), torch.diff 的 dim:
       dim=1: 沿行方向(垂直)差分
       dim=2: 沿列方向(水平)差分
-    
-    复核实测: n_iter=100 已处于收敛平台(100/200/300/1000 步 PSNR 分别为
-    31.79/31.66/31.39/31.48, Adam 在极小点附近小幅震荡), 100 步足够对比使用
+
+    求解器: L-BFGS + 强Wolfe线搜索，把(1e-10光滑化后的)凸目标解到真正收敛。
+    上一版用 Adam(lr=0.05,100步,lam=0.05) 并把 31.79 dB 称为"收敛平台"；
+    第二轮复核实测那只是固定学习率 Adam 在极小点附近停滞：
+      - 同一目标 lam=0.05: Adam-100 31.79 dB -> L-BFGS 31.93 dB
+      - 公平扫参 lam=0.03: L-BFGS seed42 达 32.88 dB, 16 seed 均值 32.23 dB
+    因此 TV 基线必须调参 + 解到收敛，与 PnP 的对比才公平。
     """
     x = A_T(y).detach().clone().requires_grad_(True)
-    optimizer = torch.optim.Adam([x], lr=0.05)
+    optimizer = torch.optim.LBFGS(
+        [x], max_iter=max_iter, history_size=50,
+        line_search_fn='strong_wolfe',
+        tolerance_grad=1e-11, tolerance_change=1e-13)
 
-    for _ in range(n_iter):
+    def closure():
         optimizer.zero_grad()
-
         # 数据保真项
         data_term = 0.5 * torch.mean((A(x) - y)**2)
-
-        # 各向同性TV (内部区域, 边界项用绝对值近似)
+        # 各向同性TV, 使用mean而非sum使lam对图像尺寸不敏感
         dx = torch.diff(x, dim=1)  # (C, H-1, W)
         dy = torch.diff(x, dim=2)  # (C, H, W-1)
-        # 取重叠区域: (C, H-1, W-1)
-        # 注意: 使用mean而非sum，使lam参数对图像尺寸不敏感
         tv = torch.mean(torch.sqrt(dx[:, :, :dy.shape[2]]**2 +
                                    dy[:, :dx.shape[1], :]**2 + 1e-10))
-
         loss = data_term + lam * tv
         loss.backward()
-        optimizer.step()
+        return loss
 
+    optimizer.step(closure)
     return x.detach()
+
+
+def cg_tikhonov(y, A, A_T, lam=0.05, n_iter=2000, tol=1e-10):
+    """
+    在线性(零填充)卷积模型下用共轭梯度精确求解 Tikhonov 目标:
+        min_x 0.5||Ax-y||^2 + 0.5*lam*||x||^2
+    即正规方程 (A^T A + lam I) x = A^T y。
+
+    用途: tikhonov_wiener 的 FFT 实现隐含循环卷积边界假设，与前向算子的
+    零填充卷积存在边界失配。CG 在真实算子上求解，可排除边界因素，检验
+    L2 先验"调优 lambda 后"的真实上限(实测 lam=0.05 约 21.9 dB，
+    仍低于线性反演，证明 L2 失配才是主因、FFT 边界只是次因)。
+    """
+    b = A_T(y)
+    x = torch.zeros_like(b)
+    r = b - (A_T(A(x)) + lam * x)
+    p = r.detach().clone()
+    rr = (r * r).sum()
+    for _ in range(n_iter):
+        Ap = A_T(A(p)) + lam * p
+        alpha = rr / (p * Ap).sum()
+        x = x + alpha * p
+        r = r - alpha * Ap
+        rr_new = (r * r).sum()
+        if rr_new.sqrt() < tol:
+            break
+        p = r + (rr_new / rr) * p
+        rr = rr_new
+    return x
 
 
 # ══════════════════════════════════════════════════════════
@@ -223,6 +266,18 @@ def simple_denoiser(x, sigma_denoise=0.1):
     return result
 
 
+def pnp_gd(y, A, A_T, x0, tau=0.5, sigma_denoise=0.05, n_iter=50):
+    """
+    PnP-GD 迭代: x^{k+1} = D_sigma(x^k - tau * A^T(A x^k - y))
+    用去噪器替代近端算子，梯度步(数据保真)与去噪(隐式先验)交替。
+    """
+    x = x0.detach().clone()
+    for _ in range(n_iter):
+        grad = A_T(A(x) - y)
+        x = simple_denoiser(x - tau * grad, sigma_denoise)
+    return x
+
+
 # ══════════════════════════════════════════════════════════
 # 实验设置
 # ══════════════════════════════════════════════════════════
@@ -257,10 +312,16 @@ x_tikh = tikhonov_wiener(y, kernel, lam=lam_tikh)
 psnr_tikh = compute_psnr(x_tikh, x_true)
 print(f"  Tikhonov (L2, lam={lam_tikh}): PSNR={psnr_tikh:.2f} dB")
 
-lam_tv = 0.05
+lam_tv = 0.03  # L-BFGS 下扫参所得最优(seed42: 0.02->32.52, 0.03->32.88, 0.04->32.50, 0.05->31.93)
 x_tv = tv_deblur(y, A, A_T, lam=lam_tv)
 psnr_tv = compute_psnr(x_tv, x_true)
-print(f"  TV (L1 grad, lam={lam_tv}): PSNR={psnr_tv:.2f} dB")
+print(f"  TV (L1 grad, L-BFGS收敛解, lam={lam_tv}): PSNR={psnr_tv:.2f} dB")
+
+# Tikhonov 公平对照: CG 在真实(零填充)卷积算子上精确求解 + 扫参最优 lambda
+lam_tikh_tuned = 0.05
+x_tikh_tuned = cg_tikhonov(y, A, A_T, lam=lam_tikh_tuned)
+psnr_tikh_tuned = compute_psnr(x_tikh_tuned, x_true)
+print(f"  Tikhonov (CG精确解, 扫参最优lam={lam_tikh_tuned}): PSNR={psnr_tikh_tuned:.2f} dB")
 
 # ── PnP隐式先验 ──
 print("\n" + "-" * 50)
@@ -275,18 +336,18 @@ tau = 0.5            # 梯度步长
 sigma_denoise = 0.05 # 去噪器工作噪声水平
 num_iter_pnp = 50    # 复核实测 50 步已收敛(200 步仅 -0.1 dB)
 
-x_pnp = x_lin.detach().clone()
-for _ in range(num_iter_pnp):
-    grad = A_T(A(x_pnp) - y)
-    x_pnp = simple_denoiser(x_pnp - tau * grad, sigma_denoise)
+x_pnp = pnp_gd(y, A, A_T, x_lin, tau, sigma_denoise, num_iter_pnp)
 
 psnr_pnp = compute_psnr(x_pnp, x_true)
 psnr_lin = compute_psnr(x_lin, x_true)
-psnr_pnp1 = compute_psnr(simple_denoiser(x_lin, 0.2), x_true)  # 旧"单次去噪"版, 仅作对照打印
+# 单次去噪对照: 主口径 sigma=0.05(与迭代版同口径); sigma=0.2 仅演示"去噪器失配"
+psnr_single_05 = compute_psnr(simple_denoiser(x_lin, sigma_denoise), x_true)
+psnr_single_02 = compute_psnr(simple_denoiser(x_lin, 0.2), x_true)
 
 print(f"  线性反演: PSNR={psnr_lin:.2f} dB")
 print(f"  PnP-GD 迭代({num_iter_pnp}步, tau={tau}, sigma_d={sigma_denoise}): PSNR={psnr_pnp:.2f} dB")
-print(f"  [对照] 单次去噪 D(A^T y) 不迭代: PSNR={psnr_pnp1:.2f} dB (低于线性反演, 说明先验必须与数据保真项交替)")
+print(f"  [对照] 单次去噪 sigma=0.05(与迭代同口径)不迭代: PSNR={psnr_single_05:.2f} dB (小幅好于线性反演)")
+print(f"  [对照] 单次去噪 sigma=0.2(去噪器失配,退化为均值模糊): PSNR={psnr_single_02:.2f} dB")
 
 # ── 全部对比总结 ──
 print("\n" + "-" * 50)
@@ -296,6 +357,54 @@ methods = ['线性反演', 'Tikhonov', 'TV', 'PnP-GD']
 psnrs_all = [psnr_lin, psnr_tikh, psnr_tv, psnr_pnp]
 for name, p in zip(methods, psnrs_all):
     print(f"  {name}: PSNR={p:.2f} dB")
+
+# ══════════════════════════════════════════════════════════
+# 多噪声实现稳健性 (16 个独立 seed, 避免单张实现的偶然性)
+# ══════════════════════════════════════════════════════════
+print("\n" + "-" * 50)
+print("多噪声实现稳健性 (16 个独立噪声实现)")
+print("-" * 50)
+
+NUM_SEEDS = 16
+SEED_START = 1000
+robust_rows = {k: [] for k in
+               ['linear', 'tikhonov_wiener_0.01', 'tikhonov_cg_0.05',
+                'single_pass_0.05', 'single_pass_0.2',
+                'tv_lbfgs_0.03', 'pnp_gd_50']}
+for _seed in range(SEED_START, SEED_START + NUM_SEEDS):
+    torch.manual_seed(_seed)
+    _y = A(x_true) + noise_level * torch.randn_like(x_true)
+    _x_lin = A_T(_y)
+    robust_rows['linear'].append(compute_psnr(_x_lin, x_true))
+    robust_rows['tikhonov_wiener_0.01'].append(
+        compute_psnr(tikhonov_wiener(_y, kernel, lam=lam_tikh), x_true))
+    robust_rows['tikhonov_cg_0.05'].append(
+        compute_psnr(cg_tikhonov(_y, A, A_T, lam=lam_tikh_tuned), x_true))
+    robust_rows['single_pass_0.05'].append(
+        compute_psnr(simple_denoiser(_x_lin, sigma_denoise), x_true))
+    robust_rows['single_pass_0.2'].append(
+        compute_psnr(simple_denoiser(_x_lin, 0.2), x_true))
+    robust_rows['tv_lbfgs_0.03'].append(
+        compute_psnr(tv_deblur(_y, A, A_T, lam=lam_tv), x_true))
+    robust_rows['pnp_gd_50'].append(
+        compute_psnr(pnp_gd(_y, A, A_T, _x_lin, tau, sigma_denoise, num_iter_pnp), x_true))
+
+robust_stats = {k: (float(np.mean(v)), float(np.std(v)))
+                for k, v in robust_rows.items()}
+_pnp_arr = np.array(robust_rows['pnp_gd_50'])
+_tv_arr = np.array(robust_rows['tv_lbfgs_0.03'])
+_single05_arr = np.array(robust_rows['single_pass_0.05'])
+_linear_arr = np.array(robust_rows['linear'])
+pnp_vs_tv_winrate = float((_pnp_arr > _tv_arr).mean())
+pnp_minus_tv_mean = float((_pnp_arr - _tv_arr).mean())
+single05_vs_linear_winrate = float((_single05_arr > _linear_arr).mean())
+single05_minus_linear_mean = float((_single05_arr - _linear_arr).mean())
+
+for _k, (_m, _s) in robust_stats.items():
+    print(f"  {_k:<22}: {_m:6.2f} +/- {_s:.2f} dB")
+print(f"  PnP-GD > TV 胜率: {pnp_vs_tv_winrate*100:.0f}%, 平均增益 {pnp_minus_tv_mean:+.2f} dB")
+print(f"  单次(0.05) > 线性反演 胜率: {single05_vs_linear_winrate*100:.0f}%, "
+      f"平均增益 {single05_minus_linear_mean:+.2f} dB")
 
 # ══════════════════════════════════════════════════════════
 # 可视化
@@ -313,7 +422,7 @@ axes[0, 1].set_title('模糊+噪声图像')
 axes[0, 1].axis('off')
 
 axes[0, 2].imshow(x_tikh.cpu().squeeze(), cmap='gray')
-axes[0, 2].set_title(f'Tikhonov (L2显式先验)\nPSNR={psnr_tikh:.2f}dB')
+axes[0, 2].set_title(f'Tikhonov (L2显式先验, λ={lam_tikh}未调优)\nPSNR={psnr_tikh:.2f}dB')
 axes[0, 2].axis('off')
 
 # 第2行：线性反演 -> PnP -> TV
@@ -326,13 +435,42 @@ axes[1, 1].set_title(f'PnP-GD 迭代{num_iter_pnp}步 (隐式先验)\nPSNR={psnr
 axes[1, 1].axis('off')
 
 axes[1, 2].imshow(x_tv.cpu().squeeze(), cmap='gray')
-axes[1, 2].set_title(f'TV (L1梯度显式先验)\nPSNR={psnr_tv:.2f}dB')
+axes[1, 2].set_title(f'TV (L1梯度显式先验, L-BFGS λ={lam_tv}调优)\nPSNR={psnr_tv:.2f}dB')
 axes[1, 2].axis('off')
 
 plt.suptitle('隐式先验 vs 显式先验：图像去模糊任务对比', fontsize=14)
 plt.tight_layout(rect=[0, 0, 1, 0.98])  # 调整布局，为suptitle留出更多空间
 plt.subplots_adjust(hspace=0.175)  # 增加行间距，使两行子图之间有更多间隔
 plt.savefig(os.path.join(SAVE_DIR, '步骤1_PnP与显式先验对比.png'), dpi=150, bbox_inches='tight')
+plt.close()
+
+# ── 图2：多噪声实现稳健性 (均值±标准差) ──
+_fig2_order = [
+    ('linear',              '线性反演'),
+    ('tikhonov_wiener_0.01', 'Tikhonov\nλ=0.01\n未调优'),
+    ('tikhonov_cg_0.05',    'Tikhonov(CG)\nλ=0.05调优'),
+    ('single_pass_0.05',    '单次去噪\nσ=0.05'),
+    ('single_pass_0.2',     '单次去噪\nσ=0.2失配'),
+    ('tv_lbfgs_0.03',       'TV\nL-BFGS调优'),
+    ('pnp_gd_50',           'PnP-GD\n50步'),
+]
+_colors = ['#9e9e9e', '#d6604d', '#f4a582', '#92c5de', '#d1e5f0', '#4393c3', '#2166ac']
+fig2, ax2 = plt.subplots(figsize=(11, 5.5))
+_labels = [item[1] for item in _fig2_order]
+_means = [robust_stats[key][0] for key, _ in _fig2_order]
+_stds = [robust_stats[key][1] for key, _ in _fig2_order]
+_bars = ax2.bar(_labels, _means, yerr=_stds, capsize=4, color=_colors, alpha=0.9)
+for _bar, _m in zip(_bars, _means):
+    ax2.text(_bar.get_x() + _bar.get_width() / 2, _m + 0.45,
+             f'{_m:.1f}', ha='center', fontsize=10)
+ax2.set_ylabel('PSNR (dB)', fontsize=12)
+ax2.set_ylim(10, 36)
+ax2.set_title(f'16个独立噪声实现的均值±标准差：PnP-GD 对调优TV平均 {pnp_minus_tv_mean:+.2f} dB、'
+              f'胜率 {pnp_vs_tv_winrate*100:.0f}%；单次去噪σ=0.05 对线性反演 '
+              f'{single05_minus_linear_mean:+.2f} dB', fontsize=12)
+ax2.grid(axis='y', alpha=0.3)
+plt.tight_layout()
+plt.savefig(os.path.join(SAVE_DIR, '步骤2_多噪声实现稳健性.png'), dpi=150, bbox_inches='tight')
 plt.close()
 
 # ══════════════════════════════════════════════════════════
@@ -361,16 +499,25 @@ print("     a) 手工设计去噪器 (NLM, BM3D) --- 不需要训练数据")
 print("     b) 数据驱动去噪器 (DnCNN, DRUNet) --- 需要外部训练")
 print("   - 数据驱动去噪器已进入第3章'学习型先验'范畴")
 
-print("\n4. PnP vs 显式先验 (本实验对比基线):")
-print("   - Tikhonov (L2): 闭式解, 计算快, 但L2先验与分段常数图像失配, 表现最差")
-print("   - TV (L1梯度): 保边, 需迭代求解")
-print("   - PnP-GD: 无需显式定义正则项; 同一手工去噪器下迭代版超过TV,")
-print("     但仅对 A^T y 单次去噪(不迭代)反而劣于线性反演 -> 先验须与数据保真交替")
+print("\n4. PnP vs 显式先验 (16 个独立噪声实现的稳健口径):")
+print(f"   - Tikhonov (L2, λ={lam_tikh} 未调优): 最差; 即便 CG 排除边界失配且扫参到 "
+      f"λ={lam_tikh_tuned}, 均值也仅 {robust_stats['tikhonov_cg_0.05'][0]:.1f} dB")
+print(f"   - TV (L-BFGS 收敛解, λ={lam_tv} 调优): {robust_stats['tv_lbfgs_0.03'][0]:.2f}"
+      f"±{robust_stats['tv_lbfgs_0.03'][1]:.2f} dB —— 需认真调参的强显式基线")
+print(f"   - PnP-GD: {robust_stats['pnp_gd_50'][0]:.2f}±{robust_stats['pnp_gd_50'][1]:.2f} dB, "
+      f"对调优TV平均 {pnp_minus_tv_mean:+.2f} dB、胜率 {pnp_vs_tv_winrate*100:.0f}% —— 占优但优势不大")
+print(f"   - 单次去噪(σ=0.05, 与迭代同口径): 均值 {robust_stats['single_pass_0.05'][0]:.2f} dB, "
+      f"对线性反演 {single05_minus_linear_mean:+.2f} dB、胜率 {single05_vs_linear_winrate*100:.0f}%")
+print("     -> 单次并非'不升反降'; 真正的结论是: 迭代交替把约 +0.4 dB 放大到约 +10 dB")
+print("        σ=0.2 低于线性反演只是去噪器强度失配(退化为均值模糊), 不能作为'必须交替'的证据")
 
-print("\n5. PnP的优势:")
+print("\n5. PnP的优势与归因边界:")
 print("   - 无需显式定义先验 p(x) 或正则项 R(x)")
 print("   - 解耦数据保真项与先验项 (模块化)")
 print("   - 适用于各种逆问题 (去模糊、超分、修复等)")
+print("   - 归因边界: 本实验手工去噪器编码的是与 TV 同族的保边平滑, 无'同先验、")
+print("     仅显式/隐式形式不同'的对照, 故小幅领先不能单独归因于'隐式性本身';")
+print("     可下的结论是'不写显式正则项, 仅凭去噪器交替即可达到并略超调优TV'")
 
 print("\n6. 理论保证:")
 print("   PnP-ULA 收敛到 oracle 后验邻域")
@@ -382,17 +529,37 @@ print("=" * 70)
 # ===== 保存数值结果 =====
 import json
 results_summary = {
-    'psnr_linear_dB': float(round(psnr_lin, 2)),
-    'psnr_tikhonov_dB': float(round(psnr_tikh, 2)),
-    'psnr_tv_dB': float(round(psnr_tv, 2)),
-    'psnr_pnp_dB': float(round(psnr_pnp, 2)),
-    'psnr_pnp_single_pass_dB': float(round(psnr_pnp1, 2)),
-    'lambda_tikhonov': float(lam_tikh),
-    'lambda_tv': float(lam_tv),
-    'tv_num_iters': int(100),
-    'pnp_tau_step': float(tau),
-    'pnp_sigma_denoise': float(sigma_denoise),
-    'pnp_num_iters': int(num_iter_pnp),
+    'single_realization_seed42': {
+        'psnr_linear_dB': round(psnr_lin, 2),
+        'psnr_tikhonov_wiener_lam0.01_dB': round(psnr_tikh, 2),
+        'psnr_tikhonov_cg_lam0.05_dB': round(psnr_tikh_tuned, 2),
+        'psnr_tv_lbfgs_lam0.03_dB': round(psnr_tv, 2),
+        'psnr_pnp_gd_dB': round(psnr_pnp, 2),
+        'psnr_single_pass_sigma0.05_dB': round(psnr_single_05, 2),
+        'psnr_single_pass_sigma0.2_dB': round(psnr_single_02, 2),
+    },
+    'parameters': {
+        'noise_sigma': noise_level,
+        'lambda_tikhonov_wiener_headline': lam_tikh,
+        'lambda_tikhonov_cg_tuned': lam_tikh_tuned,
+        'lambda_tv': lam_tv,
+        'tv_solver': 'L-BFGS + strong_wolfe (max_iter=500, 解至收敛)',
+        'pnp_tau_step': tau,
+        'pnp_sigma_denoise': sigma_denoise,
+        'pnp_num_iters': num_iter_pnp,
+    },
+    'multi_seed_robustness': {
+        'num_seeds': NUM_SEEDS,
+        'seed_range': [SEED_START, SEED_START + NUM_SEEDS - 1],
+        'mean_std_dB': {
+            k: {'mean': round(m, 3), 'std': round(s, 3)}
+            for k, (m, s) in robust_stats.items()
+        },
+        'pnp_gd_minus_tv_mean_dB': round(pnp_minus_tv_mean, 3),
+        'pnp_gd_vs_tv_win_rate': round(pnp_vs_tv_winrate, 3),
+        'single0.05_minus_linear_mean_dB': round(single05_minus_linear_mean, 3),
+        'single0.05_vs_linear_win_rate': round(single05_vs_linear_winrate, 3),
+    },
 }
 
 def _to_native(obj):

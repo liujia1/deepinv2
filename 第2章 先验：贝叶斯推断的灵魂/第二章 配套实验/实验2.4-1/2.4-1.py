@@ -20,13 +20,15 @@
      符号/下标走 LaTeX 格式；文字说明一律用 print，不把文字做进图片
   7. 输出三张图：图1=训练后滤波器与特征响应(2x7)，
      图2=训练前vs训练后去噪对比(2x3)，
-     图3=去噪轨迹快照(第0/2/5/10步与真值)+后验能量下降曲线(参考图风格)
+     图3=去噪轨迹快照(第0/5/10/25/50步与真值)+真实后验能量(求和口径)下降曲线
+     ——图2/图3共用同一固定种子的含噪实例；数据保真锚点在整条轨迹上固定
 """
 
 import numpy as np
 import os
 import sys
 import json
+import copy
 # ====== 静默模式配置 ======
 SILENT_MODE = True
 
@@ -162,7 +164,9 @@ class FoEModule(nn.Module):
         return f / norms
 
     def compute_energy(self, x, y):
-        # 本实验退化算子取恒等 A=I，故数据保真 = 0.5*||x - y||²
+        # 注意：本方法返回 mean 口径标量，仅供损失/粗略监控；
+        # 推断实际最小化的、图3所绘制的是下方 compute_posterior_energy_sum
+        # 的"求和口径"后验能量，二者不要混用。
         filters = self.get_normalized_filters()
         alphas = self.alphas.view(1, -1, 1, 1)
         resp = F.conv2d(x, filters, padding=filters.shape[-1] // 2)
@@ -170,23 +174,49 @@ class FoEModule(nn.Module):
         data_energy = 0.5 * torch.mean((x - y)**2)
         return reg_energy + data_energy, resp
 
-    def forward_denoise_unrolled(self, y, num_steps=25, step_size=0.2):
+    def compute_posterior_energy_sum(self, x, y):
         """
-        去噪迭代：放大步长、增加展开步数，并移除梯度中的像素数除法，
-        让 FoE 先验在推断中真正发挥作用。对应能量：
-            E(x) = 1/2 ||x - y||² + Σ_i α_k ρ((f_k * x)_i)
+        推断真正最小化的后验能量（求和口径），即教材中的 MAP 目标：
+            E(x; y) = 1/2 * Σ_pix (x-y)²
+                      + λ * Σ_k Σ_pix α_k log(1 + γ (f_k*x)²)
+        内层梯度下降的每一步都在减小这个量（步长合适时严格单调）。
+        返回 (能量标量, 特征响应 resp)。
         """
-        x_curr = y.clone()
+        filters = self.get_normalized_filters()
+        alphas = self.alphas.view(1, -1, 1, 1)
+        resp = F.conv2d(x, filters, padding=filters.shape[-1] // 2)
+        reg_energy = torch.sum(alphas * torch.log(1.0 + self.gamma * resp**2))
+        data_energy = 0.5 * torch.sum((x - y)**2)
+        return data_energy + self.lambda_reg * reg_energy, resp
+
+    def denoise_step(self, x_curr, anchor, step_size=0.2):
+        """
+        MAP 内层迭代的单步梯度下降：
+            x ← x - η ( (x - anchor) + λ Σ_k f_k^⋆ φ'_k(f_k*x) )
+        其中 anchor 必须固定为初始含噪观测 y（数据保真项的锚点），
+        不能随迭代更新——否则数据项梯度恒为 0，推断退化为无锚定先验流。
+        """
         filters = self.get_normalized_filters()
         alphas = self.alphas.view(1, -1, 1, 1)
         pad = filters.shape[-1] // 2
+        resp = F.conv2d(x_curr, filters, padding=pad)
+        d_pot = (2.0 * self.gamma * alphas * resp) / (1.0 + self.gamma * resp**2)
+        grad_reg = self.lambda_reg * F.conv_transpose2d(d_pot, filters, padding=pad)
+        grad_data = (x_curr - anchor)
+        return x_curr - step_size * (grad_reg + grad_data)
+
+    def forward_denoise_unrolled(self, y, num_steps=25, step_size=0.2, anchor=None):
+        """
+        展开式 MAP 去噪：对应能量
+            E(x) = 1/2 Σ (x-y)² + λ Σ_k Σ_i α_k log(1+γ(f_k*x)_i²)
+        anchor 为数据保真项锚点，默认取初始含噪输入 y；
+        逐步生成轨迹时必须显式传入同一个 anchor，切忌把当前迭代值当作 anchor。
+        """
+        if anchor is None:
+            anchor = y
+        x_curr = y.clone()
         for _ in range(num_steps):
-            resp = F.conv2d(x_curr, filters, padding=pad)
-            d_pot = (2.0 * self.gamma * alphas * resp) / (1.0 + self.gamma * resp**2)
-            # 移除 H*W 除法，并用 λ 平衡先验与数据项；避免先验梯度压过数据项导致发散
-            grad_reg = self.lambda_reg * F.conv_transpose2d(d_pot, filters, padding=pad)
-            grad_data = (x_curr - y)
-            x_curr = x_curr - step_size * (grad_reg + grad_data)
+            x_curr = self.denoise_step(x_curr, anchor, step_size)
         return x_curr
 
 
@@ -200,9 +230,16 @@ def compute_psnr(x, x_true):
     return 10 * np.log10(1.0 / mse)
 
 
-def degrade(x_clean, noise_level=0.12):
+def degrade(x_clean, noise_level=0.12, generator=None):
     # 退化算子 A=I，仅加噪 (去噪/恢复先验演示)
-    return x_clean + noise_level * torch.randn_like(x_clean)
+    # 传入独立 generator 可在不影响训练随机流的前提下得到可复现的测试噪声，
+    # 并保证图2/图3使用同一个含噪实例做公平对照。
+    if generator is not None:
+        noise = torch.randn(x_clean.shape, generator=generator,
+                            device=x_clean.device, dtype=x_clean.dtype)
+    else:
+        noise = torch.randn_like(x_clean)
+    return x_clean + noise_level * noise
 
 
 # ════════════════════════════════════════════════════════════════
@@ -220,6 +257,7 @@ TRAIN_UNROLL_STEPS = 25   # 训练时展开步数
 TRAIN_STEP_SIZE = 0.2     # 训练时梯度下降步长
 TEST_UNROLL_STEPS = 50    # 测试时展开步数
 TEST_STEP_SIZE = 0.15     # 测试时步长
+TEST_NOISE_SEED = 42      # 测试噪声种子：图2/图3共用同一含噪实例（实测PSNR≈18.45dB）
 
 
 def build_model():
@@ -286,6 +324,10 @@ def train(model, train_loader, start_epoch=0):
             x_hat_batch = model.forward_denoise_unrolled(y_noisy_batch,
                                                          num_steps=TRAIN_UNROLL_STEPS,
                                                          step_size=TRAIN_STEP_SIZE)
+            # 外层损失 = 像素重建MSE + 2.0×(水平/垂直)梯度域MSE。
+            # 梯度域项是额外的任务特定监督（在纯像素MSE之外显式保边），
+            # 仍属于任务驱动的双层优化，但不是教材正文所述唯一的"重建误差"，
+            # 故在 JSON/教材中显式披露该口径。
             dx_hat = x_hat_batch[:, :, :, 1:] - x_hat_batch[:, :, :, :-1]
             dx_gt = x_batch[:, :, :, 1:] - x_batch[:, :, :, :-1]
             dy_hat = x_hat_batch[:, :, 1:, :] - x_hat_batch[:, :, :-1, :]
@@ -293,7 +335,7 @@ def train(model, train_loader, start_epoch=0):
             loss_upper = F.mse_loss(x_hat_batch, x_batch) \
                 + 2.0 * (F.mse_loss(dx_hat, dx_gt) + F.mse_loss(dy_hat, dy_gt))
             loss_upper.backward()
-            # 梯度裁剪，防止移除 H*W 除法后初期梯度爆炸
+            # 梯度裁剪，防止求和口径先验梯度在训练初期爆炸
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             optimizer.step()
             epoch_loss += loss_upper.item()
@@ -311,6 +353,38 @@ def train(model, train_loader, start_epoch=0):
 def _white():
     """深色背景下统一用白色文字"""
     return 'white'
+
+
+def compute_structure_concentration(model, x, q_hi=0.90, q_lo=0.50):
+    """
+    结构处先验能量集中度（教材"核心结论"引用的可复算指标）：
+      以测试图像梯度幅值定义"结构像素"（前 q_hi 分位）与"平滑像素"（后 1-q_lo 分位），
+      比较两组像素上平均先验能量 Σ_k α_k log(1+γ(f_k*x)²) 的比值。
+    返回 {'structure_mean','smooth_mean','ratio'}，随机/训练后模型可直接对比。
+    """
+    model.eval()
+    with torch.no_grad():
+        g = torch.zeros_like(x)
+        g[:, :, :, 1:] += (x[:, :, :, 1:] - x[:, :, :, :-1]).abs()
+        g[:, :, 1:, :] += (x[:, :, 1:, :] - x[:, :, :-1, :]).abs()
+        filters = model.get_normalized_filters()
+        alphas = model.alphas.view(1, -1, 1, 1)
+        resp = F.conv2d(x, filters, padding=filters.shape[-1] // 2)
+        prior_map = (alphas * torch.log(1.0 + model.gamma * resp**2)).sum(
+            dim=1, keepdim=True)
+        t_hi = torch.quantile(g.view(-1), q_hi)
+        t_lo = torch.quantile(g.view(-1), q_lo)
+        struct = g >= t_hi
+        smooth = g <= t_lo
+        e_struct = prior_map[struct].mean().item()
+        e_smooth = prior_map[smooth].mean().item()
+    return {
+        'structure_quantile': q_hi,
+        'smooth_quantile': q_lo,
+        'structure_mean': float(e_struct),
+        'smooth_mean': float(e_smooth),
+        'ratio': float(e_struct / max(e_smooth, 1e-12)),
+    }
 
 
 def plot_filters_and_responses(model, x_gt_test, save_path):
@@ -372,17 +446,20 @@ def plot_filters_and_responses(model, x_gt_test, save_path):
     print(f"  已保存图1: {save_path}")
 
 
-def plot_denoise_before_after(model_before, model_after, x_gt_test, save_path):
-    """图2: 训练前 vs 训练后 去噪对比 (2x3 布局)"""
+def plot_denoise_before_after(model_before, model_after, x_gt_test, save_path, y_noisy=None):
+    """图2: 训练前 vs 训练后 去噪对比 (2x3 布局)
+    y_noisy 由外部传入时直接使用（与图3共用同一含噪实例，保证公平对照）。"""
     x_gt = x_gt_test
-    y_noisy = degrade(x_gt, NOISE_LEVEL)
+    if y_noisy is None:
+        y_noisy = degrade(x_gt, NOISE_LEVEL)
 
     with torch.no_grad():
-        x_before = model_before.forward_denoise_unrolled(y_noisy, TEST_UNROLL_STEPS, TEST_STEP_SIZE)
-        x_after = model_after.forward_denoise_unrolled(y_noisy, TEST_UNROLL_STEPS, TEST_STEP_SIZE)
-        # 截断到合法像素范围，PSNR 和可视化都基于截断后结果
-        x_before = torch.clamp(x_before, 0.0, 1.0)
-        x_after = torch.clamp(x_after, 0.0, 1.0)
+        x_before_raw = model_before.forward_denoise_unrolled(y_noisy, TEST_UNROLL_STEPS, TEST_STEP_SIZE)
+        x_after_raw = model_after.forward_denoise_unrolled(y_noisy, TEST_UNROLL_STEPS, TEST_STEP_SIZE)
+        # 截断到合法像素范围，PSNR 和可视化都基于截断后结果；
+        # 同时保留未截断 PSNR 供 JSON 记录，区分"先验本身"与"[0,1]投影"的贡献
+        x_before = torch.clamp(x_before_raw, 0.0, 1.0)
+        x_after = torch.clamp(x_after_raw, 0.0, 1.0)
     x_gt_np = x_gt.squeeze().cpu().numpy()
     y_np = y_noisy.squeeze().cpu().numpy()
     xb_np = x_before.squeeze().cpu().numpy()
@@ -390,6 +467,8 @@ def plot_denoise_before_after(model_before, model_after, x_gt_test, save_path):
     psnr_y = compute_psnr(y_noisy, x_gt)
     psnr_b = compute_psnr(x_before, x_gt)
     psnr_a = compute_psnr(x_after, x_gt)
+    psnr_b_raw = compute_psnr(x_before_raw, x_gt)
+    psnr_a_raw = compute_psnr(x_after_raw, x_gt)
 
     fig, axes = plt.subplots(2, 3, figsize=(13, 8), facecolor='#121212')
     fig.suptitle("训练前 vs 训练后：FoE 去噪对比", fontsize=15, color=_white(),
@@ -432,61 +511,56 @@ def plot_denoise_before_after(model_before, model_after, x_gt_test, save_path):
     plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='#121212')
     plt.close()
     print(f"  已保存图2: {save_path}")
-    return psnr_y, psnr_b, psnr_a
+    return psnr_y, psnr_b, psnr_a, psnr_b_raw, psnr_a_raw
 
 
 def plot_denoise_trajectory_and_energy(model, x_gt_test, save_path,
-                                        num_steps=10, snapshot_steps=(0, 2, 5, 10)):
+                                        num_steps=50, snapshot_steps=(0, 5, 10, 25, 50),
+                                        y_noisy=None):
     """
-    图3: 去噪轨迹快照(第0/2/5/10步与真值) + 后验能量下降曲线。
+    图3: 去噪轨迹快照(第0/5/10/25/50步与真值) + 后验能量下降曲线。
 
-    上排: K=num_steps 步 unrolled 去噪轨迹上若干快照 + 干净真值, 每帧上方标 PSNR
-    下排: 整图累积后验能量 E(x_t) = Σ (α log(1+γ(f*x)^2) + 0.5‖x-y‖²) 随迭代步 t 的下降曲线,
-         起点/终点用箭头注释
-
-    参考图风格: 上排 5 帧灰度天体图, 下排深色背景单条折线 + 端点红色标注 + 箭头。
+    上排: num_steps 步 unrolled MAP 轨迹上若干快照 + 干净真值, 每帧上方标 PSNR
+    下排: 推断真正最小化的"求和口径"后验能量随迭代步 t 的下降曲线
+        E(x_t) = 0.5 Σ_pix (x_t - y)² + λ Σ_k Σ_pix α_k log(1 + γ(f_k*x_t)²)
+    关键: 数据保真项锚点 y 在整条轨迹上固定为初始含噪观测（denoise_step 显式
+          传入同一 anchor），不能随迭代更新。
     """
     model.eval()
     x_gt = x_gt_test
-    y_noisy = degrade(x_gt, NOISE_LEVEL)
+    if y_noisy is None:
+        y_noisy = degrade(x_gt, NOISE_LEVEL)
 
-    # ── 1) 单步长逐步去噪: 累积每帧的中间解 x_t 与整图累积能量 E(x_t) ──
-    snapshots = []           # 存 list of (step_idx, x_t tensor, psnr(y->x_t))
-    energies = []            # 存 list of (step_idx, E_total)
+    # ── 1) 固定锚点逐步 MAP 推断: 记录中间解 x_t 与真实后验能量 E(x_t) ──
+    snapshots = []           # list of (step_idx, x_t(clamped), psnr)
+    energies = []            # list of (step_idx, E_total)
     x_curr = y_noisy.clone()
     snapshot_set = set(snapshot_steps)
     with torch.no_grad():
         for t in range(num_steps + 1):
-            # 整图累积能量: 用与 compute_energy 一致的公式 (mean over all dims), 但乘以 N=H*W
-            #   让 E_total = N * (mean(α·log(1+γ·r²)) + 0.5*mean((x-y)²))
-            # 这样量级在数百~数千, 与参考图风格对齐
-            # 注意: compute_energy 返回 (reg+data 标量, resp_map), 只用第一个
-            E_scalar, _ = model.compute_energy(x_curr, y_noisy)
-            N = x_curr.numel()   # batch × C × H × W
-            E_total = float(E_scalar.item() * N)
-            energies.append((t, E_total))
+            # 与内层迭代完全一致的求和口径后验能量（含 λ），逐点可核验
+            E_scalar, _ = model.compute_posterior_energy_sum(x_curr, y_noisy)
+            energies.append((t, float(E_scalar.item())))
             if t in snapshot_set:
                 x_clip = torch.clamp(x_curr, 0.0, 1.0)
-                # PSNR 口径与图2/JSON 一致：t=0 帧是含噪观测本身，用截断前计算；
-                # 其余帧是恢复结果，截断到 [0,1] 后计算
+                # PSNR 口径与图2/JSON 一致：t=0 帧为含噪观测本身（不截断），
+                # 其余帧截断到 [0,1] 后计算
                 psnr_src = x_curr if t == 0 else x_clip
                 psnr_t = compute_psnr(psnr_src, x_gt)
                 snapshots.append((t, x_clip.detach().clone(), psnr_t))
             if t < num_steps:
-                x_curr = model.forward_denoise_unrolled(
-                    x_curr, num_steps=1, step_size=TEST_STEP_SIZE)
+                # 锚点固定为初始含噪 y（而不是当前 x_curr）
+                x_curr = model.denoise_step(x_curr, y_noisy, TEST_STEP_SIZE)
 
-    # ── 2) 上排 5 帧快照(按 snapshot_steps 顺序排列, 末尾再追加 x_gt) ──
-    n_show = len(snapshot_steps) + 1   # 4 个快照 + 1 个真值 = 5 帧
+    # ── 2) 上排快照(按 snapshot_steps 顺序排列, 末尾再追加 x_gt) ──
+    n_show = len(snapshot_steps) + 1   # 5 个快照 + 1 个真值 = 6 帧
     fig = plt.figure(figsize=(15, 8), facecolor='#121212')
-    # 用普通 subplots 拿上排 5 个 axes, 下排 energy 图改用 fig.add_axes
-    # 直接指定坐标系, 完全避免 gridspec 嵌套导致的 bbox 爆炸
     snap_axes = []
     for col in range(n_show):
-        ax = fig.add_subplot(2, n_show, col + 1)   # 第 1 行第 col+1 个
+        ax = fig.add_subplot(2, n_show, col + 1)
         snap_axes.append(ax)
 
-    # 上排子图
+    # 上排子图：每帧都标 PSNR，便于观察"先快速提升、后收敛平台"
     for col, (t, x_t, psnr_t) in enumerate(snapshots):
         ax = snap_axes[col]
         ax.imshow(x_t.squeeze().cpu().numpy(), cmap='gray')
@@ -494,11 +568,11 @@ def plot_denoise_trajectory_and_energy(model, x_gt_test, save_path,
             ax.set_title(f"含噪输入 ($y$)\nPSNR: {psnr_t:.2f}dB",
                          color=_white(), fontsize=11, pad=8)
         elif t == num_steps:
-            ax.set_title(f"第 {t} 步迭代  $x_{{\\it t}}$\n"
+            ax.set_title(f"第 {t} 步迭代 $x_{{\\it t}}$（收敛）\n"
                          f"PSNR: {psnr_t:.2f}dB",
                          color=_white(), fontsize=11, pad=8)
         else:
-            ax.set_title(f"第 {t} 步迭代($x_{{\\it t}}$)",
+            ax.set_title(f"第 {t} 步迭代 $x_{{\\it t}}$\nPSNR: {psnr_t:.2f}dB",
                          color=_white(), fontsize=11, pad=8)
         ax.axis('off')
 
@@ -509,14 +583,13 @@ def plot_denoise_trajectory_and_energy(model, x_gt_test, save_path,
                      color=_white(), fontsize=11, pad=8)
     ax_gt.axis('off')
 
-    # ── 3) 下排: 能量下降曲线 (跨整个 figure 宽度, 用 add_axes 直接指定) ──
+    # ── 3) 下排: 真实后验能量下降曲线 ──
     ax_e = fig.add_axes([0.06, 0.08, 0.90, 0.36])   # [left, bottom, w, h]
     ax_e.set_facecolor('#1a1a1a')
-    fig_add_ax = ax_e   # 仅保留别名以便后续设置 facecolor (下面统一)
 
     ts = [e[0] for e in energies]
     Es = [e[1] for e in energies]
-    ax_e.plot(ts, Es, color='#1f9bff', marker='o', markersize=5,
+    ax_e.plot(ts, Es, color='#1f9bff', marker='o', markersize=4,
               linewidth=1.8, alpha=0.95)
     # 端点高亮: 起点(蓝圆)与终点(红方)
     ax_e.plot(ts[0], Es[0], marker='o', markersize=11,
@@ -526,20 +599,20 @@ def plot_denoise_trajectory_and_energy(model, x_gt_test, save_path,
               markerfacecolor='red', markeredgecolor='white',
               markeredgewidth=1.5)
 
-    # 起点注释 + 箭头 (用 axes fraction 固定在左下空白区域, 避开折线和圆点)
+    # 起点注释 + 箭头
     ax_e.annotate(f"Start: {Es[0]:.1f}",
                   xy=(ts[0], Es[0]),
-                  xytext=(0.05, 0.05),           # axes 左下角附近
+                  xytext=(0.05, 0.05),
                   textcoords='axes fraction',
                   color='#1f9bff', fontsize=11,
                   zorder=10,
                   arrowprops=dict(arrowstyle='->',
                                   color='#1f9bff', lw=1.2,
                                   shrinkA=4, shrinkB=8))
-    # 终点注释 + 箭头 (左上偏移, 用 offset points)
+    # 终点注释 + 箭头
     ax_e.annotate(f"End: {Es[-1]:.1f}",
                   xy=(ts[-1], Es[-1]),
-                  xytext=(-65, 35),
+                  xytext=(-75, 30),
                   textcoords='offset points',
                   color='red', fontsize=11,
                   zorder=10,
@@ -547,23 +620,39 @@ def plot_denoise_trajectory_and_energy(model, x_gt_test, save_path,
                                   shrinkA=4, shrinkB=8))
 
     ax_e.set_xlabel("迭代步数 ($t$)", fontsize=11, color=_white())
-    ax_e.set_ylabel(r"平均后验能量 $E(x_t)$", fontsize=11, color=_white())
-    ax_e.set_title("后验能量下降曲线: $E(x_t)$ = 数据保真项 + 先验惩罚项",
+    ax_e.set_ylabel(r"后验能量 $E(x_t)$（求和口径）", fontsize=11, color=_white())
+    ax_e.set_title("后验能量下降曲线: "
+                   r"$E(x_t)=\frac{1}{2}\sum(x_t-y)^2+"
+                   r"\lambda\sum_k\sum_{i,j}\alpha_k\log(1+\gamma(f_k*x_t)^2)$",
                    color=_white(), fontsize=12, pad=8)
     ax_e.tick_params(colors=_white())
     for spine in ax_e.spines.values():
         spine.set_color('gray')
     ax_e.grid(True, linestyle='--', linewidth=0.4, alpha=0.35)
-    ax_e.set_xticks(ts)
+    ax_e.set_xticks(ts[::5])
 
-    # ── 4) 保存图像 (不用 bbox_inches='tight', 避免深底背景下 mathtext 触发 figure bbox 爆炸) ──
+    # ── 4) 保存图像 ──
     plt.savefig(save_path, dpi=150, facecolor='#121212', pad_inches=0.15)
     plt.close()
     print(f"  已保存图3: {save_path}")
-    # 返回末端 PSNR, 便于在 main 中打印
+    # 返回末端 PSNR、能量起止值与单调性，供 main 打印/写入 JSON
     last_psnr = snapshots[-1][2] if snapshots[-1][0] == num_steps \
         else compute_psnr(torch.clamp(x_curr, 0.0, 1.0), x_gt)
-    return last_psnr
+    # 单调性容差取 1e-6 相对精度（约为 float32 机器精度的 10 倍）：
+    # 收敛定点附近相邻能量差仅 1~2 个 ULP（~2e-6 绝对），属浮点舍入而非算法震荡；
+    # 同时把原始最大上升幅度写入 JSON 供核验，不做黑箱判定。
+    max_uptick = max((Es[t + 1] - Es[t] for t in range(len(Es) - 1)), default=0.0)
+    monotone = all(Es[t + 1] <= Es[t] + 1e-6 * max(1.0, abs(Es[t]))
+                   for t in range(len(Es) - 1))
+    psnr_10 = next((p for (st, _, p) in snapshots if st == 10), None)
+    return {
+        'psnr_10steps_dB': psnr_10,
+        'psnr_end_dB': last_psnr,
+        'energy_start': Es[0],
+        'energy_end': Es[-1],
+        'energy_monotone': bool(monotone),
+        'energy_max_uptick': float(max_uptick),
+    }
 
 
 # ════════════════════════════════════════════════════════════════
@@ -572,23 +661,24 @@ def plot_denoise_trajectory_and_energy(model, x_gt_test, save_path,
 def main():
     x_gt_test = create_rich_test_image(64).to(device)
 
-    # 复现 2.4.1.py 的随机时序，确保 model_after 初始权重与 2.4.1.py 的 foe_model 一致：
-    #   seed(42) -> 建训练集(内部 manual_seed 覆盖) -> 建 model_after
-    # 注意：model_before 必须在 model_after 初始化之后才创建，否则会打乱随机状态。
+    # 随机时序：seed(42) -> 建训练集(内部 manual_seed 覆盖) -> 建 model_after
     torch.manual_seed(42)
     np.random.seed(42)
 
     train_set = SyntheticRichDataset(num_samples=128, size=64, seed_offset=0)
     train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
 
+    # 先建模并立刻深存一份"训练前初始权重"，作为严格的训练前对照
+    # （不依赖随机流复现，保证 model_before 就是 model_after 开训前的那份权重）
+    model_after = build_model()
+    init_state = copy.deepcopy(model_after.state_dict())
+
     # ── 若最终权重已存在，直接加载并跳过训练 ──
     if os.path.isfile(FINAL_CKPT):
         print("\n检测到最终训练权重文件，直接加载，跳过训练过程。")
         print(f"  最终权重: {FINAL_CKPT}")
-        model_after = build_model()
         load_checkpoint(model_after, FINAL_CKPT)
     else:
-        model_after = build_model()
         start_epoch = 0
         if os.path.isfile(LAST_CKPT):
             print("\n检测到已保存的最近权重，继续 resume 训练。")
@@ -605,34 +695,49 @@ def main():
 
     model_after.eval()
 
-    # 训练前模型：训练全部完成后，用固定 seed 重新初始化的未训练模型 (对比基准)
-    torch.manual_seed(42)
-    np.random.seed(42)
+    # 训练前模型：加载训练前初始权重（严格同初始化的 before/after 对照）
     model_before = build_model()
+    model_before.load_state_dict(init_state)
     model_before.eval()
+
+    # 图2/图3 共用同一个固定种子的含噪实例，保证两图与 JSON 的数值严格可比
+    test_noise_gen = torch.Generator(device=device)
+    test_noise_gen.manual_seed(TEST_NOISE_SEED)
+    y_noisy_test = degrade(x_gt_test, NOISE_LEVEL, generator=test_noise_gen)
 
     # ── 图1：训练后滤波器与特征响应 ──
     plot_filters_and_responses(
         model_after, x_gt_test,
         os.path.join(SAVE_DIR, '图1_训练后滤波器与特征响应.png'))
 
-    # ── 图2：训练前 vs 训练后 去噪对比 ──
-    psnr_y, psnr_b, psnr_a = plot_denoise_before_after(
+    # ── 图2：训练前 vs 训练后 去噪对比（共用 y_noisy_test）──
+    psnr_y, psnr_b, psnr_a, psnr_b_raw, psnr_a_raw = plot_denoise_before_after(
         model_before, model_after, x_gt_test,
-        os.path.join(SAVE_DIR, '图2_训练前后去噪对比.png'))
+        os.path.join(SAVE_DIR, '图2_训练前后去噪对比.png'),
+        y_noisy=y_noisy_test)
 
-    # ── 图3：去噪轨迹快照 + 后验能量下降曲线 (训练后模型) ──
-    psnr_t_end = plot_denoise_trajectory_and_energy(
+    # ── 图3：去噪轨迹快照 + 后验能量下降曲线 (训练后模型，共用 y_noisy_test) ──
+    traj_info = plot_denoise_trajectory_and_energy(
         model_after, x_gt_test,
-        os.path.join(SAVE_DIR, '图3_去噪轨迹与能量曲线.png'))
+        os.path.join(SAVE_DIR, '图3_去噪轨迹与能量曲线.png'),
+        y_noisy=y_noisy_test)
 
     print("\n" + "-" * 50)
     print("去噪结果 (FoE 先验)")
     print("-" * 50)
-    print(f"  带噪观测 PSNR = {psnr_y:.2f} dB")
-    print(f"  训练前 FoE PSNR = {psnr_b:.2f} dB")
-    print(f"  训练后 FoE PSNR = {psnr_a:.2f} dB")
-    print(f"  训练后 10 步 unrolled 末端 PSNR = {psnr_t_end:.2f} dB")
+    print(f"  带噪观测 PSNR = {psnr_y:.2f} dB (测试噪声种子={TEST_NOISE_SEED})")
+    print(f"  训练前 FoE PSNR = {psnr_b:.2f} dB (未截断 {psnr_b_raw:.2f} dB)")
+    print(f"  训练后 FoE PSNR = {psnr_a:.2f} dB ({TEST_UNROLL_STEPS}步, 未截断 {psnr_a_raw:.2f} dB)")
+    print(f"  训练后 10 步 PSNR = {traj_info['psnr_10steps_dB']:.2f} dB, "
+          f"{TEST_UNROLL_STEPS} 步末端 PSNR = {traj_info['psnr_end_dB']:.2f} dB")
+    print(f"  后验能量: {traj_info['energy_start']:.2f} -> {traj_info['energy_end']:.2f}, "
+          f"逐帧单调 = {traj_info['energy_monotone']}")
+
+    # 结构处能量集中度（教材"核心结论"引用；同一定义下训练前/后可直接对比）
+    conc_before = compute_structure_concentration(model_before, x_gt_test)
+    conc_after = compute_structure_concentration(model_after, x_gt_test)
+    print(f"  结构/平滑区先验能量比: 训练前 {conc_before['ratio']:.2f}, "
+          f"训练后 {conc_after['ratio']:.2f}")
 
     # ═══════════════════════════════════════════════════════════
     # 7. 核心结论 (用 print 提示，不把文字放进图片)
@@ -652,7 +757,9 @@ def main():
 
     print("\n3. 本实验的简化说明:")
     print("   为教学清晰，外层以 unrolled 去噪结果逼近真值为监督，梯度反传专家参数")
-    print("   (可微双层优化的实用近似)。完整 FoE 外层可优化对比散度/打分匹配，")
+    print("   (可微双层优化的实用近似)。外层损失=像素MSE+2.0×梯度域MSE（显式保边，")
+    print("   属任务特定监督，已在 JSON/教材中披露）；报告 PSNR 均经 [0,1] 截断，")
+    print("   未截断值一并写入 JSON 供核验。完整 FoE 外层可优化对比散度/打分匹配，")
     print("   但核心思想一致：先验 = 可学习的专家场加权和，从数据中学到")
 
     print("\n4. 与 2.4 章节论点呼应:")
@@ -671,11 +778,42 @@ def main():
         'num_experts': model_after.num_experts,
         'kernel_size': model_after.kernel_size,
         'gamma': model_after.gamma,
+        'lambda_reg': model_after.lambda_reg,
         'noise_level': NOISE_LEVEL,
+        'test_noise_seed': TEST_NOISE_SEED,
+        # 图2与图3共用同一含噪实例；除 *_unclipped 外 PSNR 均在 clamp 到 [0,1] 后计算
         'psnr_noisy_dB': float(round(psnr_y, 2)),
         'psnr_foe_before_dB': float(round(psnr_b, 2)),
+        'psnr_foe_before_unclipped_dB': float(round(psnr_b_raw, 2)),
         'psnr_foe_after_dB': float(round(psnr_a, 2)),
-        'psnr_foe_after_10steps_dB': float(round(psnr_t_end, 2)),
+        'psnr_foe_after_unclipped_dB': float(round(psnr_a_raw, 2)),
+        'psnr_foe_after_10steps_dB': float(round(traj_info['psnr_10steps_dB'], 2)),
+        'psnr_foe_after_50steps_dB': float(round(traj_info['psnr_end_dB'], 2)),
+        'posterior_energy': {
+            'definition': '0.5*sum((x-y)^2) + lambda*sum_k sum_pix alpha_k log(1+gamma r^2)',
+            'unroll_steps': TEST_UNROLL_STEPS,
+            'step_size': TEST_STEP_SIZE,
+            'start': float(round(traj_info['energy_start'], 3)),
+            'end': float(round(traj_info['energy_end'], 3)),
+            'monotone_nonincreasing': bool(traj_info['energy_monotone']),
+            'monotone_check': 'Es[t+1] <= Es[t] + 1e-6*max(1,|Es[t]|) (float32相对容差)',
+            'max_uptick_abs': float(traj_info['energy_max_uptick']),
+        },
+        'upper_level_loss': 'MSE(x_hat, x) + 2*(MSE(dx_hat, dx) + MSE(dy_hat, dy))',
+        'energy_concentration': {
+            'definition': 'mean prior energy over structure pixels (gradient-magnitude top 10%) '
+                          'divided by mean over smooth pixels (bottom 50%)',
+            'before_training': {
+                'ratio': round(conc_before['ratio'], 2),
+                'structure_mean': round(conc_before['structure_mean'], 3),
+                'smooth_mean': round(conc_before['smooth_mean'], 3),
+            },
+            'after_training': {
+                'ratio': round(conc_after['ratio'], 2),
+                'structure_mean': round(conc_after['structure_mean'], 3),
+                'smooth_mean': round(conc_after['smooth_mean'], 3),
+            },
+        },
     }
 
     def _to_native(obj):

@@ -33,7 +33,11 @@
       "coverage_q05": 0.3,
       "coverage_q95": 0.69,
       "rmse_mean": 0.3169,
-      "post_std_mean": 0.1068
+      "post_std_mean": 0.1068,
+      "coverage_pooled": 0.485,
+      "z_mean": -0.0049,
+      "z_std": 3.0143,
+      "p_coverage_full": 0.0
     },
     {
       "lambda": 1.0,
@@ -43,7 +47,11 @@
       "coverage_q05": 0.83,
       "coverage_q95": 1.0,
       "rmse_mean": 0.2834,
-      "post_std_mean": 0.2879
+      "post_std_mean": 0.2879,
+      "coverage_pooled": 0.9496,
+      "z_mean": -0.0024,
+      "z_std": 1.0031,
+      "p_coverage_full": 0.4215
     },
     {
       "lambda": 10.0,
@@ -53,7 +61,11 @@
       "coverage_q05": 0.94,
       "coverage_q95": 1.0,
       "rmse_mean": 0.4523,
-      "post_std_mean": 0.642
+      "post_std_mean": 0.642,
+      "coverage_pooled": 0.9934,
+      "z_mean": -0.0019,
+      "z_std": 0.7197,
+      "p_coverage_full": 0.884
     }
   ],
   "bayesian_lambda": 1.0,

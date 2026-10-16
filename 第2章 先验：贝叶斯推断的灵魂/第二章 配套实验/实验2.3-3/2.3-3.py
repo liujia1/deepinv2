@@ -6,7 +6,8 @@
   - 不同先验给出形状迥异的 D_σ(y)：
       无先验   → 恒等 D(y)=y (对角直线)
       高斯先验 → 线性缩放 D(y)=γ²/(γ²+σ²)·y (相对收缩恒定，无阈值)
-      Laplace  → MMSE(后验均值)无闭式、需数值积分；其 MAP 才有闭式软阈值
+      Laplace  → MMSE(后验均值)无初等闭式，但存在只用标准正态 Φ/φ 的截断正态
+                 混合解析式（本实验用它交叉校验数值积分）；其 MAP 才有初等闭式软阈值
                  D_MAP(y)=sign(y)·max(|y|-σ²/b, 0)   ← 阈值是 σ²/b，不是 b·σ²
       Student-t→ 重尾先验的 MMSE：近零处温和收缩，大 |y| 处最接近恒等
   - 同一 Laplace 先验下同时画出 MMSE 与 MAP 两条曲线，直接呈现 2.3 节
@@ -14,7 +15,8 @@
 
 说明：本实验为 1D 贝叶斯去噪器的数值积分与可视化，无 GPU 训练；
       “是否训练”相关规则在此不适用。所有先验的 D_σ(y) 通过对 y 网格的逐点
-      1D 后验积分求得，并与闭式解/更宽积分网格做交叉校验（见“自检”输出）。
+      1D 后验积分求得，并分别与共轭闭式解、Laplace 截断正态解析式、
+      以及“同间距、更宽支撑域”的积分网格做三重交叉校验（见“自检”输出）。
 """
 
 import numpy as np
@@ -27,10 +29,14 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import warnings
-warnings.filterwarnings('ignore')
+# 只静默“字形缺失”这一类可预期告警（无中文字体时）；
+# 不再全局 ignore UserWarning，避免把其他真实问题也一并吞掉
+warnings.filterwarnings('ignore', message='Glyph .* missing from font.*')
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8') if hasattr(sys.stdout, 'reconfigure') else None
 from tqdm import tqdm
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
 
 _gdrive = '/content/drive/MyDrive'
 if os.path.isdir(_gdrive):
@@ -38,9 +44,11 @@ if os.path.isdir(_gdrive):
     SAVE_DIR = os.path.join(_gdrive, '实验2.3-3')
     os.makedirs(SAVE_DIR, exist_ok=True)
 else:
-    _chinese_path = '.chinese'
-    SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
-sys.path.insert(0, _chinese_path)
+    # 用脚本自身所在目录拼绝对路径：从任意工作目录启动都能找到字体模块
+    _chinese_path = os.path.join(SCRIPT_DIR, '.chinese')
+    SAVE_DIR = SCRIPT_DIR
+if os.path.isdir(_chinese_path):
+    sys.path.insert(0, _chinese_path)
 try:
     from chinese_font import setup_chinese_font
     cn_font = setup_chinese_font(save_dir=_chinese_path)
@@ -48,7 +56,7 @@ try:
         plt.rcParams['font.sans-serif'] = [cn_font] + plt.rcParams.get('font.sans-serif', [])
         plt.rcParams['font.family'] = 'sans-serif'
 except ImportError:
-    print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
+    print(f"警告: chinese_font 模块未找到 (查找路径: {_chinese_path})，中文字体可能无法正常显示")
 
 # ══════════════════════════════════════════════════════════
 # 设置：噪声水平与先验参数
@@ -76,8 +84,35 @@ def denoiser_gaussian(y, gamma, sigma):
 
 def denoiser_laplace_map(y, threshold):
     # 这是 Laplace 先验的 MAP(后验众数)去噪器 = 软阈值；
-    # Laplace 的 MMSE(后验均值)无闭式，须数值积分 (下面用 D_num['laplace'] 表示)
+    # Laplace 的 MMSE(后验均值)无初等闭式，实验统一用数值积分 (D_num['laplace'])，
+    # 另有截断正态解析式 denoiser_laplace_mmse_closed 仅作交叉校验
     return np.sign(y) * np.maximum(np.abs(y) - threshold, 0.0)
+
+
+def denoiser_laplace_mmse_closed(y, b, s):
+    r"""Laplace(0,b) + N(0,s²) 似然的 MMSE 去噪器（标量），截断正态混合解析式。
+
+    后验去掉与 x 无关的因子后是两段截断正态：
+      x ≥ 0 支: 密度核 N(y-λ, s²) 截断到 [0,∞)，非归一化质量 A₊ ∝ e^{-y/b+λ/(2b)} Φ(z₊)
+      x < 0 支: 密度核 N(y+λ, s²) 截断到 (-∞,0]，非归一化质量 A₋ ∝ e^{ y/b+λ/(2b)} Φ(-z₋)
+    其中 λ=s²/b、z₊=(y-λ)/s、z₋=(y+λ)/s；两段的条件均值为
+      m₊ = y-λ + s·φ(z₊)/Φ(z₊)，  m₋ = y+λ - s·φ(z₋)/Φ(-z₋)
+    D_MMSE(y) = (A₊m₊ + A₋m₋)/(A₊+A₋)。
+    只用标准正态 Φ(math.erf) 与 φ，不含数值积分；用于校验 posterior_mean。
+    """
+    import math
+    lam = s ** 2 / b
+    sqrt2, sqrt2pi = math.sqrt(2.0), math.sqrt(2.0 * math.pi)
+    z_p, z_m = (y - lam) / s, (y + lam) / s
+    Phi_p = 0.5 * (1.0 + math.erf(z_p / sqrt2))
+    Phi_m = 0.5 * (1.0 + math.erf(-z_m / sqrt2))
+    phi_p = math.exp(-0.5 * z_p ** 2) / sqrt2pi
+    phi_m = math.exp(-0.5 * z_m ** 2) / sqrt2pi
+    A_p = math.exp(-y / b + lam / (2 * b)) * Phi_p
+    A_m = math.exp(y / b + lam / (2 * b)) * Phi_m
+    m_p = (y - lam) + s * (phi_p / Phi_p) if Phi_p > 1e-300 else 0.0
+    m_m = (y + lam) - s * (phi_m / Phi_m) if Phi_m > 1e-300 else 0.0
+    return (A_p * m_p + A_m * m_m) / (A_p + A_m)
 
 
 # ══════════════════════════════════════════════════════════
@@ -86,7 +121,19 @@ def denoiser_laplace_map(y, threshold):
 # ══════════════════════════════════════════════════════════
 y_grid = np.linspace(-3, 3, 400)
 x_grid = np.linspace(-6, 6, 2000)
-x_grid_wide = np.linspace(-40, 40, 8000)   # 更宽的截断区间，用于检验重尾先验的截断误差
+# 截断自检网格：必须与 x_grid 逐点重合、只在两侧增加外侧点 —— 否则网格相位
+# 错位半个步长也会改变 Laplace 在 x=0 不可导尖点处的离散化误差，与“截断误差”
+# 混淆。做法：在 x_grid 两端各接出整数个 dx（不能直接用对称 linspace，因为
+# N=2000 为偶数时原网格不含 x=0，另起的对称网格会有 dx/2 相位差）。
+_dx_grid = float(x_grid[1] - x_grid[0])
+_x_wide_half_target = 12.0
+_n_extend = int(round((_x_wide_half_target - abs(float(x_grid[0]))) / _dx_grid))
+x_grid_wide = np.concatenate([
+    float(x_grid[0]) - np.arange(_n_extend, 0, -1) * _dx_grid,   # 左侧外接点(升序)
+    x_grid,                                                      # 原网格逐点保留
+    float(x_grid[-1]) + np.arange(1, _n_extend + 1) * _dx_grid,  # 右侧外接点
+])
+_x_wide_lo, _x_wide_hi = float(x_grid_wide[0]), float(x_grid_wide[-1])
 
 
 def log_prior_identity(x):
@@ -136,10 +183,26 @@ D_closed = {
 }
 
 # ══════════════════════════════════════════════════════════
-# 3) 自检：数值积分 vs 闭式、网格截断敏感性
+# 3) 自检：三重交叉校验
+#    (a) 共轭先验的闭式解 (恒等/高斯)
+#    (b) Laplace MMSE 的截断正态解析式（只用 Φ/φ，不做积分）——
+#        数值与它之差主要是 x=0 尖点处的网格离散化误差
+#    (c) 同间距 dx、支撑域 [-6,6]→[-12,12] —— 之差才是纯粹的截断误差
 # ══════════════════════════════════════════════════════════
 chk_closed = float(max(np.max(np.abs(D_num['identity'] - D_closed['identity'])),
                        np.max(np.abs(D_num['gaussian'] - D_closed['gaussian']))))
+# (b) Laplace MMSE 数值积分 vs 截断正态解析式
+D_laplace_analytic = np.array(
+    [denoiser_laplace_mmse_closed(float(y), laplace_b, sigma) for y in y_grid])
+chk_laplace_analytic = float(np.max(np.abs(D_num['laplace'] - D_laplace_analytic)))
+# (c) 纯截断误差（宽网格与原网格间距相同、网格点重合，仅多出外侧支撑）
+chk_trunc_laplace = float(np.max(np.abs(
+    [posterior_mean(priors['laplace'], y, x_grid_wide)
+     - posterior_mean(priors['laplace'], y, x_grid) for y in y_grid])))
+chk_trunc_student_t = float(np.max(np.abs(
+    [posterior_mean(priors['student_t'], y, x_grid_wide)
+     - posterior_mean(priors['student_t'], y, x_grid) for y in y_grid])))
+chk_trunc = max(chk_trunc_laplace, chk_trunc_student_t)
 # Laplace 的 MMSE 与 MAP(软阈值) 分歧：最大偏差、出现位置、以及大 |y| 后“重合”的起点
 _diff_lap = D_num['laplace'] - D_closed['laplace_map']
 chk_laplace_mmse_vs_map = float(np.max(np.abs(_diff_lap)))
@@ -151,11 +214,6 @@ _k = len(_tail)
 while _k > 0 and _tail[_k - 1] <= ALIGN_TOL:
     _k -= 1
 chk_laplace_align_from_y = float(_ys[_k]) if _k < len(_tail) else float('nan')
-chk_trunc = float(max(
-    np.max(np.abs([posterior_mean(priors['laplace'], y, x_grid_wide)
-                   - posterior_mean(priors['laplace'], y, x_grid) for y in y_grid])),
-    np.max(np.abs([posterior_mean(priors['student_t'], y, x_grid_wide)
-                   - posterior_mean(priors['student_t'], y, x_grid) for y in y_grid]))))
 
 # ══════════════════════════════════════════════════════════
 # 绘图 (文字说明一律用 print，不写入图片)
@@ -200,9 +258,12 @@ print(f"  高斯先验尺度 γ={gamma}  → 线性缩放系数 γ²/(γ²+σ²)
 print(f"  Laplace 先验尺度 b={laplace_b} (p∝e^(-|x|/b))  → MAP 软阈值 σ²/b={laplace_threshold:.3f}")
 print(f"  Student-t 自由度 ν={nu}  → 重尾先验 (方差无穷)")
 
-print("\n[自检] 数值积分 vs 闭式 / 网格截断")
-print(f"  恒等与高斯: |数值 - 闭式|max = {chk_closed:.1e}   (共轭情形达机器精度 → 积分实现正确)")
-print(f"  重尾先验换 [-40,40] 宽网格: |ΔD|max = {chk_trunc:.1e}   (x∈[-6,6] 截断可忽略)")
+print("\n[自检] 三重交叉校验：闭式 / 截断正态解析式 / 同间距扩支撑域")
+print(f"  (a) 恒等与高斯: |数值 - 闭式|max = {chk_closed:.1e}   (共轭情形达机器精度 → 积分实现正确)")
+print(f"  (b) Laplace MMSE 数值 vs 截断正态解析式(Φ/φ，无积分): |ΔD|max = {chk_laplace_analytic:.1e}")
+print(f"      残差来自先验在 x=0 不可导尖点的网格离散化（dx={_dx_grid:.4f}），非截断误差")
+print(f"  (c) 同间距 dx、逐点外接把支撑域 [-6,6] 扩大到 [{_x_wide_lo:.1f},{_x_wide_hi:.1f}] 后的纯截断误差:")
+print(f"      Laplace |ΔD|max = {chk_trunc_laplace:.1e},  Student-t |ΔD|max = {chk_trunc_student_t:.1e}  → [-6,6] 截断可忽略")
 print(f"  Laplace MMSE vs MAP: 最大分歧 {chk_laplace_mmse_vs_map:.3f} 出现在 y≈{chk_laplace_mmse_vs_map_at:.2f} (死区边缘),")
 print(f"    而 |y| ≥ {chk_laplace_align_from_y:.2f} 之后两者差一直 ≤ {ALIGN_TOL} (≈σ/{sigma/ALIGN_TOL:.0f}) → 软阈值近似只在大幅度处可靠，在死区边缘最差")
 
@@ -248,7 +309,7 @@ print(f"  - Laplace 先验 MAP: 才有死区 |y|≤σ²/b={laplace_threshold}，
 print(f"    两条绿色曲线在 y=0 附近最大相差 {chk_laplace_mmse_vs_map:.3f} —— 这就是“同一先验、两种估计器形状迥异”。")
 print(f"  - Student-t 先验(重尾) MMSE: 近零处压制约 {_st_supp:.0f}%，比 Laplace MMSE ({_lap_supp:.0f}%) 温和，")
 print(f"    但收缩仍略强于高斯的 {_g_supp:.0f}%（近零斜率 y→0 时的 D/y: 高斯 {slope_gauss:.2f} > t {slope_t:.2f} > Laplace MMSE {slope_laplace:.2f} > Laplace MAP 0）；")
-print(f"    其绝对收缩量有界且随 |y| 衰减 (~σ²(ν+1)/y)，|y| ≳ {_y_cross:.2f} 后收缩弱于所有其他先验、最接近恒等。")
+print(f"    其绝对收缩量有界且随 |y| 衰减 (~σ²(ν+1)/y)，|y| ≳ {_y_cross:.2f} 后在所有“会收缩的先验”中最弱（恒等先验不收缩，自然是严格的恒等）、最接近恒等。")
 print("    所以“重尾=收缩最温和”只在大 |y| 成立，近零处最温和的是高斯。")
 print("  → 注意: 人们常把重尾先验与'硬阈值/死区'联系在一起，但那是 MAP(后验众数)")
 print("    估计器的行为；MMSE 去噪器(本实验)对重尾先验是平滑弱收缩。")
@@ -295,12 +356,21 @@ results_summary = {
         'student_t_mmse': [float(D_num['student_t'][i]) for i in _idx],
     },
     'self_checks': {
+        # (a) 共轭闭式
         'numeric_vs_closed_max_abs': chk_closed,
+        # (b) 数值积分 vs Laplace 截断正态解析式（残差≈x=0 尖点离散化）
+        'laplace_numeric_vs_truncnorm_analytic_max_abs': chk_laplace_analytic,
+        # (c) 同间距 dx、扩大支撑域得到的纯截断误差
+        'grid_truncation_laplace_max_abs': chk_trunc_laplace,
+        'grid_truncation_student_t_max_abs': chk_trunc_student_t,
+        'grid_truncation_narrow_support': [-6.0, 6.0],
+        'grid_truncation_wide_support': [_x_wide_lo, _x_wide_hi],
+        'grid_dx': _dx_grid,
+        # MMSE vs MAP 分歧
         'laplace_mmse_vs_map_max_abs': chk_laplace_mmse_vs_map,
         'laplace_mmse_vs_map_max_at_y': chk_laplace_mmse_vs_map_at,
         'laplace_mmse_vs_map_align_from_y': chk_laplace_align_from_y,
         'laplace_align_tol': float(ALIGN_TOL),
-        'x_grid_truncation_error_max_abs': chk_trunc,
     },
     'shrinkage': {
         'suppress_pct_at_y0p2': {

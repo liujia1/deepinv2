@@ -104,7 +104,7 @@ cache_file = os.path.join(SAVE_DIR, 'experiment_cache.pkl')  # ★ 缓存文件�
 #       (b) DiffPIR 补测 50%/80% 修复场景（L2 prox 对 Inpainting 有闭式解，无需SVD，
 #           官方文档示例本身就是 Inpainting），全部6场景对齐；
 #       (c) DiffPIR 每场景独立采样3次，PSNR/SSIM 报告均值±标准差，重建图取后验均值；
-#       (d) Tikhonov 正则强度比例 0.1→0.02，修复轻度模糊场景正则过强、PSNR 反低于观测；
+#       (d) Tikhonov 正则强度比例 0.1→0.01，修复轻度模糊场景正则过强、PSNR 反低于观测；
 #       (e) Pareto 图纵轴改为"相对基线增益ΔPSNR"（跨场景可比），与左图口径声明一致；
 #       (f) 决策指南改为由实测指标动态生成，不再预设"扩散质量最高"等固定结论。
 #   加载时版本不匹配的旧缓存会自动失效，避免复用基于错误代码的旧结果。
@@ -212,19 +212,18 @@ scenarios = {}
 print("\n构造去模糊场景...")
 try:
     # ★ 修复：deepinv 的 gaussian_blur 只接受 sigma 参数，kernel_size 是自动计算的
-    # 使用新的API路径，避免DeprecationWarning
+    # ★ 注意：deepinv ≥0.4 起 gaussian_blur 位于 deepinv.physics.blur 模块
+    #   （更早版本在 deepinv.physics.functional），两条导入路径都尝试以兼容各版本
     try:
-        from deepinv.physics.functional import gaussian_blur as gauss_blur_func
+        from deepinv.physics.blur import gaussian_blur as gauss_blur_func
         # ★ 注意：gaussian_blur 只接受 sigma 参数，不接受 kernel_size
         light_kernel = gauss_blur_func(sigma=(1.5, 1.5))
         heavy_kernel = gauss_blur_func(sigma=(3.0, 3.0))
     except ImportError:
-        # 兼容旧版本
-        import warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            light_kernel = dinv.physics.blur.gaussian_blur(sigma=(1.5, 1.5))
-            heavy_kernel = dinv.physics.blur.gaussian_blur(sigma=(3.0, 3.0))
+        # 兼容早期版本（gaussian_blur 位于 deepinv.physics.functional）
+        from deepinv.physics.functional import gaussian_blur as gauss_blur_func
+        light_kernel = gauss_blur_func(sigma=(1.5, 1.5))
+        heavy_kernel = gauss_blur_func(sigma=(3.0, 3.0))
 
     # ★ 修复：使用可分解的 BlurFFT 而非 Blur（对应DPIR等依赖SVD的方法）
     #   原因：Blur 为非可分解算子（无SVD），DPIR 的数据保真步 prox_l2 需内层迭代求解，收敛差；
@@ -621,7 +620,10 @@ for scenario_name, scenario_data in scenarios.items():
                 # F.pad(s_x, (1,1)) → 在 W 维两端各补 0，然后 diff 得到 (B,C,H,W)
                 tv_grad_x = -torch.diff(F.pad(s_x, (1, 1), mode='constant', value=0), dim=-1)
                 # 垂直方向散度
-                tv_grad_y = -torch.diff(F.pad(s_y, (1, 1), mode='constant', value=0), dim=-2)
+                # ★ 修复：pad=(0,0,1,1) —— 前两个 0 表示 W 维不补、后两个 1 表示 H 维两端各补 0。
+                #   旧代码误写为 (1,1)，等于在 W 维两端补零却沿 dim=-2 差分，
+                #   差分为 (B,C,H-2,W+2)，与 tv_grad_x 形状不匹配会直接 RuntimeError。
+                tv_grad_y = -torch.diff(F.pad(s_y, (0, 0, 1, 1), mode='constant', value=0), dim=-2)
                 tv_grad = tv_grad_x + tv_grad_y  # (B,C,H,W)
                 x_tv = x_tv - lr_tv * (grad_data + lambda_tv * tv_grad)
                 x_tv = x_tv.clamp(0, 1)

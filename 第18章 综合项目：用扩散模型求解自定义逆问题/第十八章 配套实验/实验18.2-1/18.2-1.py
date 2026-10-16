@@ -21,9 +21,11 @@ Step 5: ★自定义模糊核与MRI掩模算子 —— 将自定义退化集成�
   内置算子伴随误差仍为 1e-7 量级、噪声 MAE 与 CUDA + deepinv 0.4.2 的记录偏差 ≤2%。
   版本差异提示：deepinv 0.4.0 的 Blur 默认 valid padding，组合观测为 61×61；
   0.4.2 下为 64×64。脚本按算子实际输出尺寸自适应，两版本结果均正确。
+  2026-10-15 复核：同环境（torch 2.11.0+cpu + deepinv 0.4.0）原样复跑，
+  results_summary.json 全部数值与四张图与存档逐位一致，完全确定可复现。
 """
 
-import os, sys, time
+import os, sys
 import json
 import numpy as np
 import torch
@@ -100,6 +102,24 @@ from deepinv.physics import LinearPhysics, Downsampling, GaussianNoise, PoissonN
 from deepinv.utils import load_example
 
 
+def _ensure_4d(x, context=""):
+    """把输入统一为 4D (B, C, H, W)：
+    - 3D (C, H, W)：补批维；
+    - 5D：属非标准格式，按 (B, 1, C, H, W) 假设压缩并打印警告（隐性丢数据，
+      仅在预期外时出现，打印假设便于学生排查数据源）；
+    - 其余维度：直接报错。
+    """
+    if x.ndim == 3:
+        return x.unsqueeze(0)
+    if x.ndim == 5:
+        print(f"  ⚠️ [Warning] {context} 收到 5D 输入 shape={tuple(x.shape)}，"
+              f"按 (B, 1, C, H, W) 假设压缩为 4D；如不符合请检查数据源")
+        return x.squeeze(1) if x.shape[1] == 1 else x[:, 0]
+    if x.ndim != 4:
+        raise ValueError(f"{context} 期望 3D/4D 张量，得到 {x.ndim}D，shape={tuple(x.shape)}")
+    return x
+
+
 # ========================================================================
 # Step 1: 浏览deepinv Physics类体系
 # 对应18.2节知识点：Physics类设计三原则
@@ -126,21 +146,8 @@ deepinv Physics 类体系的设计三原则：
 # 加载示例图像
 x_true = load_example("celeba_example.jpg", img_size=(256, 256), resize_mode='resize')
 print(f"load_example 返回 shape: {x_true.shape}, ndim: {x_true.ndim}")
-# 确保是4D张量 (B, C, H, W)
-if x_true.ndim == 3:
-    x_true = x_true.unsqueeze(0)  # (C, H, W) -> (1, C, H, W)
-elif x_true.ndim == 5:
-    # 5D 属于非标准格式（如 (1, 1, C, H, W)），按启发式规则显式压缩；
-    # 打印警告说明假设，便于学生排查数据结构异常
-    print(f"  ⚠️ [Warning] load_example 返回 5D 张量 shape={tuple(x_true.shape)}，"
-          f"按 (B, 1, C, H, W) 假设压缩为 4D；如不符合请检查数据源")
-    if x_true.shape[1] == 1:
-        x_true = x_true.squeeze(1)
-    else:
-        # ⚠️ 通道维不为 1 时保守取第一组（隐性丢数据），此情况罕见但在预期外时建议排查数据源
-        x_true = x_true[:, 0]
-elif x_true.ndim != 4:
-    raise ValueError(f"load_example 返回的 x_true ndim={x_true.ndim} 不在支持范围 [3,4,5]")
+# 确保是4D张量 (B, C, H, W)（3D 补批维；5D 为非标准格式，按启发式压缩并告警）
+x_true = _ensure_4d(x_true, context="load_example 输出")
 x_true = x_true.to(device)
 print(f"处理后 x_true shape: {x_true.shape}")
 
@@ -179,20 +186,7 @@ class MultiViewPhysics(LinearPhysics):
             raise ValueError("需要提供变换矩阵 transf")
         
         # 确保输入是4D张量 (B, C, H, W)
-        if x.ndim == 3:
-            x = x.unsqueeze(0)  # (C, H, W) -> (1, C, H, W)
-        elif x.ndim == 5:
-            # 5D 属于非标准格式（如 (B, 1, C, H, W)），按启发式规则显式压缩；
-            # 打印警告说明假设，便于学生排查数据结构异常
-            print(f"  ⚠️ [Warning] MultiViewPhysics.A 收到 5D 输入 shape={tuple(x.shape)}，"
-                  f"按 (B, 1, C, H, W) 假设压缩为 4D；如不符合请检查上游算子")
-            if x.shape[1] == 1:
-                x = x.squeeze(1)
-            else:
-                # ⚠️ 通道维不为 1 时保守取第一组（隐性丢数据），此情况罕见但在预期外时建议排查上游算子
-                x = x[:, 0]
-        elif x.ndim != 4:
-            raise ValueError(f"期望输入为3D或4D张量，但得到 {x.ndim}D，shape={x.shape}")
+        x = _ensure_4d(x, context="MultiViewPhysics.A")
         
         B, C, H, W = x.shape
         J = transf.shape[0]
@@ -226,9 +220,9 @@ class MultiViewPhysics(LinearPhysics):
         但在离散实现中，双线性插值的严格伴随是"散射-累加"(scatter-add)，
         用"再次拉回采样"近似伴随会引入随变换幅度增大的误差：
             本实验配置（max_angle=π/8、scale=1.0）下实测 dot product 相对误差
-            为 1e-2 量级（典型值 ~1e-2，随分辨率/变换幅度/设备实现波动，
-            std 与均值同量级），
-        而 autograd 自动伴随（VJP，见 Step 3c）可达 ~1e-7 数值精度。
+            为 1e-3~1e-2 量级（CPU 复跑均值 5.1e-3 ± 3.9e-3，
+            随随机变换/设备实现波动，std 与均值同量级），
+            而 autograd 自动伴随（VJP，见 Step 3c）可达 ~1e-7 数值精度。
         因此手动伴随是"插值级近似"——精度足够但达不到机器精度；
         需要精确伴随时应使用 autograd（误差数值以实际运行为准）。
         【注】变换矩阵由 generate_random_transforms 生成，默认 scale=1.0
@@ -325,6 +319,17 @@ print(f"  输入 x shape:  {x_true.shape}")
 print(f"  输出 y shape:  {y_multi.shape}")
 print(f"  J={y_multi.shape[1]} 个视角, 每个视角 {y_multi.shape[3]}×{y_multi.shape[4]}")
 
+# ★ 演示 update_parameters：动态更换变换矩阵后，前向输出随之更新
+# （保存/恢复全局 RNG 状态，确保后续步骤随机流不受影响、结果可复现）
+_rng_state = torch.get_rng_state()
+transf_new = generate_random_transforms(J=16)
+multi_physics.update_parameters(transf=transf_new)
+y_multi_updated = multi_physics(x_true)
+print(f"  update_parameters 演示: 更换 transf 后 y shape: {y_multi_updated.shape}，"
+      f"输出已随新变换改变: {not torch.allclose(y_multi_updated, y_multi)}")
+multi_physics.update_parameters(transf=transf)  # 恢复原变换，保证后续步骤复现
+torch.set_rng_state(_rng_state)
+
 
 # ========================================================================
 # Step 3: 伴随验证与算子范数估计
@@ -396,7 +401,7 @@ if abs_err < 1e-3:
     verdict = "满足 1e-3 阈值（对小旋转/小平移场景可接受）"
     advice = "在变换接近恒等时手动伴随已足够；如需更严格精度请用 Step 3c autograd"
 else:
-    verdict = "为 1e-2 量级的插值级近似（属方法固有，非实现错误）"
+    verdict = "为 1e-3~1e-2 量级的插值级近似（属方法固有，非实现错误）"
     advice = "手动伴随用'连续伴随+再次采样'近似 grid_sample，误差随变换幅度与设备波动；强烈推荐 Step 3c 的 autograd 自动伴随"
 
 print(f"  |手动伴随相对误差|: {abs_err:.2e}")
@@ -709,8 +714,7 @@ if has_blur:
         # 注意：Blur算子可能会改变图像尺寸（边界效应），需要确保尺寸匹配
         # 方案1：使用padding='same'保持尺寸（如果Blur支持）
         # 方案2：先检查模糊后的尺寸，再创建Downsampling
-        y_blurred_test = blur_phys(x_true)
-        _, _, H_blur, W_blur = y_blurred_test.shape
+        _, _, H_blur, W_blur = y_blurred.shape  # 尺寸已在 5a 测得，直接复用
         
         # 组合算子: y = D(K(x))，即先模糊再下采样
         # deepinv中用乘法表示算子组合，执行顺序从右到左: D * K 表示先应用K再应用D
@@ -758,9 +762,10 @@ try:
     # （传入后会被 **kwargs 吞掉，掩模保持全1即不欠采样，4×加速被静默忽略）。
     # 这里手动构造竖直方向每4行保留1行的笛卡尔掩模并显式传入 mask，
     # 该写法在各 0.4.x 版本上都能确保 4× 加速真正生效。
-    mask = torch.zeros(1, 1, 256, 256, device=device)
+    H_img, W_img = x_true.shape[-2:]  # 掩模尺寸随输入自适应，避免硬编码
+    mask = torch.zeros(1, 1, H_img, W_img, device=device)
     mask[:, :, ::4, :] = 1  # k空间竖直方向 4× 加速采样
-    mri_phys = MRI(mask=mask, img_size=(256, 256), device=device)
+    mri_phys = MRI(mask=mask, img_size=(H_img, W_img), device=device)
     # MRI通常是单通道，将RGB转灰度（ITU-R BT.709标准）
     x_gray = 0.2126*x_true[:,0:1] + 0.7152*x_true[:,1:2] + 0.0722*x_true[:,2:3]
     
@@ -939,43 +944,6 @@ plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, 'step5_custom_operators.png'), dpi=150, bbox_inches='tight')
 plt.close()
 print("  已保存: step5_custom_operators.png")
-
-# 5e. ★ 性能基准测试
-print("\n--- 5e. ★ 算子性能基准测试 ---")
-# 【免责说明】本测试仅演示 time.perf_counter 的计时方法与算子调用流程，
-# 并非严格的算子效率横向对比：
-#   - Blur 输入 (3, 256, 256) 3通道；Composite 为 Blur+Downsampling 复合，尺寸经模糊后保持；
-#   - MRI 输入 (2, 256, 256) 复数表示的灰度图，与 RGB 算子通道数不同；
-#   - MRI 内部涉及 FFT 等复数运算，与 Blur/Downsampling 的实数卷积/采样在计算范式上也不同；
-#   - 真实横向对比需统一输入尺寸、通道数、迭代次数与硬件环境。
-# 本节目的：让学生掌握算子耗时评估方法，理解影响算子速度的混杂变量。
-benchmark_ops = []
-# 准备每个算子对应的真实输入：MRI 期望复数，其他算子期望实数 RGB
-# 教学注意：若 MRI 误用实数输入调用，计时结果无法代表真实调用路径
-if has_blur:
-    benchmark_ops.append(('Blur', blur_phys, x_true))
-if has_composite:
-    benchmark_ops.append(('Composite', composite_phys, x_true))
-if has_mri:
-    benchmark_ops.append(('MRI', mri_phys, x_mri_input))
-
-for name, phys, bench_input in benchmark_ops:
-    try:
-        # 预热
-        _ = phys(bench_input)
-        # 正式测试
-        t0 = time.perf_counter()
-        n_iters = 10
-        for _ in range(n_iters):
-            _ = phys(bench_input)
-        elapsed_ms = (time.perf_counter() - t0) / n_iters * 1000
-        print(f"  {name:10s}: {elapsed_ms:7.2f} ms/iter")
-    except Exception as e:
-        # 【教学改进】打印 traceback，便于排查算子调用路径问题
-        import traceback
-        print(f"  {name:10s}: 测试失败 ({e})")
-        traceback.print_exc()
-
 
 # ========================================================================
 # 实验总结

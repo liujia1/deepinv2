@@ -23,6 +23,11 @@
   14. 补充 LASSO λ 的调参说明
   15. 修正 Tikhonov 最优 λ 的方差口径：λ=σ²/σ_x² 中 σ_x² 应为每坐标方差
       （原代码误用 E||x||²=两坐标之和，λ 偏小约 2 倍，非理论最优；修正后 λ≈0.0597）
+  16. LASSO λ 由硬编码经验值 0.08 改为网格搜索自动选取（审计发现原注释声称
+      “手动调优”但 0.08 并非最优点：总体最优≈0.05、本样本集最优=0.06），
+      并与 Tikhonov 一致标注为 oracle 口径的教学调参
+  17. ESS 报警阈值由 max(3, N_mc×0.1%) 修正为 N_mc×1%（原阈值在实际参数下
+      几乎不可触发，属于失效诊断；σ=0.1 时最小 ESS≈43，仍不会误报）
 """
 
 import numpy as np
@@ -87,10 +92,17 @@ x_tikh = y / (1 + lambda_tikh_optimal)
 def soft_thresh(x, l):
     return np.multiply(np.sign(x), np.maximum(np.abs(x) - l, np.zeros_like(x)))
 
-lambda_lasso = 0.08
-print(f"[参数] LASSO λ = {lambda_lasso} (手动调参经验值)")
-print(f"        注: 此值针对噪声水平 σ={sigma_eps} 手动调优")
-print(f"        若修改 σ，需重新调整 λ（可通过交叉验证或网格搜索）")
+# LASSO λ：网格搜索（0.01~0.30，步长 0.01）在样本上最小化 NRMSE 自动选取。
+# 属于 oracle 口径（用真实 x 评估调参），与上面 Tikhonov 使用 ground truth
+# 方差一致，仅用于教学展示；实际场景 x 未知，应改用交叉验证。
+_lasso_grid = np.round(np.arange(0.01, 0.301, 0.01), 2)
+_lasso_nrmse = lambda t: np.sqrt(
+    np.mean(np.sum((soft_thresh(y, t) - x)**2, axis=1)) /
+    np.mean(np.sum(x**2, axis=1)))
+lambda_lasso = float(min(_lasso_grid, key=_lasso_nrmse))
+print(f"[参数] LASSO λ = {lambda_lasso:.2f} (网格搜索 {_lasso_grid[0]:.2f}~{_lasso_grid[-1]:.2f}, 步长0.01, 最小化样本内NRMSE)")
+print(f"        注: 此处为 oracle 调参（用真实 x 评估），与 Tikhonov 口径一致，仅用于教学")
+print(f"        实际场景 x 未知，需交叉验证调参；若修改 σ，需重新搜索")
 x_lasso = soft_thresh(y, lambda_lasso)
 
 N_mc = 2000
@@ -111,11 +123,11 @@ x_bayes = w @ x_mc                     # (N_test, 2)
 ess_mean = np.mean(ess_arr)
 ess_min = np.min(ess_arr)
 
-ESS_THRESHOLD = max(3, N_mc * 0.001)
+ESS_THRESHOLD = N_mc * 0.01  # 1%：低于此值说明重要性权重退化已不可忽略（原 max(3,0.1%) 几乎不可触发）
 low_ess_count = np.sum(ess_arr < ESS_THRESHOLD)
 
 print(f"[诊断] 蒙特卡洛有效样本量 (ESS): 均值={ess_mean:.1f}, 最小={ess_min:.1f}")
-print(f"[诊断] ESS 阈值: {ESS_THRESHOLD:.1f} (max(3, N_mc×0.1%))")
+print(f"[诊断] ESS 阈值: {ESS_THRESHOLD:.1f} (N_mc×1%)")
 if low_ess_count > 0:
     print(f"[警告] {low_ess_count}/{N_test} 个样本的 ESS < {ESS_THRESHOLD:.1f}")
     print(f"        低 ESS 在低噪声场景是预期现象，反映重要性采样的固有局限")

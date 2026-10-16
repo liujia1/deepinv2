@@ -67,11 +67,22 @@
   },
   "self_checks": {
     "numeric_vs_closed_max_abs": 2.929798625928015e-09,
+    "laplace_numeric_vs_truncnorm_analytic_max_abs": 2.0871253477161567e-06,
+    "grid_truncation_laplace_max_abs": 4.377831430701917e-12,
+    "grid_truncation_student_t_max_abs": 4.20606660611611e-10,
+    "grid_truncation_narrow_support": [
+      -6.0,
+      6.0
+    ],
+    "grid_truncation_wide_support": [
+      -11.996998499249642,
+      11.996998499249642
+    ],
+    "grid_dx": 0.006003001500750393,
     "laplace_mmse_vs_map_max_abs": 0.24995734269657832,
     "laplace_mmse_vs_map_max_at_y": 0.5037593984962405,
     "laplace_mmse_vs_map_align_from_y": 1.556390977443609,
-    "laplace_align_tol": 0.01,
-    "x_grid_truncation_error_max_abs": 3.706418649829235e-06
+    "laplace_align_tol": 0.01
   },
   "shrinkage": {
     "suppress_pct_at_y0p2": {

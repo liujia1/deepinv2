@@ -47,15 +47,28 @@ if os.path.isdir(_gdrive):
     SAVE_DIR = os.path.join(_gdrive, '实验2.2-3')
     os.makedirs(SAVE_DIR, exist_ok=True)
 else:
-    _chinese_path = '.chinese'
     SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
 sys.path.insert(0, _chinese_path)
+_cn_font = None
 try:
     from chinese_font import setup_chinese_font
-    setup_chinese_font(save_dir=_chinese_path)
+    _cn_font = setup_chinese_font(save_dir=_chinese_path)
 except ImportError:
-    print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
-    print("请确保 .chinese 文件夹已上传到 Google Drive 的正确位置")
+    print("警告: chinese_font 模块未找到，尝试加载随实验附带的字体文件")
+
+# 兜底：系统无中文字体时（如精简版 Windows），加载 .chinese 内的 Noto Sans SC
+if not _cn_font:
+    _ttf_path = os.path.join(_chinese_path, 'NotoSansSC-Regular.ttf')
+    if os.path.exists(_ttf_path):
+        from matplotlib.font_manager import fontManager
+        fontManager.addfont(_ttf_path)
+        plt.rcParams['font.sans-serif'] = ['Noto Sans SC'] + plt.rcParams.get('font.sans-serif', [])
+        plt.rcParams['font.family'] = 'sans-serif'
+        print("[Font] 已加载随实验附带的中文字体: Noto Sans SC")
+    else:
+        print("警告: 未找到任何中文字体，图中中文可能显示为方框")
+        print("请确保 .chinese 文件夹位于实验目录下")
 
 np.random.seed(42)
 
@@ -96,6 +109,14 @@ def sobolev_denoise(y, lam):
     denom = 1 - lam * lap_eig
     return idctn(dctn(y, type=2, norm='ortho') / denom, type=2, norm='ortho')
 
+def gradient_magnitude(img):
+    """Neumann 边界下的前向差分梯度幅值（边界处外推梯度置零，与 Chambolle 口径一致）"""
+    gx = np.zeros_like(img)
+    gy = np.zeros_like(img)
+    gx[:, :-1] = np.diff(img, axis=1)
+    gy[:-1, :] = np.diff(img, axis=0)
+    return np.sqrt(gx**2 + gy**2)
+
 def find_edge_position(tv_img, sob_img, margin=20, window_size=7):
     """
     找到"TV 保边而 Sobolev 磨边"差异最显著的强边缘位置（用于选取剖面图行）
@@ -108,28 +129,23 @@ def find_edge_position(tv_img, sob_img, margin=20, window_size=7):
         tuple: (edge_x, edge_y) - matplotlib坐标系下的位置，x=列，y=行
     """
     from scipy.ndimage import uniform_filter
-    
-    grad_tv_x = np.roll(tv_img, -1, axis=1) - tv_img
-    grad_tv_y = np.roll(tv_img, -1, axis=0) - tv_img
-    grad_tv_mag = np.sqrt(grad_tv_x**2 + grad_tv_y**2)
-    
-    grad_sob_x = np.roll(sob_img, -1, axis=1) - sob_img
-    grad_sob_y = np.roll(sob_img, -1, axis=0) - sob_img
-    grad_sob_mag = np.sqrt(grad_sob_x**2 + grad_sob_y**2)
-    
+
+    grad_tv_mag = gradient_magnitude(tv_img)
+    grad_sob_mag = gradient_magnitude(sob_img)
+
     tv_excess = np.maximum(grad_tv_mag - grad_sob_mag, 0)
-    
+
     diff = np.abs(tv_img - sob_img)
-    
-    staircase_score = tv_excess * uniform_filter(diff, size=window_size)
-    
-    staircase_score[:margin, :] = 0
-    staircase_score[-margin:, :] = 0
-    staircase_score[:, :margin] = 0
-    staircase_score[:, -margin:] = 0
-    
-    max_idx = np.unravel_index(np.argmax(staircase_score), staircase_score.shape)
-    
+
+    edge_score = tv_excess * uniform_filter(diff, size=window_size)
+
+    edge_score[:margin, :] = 0
+    edge_score[-margin:, :] = 0
+    edge_score[:, :margin] = 0
+    edge_score[:, -margin:] = 0
+
+    max_idx = np.unravel_index(np.argmax(edge_score), edge_score.shape)
+
     return (max_idx[1], max_idx[0])
 
 # Sobolev：取 Neumann 口径下的 SSIM 最优工作点（λ≈2.9），此时磨边效应最具代表性
@@ -206,11 +222,11 @@ plt.close()
 
 # ===== 合成一维信号：无歧义地展示阶梯效应 =====
 def sobolev_1d(y, lam):
-    """一维 Sobolev 去噪闭式解（周期边界）：X = Y / (1 - lam*2(cos f - 1))"""
+    """一维 Sobolev 去噪闭式解（Neumann边界, DCT-II）：X_k = Y_k / (1 - lam*2(cos(kπ/m)-1))"""
     m = len(y)
-    f = np.fft.fftfreq(m) * 2 * np.pi
-    lap = 2 * (np.cos(f) - 1)
-    return np.real(np.fft.ifft(np.fft.fft(y) / (1 - lam * lap)))
+    w = np.pi * np.arange(m) / m
+    lap = 2 * (np.cos(w) - 1)
+    return idct(dct(y, type=2, norm='ortho') / (1 - lam * lap), type=2, norm='ortho')
 
 m = 128
 tt = np.arange(m)
@@ -224,7 +240,8 @@ x_noisy = x_true + rng_synth.normal(0, sigma, m)
 
 lam_synth = 3.0
 x_sob = sobolev_1d(x_noisy, lam_synth)
-x_tv = denoise_tv_chambolle(x_noisy, weight=alpha_tv)
+x_tv = denoise_tv_chambolle(x_noisy, weight=alpha_tv,
+                            eps=TV_EPS, max_num_iter=TV_MAX_ITER)
 
 ramp = slice(32, 80)
 step = slice(88, 104)
@@ -242,8 +259,8 @@ print(f"  阶跃边缘 MSE: TV={step_mse_tv:.5f}  Sobolev={step_mse_sob:.5f}  (T
 print(f"  渐变区平台占比(近零梯度): TV={ramp_flat_frac_tv*100:.1f}%  Sobolev={ramp_flat_frac_sob*100:.1f}%  (TV 阶梯效应)")
 
 # ===== 步骤2图：真实剖面 + 合成信号阶梯效应 =====
-stair_x, stair_y = staircase_pos
-row = stair_y
+edge_x, edge_y = edge_pos
+row = edge_y
 
 fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
@@ -251,7 +268,7 @@ axes[0].plot(camera[row, :], color=COLOR_ORIGINAL, linewidth=2, label='真实信
 axes[0].plot(camera_noisy[row, :], color=COLOR_NOISY, linewidth=0.5, alpha=0.5, label='含噪')
 axes[0].plot(camera_sob[row, :], color=COLOR_SOBOLEV, linewidth=1.5, label='Sobolev (边缘模糊)')
 axes[0].plot(camera_tv[row, :], color=COLOR_TV, linewidth=1.5, label='TV (边缘锐利)')
-axes[0].axvline(x=stair_x, color='red', linestyle='--', linewidth=1, alpha=0.5, label='检测位置')
+axes[0].axvline(x=edge_x, color='red', linestyle='--', linewidth=1, alpha=0.5, label='强边缘位置')
 axes[0].set_title(f'真实图像第{row}行剖面\n(Sobolev 磨边 vs TV 保边)')
 axes[0].legend(fontsize=8)
 axes[0].set_xlabel('像素索引')
@@ -298,17 +315,9 @@ axes[0].set_ylabel('惩罚值')
 axes[0].set_ylim(-0.2, 4)
 axes[0].grid(True, alpha=0.3)
 
-grad_orig_x = np.roll(camera, -1, axis=1) - camera
-grad_orig_y = np.roll(camera, -1, axis=0) - camera
-grad_orig_mag = np.sqrt(grad_orig_x**2 + grad_orig_y**2).flatten()
-
-grad_sob_x = np.roll(camera_sob, -1, axis=1) - camera_sob
-grad_sob_y = np.roll(camera_sob, -1, axis=0) - camera_sob
-grad_sob_mag = np.sqrt(grad_sob_x**2 + grad_sob_y**2).flatten()
-
-grad_tv_x = np.roll(camera_tv, -1, axis=1) - camera_tv
-grad_tv_y = np.roll(camera_tv, -1, axis=0) - camera_tv
-grad_tv_mag = np.sqrt(grad_tv_x**2 + grad_tv_y**2).flatten()
+grad_orig_mag = gradient_magnitude(camera).flatten()
+grad_sob_mag = gradient_magnitude(camera_sob).flatten()
+grad_tv_mag = gradient_magnitude(camera_tv).flatten()
 
 bins = np.linspace(0, 0.5, 50)
 axes[1].hist(grad_orig_mag, bins=bins, alpha=0.5, color=COLOR_ORIGINAL, label='原始', density=True)
@@ -384,8 +393,11 @@ import json
 results_summary = {
     'image_size': n,
     'noise_sigma': float(sigma),
+    'boundary_condition': 'Neumann (Sobolev用DCT-II闭式解；TV用Chambolle零外推梯度)',
     'sobolev_lambda': float(lam_sob),
     'tv_alpha': float(alpha_tv),
+    'tv_chambolle_eps': float(TV_EPS),
+    'tv_chambolle_max_iter': int(TV_MAX_ITER),
     'psnr_noisy_dB': float(round(psnr_noisy, 2)),
     'psnr_sobolev_dB': float(round(psnr_sob, 2)),
     'psnr_tv_dB': float(round(psnr_tv, 2)),

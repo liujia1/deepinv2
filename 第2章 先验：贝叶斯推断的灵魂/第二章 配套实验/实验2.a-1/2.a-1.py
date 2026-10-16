@@ -29,8 +29,10 @@ if os.path.isdir(_gdrive):
     SAVE_DIR = os.path.join(_gdrive, '实验2.a-1')
     os.makedirs(SAVE_DIR, exist_ok=True)
 else:
-    _chinese_path = '.chinese'
-    SAVE_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
+    # 字体路径与保存目录都锚定脚本所在目录，避免从其他工作目录启动时找不到 .chinese
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
+    _chinese_path = os.path.join(SCRIPT_DIR, '.chinese')
+    SAVE_DIR = SCRIPT_DIR
 sys.path.insert(0, _chinese_path)
 try:
     from chinese_font import setup_chinese_font
@@ -70,11 +72,12 @@ print(f"  先验: u ~ N(0, Σ), Σ由相关长度L={L}构造")
 print(f"  先验方差: σ_x² = {sigma_x2:.3f} (Σ对角元素均值)")
 print(f"  似然: y|u ~ N(u, σ²I), σ={sigma}, σ²={sigma**2}")
 print(f"  共轭性: 高斯先验 + 高斯似然 → 高斯后验")
-print(f"\n正则化参数λ的语义:")
-print(f"  在广义Tikhonov形式 (λI + Σ)⁻¹Σy 中，λ = σ² (噪声方差)")
-print(f"  在标准Tikhonov形式 (A^TA + λI)⁻¹A^Ty 中，λ = σ²/σ_x² (信噪比)")
-print(f"  本实验使用广义Tikhonov形式，故 λ=σ²={sigma} 时为真实贝叶斯后验")
-print(f"  本例σ_x²={sigma_x2:.1f}，两个λ的**数值**恰好相等（但代入的是不同公式，解并不相同）")
+print(f"\n正则化参数λ的语义（两种形式不可混用）:")
+print(f"  广义Tikhonov（正则化矩阵Σ⁻¹，即本实验）: μ=(λI+Σ)⁻¹Σy，真实贝叶斯参数 λ=σ²（噪声方差）")
+print(f"  标准Tikhonov（正则化矩阵I，对应各向同性先验σ_x²I）: μ=(A^TA+λI)⁻¹A^Ty，真实参数 λ=σ²/σ_x²")
+print(f"  本实验使用广义形式，故 λ=σ²={sigma} 时为真实贝叶斯后验")
+print(f"  本例σ_x²={sigma_x2:.1f}，两种形式的λ数值恰好相等；但两个估计量只在Σ=σ_x²I时才相同——")
+print(f"  本例Σ含相关结构，广义估计(λI+Σ)⁻¹Σy 与各向同性估计(λI+I)⁻¹y 并不相同，公式勿互换")
 
 print("\n[数值验证] 后验协方差闭式解正确性检验...")
 Sigma_post_direct = np.linalg.inv(np.linalg.inv(Sigma) + np.eye(n) / sigma**2)
@@ -122,10 +125,12 @@ for lam in lambda_values:
     print(f"  后验协方差 Σ_post = λ·Σ·(Σ + λI)⁻¹ = (Σ⁻¹ + λ⁻¹I)⁻¹")
     print(f"  MAP估计 = 后验均值 (高斯后验对称性)")
     print(f"  对真值 RMSE = {rmse_lam:.4f} | 95%区间平均半宽 = {1.96*np.mean(np.sqrt(np.diag(Sigma_post))):.4f}")
-    if lam < sigma**2 / sigma_x2:
-        print(f"  → λ较小: 相对信任数据，对数据拟合更紧、后验不确定性较小（但区间会窄于真实误差 → 过度自信）")
-    elif lam > sigma**2 / sigma_x2:
-        print(f"  → λ较大: 噪声假设大→数据信息弱→后验不确定性较大（区间宽于真实误差 → 过于保守）")
+    # 循环内计算的是广义Tikhonov形式，分界必须用 λ=σ²；
+    # 不能用标准形式的 σ²/σ_x²（本例两者数值恰好相等，但σ_x²≠1或Σ非各向同性时会错位）
+    if lam < sigma**2:
+        print(f"  → λ<σ²: 低估噪声，相对信任数据，对数据拟合更紧、后验区间偏窄（窄于真实误差 → 过度自信）")
+    elif lam > sigma**2:
+        print(f"  → λ>σ²: 高估噪声→数据信息弱→后验区间偏宽（宽于真实误差 → 过于保守）")
     else:
         print(f"  → λ = σ²: 模型设定正确，后验是真实贝叶斯后验，重复抽样意义下应当校准")
 
@@ -173,7 +178,7 @@ for k, lam in enumerate(lambda_values):
     coverage_list.append(coverage)  # 保存覆盖率供后续使用
     
     axes[1, k].set_xlabel('残差')
-    axes[1, k].set_title(f'残差分布对比\n95%置信区间覆盖率: {coverage:.1%}')
+    axes[1, k].set_title(f'残差分布对比\n95%可信区间覆盖率: {coverage:.1%}')
     if k == 0:
         axes[1, k].set_ylabel('概率密度')
     axes[1, k].legend(fontsize=7)
@@ -210,6 +215,14 @@ axes[1].set_title('正则化参数λ与后验不确定性\nλ大→噪声假设�
 axes[1].grid(True, alpha=0.3)
 axes[1].legend(fontsize=9)
 
+# 对数轴主刻度用普通十进制文本（0.01/0.1/1/10…），避免默认 mathtext 指数中的
+# U+2212 负号在中文字体下缺字形而显示为方框（正负值均为正数，无歧义）
+from matplotlib.ticker import FuncFormatter
+_plain_log_formatter = FuncFormatter(lambda xv, pos: f'{xv:g}')
+axes[0].yaxis.set_major_formatter(_plain_log_formatter)
+axes[1].xaxis.set_major_formatter(_plain_log_formatter)
+axes[1].yaxis.set_major_formatter(_plain_log_formatter)
+
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤2_后验不确定性与正则化参数.png'), dpi=150, bbox_inches='tight')
 if not SILENT_MODE:
@@ -228,8 +241,8 @@ print("   Σ_post = (Σ⁻¹ + σ⁻²I)⁻¹ = σ²·Σ·(Σ + σ²I)⁻¹")
 print("   注意: 因Σ对称，Σ与(Σ+σ²I)⁻¹可交换，乘法顺序不影响结果")
 print("   一般情形(A≠I时): 必须注意矩阵乘法顺序")
 print("   可量化重建的不确定性")
-print("\n4. 正则化参数λ的概率解释:")
-print("   λ = σ²/σ_x² = 噪声方差/先验方差")
+print("\n4. 正则化参数λ的概率解释（标准Tikhonov形式，正则化矩阵为I）:")
+print("   λ = σ²/σ_x² = 噪声方差/先验方差；广义形式(正则化矩阵为Σ⁻¹)下对应 λ=σ²")
 print("   λ小: 噪声相对低 → 数据信息强 → 后验不确定性小")
 print("   λ大: 噪声相对高 → 数据信息弱 → 后验不确定性大")
 print("   本例: σ²=%.2f, σ_x²=%.3f, 理论λ≈%.2f" % (sigma**2, sigma_x2, sigma**2/sigma_x2))
@@ -250,11 +263,12 @@ for k in range(len(lambda_values)):
 print("   ⚠ 以上只是**单次数据集**的经验覆盖率，不能直接与95%比较，见下一节")
 print("\n7. SE核的特殊性质:")
 print(f"   SE核对角线恒为exp(0)=1，故σ_x²=1.0")
-print(f"   理论最优λ = σ²/σ_x² = {sigma**2/sigma_x2:.1f}（恰好是测试值之一）")
+print(f"   标准形式理论λ = σ²/σ_x² = {sigma**2/sigma_x2:.1f}；广义形式λ = σ² = {sigma**2:.1f}")
+print(f"   本例两者都为1（测试网格恰好含此值）；σ_x²≠1时两值不等，须按所用形式对号入座")
 
 # ===== 重复抽样校准检验：区分"模型失配"与"单样本MC噪声" =====
 # 说明：上面三个覆盖率来自**同一份数据**的单次实现。由于先验强相关
-# （L=0.1 ⇒ 区间[0,1]上只有约 1/L≈10 个等效独立区域），覆盖率的蒙特卡洛
+# （L=0.1 ⇒ 有效维数 tr(Σ)²/tr(Σ²)≈6，仅约6个等效独立模态），覆盖率的蒙特卡洛
 # 波动远大于二项公式 sqrt(p(1-p)/n) 的估计。这里用特征分解做向量化重复抽样，
 # 既检验"λ=σ²时应当校准"的理论断言，也量化单次观测到的偏差有多少只是抽样噪声。
 # 使用独立的 default_rng，不触碰全局随机流，故上方所有结果保持逐位不变。
@@ -271,8 +285,17 @@ for lam, cov_once in zip(lambda_values, coverage_list):
     a_shrink = w_eig / (w_eig + lam)
     MU_rep = ((Y_rep @ V_eig) * a_shrink) @ V_eig.T
     var_post_rep = (V_eig ** 2) @ (lam * w_eig / (w_eig + lam))
-    cover_rep = np.mean(np.abs(U_rep - MU_rep) < 1.96 * np.sqrt(var_post_rep), axis=1)
-    rmse_rep = np.sqrt(np.mean((U_rep - MU_rep) ** 2, axis=1))
+    err_rep = U_rep - MU_rep
+    sd_post_rep = np.sqrt(var_post_rep)
+    cover_rep = np.mean(np.abs(err_rep) < 1.96 * sd_post_rep, axis=1)
+    rmse_rep = np.sqrt(np.mean(err_rep ** 2, axis=1))
+    # 精确校准量（池化全部 R×n 个点，而非先逐次取均值再比较）：
+    # 模型校准时标准化误差 z=e/σ_post 应满足 E[z]=0、std(z)=1、P(|z|<1.96)=0.95。
+    # 注意 E[RMSE] 与平均std之间隔着Jensen不等式，只能当粗参考，不能作为校准判据。
+    z_rep = err_rep / sd_post_rep
+    coverage_pooled = float(np.mean(np.abs(z_rep) < 1.96))
+    z_mean, z_std = float(z_rep.mean()), float(z_rep.std())
+    p_cover_full = float(np.mean(cover_rep == 1.0))
     repeat_stats.append({
         'lambda': float(lam),
         'coverage_once': float(cov_once),
@@ -281,16 +304,24 @@ for lam, cov_once in zip(lambda_values, coverage_list):
         'coverage_q05': float(np.quantile(cover_rep, 0.05)),
         'coverage_q95': float(np.quantile(cover_rep, 0.95)),
         'rmse_mean': float(rmse_rep.mean()),
-        'post_std_mean': float(np.sqrt(var_post_rep).mean()),
+        'post_std_mean': float(sd_post_rep.mean()),
+        'coverage_pooled': coverage_pooled,
+        'z_mean': z_mean,
+        'z_std': z_std,
+        'p_coverage_full': p_cover_full,
     })
+    cal_status = '校准' if abs(z_std - 1.0) < 0.03 else ('过度自信' if z_std > 1.0 else '过于保守')
     print(f"  λ={lam:>4}: 单次实现={cov_once:.1%} | 重复抽样={cover_rep.mean():.1%}±{cover_rep.std():.1%}"
           f" (5–95%分位 {np.quantile(cover_rep,0.05):.0%}–{np.quantile(cover_rep,0.95):.0%})")
-    print(f"           E[RMSE]={rmse_rep.mean():.4f} vs 平均后验std={np.sqrt(var_post_rep).mean():.4f}"
-          f"  → {'校准' if abs(rmse_rep.mean()-np.sqrt(var_post_rep).mean())<0.05*rmse_rep.mean() else ('过度自信' if rmse_rep.mean()>np.sqrt(var_post_rep).mean() else '过于保守')}")
+    print(f"           E[RMSE]={rmse_rep.mean():.4f}（粗参考，平均后验std={sd_post_rep.mean():.4f}）"
+          f" | 精确校准: 池化覆盖率={coverage_pooled:.2%}, z均值={z_mean:+.3f}, z标准差={z_std:.3f}(理论1) → {cal_status}")
 
 print(f"\n  裁决：")
-print(f"    λ=σ²={sigma} 时重复覆盖率 = {repeat_stats[1]['coverage_mean']:.1%} ≈ 95% → 模型设定时后验确实校准；")
-print(f"    本例单次观测到 100% 只是抽样波动（该λ下 P(覆盖率=100%) 本身就有约五成）；")
+print(f"    λ=σ²={sigma} 时重复覆盖率均值 = {repeat_stats[1]['coverage_mean']:.1%}，"
+      f"池化覆盖率 = {repeat_stats[1]['coverage_pooled']:.2%}，z标准差 = {repeat_stats[1]['z_std']:.3f}(理论1)"
+      f" → 模型设定时后验确实校准；")
+print(f"    本例单次观测到 100% 只是抽样波动（该λ下单次覆盖率恰好为100%的概率 P≈"
+      f"{repeat_stats[1]['p_coverage_full']:.0%}，约四成，并非小概率异常）；")
 print(f"    λ=0.1 重复覆盖率 {repeat_stats[0]['coverage_mean']:.1%} → 低估噪声⇒真实失配⇒过度自信；")
 print(f"    λ=10 重复覆盖率 {repeat_stats[2]['coverage_mean']:.1%} → 高估噪声⇒区间过宽⇒保守（固有而非缺陷）。")
 print(f"    数值误差对上述覆盖率无可测影响（Σ_post 对角线与特征分解参考解差约 1e-15）。")

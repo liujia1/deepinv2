@@ -326,7 +326,7 @@ axes[1].semilogx(lambdas, psnr_tikh_grad_list, color='orange', marker='D', marke
                  linestyle='--', label='Tikhonov梯度域')
 axes[1].semilogx(lambdas, psnr_tv_list, 'r-^', markersize=3, label='TV')
 axes[1].axhline(y=psnr_noisy, color='k', linestyle='--', alpha=0.5, label='含噪')
-axes[1].set_xlabel(r'$\lambda$（像素域/梯度域量纲不同，仅各自曲线内定位最优）')
+axes[1].set_xlabel('lambda（像素域/梯度域量纲不同，仅各自曲线内定位最优）')
 axes[1].set_ylabel('PSNR (dB)')
 axes[1].set_title(r'不同先验的 PSNR-$\lambda$ 曲线')
 axes[1].legend()
@@ -350,12 +350,17 @@ plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤2_正则项形态与性能对比.png'), dpi=150, bbox_inches='tight')
 plt.close()
 
-print("\n===== 三种先验的特点总结 =====")
-print("\n高斯先验 (Tikhonov):")
-print("  - 假设: 图像值小")
+print("\n===== 经典先验族特点总结 =====")
+print("\n高斯先验① 像素域Tikhonov:")
+print("  - 假设: 图像值小（零均值）")
 print("  - 正则项: ||x||_2^2")
 print("  - 优点: 有闭式解, 计算高效")
-print("  - 缺点: 过度平滑, 丢失边缘")
+print("  - 缺点: 自然图像均值约0.5，'值小'假设失配，收缩极弱、几乎不降噪")
+print("\n高斯先验② 梯度域Tikhonov（经典Tikhonov/Wiener平滑）:")
+print("  - 假设: 图像梯度小（信号平滑）")
+print("  - 正则项: ||grad x||_2^2")
+print("  - 优点: 线性低通滤波，DCT域闭式解，平坦区去噪有效")
+print("  - 缺点: 对所有频率无差别衰减，过度平滑、丢失（抹糊）边缘")
 print("\nLaplace先验 (LASSO):")
 print("  - 假设: 图像值稀疏")
 print("  - 正则项: ||x||_1")
@@ -367,7 +372,8 @@ print("  - 假设: 图像梯度稀疏")
 print("  - 正则项: ||grad x||_1")
 print("  - 优点: 同时平滑与保边")
 print("  - 缺点: 可能产生阶梯效应")
-print("\n注: 三种方法的lambda参数量纲不同, PSNR数值仅在同一方法内可比。")
+print("\n注: 各方法λ随正则项量纲（像素值/梯度值）不同而不可跨方法直接比较；")
+print("    但对同一真值、同一data_range计算的PSNR/MSE可以跨方法比较。")
 
 # ===== 保存数值结果 =====
 import json
@@ -375,13 +381,16 @@ results_summary = {
     'image_size': n,
     'noise_level': float(NOISE_LEVEL),
     'psnr_noisy_dB': float(round(psnr_noisy, 2)),
-    'psnr_tikhonov_dB': float(round(psnr_tikh, 2)),
+    'psnr_tikhonov_pixel_dB': float(round(psnr_tikh, 2)),
+    'psnr_tikhonov_gradient_dB': float(round(psnr_tikh_grad, 2)),
     'psnr_lasso_dB': float(round(psnr_lasso, 2)),
     'psnr_tv_dB': float(round(psnr_tv, 2)),
-    'lambda_tikhonov': float(round(lam_tikh, 6)),
+    'lambda_tikhonov_pixel': float(round(lam_tikh, 6)),
+    'lambda_tikhonov_gradient': float(round(lam_tikh_grad, 6)),
     'lambda_lasso': float(round(lam_lasso, 6)),
     'lambda_tv': float(round(lam_tv, 4)),
-    'mse_tikhonov': float(round(np.mean((x_tikh - x)**2), 6)),
+    'mse_tikhonov_pixel': float(round(np.mean((x_tikh - x)**2), 6)),
+    'mse_tikhonov_gradient': float(round(np.mean((x_tikh_grad - x)**2), 6)),
     'mse_lasso': float(round(np.mean((x_lasso - x)**2), 6)),
     'mse_tv': float(round(np.mean((x_tv - x)**2), 6)),
 }
