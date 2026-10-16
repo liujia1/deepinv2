@@ -1,0 +1,102 @@
+{
+  "experiment": "2.3-3",
+  "title": "不同先验下的去噪器函数曲线 D(y) vs y",
+  "noise_sigma": 0.5,
+  "priors": {
+    "gaussian": {
+      "gamma": 1.0,
+      "scale": 0.8
+    },
+    "laplace": {
+      "b": 0.5,
+      "map_threshold_sigma2_over_b": 0.5
+    },
+    "student_t": {
+      "nu": 2.0
+    }
+  },
+  "sample_curves": {
+    "y": [
+      -3.0,
+      -1.0,
+      -0.2,
+      0.2,
+      1.0,
+      3.0
+    ],
+    "grid_y": [
+      -3.0,
+      -1.0,
+      -0.20300751879699241,
+      0.20300751879699241,
+      1.0,
+      3.0
+    ],
+    "gaussian_mmse": [
+      -2.4000000000000004,
+      -0.8,
+      -0.16240601503759394,
+      0.16240601503759394,
+      0.8,
+      2.4000000000000004
+    ],
+    "laplace_mmse": [
+      -2.5000002083358894,
+      -0.5805462979715842,
+      -0.09736317368990047,
+      0.09736317368990048,
+      0.5805462979715842,
+      2.500000208335889
+    ],
+    "laplace_map_soft": [
+      -2.5,
+      -0.5,
+      -0.0,
+      0.0,
+      0.5,
+      2.5
+    ],
+    "student_t_mmse": [
+      -2.785320816650633,
+      -0.804431192195109,
+      -0.15672434360191537,
+      0.15672434360191534,
+      0.804431192195109,
+      2.7853208166506325
+    ]
+  },
+  "self_checks": {
+    "numeric_vs_closed_max_abs": 2.929798625928015e-09,
+    "laplace_numeric_vs_truncnorm_analytic_max_abs": 2.0871253477161567e-06,
+    "grid_truncation_laplace_max_abs": 4.377831430701917e-12,
+    "grid_truncation_student_t_max_abs": 4.20606660611611e-10,
+    "grid_truncation_narrow_support": [
+      -6.0,
+      6.0
+    ],
+    "grid_truncation_wide_support": [
+      -11.996998499249642,
+      11.996998499249642
+    ],
+    "grid_dx": 0.006003001500750393,
+    "laplace_mmse_vs_map_max_abs": 0.24995734269657832,
+    "laplace_mmse_vs_map_max_at_y": 0.5037593984962405,
+    "laplace_mmse_vs_map_align_from_y": 1.556390977443609,
+    "laplace_align_tol": 0.01
+  },
+  "shrinkage": {
+    "suppress_pct_at_y0p2": {
+      "gaussian": 19.999999999999996,
+      "laplace_mmse": 52.039621849049,
+      "laplace_map": 100.0,
+      "student_t": 22.798749262760197
+    },
+    "student_t_shrink_crossover_y": 0.9398496240601499,
+    "near_zero_slope_D_over_y": {
+      "gaussian": 0.8,
+      "student_t": 0.7705092764152541,
+      "laplace_mmse": 0.47486918902225794,
+      "laplace_map": 0.0
+    }
+  }
+}

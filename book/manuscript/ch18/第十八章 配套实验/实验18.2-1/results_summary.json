@@ -1,0 +1,56 @@
+{
+  "experiment": "实验18.2-1 自定义前向算子与伴随验证",
+  "environment": {
+    "device": "cpu",
+    "torch_version": "2.11.0+cpu",
+    "deepinv_version": "0.4.0"
+  },
+  "scene": {
+    "image_size": [
+      256,
+      256
+    ],
+    "multiview_num_views_J": 16,
+    "multiview_transform": "旋转+平移（scale=1.0，线性部分正交）",
+    "max_rotation_angle_rad": 0.39269908169872414,
+    "max_shift": 0.05,
+    "downsampling_factor": 4,
+    "mri_acceleration": 4,
+    "gaussian_sigma": 0.05,
+    "poisson_gain": 0.1,
+    "poisson_gaussian": {
+      "gain": 0.1,
+      "sigma": 0.05
+    }
+  },
+  "adjoint_relative_error": {
+    "downsampling_factor2": 2.0203872612804297e-07,
+    "multiview_manual_mean": 0.005113837464525357,
+    "multiview_manual_std": 0.003938050819300627,
+    "multiview_manual_adjointness_test_raw": 1.6325225830078125,
+    "multiview_autograd": 6.187148749074862e-08,
+    "blur": 8.353174641371825e-08,
+    "composite_blur_downsample": 4.3988576767791784e-07,
+    "mri": 2.093729296156315e-07
+  },
+  "noise_mae": {
+    "gaussian": 0.040080610662698746,
+    "poisson": 0.12398243695497513,
+    "poisson_gaussian": 0.13198912143707275
+  },
+  "operator_norm": {
+    "downsampling_factor2_compute_norm": 1.0000008344650269
+  },
+  "composition_order_check": {
+    "composite_vs_manual_max_rel_diff": 0.0,
+    "pass_threshold": 1e-05,
+    "passed": true
+  },
+  "output_files": [
+    "step2_multiview_forward.png",
+    "step4_noise_comparison.png",
+    "step4_noise_histogram.png",
+    "step5_custom_operators.png",
+    "results_summary.json"
+  ]
+}

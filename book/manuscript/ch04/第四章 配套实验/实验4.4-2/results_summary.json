@@ -1,0 +1,33 @@
+{
+  "experiment": "4.4-2",
+  "title": "MYULA经验贝叶斯（SAPG参数自适应估计）",
+  "setup": {
+    "image_size": [
+      512,
+      512
+    ],
+    "BSNR": 30,
+    "true_sigma2": 4.975089,
+    "kernel_len": [
+      9,
+      9
+    ],
+    "type_blur": "uniform"
+  },
+  "sapg_params": {
+    "warmup_steps": 1000,
+    "total_iter": 1000,
+    "n_burn_in": 700,
+    "th_init": 0.01
+  },
+  "estimates": {
+    "theta_est": 0.024222,
+    "sigma2_est": 4.826401,
+    "true_sigma2": 4.975089
+  },
+  "map_results": {
+    "snr_obs": 18.84,
+    "snr_map": 23.07,
+    "snr_improvement": 4.23
+  }
+}

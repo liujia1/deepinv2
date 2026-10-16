@@ -1,0 +1,42 @@
+{
+  "experiment": "2.4-1 FoE 双层优化与参数学习",
+  "device": "cpu",
+  "num_epochs": 30,
+  "num_experts": 6,
+  "kernel_size": 7,
+  "gamma": 1.0,
+  "lambda_reg": 0.01,
+  "noise_level": 0.12,
+  "test_noise_seed": 42,
+  "psnr_noisy_dB": 18.45,
+  "psnr_foe_before_dB": 20.62,
+  "psnr_foe_before_unclipped_dB": 19.04,
+  "psnr_foe_after_dB": 23.27,
+  "psnr_foe_after_unclipped_dB": 22.09,
+  "psnr_foe_after_10steps_dB": 23.26,
+  "psnr_foe_after_50steps_dB": 23.27,
+  "posterior_energy": {
+    "definition": "0.5*sum((x-y)^2) + lambda*sum_k sum_pix alpha_k log(1+gamma r^2)",
+    "unroll_steps": 50,
+    "step_size": 0.15,
+    "start": 34.196,
+    "end": 20.127,
+    "monotone_nonincreasing": true,
+    "monotone_check": "Es[t+1] <= Es[t] + 1e-6*max(1,|Es[t]|) (float32相对容差)",
+    "max_uptick_abs": 3.814697265625e-06
+  },
+  "upper_level_loss": "MSE(x_hat, x) + 2*(MSE(dx_hat, dx) + MSE(dy_hat, dy))",
+  "energy_concentration": {
+    "definition": "mean prior energy over structure pixels (gradient-magnitude top 10%) divided by mean over smooth pixels (bottom 50%)",
+    "before_training": {
+      "ratio": 4.78,
+      "structure_mean": 0.178,
+      "smooth_mean": 0.037
+    },
+    "after_training": {
+      "ratio": 23.84,
+      "structure_mean": 1.768,
+      "smooth_mean": 0.074
+    }
+  }
+}

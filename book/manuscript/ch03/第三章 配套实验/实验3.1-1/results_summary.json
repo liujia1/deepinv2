@@ -1,0 +1,37 @@
+{
+  "n": 32,
+  "seed": 42,
+  "blur_sigma": 2.0,
+  "sigma_noise": 0.05,
+  "sigma_prior": 0.5,
+  "lam": 0.01,
+  "psnr_note": "data_range=1（图像值域[0,1]）；所有重建PSNR均先clip至[0,1]再计算",
+  "psnr_map": 15.02,
+  "psnr_init_transpose": 14.6,
+  "psnr_init_obs": 14.64,
+  "psnr_blur_only": 14.99,
+  "psnr_oracle_wiener": 15.18,
+  "energy_note": "后验能量 -ln p(x|y)（省略常数项），单位 nats，分解为 data_term + reg_term",
+  "E_map": 509.0,
+  "E_init_transpose": 722.78,
+  "E_init_obs": 598.97,
+  "E_true": 613.28,
+  "energy_terms": {
+    "obs": {
+      "data_term": 545.93,
+      "reg_term": 53.04
+    },
+    "transpose": {
+      "data_term": 679.18,
+      "reg_term": 43.59
+    },
+    "map": {
+      "data_term": 441.16,
+      "reg_term": 67.84
+    },
+    "true": {
+      "data_term": 490.25,
+      "reg_term": 123.04
+    }
+  }
+}

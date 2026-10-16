@@ -1,0 +1,131 @@
+{
+  "schema_version": 2,
+  "revision_note": "v2: 修正q3对偶投影权重(2.0->0.5, Frobenius内积配套); 全部TGV求解至收敛(自适应500-5000次); TV基线改为同预算weight=alpha1并附调参扫描; 新增步骤6分段仿射幻影金标准; psnr_tv_dB 含义同v1但取值已改为同预算口径",
+  "image_size": 128,
+  "noise_sigma": 0.1,
+  "model_convention": "二阶TGV^2; E(w)对称梯度取半剪切分量E3=(dh wv+dv wh)/2, ||Ew||_F^2=E1^2+E2^2+2E3^2; 对偶球投影 sqrt(q1^2+q2^2+0.5q3^2)",
+  "solver": {
+    "method": "Chambolle-Pock primal-dual",
+    "tau": 0.25,
+    "sigma": 0.25,
+    "K_norm_sq_measured": 10.3364,
+    "tau_sigma_K2": 0.646,
+    "min_iter": 500,
+    "max_iter": 5000,
+    "tol": 5e-05
+  },
+  "psnr_noisy_dB": 20.38,
+  "psnr_tv_dB": 26.99,
+  "psnr_tgv_dB": 26.23,
+  "ssim_noisy": 0.3539,
+  "ssim_tv": 0.7621,
+  "ssim_tgv": 0.7663,
+  "tv_baseline": {
+    "policy": "matched_budget_weight=alpha1; plus best-tuned weight sweep",
+    "matched_weight": 0.15,
+    "matched_psnr_dB": 26.99,
+    "matched_ssim": 0.7621,
+    "best_weight": 0.08,
+    "best_psnr_dB": 28.24,
+    "best_ssim": 0.8007,
+    "weight_sweep": [
+      {
+        "weight": 0.06,
+        "psnr_dB": 28.017,
+        "ssim": 0.7436
+      },
+      {
+        "weight": 0.08,
+        "psnr_dB": 28.239,
+        "ssim": 0.80073
+      },
+      {
+        "weight": 0.1,
+        "psnr_dB": 27.822,
+        "ssim": 0.80377
+      },
+      {
+        "weight": 0.12,
+        "psnr_dB": 27.376,
+        "ssim": 0.78569
+      },
+      {
+        "weight": 0.15,
+        "psnr_dB": 26.986,
+        "ssim": 0.76213
+      },
+      {
+        "weight": 0.18,
+        "psnr_dB": 26.332,
+        "ssim": 0.76775
+      },
+      {
+        "weight": 0.2,
+        "psnr_dB": 25.901,
+        "ssim": 0.76339
+      }
+    ],
+    "time_seconds": 0.003
+  },
+  "tgv_main": {
+    "n_iter": 2800,
+    "time_seconds": 6.37
+  },
+  "alpha0": 0.3,
+  "alpha1": 0.15,
+  "alpha0_alpha1_ratio": 2.0,
+  "sensitivity_alpha_ratio": {
+    "ratio_0.5": {
+      "psnr_dB": 27.01,
+      "ssim": 0.7919,
+      "n_iter": 1200
+    },
+    "ratio_1.0": {
+      "psnr_dB": 26.03,
+      "ssim": 0.769,
+      "n_iter": 1800
+    },
+    "ratio_2.0": {
+      "psnr_dB": 26.23,
+      "ssim": 0.7663,
+      "n_iter": 2800
+    },
+    "ratio_4.0": {
+      "psnr_dB": 26.4,
+      "ssim": 0.7702,
+      "n_iter": 5000
+    },
+    "ratio_8.0": {
+      "psnr_dB": 26.4,
+      "ssim": 0.7696,
+      "n_iter": 5000
+    }
+  },
+  "phantom_piecewise_affine": {
+    "noise_sigma": 0.05,
+    "matched_budget_alpha1": 0.08,
+    "n_iter_tgv": 3800,
+    "psnr_noisy_dB": 25.95,
+    "psnr_tv_matched_dB": 40.44,
+    "psnr_tv_best_dB": 43.44,
+    "psnr_tgv_dB": 50.39,
+    "ssim_tv_matched": 0.948,
+    "ssim_tgv": 0.9988,
+    "ramp_curvature": {
+      "noisy": 6.282,
+      "tv_matched": 0.2697,
+      "tv_best": 0.1507,
+      "tgv": 0.002
+    },
+    "ramp_mse": {
+      "tv_matched": 9.6e-05,
+      "tgv": 7e-06
+    }
+  },
+  "gradient_region_detected": {
+    "orientation": "v",
+    "fixed_index": 98,
+    "range_start": 2,
+    "range_stop": 34
+  }
+}

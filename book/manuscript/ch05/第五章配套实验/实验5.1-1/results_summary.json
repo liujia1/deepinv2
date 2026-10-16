@@ -1,0 +1,111 @@
+{
+  "experiment": "5.1-1",
+  "title": "ULA采样与步长敏感性分析",
+  "revision_note": "复核修订版：步骤2改为20条独立链统计并报告ESS；新增步骤3稳定边界实证",
+  "step1_ula_sampling": {
+    "niter": 100000,
+    "delta": 0.1,
+    "empirical_var": 1.071742,
+    "theoretical_var": 1.052632,
+    "acf_mix_lag": 30,
+    "ess_mean_theoretical": 5263.2,
+    "var_mc_standard_error": 0.01453
+  },
+  "step2_step_size_sensitivity": {
+    "niter_per_chain": 50000,
+    "nchains": 20,
+    "burn_in": 1000,
+    "results": [
+      {
+        "delta": 0.01,
+        "var_mean_across_chains": 0.989517,
+        "var_std_across_chains": 0.061175,
+        "var_ci95": [
+          0.891661,
+          1.086187
+        ],
+        "var_pooled": 0.992057,
+        "theoretical_var": 1.005025,
+        "discretization_bias": 0.005025,
+        "ess_mean_per_chain": 251.3
+      },
+      {
+        "delta": 0.1,
+        "var_mean_across_chains": 1.047797,
+        "var_std_across_chains": 0.020575,
+        "var_ci95": [
+          1.014747,
+          1.084364
+        ],
+        "var_pooled": 1.048161,
+        "theoretical_var": 1.052632,
+        "discretization_bias": 0.052632,
+        "ess_mean_per_chain": 2631.6
+      },
+      {
+        "delta": 0.5,
+        "var_mean_across_chains": 1.337888,
+        "var_std_across_chains": 0.010904,
+        "var_ci95": [
+          1.313935,
+          1.351096
+        ],
+        "var_pooled": 1.337974,
+        "theoretical_var": 1.333333,
+        "discretization_bias": 0.333333,
+        "ess_mean_per_chain": 16666.7
+      },
+      {
+        "delta": 1.0,
+        "var_mean_across_chains": 1.99398,
+        "var_std_across_chains": 0.00893,
+        "var_ci95": [
+          1.978899,
+          2.009124
+        ],
+        "var_pooled": 1.994015,
+        "theoretical_var": 2.0,
+        "discretization_bias": 1.0,
+        "ess_mean_per_chain": 50000.0
+      }
+    ]
+  },
+  "step3_stability_boundary": {
+    "formula": "v_m = 2δ·[(1-δ)^{2m}-1]/[(1-δ)²-1] (δ≠2); v_m=4m (δ=2)",
+    "nchains": 200,
+    "results": [
+      {
+        "delta": 1.0,
+        "horizon": 20000,
+        "nchains": 200,
+        "tail_window": 2000,
+        "empirical_second_moment_tailavg": 1.9987,
+        "theoretical_second_moment_tailavg": 2.0
+      },
+      {
+        "delta": 1.9,
+        "horizon": 20000,
+        "nchains": 200,
+        "tail_window": 2000,
+        "empirical_second_moment_tailavg": 19.8673,
+        "theoretical_second_moment_tailavg": 20.0
+      },
+      {
+        "delta": 2.0,
+        "horizon": 20000,
+        "nchains": 200,
+        "tail_window": 2000,
+        "empirical_second_moment_tailavg": 70004.0596,
+        "theoretical_second_moment_tailavg": 76002.0
+      },
+      {
+        "delta": 2.5,
+        "horizon": 400,
+        "nchains": 200,
+        "tail_window": 50,
+        "empirical_second_moment_tailavg": 1.1553734272177674e+140,
+        "theoretical_second_moment_tailavg": 1.074904142631836e+140
+      }
+    ]
+  }
+}

@@ -1,0 +1,409 @@
+# -*- coding: utf-8 -*-
+"""
+实验10.4-1 层级VAE→扩散的连续极限
+对应章节: 10.4 层级VAE→扩散的极限
+
+知识点:
+  - VP-SDE连续极限: 离散乘积→连续指数
+  - 层级ELBO与VLB的对应关系
+  - 扩散模型=固定编码器的层级VAE极限
+
+实验内容:
+  步骤1: 离散→连续极限验证 (不同L下的ab(t)对比)
+  步骤2: 层级ELBO→VLB对应关系
+  步骤3: VP-SDE形式推导
+
+本实验不需要GPU，通过数值实验验证10.4节的核心数学结论。
+"""
+
+import sys
+import io
+import os
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # 非交互式后端
+import matplotlib.pyplot as plt
+import logging
+import warnings
+
+# 设置控制台输出为 UTF-8 (Windows下避免中文乱码)
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+
+# 静默matplotlib相关警告
+logging.getLogger('matplotlib').setLevel(logging.ERROR)
+logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*U\\+2212.*")
+warnings.filterwarnings("ignore", message=".*glyph.*")
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+# ====== 中文字体配置(兼容本地和Google Colab) ======
+_gdrive = '/content/drive/MyDrive'
+_IN_COLAB = 'google.colab' in sys.modules
+
+if _IN_COLAB:
+    from google.colab import drive
+    if not os.path.isdir(_gdrive):
+        print("正在挂载 Google Drive...")
+        drive.mount('/content/drive')
+    SAVE_DIR = os.path.join(_gdrive, '实验10.4-1')
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+else:
+    try:
+        SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        SAVE_DIR = os.getcwd()
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+
+os.makedirs(_chinese_path, exist_ok=True)
+sys.path.insert(0, _chinese_path)
+try:
+    from chinese_font import setup_chinese_font
+    setup_chinese_font(save_dir=_chinese_path)
+except ImportError:
+    print("警告: chinese_font模块未找到，中文字体可能无法正常显示")
+# ========================================================
+
+np.random.seed(42)
+import torch
+torch.manual_seed(42)
+
+print("\n" + "="*60)
+print("实验10.4-1: 层级VAE→扩散的连续极限")
+print("="*60)
+print("对应章节: 10.4 层级VAE→扩散的极限")
+print("使用设备: CPU (本实验不需要GPU)")
+
+
+# ============================================================
+# 步骤1：离散→连续极限验证 —— 10.4节核心
+# ============================================================
+print("\n" + "="*60)
+print("步骤1：离散→连续极限验证")
+print("="*60)
+print("\n[核心思想]")
+print("  当层级数L→∞时，离散乘积收敛到连续指数:")
+print("  一般t:  ab(t) = (1 - beta/L)^(L·t) → exp(-beta·t)")
+print("  t=1端点: ab_L = prod_{i=1}^L (1 - beta/L) → exp(-beta)")
+print("  其中 t = i/L 为归一化时间")
+
+beta_total = 1.0  # 总扩散量
+
+print("\n不同层级数L下的离散ab vs 连续极限:")
+print("     L      离散ab_L      连续极限      相对误差")
+print("-" * 45)
+
+for L in [5, 10, 50, 100, 500, 1000]:
+    dt = beta_total / L
+    alpha_per_step = 1 - dt
+    # 离散乘积: ab_L = (1 - beta/L)^L 在 t=1 处
+    alpha_bar_discrete = alpha_per_step ** L
+    # 连续极限: ab(t=1) = exp(-beta)
+    alpha_bar_cont = np.exp(-beta_total)
+
+    rel_err = abs(alpha_bar_discrete - alpha_bar_cont) / alpha_bar_cont
+    print(str(L).rjust(6) + "     " + str(round(alpha_bar_discrete, 6)).rjust(12) + "     " + str(round(alpha_bar_cont, 6)).rjust(12) + "     " + str(round(rel_err, 4)).rjust(10))
+
+print("\n→ L增大时，离散乘积逐渐逼近连续指数 exp(-beta t)")
+print("  这是VP-SDE的理论基础")
+
+
+# ============================================================
+# 步骤2：VP-SDE形式推导
+# ============================================================
+print("\n" + "="*60)
+print("步骤2：VP-SDE形式推导")
+print("="*60)
+print("\n[VP-SDE的定义]")
+print("  前向SDE: dx = -beta(t)/2 · x dt + sqrt(beta(t)) dW")
+print("  边际分布: q(x_t|x_0) = N(x_t; sqrt(ab(t)) x_0, (1-ab(t))I)")
+print("  其中 ab(t) = exp(-int_0^t beta(s) ds)")
+
+print("\n[逆向SDE]")
+print("  逆向SDE: dx = [-beta(t)/2 · x - beta(t) · s_theta(x,t)] dt + sqrt(beta(t)) dW_bar")
+print("  或用eps-prediction参数化 (s_theta = -hat_eps/sqrt(1-ab)):")
+print("  dx = [-beta(t)/2 · x + beta(t)/sqrt(1-ab(t)) · hat_eps_theta(x,t)] dt + sqrt(beta(t)) dW_bar")
+
+print("\n[ODE形式 (Probability Flow ODE)]")
+print("  去除随机项后得到确定性ODE:")
+print("  dx = [-beta(t)/2 · x - beta(t)/2 · s_theta(x,t)] dt")
+print("  用于确定性采样和似然计算")
+
+
+# ============================================================
+# 步骤3：边际分布演化与连续极限
+# ============================================================
+print("\n" + "="*60)
+print("步骤3：边际分布演化与连续极限")
+print("="*60)
+print("\n[对应关系表]")
+print("""
+层级VAE概念            →  扩散模型概念
+────────────────────────────────────
+编码器 q(z_l|z_{l-1})  →  前向加噪 q(x_t|x_{t-1})
+解码器 p(z_{l-1}|z_l)  →  反向去噪 p_theta(x_{t-1}|x_t)
+隐变量 z_l             →  噪声状态 x_t
+先验 p(z_L)            →  先验 p(x_T) = N(0,I)
+重参数化               →  直接采样 x_t = sqrt(ab_t) x_0 + sqrt(1-ab_t) eps
+ELBO                   →  VLB
+
+关键差异:
+  层级VAE: 编码器参数被学习（自由推断）
+  扩散模型: 编码器参数被固定（高斯转移，仅beta_t是超参数）
+  → 扩散模型的"推断"无需训练，VLB只优化解码器（去噪网络）
+""")
+
+# 数值验证: 不同L下的边际分布到先验KL距离积分
+# 2D高斯混合: 分量 N([±1,0], 0.25·I) 等权 → 各维二阶矩为解析常数(无需采样):
+#   E[x0,1²] = mu2 + sigma2 = 1.25,  E[x0,2²] = sigma2 = 0.25 (dim2均值本为0)
+# 边际 q_t 由对称性均值为0, 矩匹配单高斯为 N(0, diag(v1, v2)):
+#   v1 = ab·(mu2+sigma2) + (1-ab) = 1 + 0.25ab   (dim1)
+#   v2 = ab·sigma2 + (1-ab)      = 1 - 0.75ab   (dim2)
+# 精确2D矩匹配KL: KL(q_t‖N(0,I)) = 0.5·[(v1-1-ln v1) + (v2-1-ln v2)]
+# 注: v1/v2 对 ab 的一阶偏离在迹项与 -ln det 项中恰好相消,
+#   故该 KL 为 O(ab²) 量级 —— 数值偏小是数据二阶矩接近先验的固有属性, 非计算错误
+#   (若把 dim1 二阶矩与 dim2 方差混搭进同一公式, 一阶项不消, 会虚高约4倍)
+
+print("\n[数值验证] 边际分布演化: ∫KL(q_t || N(0,I))dt 的积分收敛 (q_t取2D矩匹配单高斯近似)")
+print("  说明: 这衡量每一层边际分布到标准正态先验的距离(矩匹配意义下)")
+print("       L增大→积分收敛，体现离散到连续极限的数值稳定性")
+print("\n不同层级数L下的KL积分估计（2D高斯混合, beta_total=1.0）:")
+print("     L      KL积分估计      每步beta")
+print("-" * 40)
+
+mu2 = 1.0      # 双模态均值平方 E[mu0²]
+sigma2 = 0.25  # 单分量方差 sigma0²
+
+def kl_marginal_2d(ab):
+    """2D矩匹配单高斯近似下的 KL(q_t ‖ N(0,I)), ab可标量或数组"""
+    v1 = ab * (mu2 + sigma2) + (1 - ab)
+    v2 = ab * sigma2 + (1 - ab)
+    return 0.5 * ((v1 - 1 - np.log(v1)) + (v2 - 1 - np.log(v2)))
+
+for L in [5, 10, 50, 100]:
+    dt = 1.0 / L
+    beta_step = dt
+    alpha_step = 1 - beta_step
+
+    # 黎曼和: 在离散 ᾱ_t=(1-1/L)^t 处取KL, 以步长dt加权求和逼近积分
+    total_kl = 0
+    for t in range(1, L + 1):
+        ab_t = alpha_step ** t
+        total_kl += kl_marginal_2d(ab_t) * dt
+
+    print(str(L).rjust(6) + "        " + str(round(total_kl, 4)).rjust(12) + "        " + str(round(beta_step, 6)).rjust(10))
+
+print("\n→ L增大时KL积分逐渐收敛，体现离散求和→连续积分的数值稳定性")
+print("  这验证了离散层级过程→VP-SDE连续极限的数学合理性")
+
+# 闭式对照: L→∞ 时黎曼和→积分 ∫_0^1 kl(t)dt, 其中 ab(t)=e^{-t}
+# 用细网格梯形积分作确定性基准(无需scipy)
+_t_fine = np.linspace(0.0, 1.0, 200001)
+_f_kl = kl_marginal_2d(np.exp(-_t_fine))
+_kl_lim = float(np.sum(0.5 * (_f_kl[1:] + _f_kl[:-1]) * np.diff(_t_fine)))
+print(f"  连续极限对照 (20万点梯形积分): ∫_0^1 kl(t) dt ≈ {_kl_lim:.6f}，上表值以 O(1/L) 向其收敛")
+
+
+# ============================================================
+# 可视化
+# ============================================================
+print("\n" + "="*60)
+print("生成可视化图表...")
+print("="*60)
+
+fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+# (a) 不同L下的离散ab vs 连续极限
+ax = axes[0, 0]
+for L in [5, 10, 50, 100, 1000]:
+    beta_total = 1.0
+    dt = beta_total / L
+    alpha_per_step = 1 - dt
+    alpha_bar_L = torch.cumprod(torch.full((L,), alpha_per_step), dim=0)
+    t_norm = torch.linspace(1/L, 1, L)  # 归一化时间
+    ax.plot(t_norm.numpy(), alpha_bar_L.numpy(), linewidth=1.5 if L >= 50 else 1,
+            label='$L=' + str(L) + '$')
+
+# 连续极限: ab(t) = exp(-beta_total · t)
+t_cont = torch.linspace(0, 1, 200)
+alpha_bar_cont = torch.exp(-beta_total * t_cont)
+ax.plot(t_cont.numpy(), alpha_bar_cont.numpy(), 'k--', linewidth=2, label='连续极限: $\\exp(-\\beta t)$')
+
+ax.set_xlabel('归一化时间 $t/T$', fontsize=12)
+ax.set_ylabel(r'$\bar{\alpha}(t)$', fontsize=12)
+ax.set_title('(a) $L\\to\\infty$: 离散乘积→连续指数', fontsize=13)
+ax.legend(fontsize=9)
+ax.grid(True, alpha=0.3)
+ax.annotate('$L\\to\\infty$', xy=(0.35, 0.5), xycoords='axes fraction',
+            fontsize=10, color='black', fontweight='bold',
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffeaa7', alpha=0.8))
+
+# (b) VP-SDE的边际分布演化
+ax = axes[0, 1]
+t_cont = torch.linspace(0, 1, 100)
+beta_func = torch.ones_like(t_cont) * beta_total  # beta(t) = beta (常数)
+alpha_bar_t = torch.exp(-beta_func * t_cont)
+
+ax.plot(t_cont.numpy(), torch.sqrt(alpha_bar_t).numpy(), 'b-', linewidth=2, label=r'$\sqrt{\bar{\alpha}(t)}$ ($x_0$系数)')
+ax.plot(t_cont.numpy(), torch.sqrt(1 - alpha_bar_t).numpy(), 'r-', linewidth=2, label=r'$\sqrt{1-\bar{\alpha}(t)}$ (噪声系数)')
+ax.set_xlabel('归一化时间 $t$', fontsize=12)
+ax.set_ylabel('系数值', fontsize=12)
+ax.set_title('(b) VP-SDE边际分布系数', fontsize=13)
+ax.legend(fontsize=11)
+ax.grid(True, alpha=0.3)
+
+# (c) 不同噪声调度的对比
+ax = axes[1, 0]
+# DDPM线性调度
+T = 1000
+betas_linear = torch.linspace(1e-4, 0.02, T)
+alphas_linear = 1.0 - betas_linear
+alpha_bars_linear = torch.cumprod(alphas_linear, dim=0)
+
+# 改进调度 (cosine schedule)
+def cosine_alpha_bar_schedule(t, s=0.008):
+    """ᾱ(t)调度函数，来自Improved DDPM (Nichol & Dhariwal 2021)"""
+    f = lambda x: torch.cos((x + s) / (1 + s) * np.pi / 2) ** 2
+    return f(t) / f(torch.zeros_like(t))  # 归一化保证ᾱ(0)=1
+
+t_norm = torch.linspace(0, 1, T)
+alpha_bars_cosine = cosine_alpha_bar_schedule(t_norm)
+
+# ★ 自检：验证cosine调度的关键性质(避免s参数被误改后调度形状变化)
+# 公式: ᾱ(t) = cos²((t+s)/(1+s)·π/2) / cos²(s/(1+s)·π/2)
+# 检验规则:
+#   C1: ᾱ(0) = 1 (归一化保证)
+#   C2: ᾱ(1) = cos²((1+s)/(1+s)·π/2) / cos²(s/(1+s)·π/2) = 0 / cos²(...) = 0
+#   C3: ᾱ(t)单调递减
+#   C4: 在t=0.5处ᾱ(0.5)与DDPM线性调度的对比(典型值)
+print(f"[Cosine自检] 改进DDPM余弦调度验证(实际运行, 非手算):")
+print(f"  C1: ᾱ(0)={alpha_bars_cosine[0].item():.6f} (应=1): "
+      f"{'OK' if abs(alpha_bars_cosine[0].item() - 1.0) < 1e-5 else 'FAIL'}")
+print(f"  C2: ᾱ(1)={alpha_bars_cosine[-1].item():.6e} (应→0): "
+      f"{'OK' if alpha_bars_cosine[-1].item() < 0.01 else 'FAIL'}")
+print(f"  C3: 单调递减: {'OK' if (alpha_bars_cosine[1:] <= alpha_bars_cosine[:-1]).all().item() else 'FAIL'}")
+# C4: 与DDPM线性调度在典型t处的对比(教学常见观察点)
+_ab_cos_mid = alpha_bars_cosine[T//2].item()
+_ab_cos_q = alpha_bars_cosine[T//4].item()
+_ab_cos_3q = alpha_bars_cosine[3*T//4].item()
+print(f"  C4: 关键t处ᾱ值: t=0.25→{_ab_cos_q:.4f}, t=0.5→{_ab_cos_mid:.4f}, t=0.75→{_ab_cos_3q:.4f}")
+print(f"  (典型范围: 中间t处cosine调度ᾱ比线性调度下降更慢, 末尾更陡)")
+
+ax.plot(range(1, T+1), alpha_bars_linear.numpy(), 'b-', linewidth=2, label='DDPM线性调度')
+ax.plot(range(1, T+1), alpha_bars_cosine.numpy(), 'g-', linewidth=2, label='Cosine调度')
+ax.set_xlabel('时间步 $t$', fontsize=12)
+ax.set_ylabel(r'$\bar{\alpha}_t$', fontsize=12)
+ax.set_title('(c) 不同噪声调度对比', fontsize=13)
+ax.legend(fontsize=11)
+ax.grid(True, alpha=0.3)
+
+# (d) VP-SDE示意图
+ax = axes[1, 1]
+# 绘制VP-SDE的前向过程示意图
+np.random.seed(42)
+n_pts = 50
+x0_pts = np.random.randn(n_pts) * 0.5
+
+t_steps = [0, 0.2, 0.5, 0.8, 1.0]
+colors = plt.cm.viridis(np.linspace(0, 1, len(t_steps)))
+
+for i, t_val in enumerate(t_steps):
+    ab = np.exp(-beta_total * t_val)
+    noise = np.random.randn(n_pts)
+    x_t = np.sqrt(ab) * x0_pts + np.sqrt(1 - ab) * noise
+    offset = i * 3
+    ax.scatter([offset] * n_pts, x_t, c=[colors[i]], s=30, alpha=0.7, label='$t=' + str(round(t_val, 1)) + '$')
+    ax.text(offset, 3, '$t=' + str(round(t_val, 1)) + '$', ha='center', fontsize=9)
+
+ax.set_xlabel('VP-SDE前向过程 →', fontsize=12)
+ax.set_ylabel('$x_t$', fontsize=12)
+ax.set_title('(d) VP-SDE前向过程演化', fontsize=13)
+ax.set_ylim(-3, 3.5)
+ax.grid(True, alpha=0.3)
+ax.legend(fontsize=8, loc='upper right')
+
+plt.tight_layout()
+fig_path = os.path.join(SAVE_DIR, '步骤1_离散到连续极限.png')
+plt.savefig(fig_path, dpi=150, bbox_inches='tight')
+plt.close()
+print("图表已保存: 步骤1_离散到连续极限.png")
+
+
+# ============================================================
+# 实验总结
+# ============================================================
+print("\n" + "="*60)
+print("实验10.4-1 总结")
+print("="*60)
+print("\n关键结论:")
+print("\n1. 离散→连续极限 (步骤1)")
+print("   - 当L→∞时: prod_{i=1}^L (1 - beta/L) → exp(-beta t)")
+print("   - 这是VP-SDE的理论基础")
+print("\n2. VP-SDE形式 (步骤2)")
+print("   - 前向SDE: dx = -beta(t)/2 · x dt + sqrt(beta(t)) dW")
+print("   - 边际分布: ab(t) = exp(-int_0^t beta(s) ds)")
+print("   - 逆向SDE: 由得分函数或eps-prediction驱动")
+print("\n3. 边际分布演化与连续极限 (步骤3)")
+print("   - 扩散模型 = 固定编码器的层级VAE连续极限")
+print("   - 编码器固定 → 无需训练推断网络")
+print("   - 只优化解码器（去噪网络）")
+print("\n4. 三者的统一视角:")
+print("   - 层级VAE: 通用框架，编码器可学习")
+print("   - 扩散模型: 固定编码器，L=T步离散化")
+print("   - VP-SDE: L→∞的连续极限，SDE形式")
+
+print("\n" + "="*60)
+print("实验10.4-1 完成!")
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    'discrete_to_continuous_limit': {},
+    'KL_integral_estimates': {},
+}
+beta_total_save = 1.0
+for L in [5, 10, 50, 100, 500, 1000]:
+    dt = beta_total_save / L
+    alpha_per_step = 1 - dt
+    alpha_bar_discrete = alpha_per_step ** L
+    alpha_bar_cont = np.exp(-beta_total_save)
+    rel_err = abs(alpha_bar_discrete - alpha_bar_cont) / alpha_bar_cont
+    results_summary['discrete_to_continuous_limit'][f'L_{L}'] = {
+        'alpha_bar_discrete': alpha_bar_discrete,
+        'alpha_bar_continuous': alpha_bar_cont,
+        'relative_error': rel_err,
+    }
+# KL integral estimates (与步骤3打印共用 kl_marginal_2d)
+for L in [5, 10, 50, 100]:
+    dt = 1.0 / L
+    beta_step = dt
+    alpha_step = 1 - beta_step
+    total_kl = 0
+    for t in range(1, L + 1):
+        ab_t = alpha_step ** t
+        total_kl += kl_marginal_2d(ab_t) * dt
+    results_summary['KL_integral_estimates'][f'L_{L}'] = {
+        'KL_integral': total_kl,
+        'beta_step': beta_step,
+    }
+results_summary['KL_continuous_limit'] = _kl_lim
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")

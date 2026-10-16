@@ -1,0 +1,22 @@
+{
+  "image_size": 128,
+  "noise_sigma": 0.1,
+  "boundary_condition": "Neumann (Sobolev用DCT-II闭式解；TV用Chambolle零外推梯度)",
+  "sobolev_lambda": 2.9,
+  "tv_alpha": 0.08,
+  "tv_chambolle_eps": 1e-08,
+  "tv_chambolle_max_iter": 5000,
+  "psnr_noisy_dB": 20.38,
+  "psnr_sobolev_dB": 24.37,
+  "psnr_tv_dB": 28.24,
+  "ssim_noisy": 0.3539,
+  "ssim_sobolev": 0.7077,
+  "ssim_tv": 0.8031,
+  "tv_zero_gradient_pct": 65.81,
+  "sobolev_zero_gradient_pct": 21.34,
+  "synth_sobolev_lambda": 3.0,
+  "synth_step_mse_tv": 0.00118,
+  "synth_step_mse_sobolev": 0.00408,
+  "synth_ramp_flat_frac_tv": 0.66,
+  "synth_ramp_flat_frac_sobolev": 0.128
+}

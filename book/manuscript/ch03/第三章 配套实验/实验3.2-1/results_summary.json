@@ -1,0 +1,40 @@
+{
+  "n": 32,
+  "N": 1024,
+  "sigma_noise": 0.05,
+  "lam": 0.01,
+  "L": 1.01,
+  "tau_opt": 0.990099,
+  "tau_max": 1.980198,
+  "J_star": 1.3163,
+  "results": {
+    "tau_opt = 1/L": {
+      "tau": 0.990099,
+      "psnr": 14.64,
+      "convergent": true,
+      "final_obj": 1.3163,
+      "iters_to_thresh_0p1pct": 23
+    },
+    "tau = 0.5/L (偏小)": {
+      "tau": 0.49505,
+      "psnr": 14.65,
+      "convergent": true,
+      "final_obj": 1.3163,
+      "iters_to_thresh_0p1pct": 47
+    },
+    "tau = 1.8/L (接近边界)": {
+      "tau": 1.782178,
+      "psnr": 14.64,
+      "convergent": true,
+      "final_obj": 1.3163,
+      "iters_to_thresh_0p1pct": 18
+    },
+    "tau = 2.1/L (发散)": {
+      "tau": 2.079208,
+      "psnr": null,
+      "convergent": false,
+      "final_obj": 106975.0106,
+      "iters_to_thresh_0p1pct": null
+    }
+  }
+}

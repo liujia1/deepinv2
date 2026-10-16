@@ -1,0 +1,253 @@
+# -*- coding: utf-8 -*-
+"""
+实验16.1-1 CT成像基础——Radon变换与FBP重建
+
+实验目的：理解CT正向模型的完整链条——从X射线衰减到线积分，
+          从Radon变换到sinogram，再到FBP滤波反投影重建
+
+素材来源：基于1.4.py扩展
+运行前提：CPU可运行
+"""
+
+import numpy as np
+from tqdm import tqdm
+import matplotlib
+matplotlib.use('Agg')  # 非交互式后端
+import matplotlib.pyplot as plt
+from skimage.data import shepp_logan_phantom
+from skimage.transform import radon, iradon, resize
+from skimage.metrics import peak_signal_noise_ratio as psnr
+from skimage.metrics import structural_similarity as ssim
+import os
+import sys
+import io
+import warnings
+import logging
+
+# 设置控制台输出为 UTF-8 (Windows 下避免中文乱码)
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+
+logging.getLogger('matplotlib').setLevel(logging.ERROR)
+logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*U\\+2212.*")
+warnings.filterwarnings("ignore", message=".*glyph.*")
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+plt.rcParams['axes.unicode_minus'] = False
+
+_gdrive = '/content/drive/MyDrive'
+_IN_COLAB = 'google.colab' in sys.modules
+
+if _IN_COLAB:
+    from google.colab import drive
+    if not os.path.isdir(_gdrive):
+        print("正在挂载 Google Drive...")
+        drive.mount('/content/drive')
+    SAVE_DIR = os.path.join(_gdrive, '实验16.1-1')
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+else:
+    try:
+        SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        SAVE_DIR = os.getcwd()
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+
+os.makedirs(_chinese_path, exist_ok=True)
+os.makedirs(SAVE_DIR, exist_ok=True)
+sys.path.insert(0, _chinese_path)
+try:
+    from chinese_font import setup_chinese_font
+    setup_chinese_font(save_dir=_chinese_path)
+except ImportError:
+    print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
+
+np.random.seed(42)
+
+print(f"\n{'='*60}")
+print(f"实验16.1-1: CT成像基础——Radon变换与FBP重建")
+print(f"{'='*60}")
+
+# ---- 准备Shepp-Logan幻影 ----
+n = 128  # 重建分辨率
+n_data = 256  # 数据生成分辨率（2倍于重建分辨率，避免inverse crime）
+
+# 在高分辨率下创建phantom用于数据生成
+phantom_fine = resize(shepp_logan_phantom(), (n_data, n_data), order=0, preserve_range=True, anti_aliasing=False)
+phantom_fine = phantom_fine / phantom_fine.max()
+
+# 重建分辨率下的phantom（由高分辨率降采样得到）
+phantom = resize(phantom_fine, (n, n), order=1, preserve_range=True, anti_aliasing=True)
+phantom = phantom / phantom.max()
+
+def generate_sinogram_ic_free(theta, noise_frac=0.0):
+    """避免inverse crime的sinogram生成：
+    在n_data=256高分辨率下用radon正向投影，resize到n=128低分辨率探测器尺寸。
+    这样数据生成的离散化模型与反演时使用的iradon不同，
+    避免了"用同一矩阵既造数据又反演"的inverse crime问题。
+
+    ★探测器尺度归一化：radon线积分以像素为单位，256网格的投影值是128网格的2倍，
+    resize只做平均不除尺度，必须乘n/n_data归一化，否则重建值整体2×、
+    PSNR被强度误差主导（那不是模型失配，是bug）。
+    ★噪声用相对水平（占sinogram峰值的比例）：sinogram量级为O(30)，
+    绝对σ噪声（如0.05）相对峰值<0.2%，等于没加。"""
+    sinogram_fine = radon(phantom_fine, theta=theta, circle=True)
+    # circle=True时探测器尺寸=图像尺寸，从256 resize到128，并做尺度归一化
+    sinogram_recon = resize(sinogram_fine, (n, len(theta)), order=1, preserve_range=True, anti_aliasing=True)
+    sinogram_recon = sinogram_recon * (n / n_data)
+    if noise_frac > 0:
+        sinogram_recon = sinogram_recon + noise_frac * sinogram_recon.max() * np.random.randn(*sinogram_recon.shape)
+    return sinogram_recon
+
+
+# ========================================================================
+# 步骤1：Shepp-Logan幻影与Sinogram（16.1.2节 Radon变换与sinogram）
+# ========================================================================
+print("\n" + "=" * 60)
+print("步骤1：Shepp-Logan幻影与Sinogram（16.1.2节）")
+print("=" * 60)
+
+theta_full = np.linspace(0, 180, 180, endpoint=False)
+theta_sparse = np.linspace(0, 180, 30, endpoint=False)
+
+# IC-free：高分辨率生成sinogram，resize到低分辨率
+sinogram_full = generate_sinogram_ic_free(theta_full)
+sinogram_sparse = generate_sinogram_ic_free(theta_sparse)
+
+fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
+
+axes[0].imshow(phantom, cmap='gray')
+axes[0].set_title('Shepp-Logan幻影 $u(x)$')
+axes[0].axis('off')
+
+axes[1].imshow(sinogram_full, cmap='gray', aspect='auto',
+               extent=[0, 180, sinogram_full.shape[0], 0])
+axes[1].set_title('Sinogram $\\mathcal{R}u(\\theta, s)$ (180角度)\n"正弦图"——每个点源呈正弦曲线')
+axes[1].set_xlabel('投影角度 $\\theta$ ($^{\\circ}$)')
+axes[1].set_ylabel('探测器位置 s')
+
+axes[2].imshow(sinogram_sparse, cmap='gray', aspect='auto',
+               extent=[0, 180, sinogram_sparse.shape[0], 0])
+axes[2].set_title('Sinogram (30角度)\n信息量显著减少')
+axes[2].set_xlabel('投影角度 $\\theta$ ($^{\\circ}$)')
+axes[2].set_ylabel('探测器位置 s')
+
+plt.suptitle('步骤1：Radon变换——从图像到Sinogram', fontsize=13)
+plt.tight_layout()
+plt.savefig(os.path.join(SAVE_DIR, '步骤1_Sinogram.png'), dpi=150, bbox_inches='tight')
+plt.show()
+
+print(f"  Sinogram(180角度): {sinogram_full.shape}")
+print(f"  Sinogram(30角度):  {sinogram_sparse.shape}")
+
+
+# ========================================================================
+# 步骤2：反投影 vs FBP——为什么需要滤波？（16.1.4节）
+# ========================================================================
+print("\n" + "=" * 60)
+print("步骤2：反投影 vs FBP——为什么需要滤波？（16.1.4节）")
+print("=" * 60)
+
+recon_bp = iradon(sinogram_full, theta=theta_full, circle=True, filter_name=None)
+recon_fbp = iradon(sinogram_full, theta=theta_full, circle=True, filter_name='ramp')
+
+psnr_bp = psnr(phantom, recon_bp, data_range=1.0)
+psnr_fbp = psnr(phantom, recon_fbp, data_range=1.0)
+ssim_bp = ssim(phantom, recon_bp, data_range=1.0)
+ssim_fbp = ssim(phantom, recon_fbp, data_range=1.0)
+
+fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+axes[0].imshow(phantom, cmap='gray')
+axes[0].set_title('原始幻影')
+axes[0].axis('off')
+
+axes[1].imshow(recon_bp, cmap='gray')
+axes[1].set_title(f'反投影 $\\mathcal{{R}}^* f$（无滤波）\nPSNR={psnr_bp:.1f}dB, SSIM={ssim_bp:.3f}\n模糊——$\\mathcal{{R}}^*\\mathcal{{R}}$是平滑算子')
+axes[1].axis('off')
+
+axes[2].imshow(recon_fbp, cmap='gray')
+axes[2].set_title(f'FBP $\\mathcal{{R}}^* \\mathcal{{F}}^{{-1}}[|\\omega| \\hat{{f}}]$\nPSNR={psnr_fbp:.1f}dB, SSIM={ssim_fbp:.3f}\n清晰——斜坡滤波器补偿平滑')
+axes[2].axis('off')
+
+plt.suptitle('步骤2：反投影≠逆投影——为什么FBP需要滤波？（16.1.4节）', fontsize=13)
+plt.tight_layout()
+plt.savefig(os.path.join(SAVE_DIR, '步骤2_反投影vs_FBP.png'), dpi=150, bbox_inches='tight')
+plt.show()
+
+print(f"  反投影 PSNR={psnr_bp:.1f}dB, SSIM={ssim_bp:.3f}")
+print(f"  FBP    PSNR={psnr_fbp:.1f}dB, SSIM={ssim_fbp:.3f}")
+
+
+# ========================================================================
+# 步骤3：FBP滤波器选择——分辨率与噪声的权衡（16.1.4节）
+# ========================================================================
+print("\n" + "=" * 60)
+print("步骤3：FBP滤波器选择——分辨率与噪声的权衡（16.1.4节）")
+print("=" * 60)
+
+noise_frac = 0.05  # 相对噪声水平：占sinogram峰值的5%
+# IC-free：高分辨率生成sinogram，resize+尺度归一化后添加相对噪声
+sinogram_noisy = generate_sinogram_ic_free(theta_full, noise_frac=noise_frac)
+
+filter_names = ['ramp', 'shepp-logan', 'cosine', 'hann']
+filter_labels = ['Ramp $|\\omega|$', 'Shepp-Logan $|\\omega|\\mathrm{sinc}$',
+                 'Cosine $|\\omega|\\cos$', 'Hann $|\\omega| \\cdot$ Hann窗']
+
+fig, axes = plt.subplots(2, 4, figsize=(16, 8))
+
+filter_results = {}
+for i, (fname, flabel) in enumerate(zip(filter_names, filter_labels)):
+    recon_clean = iradon(sinogram_full, theta=theta_full, circle=True, filter_name=fname)
+    p_clean = psnr(phantom, recon_clean, data_range=1.0)
+    recon_noisy = iradon(sinogram_noisy, theta=theta_full, circle=True, filter_name=fname)
+    p_noisy = psnr(phantom, recon_noisy, data_range=1.0)
+    filter_results[fname] = {"无噪_PSNR_dB": round(p_clean, 2), "含噪_PSNR_dB": round(p_noisy, 2)}
+    print(f"  {fname:12s} 无噪={p_clean:.2f}dB, 含噪={p_noisy:.2f}dB")
+
+    axes[0, i].imshow(recon_clean, cmap='gray')
+    axes[0, i].set_title(f'{flabel}\n无噪声 PSNR={p_clean:.1f}dB')
+    axes[0, i].axis('off')
+
+    axes[1, i].imshow(recon_noisy, cmap='gray')
+    axes[1, i].set_title(f'含噪(峰值{noise_frac*100:.0f}%)\nPSNR={p_noisy:.1f}dB')
+    axes[1, i].axis('off')
+
+plt.suptitle('步骤3：FBP滤波器选择——Ramp高频放大噪声，Hann更平滑但分辨率低', fontsize=12)
+plt.tight_layout()
+plt.savefig(os.path.join(SAVE_DIR, '步骤3_滤波器对比.png'), dpi=150, bbox_inches='tight')
+plt.show()
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "experiment": "实验16.1-1 CT成像基础——Radon变换与FBP重建",
+    "步骤2_反投影vs_FBP": {
+        "反投影": {"PSNR_dB": round(psnr_bp, 2), "SSIM": round(ssim_bp, 4)},
+        "FBP": {"PSNR_dB": round(psnr_fbp, 2), "SSIM": round(ssim_fbp, 4)},
+    },
+    "步骤3_滤波器对比_相对噪声水平": f"{noise_frac*100:.0f}%峰值",
+    "步骤3_滤波器对比": filter_results,
+}
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
+
+print("\n实验16.1-1完成！")

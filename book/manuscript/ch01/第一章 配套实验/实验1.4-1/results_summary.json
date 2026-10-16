@@ -1,0 +1,31 @@
+{
+  "image_size": 256,
+  "metric_basis": "PSNR/SSIM/残差均基于未截断的原始含噪数据；np.clip 仅用于 imshow 显示",
+  "signal_dependence_check": {
+    "ramp_image_size": 256,
+    "n_bins": 20,
+    "repeats_per_pixel": 50,
+    "theory_gaussian_sigma": 0.1,
+    "theory_poisson_std": "sqrt(gain * signal)"
+  },
+  "gaussian_noise": {
+    "sigma": 0.1,
+    "psnr_dB": 19.98,
+    "ssim": 0.1979,
+    "frac_outside_display_range_01": 0.3192
+  },
+  "poisson_noise": {
+    "gain": 0.08,
+    "peak_lambda": 12.5,
+    "psnr_dB": 20.02,
+    "ssim": 0.6567,
+    "frac_above_1": 0.0216,
+    "theory_mse_gain_times_E_x": 0.009843
+  },
+  "impulse_noise": {
+    "amount": 0.01,
+    "psnr_dB": 23.59,
+    "ssim": 0.7858,
+    "frac_pixels_actually_changed": 0.0069
+  }
+}

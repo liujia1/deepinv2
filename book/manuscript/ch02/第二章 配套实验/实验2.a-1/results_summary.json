@@ -1,0 +1,73 @@
+{
+  "grid_size": 100,
+  "prior_correlation_length": 0.1,
+  "prior_variance": 1.0,
+  "noise_sigma": 1.0,
+  "noise_variance": 1.0,
+  "closed_form_max_error": 0.46357566,
+  "closed_form_rel_error": 2.593154,
+  "closed_form_err_vs_eigen_ref": 3.289e-15,
+  "direct_inv_err_vs_eigen_ref": 0.4635757,
+  "lambda_values": [
+    0.1,
+    1.0,
+    10.0
+  ],
+  "coverage_rates": [
+    0.46,
+    1.0,
+    1.0
+  ],
+  "rmse_vs_truth": [
+    0.2475,
+    0.2705,
+    0.4545
+  ],
+  "rmse_noisy_baseline": 0.9492,
+  "repeated_sampling": [
+    {
+      "lambda": 0.1,
+      "coverage_once": 0.46,
+      "coverage_mean": 0.485,
+      "coverage_std": 0.1192,
+      "coverage_q05": 0.3,
+      "coverage_q95": 0.69,
+      "rmse_mean": 0.3169,
+      "post_std_mean": 0.1068,
+      "coverage_pooled": 0.485,
+      "z_mean": -0.0049,
+      "z_std": 3.0143,
+      "p_coverage_full": 0.0
+    },
+    {
+      "lambda": 1.0,
+      "coverage_once": 1.0,
+      "coverage_mean": 0.9496,
+      "coverage_std": 0.0595,
+      "coverage_q05": 0.83,
+      "coverage_q95": 1.0,
+      "rmse_mean": 0.2834,
+      "post_std_mean": 0.2879,
+      "coverage_pooled": 0.9496,
+      "z_mean": -0.0024,
+      "z_std": 1.0031,
+      "p_coverage_full": 0.4215
+    },
+    {
+      "lambda": 10.0,
+      "coverage_once": 1.0,
+      "coverage_mean": 0.9934,
+      "coverage_std": 0.0216,
+      "coverage_q05": 0.94,
+      "coverage_q95": 1.0,
+      "rmse_mean": 0.4523,
+      "post_std_mean": 0.642,
+      "coverage_pooled": 0.9934,
+      "z_mean": -0.0019,
+      "z_std": 0.7197,
+      "p_coverage_full": 0.884
+    }
+  ],
+  "bayesian_lambda": 1.0,
+  "optimal_lambda_ratio": 1.0
+}

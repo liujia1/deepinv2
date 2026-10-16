@@ -1,0 +1,131 @@
+{
+  "experiment": "实验3.6-1 Landweber 半收敛：U 形误差曲线",
+  "reproducibility": {
+    "seed": 42,
+    "mc_seeds": 100,
+    "note": "噪声族各水平共用 seed=42 的同一噪声实现（公共随机数）；蒙特卡洛使用独立种子 0..N-1，k_opt 由与迭代严格等价的闭式解计算"
+  },
+  "scene": {
+    "signal_dim": 64,
+    "sigma_diag_min": 0.006737946999085467,
+    "sigma_diag_max": 1.0,
+    "noise_delta": 0.05,
+    "noise_norm_actual": 0.36418839842719025,
+    "noise_norm_expected_delta_sqrt_n": 0.4,
+    "step_size_tau": 1.0,
+    "maxiter": 10000,
+    "closed_form_max_diff_vs_iteration": 7.638334409421077e-13
+  },
+  "semiconvergence": {
+    "k_opt": 64,
+    "k_early_displayed": 8,
+    "err_at_k0": 4.832183771339828,
+    "err_at_k_opt": 3.2775931164593706,
+    "err_at_k_max": 10.506846737189512,
+    "semiconvergence_ratio": 3.205659263935593,
+    "noise_amplification_limit_e_over_sigma": 16.48558428762364,
+    "unrecoverable_signal_norm_sigma_a_below_delta": 3.0983866769659336,
+    "morozov_k_at_expected_noise": 6,
+    "morozov_err_at_expected_noise": 3.5160094698182034,
+    "morozov_k_at_actual_noise": 8,
+    "morozov_err_at_actual_noise": 3.4788692741458167
+  },
+  "picard_crossings_sigma_a_equals_delta": [
+    {
+      "support": [
+        0,
+        10
+      ],
+      "a_value": 1.0,
+      "i_star": 37.746226646780286,
+      "status": "整段可恢复"
+    },
+    {
+      "support": [
+        15,
+        30
+      ],
+      "a_value": 0.5,
+      "i_star": 29.012572171724972,
+      "status": "i >= 29.0 起不可恢复"
+    },
+    {
+      "support": [
+        40,
+        55
+      ],
+      "a_value": 0.8,
+      "i_star": 34.93461790022124,
+      "status": "交点在支撑外，整段基本不可恢复"
+    }
+  ],
+  "k_opt_vs_noise": {
+    "0.01": 3319,
+    "0.02": 1254,
+    "0.05": 64,
+    "0.1": 11,
+    "0.2": 3
+  },
+  "k_opt_vs_noise_detail": [
+    {
+      "delta": 0.01,
+      "k_opt_seed42": 3319,
+      "censored_at_window": false,
+      "mc_median": 2426.5,
+      "mc_q05": 1599.65,
+      "mc_q25": 2157.5,
+      "mc_q75": 2839.0,
+      "mc_q95": 3323.5499999999997,
+      "mc_censored_fraction": 0.0
+    },
+    {
+      "delta": 0.02,
+      "k_opt_seed42": 1254,
+      "censored_at_window": false,
+      "mc_median": 931.0,
+      "mc_q05": 381.95,
+      "mc_q25": 777.5,
+      "mc_q75": 1098.75,
+      "mc_q95": 1312.7999999999997,
+      "mc_censored_fraction": 0.0
+    },
+    {
+      "delta": 0.05,
+      "k_opt_seed42": 64,
+      "censored_at_window": false,
+      "mc_median": 59.0,
+      "mc_q05": 30.95,
+      "mc_q25": 43.0,
+      "mc_q75": 79.25,
+      "mc_q95": 239.0,
+      "mc_censored_fraction": 0.0
+    },
+    {
+      "delta": 0.1,
+      "k_opt_seed42": 11,
+      "censored_at_window": false,
+      "mc_median": 16.0,
+      "mc_q05": 9.0,
+      "mc_q25": 11.0,
+      "mc_q75": 20.0,
+      "mc_q95": 29.0,
+      "mc_censored_fraction": 0.0
+    },
+    {
+      "delta": 0.2,
+      "k_opt_seed42": 3,
+      "censored_at_window": false,
+      "mc_median": 4.5,
+      "mc_q05": 3.0,
+      "mc_q25": 4.0,
+      "mc_q75": 5.0,
+      "mc_q95": 7.0,
+      "mc_censored_fraction": 0.0
+    }
+  ],
+  "output_files": [
+    "d:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-1\\步骤1a_U形误差曲线.png",
+    "d:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-1\\步骤1b_解对比与Picard条件.png",
+    "d:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-1\\步骤2_不同噪声下半收敛曲线族.png"
+  ]
+}

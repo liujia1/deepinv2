@@ -1,0 +1,17 @@
+{
+  "scaling_results": {
+    "dit_s": {
+      "params_M": 0.33,
+      "final_loss": 0.08723
+    },
+    "dit_m": {
+      "params_M": 0.89,
+      "final_loss": 0.056942
+    },
+    "dit_b": {
+      "params_M": 1.87,
+      "final_loss": 0.052588
+    }
+  },
+  "power_law_exponent": -0.3
+}

@@ -1,0 +1,37 @@
+{
+  "experiment": "4.6-1",
+  "title": "优化 vs 采样：MAP vs MMSE",
+  "setup": {
+    "image_size": [
+      100,
+      100
+    ],
+    "sigma": 0.1,
+    "lamb": 10.0,
+    "theta": 0.99,
+    "maxit": 10000,
+    "n_burn_in": 1000
+  },
+  "results": {
+    "psnr_noisy": 19.97,
+    "psnr_map": 32.16,
+    "psnr_ila": 29.71,
+    "psnr_mmse_minus_map_db": -2.44
+  },
+  "audit": {
+    "note": "能量均在更新后状态计算；ESS由平坦区探针像素(10,10)的积分自相关时间估计",
+    "L": 80100.0,
+    "tau": 2.4968789013732834e-05,
+    "n_post_burnin_samples": 9000,
+    "tau_int_probe_steps": 9.59,
+    "ess_probe": 938.0,
+    "energy_map_plateau": 6597.37,
+    "energy_ila_band_mean": 14692.88,
+    "energy_ila_band_std": 85.79,
+    "posterior_std": {
+      "flat_bg_median": 0.04780000075697899,
+      "edge_median": 0.04960000142455101,
+      "global_max": 0.08749999850988388
+    }
+  }
+}

@@ -1,0 +1,185 @@
+{
+  "experiment": "1.3-4 不适定性、正则化与 Inverse Crime",
+  "image": "skimage.data.astronaut (rgb2gray)",
+  "image_size": 512,
+  "sigma_model_illconditioned": 5.0,
+  "sigma_true_mismatch_demo": 5.3,
+  "sigma_well_conditioned_demo": 1.5,
+  "noise_sigma": 0.01,
+  "lambda_selection": "GCV (仅用观测y与模型H，未使用真值x；在IC观测上选定后固定)",
+  "tikhonov_lambda_gcv": 0.0004347013158125022,
+  "tikhonov_lambda_fixed_for_comparison": 0.01,
+  "psnr_naive_noisy_dB": 4.67,
+  "psnr_naive_clean_well_conditioned_dB": 159.9,
+  "psnr_tikhonov_IC_gcv_dB": 23.06,
+  "psnr_tikhonov_noIC_gcv_dB": 22.53,
+  "psnr_IC_vs_noIC_diff_dB_single_realization": 0.53,
+  "monte_carlo_paired": {
+    "n_noise_realizations": 100,
+    "lambda_used": 0.0004347013158125022,
+    "lambda_fixed_after_IC_GCV_selection": true,
+    "IC_psnr_mean_dB": 23.063,
+    "IC_psnr_std_dB": 0.0176,
+    "noIC_psnr_mean_dB": 22.545,
+    "noIC_psnr_std_dB": 0.0183,
+    "paired_diff_mean_dB": 0.517,
+    "paired_diff_std_dB": 0.0052,
+    "fraction_realizations_IC_better": 1.0
+  },
+  "eps_sensitivity_noiseless_naive_sigma5": [
+    {
+      "eps": 1e-30,
+      "psnr_dB": 4.67
+    },
+    {
+      "eps": 1e-29,
+      "psnr_dB": 4.67
+    },
+    {
+      "eps": 1e-28,
+      "psnr_dB": 4.68
+    },
+    {
+      "eps": 1e-27,
+      "psnr_dB": 4.68
+    },
+    {
+      "eps": 1e-26,
+      "psnr_dB": 4.68
+    },
+    {
+      "eps": 1e-25,
+      "psnr_dB": 4.68
+    },
+    {
+      "eps": 1e-24,
+      "psnr_dB": 4.68
+    },
+    {
+      "eps": 1e-23,
+      "psnr_dB": 4.67
+    },
+    {
+      "eps": 1e-22,
+      "psnr_dB": 4.67
+    },
+    {
+      "eps": 1e-21,
+      "psnr_dB": 4.68
+    },
+    {
+      "eps": 1e-20,
+      "psnr_dB": 4.67
+    },
+    {
+      "eps": 1e-19,
+      "psnr_dB": 4.7
+    },
+    {
+      "eps": 1e-18,
+      "psnr_dB": 4.74
+    },
+    {
+      "eps": 1e-17,
+      "psnr_dB": 4.91
+    },
+    {
+      "eps": 1e-16,
+      "psnr_dB": 6.92
+    },
+    {
+      "eps": 1e-15,
+      "psnr_dB": 20.51
+    },
+    {
+      "eps": 1e-14,
+      "psnr_dB": 30.33
+    },
+    {
+      "eps": 1e-13,
+      "psnr_dB": 30.45
+    },
+    {
+      "eps": 1e-12,
+      "psnr_dB": 30.13
+    },
+    {
+      "eps": 1e-11,
+      "psnr_dB": 29.78
+    },
+    {
+      "eps": 1e-10,
+      "psnr_dB": 29.4
+    },
+    {
+      "eps": 1e-09,
+      "psnr_dB": 29.02
+    },
+    {
+      "eps": 1e-08,
+      "psnr_dB": 28.61
+    },
+    {
+      "eps": 1e-07,
+      "psnr_dB": 28.14
+    },
+    {
+      "eps": 1e-06,
+      "psnr_dB": 27.62
+    },
+    {
+      "eps": 1e-05,
+      "psnr_dB": 27.1
+    },
+    {
+      "eps": 0.0001,
+      "psnr_dB": 26.44
+    },
+    {
+      "eps": 0.001,
+      "psnr_dB": 25.64
+    }
+  ],
+  "psnr_vs_modeling_deviation": {
+    "dsigma_-2.0": {
+      "gcv_lambda": 15.45,
+      "fixed_1e-2": 20.87
+    },
+    "dsigma_-1.0": {
+      "gcv_lambda": 21.08,
+      "fixed_1e-2": 22.76
+    },
+    "dsigma_-0.5": {
+      "gcv_lambda": 23.01,
+      "fixed_1e-2": 22.81
+    },
+    "dsigma_+0.0": {
+      "gcv_lambda": 23.06,
+      "fixed_1e-2": 22.34
+    },
+    "dsigma_+0.3": {
+      "gcv_lambda": 22.53,
+      "fixed_1e-2": 21.93
+    },
+    "dsigma_+0.5": {
+      "gcv_lambda": 22.12,
+      "fixed_1e-2": 21.64
+    },
+    "dsigma_+1.0": {
+      "gcv_lambda": 21.13,
+      "fixed_1e-2": 20.93
+    },
+    "dsigma_+2.0": {
+      "gcv_lambda": 19.64,
+      "fixed_1e-2": 19.7
+    },
+    "dsigma_+3.0": {
+      "gcv_lambda": 18.66,
+      "fixed_1e-2": 18.77
+    },
+    "dsigma_+5.0": {
+      "gcv_lambda": 17.37,
+      "fixed_1e-2": 17.48
+    }
+  }
+}

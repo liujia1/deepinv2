@@ -1,0 +1,17 @@
+{
+  "image_size": 128,
+  "noise_level": 0.1,
+  "psnr_noisy_dB": 19.97,
+  "psnr_tikhonov_pixel_dB": 20.05,
+  "psnr_tikhonov_gradient_dB": 26.18,
+  "psnr_lasso_dB": 20.05,
+  "psnr_tv_dB": 28.54,
+  "lambda_tikhonov_pixel": 0.01,
+  "lambda_tikhonov_gradient": 0.794328,
+  "lambda_lasso": 0.02,
+  "lambda_tv": 0.08,
+  "mse_tikhonov_pixel": 0.009895,
+  "mse_tikhonov_gradient": 0.002412,
+  "mse_lasso": 0.009894,
+  "mse_tv": 0.0014
+}

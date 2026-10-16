@@ -1,0 +1,188 @@
+{
+  "轻度模糊": {
+    "Tikhonov": {
+      "psnr": 31.22,
+      "ssim": 0.8479,
+      "time": 0.295
+    },
+    "TV正则化": {
+      "psnr": 31.57,
+      "ssim": 0.8618,
+      "time": 5.876
+    },
+    "伴随重建": {
+      "psnr": 27.73,
+      "ssim": 0.8085,
+      "time": 0.0
+    },
+    "DPIR(PnP)": {
+      "psnr": 34.66,
+      "ssim": 0.9243,
+      "time": 19.56
+    },
+    "DiffPIR(扩散)": {
+      "psnr": 31.63,
+      "ssim": 0.8982,
+      "time": 357.309,
+      "psnr_std": 0.219,
+      "psnr_mmse": 33.6,
+      "n_samples": 3,
+      "time_total": 1071.9
+    }
+  },
+  "重度模糊": {
+    "Tikhonov": {
+      "psnr": 25.3,
+      "ssim": 0.5642,
+      "time": 0.366
+    },
+    "TV正则化": {
+      "psnr": 27.32,
+      "ssim": 0.7388,
+      "time": 5.573
+    },
+    "伴随重建": {
+      "psnr": 23.91,
+      "ssim": 0.6553,
+      "time": 0.0
+    },
+    "DPIR(PnP)": {
+      "psnr": 29.21,
+      "ssim": 0.8026,
+      "time": 19.427
+    },
+    "DiffPIR(扩散)": {
+      "psnr": 26.93,
+      "ssim": 0.7661,
+      "time": 355.878,
+      "psnr_std": 0.063,
+      "psnr_mmse": 28.62,
+      "n_samples": 3,
+      "time_total": 1067.6
+    }
+  },
+  "2倍超分": {
+    "Tikhonov": {
+      "psnr": 33.18,
+      "ssim": 0.8926,
+      "time": 0.606
+    },
+    "TV正则化": {
+      "psnr": 34.12,
+      "ssim": 0.9182,
+      "time": 5.611
+    },
+    "插值基线": {
+      "psnr": 33.07,
+      "ssim": 0.9077,
+      "time": 0.0
+    },
+    "DPIR(PnP)": {
+      "psnr": 35.67,
+      "ssim": 0.9404,
+      "time": 19.348
+    },
+    "DiffPIR(扩散)": {
+      "psnr": 33.04,
+      "ssim": 0.9232,
+      "time": 352.987,
+      "psnr_std": 0.157,
+      "psnr_mmse": 34.77,
+      "n_samples": 3,
+      "time_total": 1059.0
+    }
+  },
+  "4倍超分": {
+    "Tikhonov": {
+      "psnr": 29.15,
+      "ssim": 0.805,
+      "time": 0.946
+    },
+    "TV正则化": {
+      "psnr": 27.81,
+      "ssim": 0.7877,
+      "time": 6.283
+    },
+    "插值基线": {
+      "psnr": 26.85,
+      "ssim": 0.7655,
+      "time": 0.0
+    },
+    "DPIR(PnP)": {
+      "psnr": 30.19,
+      "ssim": 0.8523,
+      "time": 19.364
+    },
+    "DiffPIR(扩散)": {
+      "psnr": 29.16,
+      "ssim": 0.8356,
+      "time": 353.522,
+      "psnr_std": 0.035,
+      "psnr_mmse": 30.58,
+      "n_samples": 3,
+      "time_total": 1060.6
+    }
+  },
+  "50%修复": {
+    "Tikhonov": {
+      "psnr": 11.34,
+      "ssim": 0.216,
+      "time": 0.047
+    },
+    "TV正则化": {
+      "psnr": 29.01,
+      "ssim": 0.7905,
+      "time": 8.16
+    },
+    "伴随重建": {
+      "psnr": 11.34,
+      "ssim": 0.2158,
+      "time": 0.0
+    },
+    "DPIR(PnP)": {
+      "psnr": 33.01,
+      "ssim": 0.876,
+      "time": 48.672
+    },
+    "DiffPIR(扩散)": {
+      "psnr": 31.32,
+      "ssim": 0.912,
+      "time": 354.03,
+      "psnr_std": 0.155,
+      "psnr_mmse": 33.3,
+      "n_samples": 3,
+      "time_total": 1062.1
+    }
+  },
+  "80%修复": {
+    "Tikhonov": {
+      "psnr": 9.32,
+      "ssim": 0.099,
+      "time": 0.053
+    },
+    "TV正则化": {
+      "psnr": 21.08,
+      "ssim": 0.5411,
+      "time": 7.801
+    },
+    "伴随重建": {
+      "psnr": 9.32,
+      "ssim": 0.0992,
+      "time": 0.0
+    },
+    "DPIR(PnP)": {
+      "psnr": 28.14,
+      "ssim": 0.7586,
+      "time": 48.429
+    },
+    "DiffPIR(扩散)": {
+      "psnr": 21.05,
+      "ssim": 0.6364,
+      "time": 353.762,
+      "psnr_std": 0.581,
+      "psnr_mmse": 22.39,
+      "n_samples": 3,
+      "time_total": 1061.3
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "image_size": 64,
+  "blur_sigma": 3.0,
+  "ghost_frequency": 15,
+  "ghost_alpha": 0.3,
+  "relative_image_error": 0.6801744,
+  "relative_measurement_error": 3.083834e-09,
+  "amplification_factor": 220561300.0,
+  "frequency_attenuation": {
+    "5": 0.1143359,
+    "10": 0.0001708957,
+    "15": 3.339221e-09,
+    "20": 8.486982e-16
+  },
+  "frequency_attenuation_theory": {
+    "5": 0.1143359,
+    "10": 0.0001708957,
+    "15": 3.339221e-09,
+    "20": 8.529524e-16
+  },
+  "operator_inverse_attenuation": {
+    "5": 8.746156,
+    "10": 5851.522,
+    "15": 299471000.0,
+    "20": 1178275000000000.0
+  },
+  "min_singular_value_analytic": 2.649521e-39,
+  "spectral_condition_number_analytic": 3.774267e+38,
+  "note": "f=20 衰减 ~8.5e-16 已接近 float64 噪声地板；更高频率的实测值由数值噪声支配，不可作为物理衰减证据，故扫描止于 f=20"
+}

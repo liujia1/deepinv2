@@ -1,0 +1,100 @@
+{
+  "experiment": "4.2-1",
+  "title": "Metropolis-Hastings算法基础演示",
+  "step1_mh_basic": {
+    "n_samples": 50000,
+    "sigma": 1.0,
+    "burn_in": 5000,
+    "accept_rate_full": 0.7062,
+    "accept_rate_post": 0.7048,
+    "sample_mean": 0.0187,
+    "sample_var": 0.9885
+  },
+  "step2_detailed_balance": {
+    "n_samples_total": 400000,
+    "burn_in": 5000,
+    "n_post_samples": 395000,
+    "n_bins": 20,
+    "x_range": [
+      -3,
+      3
+    ],
+    "truncated_transition_fraction": 0.004078,
+    "flow_weighted_imbalance": 0.013,
+    "pass_threshold_flow_imbalance": 0.03,
+    "pass": true,
+    "mean_error_filtered": 0.075,
+    "max_error_filtered": 0.5455,
+    "n_pairs_filtered": 156,
+    "mean_error_all_pairs": 0.1092,
+    "n_pairs_all": 162,
+    "convergence": [
+      {
+        "n_post": 50000,
+        "flow_weighted_imbalance": 0.0337,
+        "mean_error_filtered": 0.1182,
+        "mean_error_all_pairs": 0.1912,
+        "truncated_fraction": 0.0044
+      },
+      {
+        "n_post": 100000,
+        "flow_weighted_imbalance": 0.0282,
+        "mean_error_filtered": 0.0984,
+        "mean_error_all_pairs": 0.1973,
+        "truncated_fraction": 0.00434
+      },
+      {
+        "n_post": 200000,
+        "flow_weighted_imbalance": 0.0177,
+        "mean_error_filtered": 0.0894,
+        "mean_error_all_pairs": 0.1302,
+        "truncated_fraction": 0.00399
+      },
+      {
+        "n_post": 395000,
+        "flow_weighted_imbalance": 0.013,
+        "mean_error_filtered": 0.075,
+        "mean_error_all_pairs": 0.1092,
+        "truncated_fraction": 0.004078
+      }
+    ]
+  },
+  "step3_normalization_constant": {
+    "constants": [
+      1.0,
+      2.0,
+      5.0,
+      10.0,
+      100.0
+    ],
+    "rng_seed_per_run": 2024,
+    "trajectories_bitwise_identical_to_C1": [
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "means": [
+      -0.0041,
+      -0.0041,
+      -0.0041,
+      -0.0041,
+      -0.0041
+    ],
+    "vars": [
+      1.0005,
+      1.0005,
+      1.0005,
+      1.0005,
+      1.0005
+    ],
+    "accept_rates": [
+      0.7016,
+      0.7016,
+      0.7016,
+      0.7016,
+      0.7016
+    ]
+  }
+}

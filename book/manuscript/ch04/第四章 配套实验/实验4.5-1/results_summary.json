@@ -1,0 +1,46 @@
+{
+  "experiment": "4.5-1",
+  "title": "半二次最小化 vs GLM（Gibbs采样）",
+  "setup": {
+    "image_size": [
+      100,
+      100
+    ],
+    "sigma": 0.1,
+    "lamb_hq": 10.0,
+    "lamb_glm": 10.0,
+    "maxiter_hq": 50,
+    "maxiter_glm": 1000,
+    "n_burn_in": 60,
+    "cg_maxit_hq_per_round": 4000,
+    "cg_maxit_glm_per_round": 8000,
+    "cg_n_restart": 2,
+    "cg_tol_mean_r2": 1e-07,
+    "dtype": "float64"
+  },
+  "metrics": {
+    "psnr_noisy_vs_gt": 19.9703927251775,
+    "psnr_map_hq_vs_gt": 32.45354531604678,
+    "psnr_mmse_glm_vs_gt": 30.11759083077608,
+    "posterior_std_mean": 0.04664166816505267,
+    "posterior_std_flat_mean": 0.04645279137261166,
+    "posterior_std_edge_mean": 0.061909672772552965,
+    "corr_std_vs_edge": 0.4365627471581584,
+    "n_samples_after_burnin": 940,
+    "ess_scalar_mean": 895.4838936971988,
+    "iat_scalar_mean": 1.0497117889178407,
+    "ess_scalar_energy": 532.7345539565774,
+    "iat_scalar_energy": 1.764481002815932,
+    "cg_tol": 1e-07,
+    "cg_maxit_per_round": 8000,
+    "cg_n_restart": 2,
+    "cg_total_budget": 24000,
+    "cg_capped_count": 0,
+    "cg_capped_fraction": 0.0,
+    "cg_iter_median": 4159.0,
+    "cg_iter_max": 11672,
+    "cg_resid_max": 9.998519142513275e-08,
+    "hq_cg_capped_count": 0,
+    "hq_cg_resid_max": 9.994382977942787e-08
+  }
+}

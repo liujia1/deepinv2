@@ -1,0 +1,74 @@
+{
+  "experiment": "4.2-2",
+  "title": "提议分布步长与MH采样效率",
+  "step1_step_size": {
+    "sigmas": [
+      0.1,
+      0.5,
+      1.0,
+      2.0,
+      4.0,
+      8.0
+    ],
+    "accept_rates": [
+      0.9685,
+      0.8438,
+      0.7029,
+      0.4956,
+      0.2947,
+      0.1548
+    ],
+    "avg_displacements": [
+      0.0757,
+      0.3008,
+      0.4404,
+      0.46,
+      0.34,
+      0.1871
+    ],
+    "n_samples": 30000
+  },
+  "step2_autocorrelation_ess": {
+    "sigmas": [
+      0.1,
+      0.5,
+      1.0,
+      2.0,
+      4.0,
+      8.0
+    ],
+    "ess": [
+      72.0,
+      1484.4,
+      3666.0,
+      6684.7,
+      5558.2,
+      3378.3
+    ],
+    "ess_ratio": [
+      0.0024,
+      0.0495,
+      0.1222,
+      0.2228,
+      0.1853,
+      0.1126
+    ]
+  },
+  "step3_optimal_step": {
+    "argmax_sigma": 2.4,
+    "argmax_ess": 4543.8,
+    "argmax_accept": 0.4417,
+    "plateau_fraction": 0.97,
+    "plateau_sigma_range": [
+      2.2,
+      2.8
+    ],
+    "plateau_accept_range": [
+      0.3948,
+      0.4683
+    ],
+    "sigma_at_accept_0.44": 2.4136,
+    "n_repeats": 20,
+    "n_samples_fine": 20000
+  }
+}

@@ -1,0 +1,370 @@
+# -*- coding: utf-8 -*-
+"""
+实验8.4-1 前向KL vs 逆向KL：零强迫与零避免
+对应章节：8.4（变分推断与正则化的统一视角）
+素材来源：🆕 新写
+★ 原创设计：前向KL vs 逆向KL的行为对比
+
+知识点：
+  - 前向KL(p||q)：零避免（zero-avoiding / mean-seeking），覆盖所有模态
+  - 逆向KL(q||p)：零强迫（zero-forcing / mode-seeking），聚焦单个模态
+  - 变分推断使用逆向KL的原因
+  - KL方向选择对近似质量的影响
+
+实验内容：
+  步骤1：前向KL vs 逆向KL的数值对比
+  步骤2：最优变分分布的可视化
+
+运行前提：纯NumPy/SciPy CPU即可
+"""
+
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # 非交互式后端
+import matplotlib.pyplot as plt
+import os
+import sys
+import io
+import json
+from scipy.optimize import minimize
+from scipy.special import logsumexp
+from numpy.polynomial.hermite_e import hermegauss
+
+# 设置控制台输出为 UTF-8 (Windows 下避免中文乱码)
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+
+# ====== 中文字体配置(兼容本地和Google Colab) ======
+_gdrive = '/content/drive/MyDrive'
+_IN_COLAB = 'google.colab' in sys.modules
+
+if _IN_COLAB:
+    from google.colab import drive
+    if not os.path.isdir(_gdrive):
+        print("正在挂载 Google Drive...")
+        drive.mount('/content/drive')
+    SAVE_DIR = os.path.join(_gdrive, '实验8.4-1')
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+else:
+    try:
+        SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        SAVE_DIR = os.getcwd()
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+
+os.makedirs(_chinese_path, exist_ok=True)
+
+sys.path.insert(0, _chinese_path)
+try:
+    from chinese_font import setup_chinese_font
+    setup_chinese_font(save_dir=_chinese_path)
+except ImportError:
+    print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
+
+# 注：本实验全部使用确定性求积（Gauss-Hermite）与确定性优化，无随机采样，
+# 不设置随机种子；结果由初始点与容差唯一确定，可逐位复现。
+
+
+# ============================================================
+# 模型设定：直接构造一个不对称双峰后验
+# 注意：使用不对称双峰，使逆向KL能锁定较重的峰，而前向KL覆盖两峰
+# ============================================================
+# 后验分布：p(z) = 0.35*N(-2.5, 0.6²) + 0.65*N(2.0, 0.6²)
+# 左峰权重35%，右峰权重65%，两峰相距4.5（约7.5σ），明显分离
+post_w = [0.35, 0.65]
+post_m = [-2.5, 2.0]
+post_s = [0.6, 0.6]
+
+print("=" * 60)
+print("实验8.4-1：前向KL vs 逆向KL")
+print("=" * 60)
+print(f"\n真实后验 p(z):")
+for i in range(len(post_w)):
+    print(f"  分量{i+1}: w={post_w[i]:.2f}, μ={post_m[i]:.2f}, σ={post_s[i]:.2f}")
+
+
+# ============================================================
+# 辅助函数
+# ============================================================
+
+def gm_pdf(x, weights, means, stds):
+    """高斯混合分布的PDF"""
+    pdf = np.zeros_like(x)
+    for w, m, s in zip(weights, means, stds):
+        pdf += w * np.exp(-0.5 * ((x - m) / s)**2) / (s * np.sqrt(2 * np.pi))
+    return pdf
+
+
+# ============================================================
+# 步骤1：前向KL vs 逆向KL的数值对比
+# ★ 原创设计
+# ============================================================
+print("\n" + "=" * 60)
+print("步骤1：前向KL vs 逆向KL的数值对比")
+print("=" * 60)
+
+print("\n[核心概念]")
+print("  前向KL(p||q) = E_p[log(p/q)]：零避免（zero-avoiding / mean-seeking）")
+print("    → q必须在p>0的地方也有概率质量")
+print("    → 覆盖所有模态，但可能过度分散")
+print("  逆向KL(q||p) = E_q[log(q/p)]：零强迫（zero-forcing / mode-seeking）")
+print("    → q在p≈0的地方必须也≈0，否则KL→∞")
+print("    → 聚焦单个模态，但可能欠估计不确定性")
+
+print("\n[数值方法] KL 用 64 点 Gauss-Hermite 精确积分（对整条实轴求积，")
+print("  不存在有限网格截断宽分布尾部的问题）；网格仅用于绘图")
+
+# 定义网格（仅用于可视化；KL 的数值计算不依赖网格）
+z_grid = np.linspace(-6, 6, 1000)
+
+# 真实后验（绘图用）
+posterior_pdf = gm_pdf(z_grid, post_w, post_m, post_s)
+
+# ============================================================
+# KL 散度：Gauss-Hermite 精确积分
+# 对整条实轴求积，避免有限网格（如 [-6,6]）截断宽分布尾部所带来的偏差
+# ============================================================
+_GH_N = 64
+_gh_x, _gh_w = hermegauss(_GH_N)
+_gh_w = _gh_w / np.sqrt(2.0 * np.pi)  # probabilists' Hermite 的归一化权重
+
+def gm_logpdf(x, weights, means, stds):
+    """高斯混合分布的对数PDF（log-sum-exp，数值稳定）"""
+    x = np.asarray(x, dtype=float)
+    terms = []
+    for w, m, s in zip(weights, means, stds):
+        terms.append(np.log(w) - 0.5 * np.log(2 * np.pi * s**2)
+                     - 0.5 * ((x - m) / s)**2)
+    return logsumexp(np.asarray(terms), axis=0)
+
+def expectation_p(f):
+    """E_p[f]：对真实后验 GMM 精确求期望（各分量分别 GH 求积后按权重合成）"""
+    total = 0.0
+    for w, m, s in zip(post_w, post_m, post_s):
+        total += w * np.sum(_gh_w * f(m + s * _gh_x))
+    return total
+
+def expectation_q(f, mu, sigma):
+    """E_q[f]：对变分高斯 q = N(mu, sigma^2) 精确求期望"""
+    return np.sum(_gh_w * f(mu + sigma * _gh_x))
+
+# 定义单高斯变分分布（可视化用）
+def gaussian_pdf(x, mu, sigma):
+    return np.exp(-0.5 * ((x - mu) / sigma)**2) / (sigma * np.sqrt(2 * np.pi))
+
+def kl_forward(mu, sigma):
+    """前向 KL(p||q) = E_p[log p] - E_p[log q]，Gauss-Hermite 精确积分"""
+    E_log_p = expectation_p(lambda z: gm_logpdf(z, post_w, post_m, post_s))
+    E_log_q = expectation_p(
+        lambda z: -0.5 * np.log(2 * np.pi * sigma**2)
+                  - 0.5 * ((z - mu) / sigma)**2)
+    return E_log_p - E_log_q
+
+def kl_reverse(mu, sigma):
+    """逆向 KL(q||p) = E_q[log q] - E_q[log p]，Gauss-Hermite 精确积分
+    高斯熵有闭式：E_q[log q] = -H(q) = -0.5 log(2*pi*e*sigma^2)"""
+    E_log_q = -0.5 * np.log(2 * np.pi * np.e * sigma**2)
+    E_log_p = expectation_q(lambda z: gm_logpdf(z, post_w, post_m, post_s),
+                            mu, sigma)
+    return E_log_q - E_log_p
+
+# 优化目标函数
+def objective_forward(params):
+    """最小化前向KL(p||q)"""
+    mu, log_sigma = params
+    return kl_forward(mu, np.exp(log_sigma))
+
+def objective_reverse(params):
+    """最小化逆向KL(q||p)"""
+    mu, log_sigma = params
+    return kl_reverse(mu, np.exp(log_sigma))
+
+def run_minimize(x0, label):
+    """Nelder-Mead 优化并检查返回状态；未报告成功时显式告警"""
+    result = minimize(objective_reverse if '逆向' in label else objective_forward,
+                      x0, method='Nelder-Mead',
+                      options={'maxiter': 2000, 'xatol': 1e-8, 'fatol': 1e-8})
+    if not result.success:
+        print(f"  警告: {label} 优化未报告成功（{result.message}），结果需谨慎")
+    return result
+
+# 优化前向KL
+print("\n优化前向KL(p||q)...")
+result_forward = run_minimize([0.0, 0.0], "前向KL")
+mu_forward = result_forward.x[0]
+sigma_forward = np.exp(result_forward.x[1])
+kl_forward_val = result_forward.fun
+
+print(f"  最优参数: μ = {mu_forward:.4f}, σ = {sigma_forward:.4f}")
+print(f"  前向KL(p||q) = {kl_forward_val:.6f}")
+
+# 优化逆向KL - 从每个峰附近初始化，找到锁定单峰的局部最优解
+print("\n优化逆向KL(q||p)...")
+print("  从每个峰附近初始化，寻找锁定单峰的局部最优解...")
+
+# 从每个峰附近用小sigma初始化
+mode_lock_results = []
+for i, (mode_mu, mode_sigma) in enumerate(zip(post_m, post_s)):
+    init = [mode_mu, np.log(mode_sigma * 0.8)]
+    result = run_minimize(init, f"逆向KL(峰{i+1}初始化)")
+    mu_temp = result.x[0]
+    sigma_temp = np.exp(result.x[1])
+    kl_temp = result.fun
+    mode_lock_results.append((mu_temp, sigma_temp, kl_temp))
+    print(f"  从峰{i+1}初始化 (μ={mode_mu:.1f}): μ={mu_temp:.4f}, σ={sigma_temp:.4f}, KL={kl_temp:.6f}")
+
+# 选择KL最小的锁定单峰解
+mode_lock_result = min(mode_lock_results, key=lambda x: x[2])
+mu_mode_lock, sigma_mode_lock, kl_mode_lock = mode_lock_result
+
+# 也从中心初始化，得到覆盖型候选解（再与锁峰解比较选出全局最优）
+result_center = run_minimize([0.0, np.log(1.5)], "逆向KL(中心初始化)")
+mu_center = result_center.x[0]
+sigma_center = np.exp(result_center.x[1])
+kl_center = result_center.fun
+print(f"  从中心初始化 (μ=0.0): μ={mu_center:.4f}, σ={sigma_center:.4f}, KL={kl_center:.6f}")
+
+# 全局最优
+if kl_center < kl_mode_lock:
+    mu_reverse, sigma_reverse, kl_reverse_val = mu_center, sigma_center, kl_center
+    reverse_type = "覆盖型（居中）"
+else:
+    mu_reverse, sigma_reverse, kl_reverse_val = mu_mode_lock, sigma_mode_lock, kl_mode_lock
+    reverse_type = "锁定单峰"
+
+print(f"\n[对比结果]")
+print(f"  前向KL最优: μ = {mu_forward:.4f}, σ = {sigma_forward:.4f}")
+print(f"  逆向KL最优 ({reverse_type}): μ = {mu_reverse:.4f}, σ = {sigma_reverse:.4f}")
+print(f"  逆向KL锁定单峰: μ = {mu_mode_lock:.4f}, σ = {sigma_mode_lock:.4f}")
+print(f"  差异分析:")
+print(f"    - 前向KL: σ={sigma_forward:.4f}（较大，尝试覆盖两个模态）")
+print(f"    - 逆向KL: σ={sigma_reverse:.4f}（较小，聚焦单个模态）")
+
+
+# ============================================================
+# 步骤2：最优变分分布的可视化
+# ★ 原创设计
+# ============================================================
+print("\n" + "=" * 60)
+print("步骤2：最优变分分布的可视化")
+print("=" * 60)
+
+# 计算最优变分分布（逆向KL使用全局比较后的最优解，不硬编码锁峰解）
+q_forward = gaussian_pdf(z_grid, mu_forward, sigma_forward)
+q_reverse = gaussian_pdf(z_grid, mu_reverse, sigma_reverse)
+
+# 创建可视化
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+# 左图：前向KL最优（覆盖两峰）
+axes[0].fill_between(z_grid, posterior_pdf, alpha=0.3, color='blue', label=r'真实后验 $p(z)$')
+axes[0].plot(z_grid, posterior_pdf, 'b-', lw=2)
+axes[0].fill_between(z_grid, q_forward, alpha=0.3, color='orange', label=r'前向KL最优 $q$')
+axes[0].plot(z_grid, q_forward, 'orange', lw=2, linestyle='--')
+axes[0].set_xlabel(r'$z$')
+axes[0].set_ylabel(r'概率密度')
+axes[0].set_title('前向KL(p||q)：零避免（zero-avoiding）')
+axes[0].legend()
+axes[0].grid(alpha=0.3)
+axes[0].set_xlim([-6, 6])
+
+# 右图：逆向KL最优（本例全局最优为锁定单峰）
+axes[1].fill_between(z_grid, posterior_pdf, alpha=0.3, color='blue', label=r'真实后验 $p(z)$')
+axes[1].plot(z_grid, posterior_pdf, 'b-', lw=2)
+axes[1].fill_between(z_grid, q_reverse, alpha=0.3, color='red', label=r'逆向KL最优 $q$')
+axes[1].plot(z_grid, q_reverse, color='red', lw=2, linestyle='--')
+axes[1].set_xlabel(r'$z$')
+axes[1].set_ylabel(r'概率密度')
+axes[1].set_title('逆向KL(q||p)：零强迫（zero-forcing）')
+axes[1].legend()
+axes[1].grid(alpha=0.3)
+axes[1].set_xlim([-6, 6])
+
+plt.tight_layout()
+plt.savefig(os.path.join(SAVE_DIR, '步骤2_前向KL_vs_逆向KL.png'), dpi=100)
+plt.close()
+print(f"\n图表已保存: 步骤2_前向KL_vs_逆向KL.png")
+
+print(f"\n[可视化分析]")
+print(f"  左图（前向KL）:")
+print(f"    - q尝试覆盖p的两个模态")
+print(f"    - σ={sigma_forward:.4f}，分布较宽")
+print(f"    - 在p≈0的地方q也有概率质量（零避免）")
+print(f"  右图（逆向KL）:")
+print(f"    - q锁定在p的较重模态（右峰）")
+print(f"    - σ={sigma_reverse:.4f}，分布较窄")
+print(f"    - 在p≈0的地方q也≈0（零强迫）")
+
+print(f"\n[核心结论]")
+print(f"  1. 变分推断使用逆向KL(q||p)的原因:")
+print(f"     - 根本原因：前向KL(p||q)=E_p[log p/q]需要对真实后验p求期望，")
+print(f"       而p的归一化常数往往不可解析（这正是8.1节讲过的核心困难），")
+print(f"       从p采样又只能依赖昂贵的MCMC；逆向KL(q||p)=E_q[log q/p]只需对q求期望，")
+print(f"       q是可控的变分分布，可以直接采样、用重参数化技巧高效估计——所以实践中使用逆向KL")
+print(f"     - 附带效果：逆向KL容易产生更锐利的近似（模式锁定），")
+print(f"       但可能欠估计不确定性（zero-forcing）")
+print(f"  2. 前向KL(p||q)的特点:")
+print(f"     - 零避免/均值寻优：覆盖所有模态，但可能过度分散")
+print(f"     - 实践中难以直接优化，但在期望传播(EP)等场景中扮演理论角色")
+print(f"  3. KL方向的选择是变分推断的核心权衡之一")
+
+
+# ============================================================
+# 结果归档：results_summary.json
+# ============================================================
+results = {
+    "model": {
+        "posterior_weights": [float(v) for v in post_w],
+        "posterior_means": [float(v) for v in post_m],
+        "posterior_stds": [float(v) for v in post_s],
+    },
+    "variational_family": "single Gaussian N(mu, sigma^2)",
+    "integration": {
+        "method": "Gauss-Hermite (probabilists' Hermite polynomial)",
+        "nodes": _GH_N,
+        "note": "对整条实轴求积，无有限网格截断；z_grid 仅用于绘图"
+    },
+    "optimizer": {
+        "method": "Nelder-Mead",
+        "maxiter": 2000,
+        "xatol": 1e-8,
+        "fatol": 1e-8
+    },
+    "step1_kl_comparison": {
+        "forward_kl": {
+            "mu": float(mu_forward),
+            "sigma": float(sigma_forward),
+            "kl": float(kl_forward_val)
+        },
+        "reverse_kl_mode_lock_inits": [
+            {"init_mu": float(post_m[i]),
+             "mu": float(r[0]),
+             "sigma": float(r[1]),
+             "kl": float(r[2])}
+            for i, r in enumerate(mode_lock_results)
+        ],
+        "reverse_kl_center_init": {
+            "mu": float(mu_center),
+            "sigma": float(sigma_center),
+            "kl": float(kl_center)
+        },
+        "reverse_kl_global_optimum": {
+            "mu": float(mu_reverse),
+            "sigma": float(sigma_reverse),
+            "kl": float(kl_reverse_val),
+            "type": reverse_type
+        }
+    },
+    "note": (
+        "前向KL(p||q)在高斯族下的最优解为矩匹配(mu=E_p[z], sigma=sd_p[z]); "
+        "逆向KL(q||p)关于参数非凸，存在锁定单峰的局部最优；本例全局最优锁定65%重峰"
+        "(KL≈0.431)，数值小于前向KL最小值(≈0.665)，但两种KL是不同泛函，"
+        "数值一般不可直接比较；全程确定性求积与优化，无随机种子")
+}
+_json_path = os.path.join(SAVE_DIR, 'results_summary.json')
+with open(_json_path, 'w', encoding='utf-8') as f:
+    json.dump(results, f, ensure_ascii=False, indent=2)
+print(f"\n结果已归档: results_summary.json")
+
+print(f"\n{'='*60}")
+print("第八章配套实验8.4-1完成！")

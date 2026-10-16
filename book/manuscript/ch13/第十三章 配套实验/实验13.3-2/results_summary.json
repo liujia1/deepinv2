@@ -1,0 +1,26 @@
+{
+  "DPS_PSNR": 34.85,
+  "DiffPIR_PSNR": 31.12,
+  "obs_PSNR": 15.89,
+  "config": {
+    "img_size": 64,
+    "task": "inpainting",
+    "mask_hole": "[24:40, 24:40]（中心16×16，官方demo同款）",
+    "measurement_noise": "none",
+    "dps_model": "NCSNpp（FFHQ-64 EDM score model）",
+    "dps_weight": 1024.0,
+    "dps_weight_sweep": "4→1024 单调改善（总PSNR 19.8→34.5 dB，可见区MSE 0.0101→0.0001）；2048 发散（16.6 dB）。seed=42、250步",
+    "dps_n_steps": 250,
+    "dps_schedule": "ve",
+    "dps_sigma_max": 80.0,
+    "dps_alpha": 0.25,
+    "diffpir_max_iter": 100,
+    "diffpir_zeta": 0.7,
+    "diffpir_lambda": 7.0,
+    "diffpir_denoiser": "DRUNet",
+    "diffpir_zeta_sweep": "本地CPU×5种子(sigma=0.02, lam=7, 100步)：zeta=0.1 涂抹伪影；0.3 均值24.5dB、21.0-30.2摆动、3/5坏签(缺口内发丝涂抹)；0.7 均值28.4dB、1/5坏签(定稿)。sigma=0.1/0.4 数据锁变松(缺口外MSE 0.0016/0.009)不可用；lambda=25 无改善",
+    "seed": 42,
+    "deepinv_version": "0.4.2",
+    "note": "DPS 与 DiffPIR 共享同一观测 y 与 Inpainting 算子，各自使用原生先验（NCSNpp / DRUNet）。DPS 装配框架对齐官方 demo_diffusion_sde.py 的 NCSNpp 段（weight=1024 为本图实测校准值，官方 4.0 仅是其演示图取值）；rng 显式传 torch.Generator 使 seed=42 生效。DiffPIR 缺口外为硬数据锁存（跨种子/超参稳定 ~0.0002），缺口内填充由随机扩散轨迹+DRUNet 弱先验决定，跨种子大幅摆动（zeta=0.3 时21-30dB）——PSNR 对比需注明抽签成分。不共享先验的原因与 256×256 去模糊踩坑记录见脚本结论 4/6"
+  }
+}

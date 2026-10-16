@@ -1,0 +1,611 @@
+# -*- coding: utf-8 -*-
+"""
+实验16.1-2 ASTRA工具箱——CT正向模型与FBP
+
+实验目的：使用工业级CT重建工具箱ASTRA实现CT正向模型和FBP重建，
+          理解不同投影几何（平行束/扇形束）的差异和GPU加速的优势
+          避免inverse crime：数据生成使用512x512高分辨率，反演使用256x256低分辨率
+
+素材来源：基于astra_operators_example.ipynb
+运行前提：ASTRA的扇形束FBP仅有CUDA实现（CPU版FBP仅支持平行束几何），
+          因此需Linux+CUDA或Windows+CUDA环境；Colab下自动pip安装CUDA版astra-toolbox，
+          其他无CUDA环境回退到skimage版本
+"""
+
+import torch
+import numpy as np
+from tqdm import tqdm
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from skimage.transform import radon, iradon, resize
+from skimage.data import shepp_logan_phantom
+from skimage.metrics import peak_signal_noise_ratio as psnr_metric
+import os
+import sys
+import io
+import warnings
+import logging
+
+if sys.platform == 'win32':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+
+logging.getLogger('matplotlib').setLevel(logging.ERROR)
+logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*U\\+2212.*")
+warnings.filterwarnings("ignore", message=".*glyph.*")
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+plt.rcParams['axes.unicode_minus'] = False
+
+_gdrive = '/content/drive/MyDrive'
+_IN_COLAB = 'google.colab' in sys.modules
+
+if _IN_COLAB:
+    from google.colab import drive
+    if not os.path.isdir(_gdrive):
+        print("正在挂载 Google Drive...")
+        drive.mount('/content/drive')
+    SAVE_DIR = os.path.join(_gdrive, '实验16.1-2')
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+else:
+    try:
+        SAVE_DIR = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        SAVE_DIR = os.getcwd()
+    _chinese_path = os.path.join(SAVE_DIR, '.chinese')
+
+os.makedirs(_chinese_path, exist_ok=True)
+os.makedirs(SAVE_DIR, exist_ok=True)
+sys.path.insert(0, _chinese_path)
+try:
+    from chinese_font import setup_chinese_font
+    setup_chinese_font(save_dir=_chinese_path)
+except ImportError:
+    print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
+
+# ASTRA可用性检测（Colab下自动pip安装CUDA版，而非静默降级）
+def _import_astra():
+    try:
+        import astra
+        return astra
+    except ImportError:
+        return None
+
+
+astra = _import_astra()
+
+if _IN_COLAB and (astra is None or not astra.use_cuda()):
+    # PyPI的astra-toolbox wheel为CUDA构建（conda-forge默认可能是CPU-only构建），
+    # Colab自带T4 GPU，应自动安装而非降级到skimage。
+    import subprocess
+    if astra is None:
+        print("ASTRA未安装，正在通过pip自动安装CUDA版...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "astra-toolbox"], check=False)
+    else:
+        print("检测到CPU-only的ASTRA（conda-forge构建），强制重装为PyPI CUDA版...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-cache-dir",
+                        "--force-reinstall", "--no-deps", "astra-toolbox"], check=False)
+    import importlib
+    importlib.invalidate_caches()
+    astra = _import_astra()  # 全新安装后同进程首次import即可加载CUDA扩展
+    if astra is not None and not astra.use_cuda():
+        # 已import过CPU-only版的情况：C扩展已加载，同进程reload不可靠
+        print("警告: ASTRA CUDA版已安装但当前进程仍为CPU版，请重启Colab运行时后重新运行本脚本。")
+
+# ★回退条件按"功能可用性"而非"import成功"判断：
+#   ASTRA的扇形束FBP仅有CUDA实现（CPU版FBP只支持parallel几何），
+#   Windows/CPU版astra若仅凭import成功就走ASTRA分支，会在
+#   algorithm.create(fanflat FBP)处崩溃。故以astra.use_cuda()为准。
+ASTRA_AVAILABLE = astra is not None and astra.use_cuda()
+if not ASTRA_AVAILABLE:
+    print("ASTRA不可用（无CUDA），整体回退skimage版本")
+
+np.random.seed(42)
+torch.manual_seed(42)  # random_ellipses用torch.rand采样椭圆强度，必须播种才能复现
+
+
+# ========================================================================
+# 工具函数
+# ========================================================================
+
+def random_ellipse_params(num_of_ellipses):
+    """在归一化坐标[-1,1]下采样椭圆参数（位置/半轴/强度）
+
+    参数与光栅化分辨率解耦：512与256两个网格光栅化出的是"同一物体"的
+    不同离散化，双分辨率IC-free才有意义。
+    （旧实现在像素坐标下采样，512网格与256网格生成的是完全不同的随机
+    物体——实测相关系数仅0.06——PSNR对比的是错误真值，名不符实。）
+    """
+    params = []
+    for k in range(num_of_ellipses):
+        x0 = np.random.uniform(-0.8, 0.8)
+        y0 = np.random.uniform(-0.8, 0.8)
+        a = np.random.uniform(0.05, 0.4)
+        b = np.random.uniform(0.05, 0.4)
+        amp = float(torch.rand(1))
+        params.append((x0, y0, a, b, amp))
+    return params
+
+
+def rasterize_ellipses(params, size):
+    """按给定分辨率光栅化椭圆幻影
+
+    参数:
+        params: random_ellipse_params返回的归一化坐标椭圆参数
+        size: (H, W) 图像尺寸
+    返回:
+        归一化的numpy数组, 值域[0, 1]
+
+    裁剪到重建圆内：radon/iradon的circle=True要求圆外为零，
+    否则圆外像素被错误折叠进重建（实测满方phantom同模型FBP仅约13 dB，
+    裁剪后可达约32 dB）。
+    """
+    H, W = size
+    x = torch.linspace(-1, 1, W)
+    y = torch.linspace(-1, 1, H)[:, None]
+    img = torch.zeros((H, W), dtype=torch.float64)
+    for (x0, y0, a, b, amp) in params:
+        mask = ((x - x0) / a) ** 2 + ((y - y0) / b) ** 2 <= 1
+        img += mask.double() * amp
+    yy, xx = np.ogrid[:H, :W]
+    r2 = (xx - (W - 1) / 2) ** 2 + (yy - (H - 1) / 2) ** 2
+    img *= torch.from_numpy((r2 <= ((min(H, W) - 1) / 2) ** 2).astype(np.float64))
+    return (img / img.max()).numpy()
+
+
+def compute_psnr(img1, img2, data_range=1.0):
+    """计算PSNR，优先使用skimage指标，回退到自定义实现"""
+    try:
+        return psnr_metric(img1, img2, data_range=data_range)
+    except Exception:
+        mse = np.mean((img1 - img2) ** 2)
+        if mse == 0:
+            return float('inf')
+        return 10 * np.log10(data_range ** 2 / mse)
+
+
+# ========================================================================
+# 步骤1：随机椭圆幻影生成（16.1.2节）
+# ========================================================================
+print("\n" + "=" * 60)
+print("步骤1：随机椭圆幻影生成（16.1.2节）")
+print("=" * 60)
+
+size = (256, 256)
+# 避免inverse crime：数据生成使用高分辨率模型，反演使用低分辨率模型
+n_data = (512, 512)  # 数据生成分辨率（2倍）
+amount_of_ellipses = 50
+# 先采样与分辨率解耦的椭圆参数，再分别在重建/数据分辨率下光栅化
+ellipse_params = random_ellipse_params(amount_of_ellipses)
+ellipses = rasterize_ellipses(ellipse_params, size)
+
+# Shepp-Logan幻影作为对比
+shepp = shepp_logan_phantom()
+from skimage.transform import resize as sk_resize
+shepp = sk_resize(shepp, size, order=0, preserve_range=True, anti_aliasing=False)
+shepp = (shepp - shepp.min()) / (shepp.max() - shepp.min())
+
+fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+
+axes[0].imshow(shepp, cmap='gray')
+axes[0].set_title('Shepp-Logan幻影（解析定义）')
+axes[0].axis('off')
+
+axes[1].imshow(ellipses, cmap='gray')
+axes[1].set_title(f'随机椭圆幻影（{amount_of_ellipses}个椭圆, {size[0]}$\\times${size[1]}）')
+axes[1].axis('off')
+
+plt.suptitle('步骤1：CT幻影对比', fontsize=13)
+plt.tight_layout()
+plt.savefig(os.path.join(SAVE_DIR, '步骤1_随机椭圆phantom.png'), dpi=150, bbox_inches='tight')
+plt.show()
+
+print(f"  随机椭圆幻影尺寸: {ellipses.shape}")
+print(f"  像素值范围: [{ellipses.min():.3f}, {ellipses.max():.3f}]")
+
+# ---- 避免inverse crime的工具函数 ----
+# 高分辨率phantom（用于数据生成）：与ellipses是同一物体的不同离散化
+phantom_fine = rasterize_ellipses(ellipse_params, n_data)
+# 重建分辨率phantom已生成（ellipses, 256x256）
+
+def generate_sinogram_ic_free_skimage(phantom_fine, theta, n_recon_size, noise_sigma=0.0):
+    """避免inverse crime的sinogram生成（skimage路径）：
+    在n_data高分辨率下用radon正向投影，添加噪声后
+    resize到n_recon对应的探测器尺寸。"""
+    sinogram_fine = radon(phantom_fine, theta=theta, circle=True)
+    if noise_sigma > 0:
+        sinogram_fine = sinogram_fine + noise_sigma * np.random.randn(*sinogram_fine.shape)
+    # circle=True时探测器尺寸=图像尺寸
+    target_det = n_recon_size[0]
+    from skimage.transform import resize as sk_resize
+    sinogram_recon = sk_resize(sinogram_fine, (target_det, len(theta)), order=1, preserve_range=True, anti_aliasing=True)
+    # ★探测器尺度归一化：radon线积分以像素为单位，512网格的线积分长度是
+    #   256网格的2倍，resize只做平均不改变量纲，须乘 n/n_data 才能与重建
+    #   网格的sinogram同尺度（实测支撑区比值≈2.02，漏掉此项重建值整体2×）。
+    sinogram_recon = sinogram_recon * (target_det / phantom_fine.shape[0])
+    return sinogram_recon
+
+
+# ========================================================================
+# 步骤2：平行束投影与FBP重建
+# ========================================================================
+print("\n" + "=" * 60)
+print("步骤2：平行束投影与FBP重建")
+print("=" * 60)
+
+if ASTRA_AVAILABLE:
+    # ---- ASTRA版本 ----
+    vol_geom = astra.create_vol_geom(size)
+    num_of_lines = 512
+    amount_of_angles = 720
+    angles = np.linspace(0, np.pi, amount_of_angles)
+
+    proj_geom = astra.create_proj_geom('parallel', 1.0, num_of_lines, angles)
+    # 设备判定与回退门槛保持同一口径（astra.use_cuda()）：
+    # 若用torch.cuda.is_available()，当torch为CPU版而astra为CUDA版时两处
+    # 判定可能相反，导致CPU FBP撞上fanflat几何而崩溃
+    device = 'cuda' if astra.use_cuda() else 'cpu'
+    projector_type = 'cuda' if device == 'cuda' else 'line'
+    FBP_type = 'FBP_CUDA' if device == 'cuda' else 'FBP'
+    print(f"  ASTRA设备: {device}, FBP类型: {FBP_type}")
+
+    proj_id_parall = astra.create_projector(projector_type, proj_geom, vol_geom)
+    parall_sinogram_id, parall_sinogram = astra.create_sino(ellipses, proj_id_parall)
+    astra.data2d.delete(proj_id_parall)
+
+    rec_id = astra.data2d.create('-vol', vol_geom)
+    cfg = astra.astra_dict(FBP_type)
+    cfg['ReconstructionDataId'] = rec_id
+    cfg['ProjectionDataId'] = parall_sinogram_id
+    cfg['option'] = {'FilterType': 'ram-lak'}
+
+    alg_id = astra.algorithm.create(cfg)
+    astra.algorithm.run(alg_id)
+    parall_rec = astra.data2d.get(rec_id)
+    parall_rec = np.maximum(0, parall_rec)
+    if parall_rec.max() > 0:
+        parall_rec = parall_rec / parall_rec.max()
+
+    astra.algorithm.delete(alg_id)
+    astra.data2d.delete(rec_id)
+    astra.data2d.delete(parall_sinogram_id)
+
+    parall_psnr = compute_psnr(ellipses, parall_rec, data_range=1.0)
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    axes[0].imshow(ellipses, cmap='gray')
+    axes[0].set_title('原始幻影')
+    axes[0].axis('off')
+
+    im1 = axes[1].imshow(parall_sinogram, cmap='gray', aspect='auto')
+    axes[1].set_title(f'平行束Sinogram\n({amount_of_angles}角度, {num_of_lines}探测器)')
+    axes[1].set_xlabel('投影角度 $\\theta$')
+    axes[1].set_ylabel('探测器位置 s')
+    plt.colorbar(im1, ax=axes[1])
+
+    axes[2].imshow(parall_rec, cmap='gray')
+    axes[2].set_title(f'FBP重建\nPSNR={parall_psnr:.1f} dB')
+    axes[2].axis('off')
+
+    plt.suptitle('步骤2：ASTRA平行束投影与FBP重建', fontsize=13)
+    plt.tight_layout()
+    plt.savefig(os.path.join(SAVE_DIR, '步骤2_平行束对比.png'), dpi=150, bbox_inches='tight')
+    plt.show()
+
+    print(f"  平行束FBP PSNR: {parall_psnr:.1f} dB")
+
+else:
+    # ---- skimage回退版本（避免inverse crime）----
+    theta_full = np.linspace(0., 180., 360, endpoint=False)
+    # IC-free：高分辨率生成sinogram，低分辨率重建
+    sinogram_full = generate_sinogram_ic_free_skimage(phantom_fine, theta_full, size)
+    recon_full = iradon(sinogram_full, theta=theta_full, circle=True, filter_name='ramp')
+    recon_full = np.clip(recon_full, 0, None)
+    if recon_full.max() > 0:
+        recon_full = recon_full / recon_full.max()
+
+    parall_psnr = compute_psnr(ellipses, recon_full, data_range=1.0)
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    axes[0].imshow(ellipses, cmap='gray')
+    axes[0].set_title('原始幻影')
+    axes[0].axis('off')
+
+    im1 = axes[1].imshow(sinogram_full, cmap='gray', aspect='auto')
+    axes[1].set_title(f'平行束Sinogram\n({len(theta_full)}角度)')
+    axes[1].set_xlabel('投影角度 $\\theta$ ($^{\\circ}$)')
+    axes[1].set_ylabel('探测器位置 s')
+    plt.colorbar(im1, ax=axes[1])
+
+    axes[2].imshow(recon_full, cmap='gray')
+    axes[2].set_title(f'FBP重建 (skimage)\nPSNR={parall_psnr:.1f} dB')
+    axes[2].axis('off')
+
+    plt.suptitle('步骤2：skimage平行束投影与FBP重建', fontsize=13)
+    plt.tight_layout()
+    plt.savefig(os.path.join(SAVE_DIR, '步骤2_平行束对比.png'), dpi=150, bbox_inches='tight')
+    plt.show()
+
+    print(f"  平行束FBP PSNR (skimage): {parall_psnr:.1f} dB")
+
+
+# ========================================================================
+# 步骤3：扇形束投影
+# ========================================================================
+print("\n" + "=" * 60)
+print("步骤3：扇形束投影")
+print("=" * 60)
+
+if ASTRA_AVAILABLE:
+    # ---- ASTRA版本 ----
+    num_of_lines = 512
+    amount_of_angles = 720
+    angles = np.linspace(0, 2 * np.pi, amount_of_angles)
+    SOD = 250  # 源到物体中心距离
+    SDD = 260  # 源到探测器距离
+
+    proj_geom = astra.create_proj_geom('fanflat', 1.0, num_of_lines, angles, SOD, SDD - SOD)
+    # 扇形束几何需要使用'line_fanflat'投影器类型（平行束用'line'，这里必须区分）
+    # 设备判定与回退门槛同口径（astra.use_cuda()），见步骤2说明
+    fan_projector_type = 'cuda' if astra.use_cuda() else 'line_fanflat'
+    proj_id_full = astra.create_projector(fan_projector_type, proj_geom, vol_geom)
+
+    full_sinogram_id, full_sinogram = astra.create_sino(ellipses, proj_id_full)
+    astra.data2d.delete(proj_id_full)
+
+    rec_id = astra.data2d.create('-vol', vol_geom)
+    cfg = astra.astra_dict(FBP_type)
+    cfg['ReconstructionDataId'] = rec_id
+    cfg['ProjectionDataId'] = full_sinogram_id
+    cfg['option'] = {'FilterType': 'ram-lak'}
+
+    alg_id = astra.algorithm.create(cfg)
+    astra.algorithm.run(alg_id)
+    full_rec = astra.data2d.get(rec_id)
+    full_rec = np.maximum(0, full_rec)
+    if full_rec.max() > 0:
+        full_rec = full_rec / full_rec.max()
+
+    astra.algorithm.delete(alg_id)
+    astra.data2d.delete(rec_id)
+    astra.data2d.delete(full_sinogram_id)
+
+    fan_psnr = compute_psnr(ellipses, full_rec, data_range=1.0)
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    axes[0].imshow(ellipses, cmap='gray')
+    axes[0].set_title('原始幻影')
+    axes[0].axis('off')
+
+    axes[1].imshow(full_sinogram, cmap='gray', aspect='auto')
+    axes[1].set_title(f'扇形束Sinogram\n(0-360$^\\circ$, {amount_of_angles}角度)')
+    axes[1].set_xlabel('投影角度 $\\theta$')
+    axes[1].set_ylabel('探测器位置 s')
+
+    axes[2].imshow(full_rec, cmap='gray')
+    axes[2].set_title(f'扇形束FBP重建\nPSNR={fan_psnr:.1f} dB')
+    axes[2].axis('off')
+
+    plt.suptitle('步骤3：ASTRA扇形束投影与FBP重建', fontsize=13)
+    plt.tight_layout()
+    plt.savefig(os.path.join(SAVE_DIR, '步骤3_扇形束投影.png'), dpi=150, bbox_inches='tight')
+    plt.show()
+
+    print(f"  扇形束FBP PSNR: {fan_psnr:.1f} dB")
+    print(f"  SOD={SOD}, SDD={SDD}, 放大倍率M={SDD/SOD:.3f}")
+
+else:
+    # ---- skimage回退版本：概念讲解 + 角度采样对比 ----
+    print("  扇形束投影需要ASTRA工具箱（扇形束FBP仅有CUDA实现）。")
+    print("  关键参数:")
+    print("    SOD = 250  # 源到物体中心距离 (Source-Object Distance)")
+    print("    SDD = 260  # 源到探测器距离 (Source-Detector Distance)")
+    print("    proj_geom = astra.create_proj_geom('fanflat', 1.0, 512, angles, SOD, SDD-SOD)")
+    print()
+    print("  扇形束 vs 平行束的区别:")
+    print("    - 扇形束：射线从点光源发散")
+    print("    - 平行束：射线互相平行")
+    print("    - 扇形束sinogram：正弦曲线不对称（发散效应）")
+    print("    - 扇形束有放大效应：M = SDD/SOD")
+    print()
+    print("  注意：由于skimage仅支持平行束几何，下方对比图无法展示扇形束的")
+    print("        发散效应和非对称sinogram，仅作角度采样数量的对比展示，")
+    print("        扇形束的真实效果需要ASTRA环境才能观察到。")
+    print()
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    # 平行束sinogram（标准0-180°）（IC-free：高分辨率生成）
+    theta_par = np.linspace(0., 180., 180, endpoint=False)
+    sino_par = generate_sinogram_ic_free_skimage(phantom_fine, theta_par, size)
+    axes[0].imshow(sino_par, cmap='gray', aspect='auto')
+    axes[0].set_title('平行束Sinogram (0-180°)\n对称正弦曲线')
+    axes[0].set_xlabel('投影角度 $\\theta$ ($^{\\circ}$)')
+    axes[0].set_ylabel('探测器位置 s')
+
+    # 0-360°采样（仍为平行束，仅增加角度数量）（IC-free：高分辨率生成）
+    theta_fan = np.linspace(0., 360., 720, endpoint=False)
+    sino_fan = generate_sinogram_ic_free_skimage(phantom_fine, theta_fan, size)
+    axes[1].imshow(sino_fan, cmap='gray', aspect='auto')
+    axes[1].set_title('平行束Sinogram (0-360°)\n（注意：仍是对称的，非真实扇形束）')
+    axes[1].set_xlabel('投影角度 $\\theta$ ($^{\\circ}$)')
+    axes[1].set_ylabel('探测器位置 s')
+
+    plt.suptitle('步骤3：扇形束几何概念对比——skimage回退', fontsize=13)
+    plt.tight_layout()
+    plt.savefig(os.path.join(SAVE_DIR, '步骤3_扇形束投影.png'), dpi=150, bbox_inches='tight')
+    plt.show()
+
+    print("  扇形束对比图已保存（skimage模拟版本）")
+
+
+# ========================================================================
+# 步骤4：FBP滤波器对比
+# ========================================================================
+print("\n" + "=" * 60)
+print("步骤4：FBP滤波器对比")
+print("=" * 60)
+
+if ASTRA_AVAILABLE:
+    # ---- ASTRA版本：使用扇形束sinogram ----
+    num_of_lines = 512
+    amount_of_angles = 720
+    angles = np.linspace(0, 2 * np.pi, amount_of_angles)
+    SOD = 250
+    SDD = 260
+
+    proj_geom = astra.create_proj_geom('fanflat', 1.0, num_of_lines, angles, SOD, SDD - SOD)
+    # 扇形束几何需要使用'line_fanflat'投影器类型；设备判定与回退门槛同口径
+    fan_projector_type = 'cuda' if astra.use_cuda() else 'line_fanflat'
+    proj_id = astra.create_projector(fan_projector_type, proj_geom, vol_geom)
+    sino_id, sino = astra.create_sino(ellipses, proj_id)
+    astra.data2d.delete(proj_id)
+
+    filter_types = ['none', 'ram-lak', 'shepp-logan', 'cosine']
+    filter_labels = ['无滤波', 'Ram-Lak $|\\omega|$', 'Shepp-Logan $|\\omega|\\mathrm{sinc}$', 'Cosine $|\\omega|\\cos$']
+
+    fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+    filter_psnrs = []
+
+    for idx, (filt, flabel) in enumerate(tqdm(zip(filter_types, filter_labels),
+                                               total=len(filter_types), desc="  滤波器对比")):
+        rec_id = astra.data2d.create('-vol', vol_geom)
+        cfg = astra.astra_dict(FBP_type)
+        cfg['ReconstructionDataId'] = rec_id
+        cfg['ProjectionDataId'] = sino_id
+        cfg['option'] = {'FilterType': filt}
+
+        alg_id = astra.algorithm.create(cfg)
+        astra.algorithm.run(alg_id)
+        rec = astra.data2d.get(rec_id)
+        rec = np.maximum(0, rec)
+        if rec.max() > 0:
+            rec = rec / rec.max()
+
+        astra.algorithm.delete(alg_id)
+        astra.data2d.delete(rec_id)
+
+        p = compute_psnr(ellipses, rec, data_range=1.0)
+        filter_psnrs.append(p)
+
+        axes[idx].imshow(rec, cmap='gray')
+        axes[idx].set_title(f'{flabel}\nPSNR={p:.1f} dB')
+        axes[idx].axis('off')
+
+    astra.data2d.delete(sino_id)
+
+    plt.suptitle('步骤4：FBP滤波器对比——扇形束', fontsize=13)
+    plt.tight_layout()
+    plt.savefig(os.path.join(SAVE_DIR, '步骤4_滤波器对比.png'), dpi=150, bbox_inches='tight')
+    plt.show()
+
+    for filt, p in zip(filter_types, filter_psnrs):
+        print(f"  滤波器 '{filt}': PSNR = {p:.1f} dB")
+
+else:
+    # ---- skimage回退版本（避免inverse crime：phantom_fine 512→size 256）----
+    filters = [None, 'ramp', 'shepp-logan', 'cosine']
+    filter_labels = ['无滤波', 'Ramp $|\\omega|$', 'Shepp-Logan $|\\omega|\\mathrm{sinc}$', 'Cosine $|\\omega|\\cos$']
+
+    theta = np.linspace(0., 180., 360, endpoint=False)
+    # IC-free：在512分辨率下投影，resize到256分辨率探测器
+    sino = generate_sinogram_ic_free_skimage(phantom_fine, theta, size)
+
+    fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+    filter_psnrs = []
+
+    for idx, (filt, flabel) in enumerate(tqdm(zip(filters, filter_labels),
+                                               total=len(filters), desc="  滤波器对比")):
+        recon = iradon(sino, theta=theta, circle=True, filter_name=filt)
+        recon = np.clip(recon, 0, None)
+        if recon.max() > 0:
+            recon = recon / recon.max()
+
+        p = compute_psnr(ellipses, recon, data_range=1.0)
+        filter_psnrs.append(p)
+
+        axes[idx].imshow(recon, cmap='gray')
+        axes[idx].set_title(f'{flabel}\nPSNR={p:.1f} dB')
+        axes[idx].axis('off')
+
+    plt.suptitle('步骤4：FBP滤波器对比——平行束', fontsize=13)
+    plt.tight_layout()
+    plt.savefig(os.path.join(SAVE_DIR, '步骤4_滤波器对比.png'), dpi=150, bbox_inches='tight')
+    plt.show()
+
+    filter_names_display = ['None', 'ramp', 'shepp-logan', 'cosine']
+    for filt, p in zip(filter_names_display, filter_psnrs):
+        print(f"  滤波器 '{filt}': PSNR = {p:.1f} dB")
+
+
+# ========================================================================
+# ASTRA内存管理提醒
+# ========================================================================
+if ASTRA_AVAILABLE:
+    print("\n" + "-" * 60)
+    print("ASTRA内存管理提醒:")
+    print("  ASTRA使用C++后端，必须手动释放内存：")
+    print("    astra.data2d.delete(id)")
+    print("    astra.algorithm.delete(id)")
+    print("    astra.projector.delete(id)")
+    print("  未释放会导致GPU显存泄漏！")
+
+
+# ========================================================================
+# ASTRA vs skimage总结
+# ========================================================================
+print("\n" + "=" * 60)
+print("ASTRA vs skimage 总结")
+print("=" * 60)
+print()
+print("skimage:")
+print("  + 跨平台（Windows/macOS/Linux）")
+print("  + 简单API（radon/iradon）")
+print("  - 仅支持平行束")
+print("  - 无GPU加速")
+print("  - 探测器数量固定")
+print()
+print("ASTRA（扇形束FBP需CUDA；CPU版可跨平台但仅支持平行束FBP）:")
+print("  + 支持扇形束/锥形束几何")
+print("  + GPU加速（50-100倍提速）")
+print("  + 自定义探测器数量")
+print("  + 多种重建算法（FBP/SIRT/SART/CGLS）")
+print("  - 扇形束FBP仅CUDA实现")
+print("  - 需手动内存管理")
+
+# ===== 保存数值结果 =====
+import json
+
+def _to_native(obj):
+    """递归转换numpy/torch类型为Python原生类型"""
+    import numpy as np
+    if isinstance(obj, dict): return {k: _to_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [_to_native(v) for v in obj]
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return _to_native(obj.tolist())
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor): return _to_native(obj.detach().cpu().tolist())
+    except: pass
+    return obj
+
+results_summary = {
+    "experiment": "实验16.1-2 ASTRA工具箱——CT正向模型与FBP",
+    "ASTRA_AVAILABLE": ASTRA_AVAILABLE,
+    "步骤2_平行束FBP_PSNR_dB": round(float(parall_psnr), 2),
+    "步骤4_滤波器对比_PSNR_dB": {f"滤波器{i}": round(float(p), 2) for i, p in enumerate(filter_psnrs)},
+}
+if ASTRA_AVAILABLE:
+    results_summary["步骤3_扇形束FBP_PSNR_dB"] = round(float(fan_psnr), 2)
+results_summary = _to_native(results_summary)
+with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+    json.dump(results_summary, f, ensure_ascii=False, indent=2)
+print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
+
+print(f"\n实验16.1-2完成！结果已保存至: {SAVE_DIR}")

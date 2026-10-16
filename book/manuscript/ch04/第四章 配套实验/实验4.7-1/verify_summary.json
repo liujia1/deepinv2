@@ -1,0 +1,161 @@
+{
+  "setup": {
+    "seed": 42,
+    "BSNR": 40,
+    "kernel_len": [
+      5,
+      5
+    ],
+    "eps": 0.00038446751249519417,
+    "sigma": 0.0024843572173267603,
+    "L_y": 160910.78125,
+    "delta": 6.0546094573510345e-06,
+    "device": "cuda"
+  },
+  "reference": {
+    "psnr": 33.22,
+    "ssim": 0.9212,
+    "nrmse": 0.0309
+  },
+  "current_experiment_json": {
+    "psnr": 28.14,
+    "ssim": 0.8492,
+    "nrmse": 0.0555
+  },
+  "runs": {
+    "A_short500_simple": {
+      "config": {
+        "maxit": 500,
+        "burnin": 50,
+        "n_samples": 50,
+        "kernel": "simple",
+        "thinning": 9
+      },
+      "psnr": 28.140915645193033,
+      "ssim": 0.8491239052007198,
+      "nrmse": 0.05534366890788078,
+      "ess_med": 11.163933321184556,
+      "ess_slow": 1.536277586467632,
+      "ess_fast": 32.76782139264693,
+      "flat_region_median_std": 0.014979972504079342,
+      "edge_region_median_std": 0.01955059915781021,
+      "std_map_grain": 0.0038830528501421213,
+      "std_edge_correlation": 0.4224439953131533,
+      "variance_relative_se_from_ess": 0.44359239729971217,
+      "elapsed_sec": 22.64781951904297,
+      "stored_samples": 49
+    },
+    "B_long10k_simple": {
+      "config": {
+        "maxit": 10000,
+        "burnin": 500,
+        "n_samples": 2000,
+        "kernel": "simple",
+        "thinning": 5
+      },
+      "psnr": 33.139358426556036,
+      "ssim": 0.920184398876667,
+      "nrmse": 0.03112761117517948,
+      "ess_med": 93.73323152777837,
+      "ess_slow": 2.795454993847262,
+      "ess_fast": 136.23725432218887,
+      "flat_region_median_std": 0.01732085831463337,
+      "edge_region_median_std": 0.029899362474679947,
+      "std_map_grain": 0.0013937749899923801,
+      "std_edge_correlation": 0.5328991046305531,
+      "variance_relative_se_from_ess": 0.14685789562053733,
+      "elapsed_sec": 459.91172099113464,
+      "stored_samples": 1899
+    },
+    "C_long10k_ppnp": {
+      "config": {
+        "maxit": 10000,
+        "burnin": 500,
+        "n_samples": 2000,
+        "kernel": "ppnp",
+        "thinning": 5
+      },
+      "psnr": 33.1171060859985,
+      "ssim": 0.9200394137201309,
+      "nrmse": 0.031207460910081863,
+      "ess_med": 77.7830623348637,
+      "ess_slow": 4.841655490486903,
+      "ess_fast": 343.83927510899224,
+      "flat_region_median_std": 0.017295271158218384,
+      "edge_region_median_std": 0.029538821429014206,
+      "std_map_grain": 0.0013918131589889526,
+      "std_edge_correlation": 0.5118249684685084,
+      "variance_relative_se_from_ess": 0.1613921039835681,
+      "elapsed_sec": 460.3011076450348,
+      "stored_samples": 1899
+    }
+  },
+  "checks": [
+    {
+      "name": "A 组复现现实验 JSON（28.14 ±0.5 dB）",
+      "passed": true,
+      "detail": "A=28.14 dB"
+    },
+    {
+      "name": "C 组达到官方参考 PSNR 33.22（±0.6 dB）",
+      "passed": true,
+      "detail": "C=33.12 dB"
+    },
+    {
+      "name": "C 组达到官方参考 SSIM 0.9212（±0.01）",
+      "passed": true,
+      "detail": "C=0.9200"
+    },
+    {
+      "name": "C 组达到官方参考 NRMSE 0.0309（±0.004）",
+      "passed": true,
+      "detail": "C=0.0312"
+    },
+    {
+      "name": "长链比短链 PSNR 提升 > 3 dB（500 步确实未收敛）",
+      "passed": true,
+      "detail": "提升 4.98 dB"
+    },
+    {
+      "name": "长链 C 末段进入平台（最后10%均值变动 < 0.15 dB）",
+      "passed": true,
+      "detail": "变动 0.068 dB"
+    },
+    {
+      "name": "短链 A 末端仍在爬坡（末10%变动 > 0.15 dB）",
+      "passed": true,
+      "detail": "变动 0.181 dB"
+    },
+    {
+      "name": "长链 B 与 C 差异小（<0.3 dB，投影基本不触发）",
+      "passed": true,
+      "detail": "|B-C|=0.022 dB"
+    },
+    {
+      "name": "平坦区不确定性是平稳固有量：长短链中位标准差比值在 [0.6, 1.4]（非瞬态高估值）",
+      "passed": true,
+      "detail": "A=0.0150, C=0.0173, A/C=0.87"
+    },
+    {
+      "name": "长链不确定性正确定位到边缘：C 的边缘/平坦标准差比较 A 提升 >15%",
+      "passed": true,
+      "detail": "edge/flat A=1.31, C=1.71（提升 31%）"
+    },
+    {
+      "name": "短链方差图为估计颗粒：长链颗粒度 < 短链的 60%（ESS 不足导致的椒盐噪声消失）",
+      "passed": true,
+      "detail": "grain A=0.00388 -> C=0.00139"
+    },
+    {
+      "name": "方差图与真值边缘的空间对齐：长链相关系数高出 >0.05",
+      "passed": true,
+      "detail": "corr A=0.422 -> C=0.512"
+    },
+    {
+      "name": "ESS：长链中速分量 > 15（短链仅 4.35）",
+      "passed": true,
+      "detail": "ESS_med A=11.2, C=77.8"
+    }
+  ],
+  "all_passed": true
+}

@@ -1,0 +1,28 @@
+{
+  "num_epochs": 100,
+  "total_steps": 46900,
+  "warmup_steps": 500,
+  "final_train_losses": {
+    "adam_const": 0.061171,
+    "adamw_const": 0.045999,
+    "adam_cosine": 0.057859,
+    "adamw_cosine": 0.046911
+  },
+  "final_val_losses": {
+    "adam_const": 0.059529,
+    "adamw_const": 0.046184,
+    "adam_cosine": 0.057515,
+    "adamw_cosine": 0.046931
+  },
+  "val_ranking_best_to_worst": [
+    "AdamW + Constant",
+    "AdamW + Warmup+Cosine",
+    "Adam + Warmup+Cosine",
+    "Adam + Constant"
+  ],
+  "crossover_epoch_cosine_minus_constant": {
+    "Adam": 8,
+    "AdamW": 16
+  },
+  "verdict_cosine_overtakes_on_val": false
+}

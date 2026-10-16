@@ -1,0 +1,150 @@
+{
+  "run_status": "generated",
+  "note": "定性视觉对比实验（无量化指标）。run_status=skipped表示本次运行环境不具备条件或加载/采样抛错，存档图须在具备依赖的环境（推荐GPU）实际生成；只有run_status=generated时下列观察才与本次运行对应。",
+  "模型": "CompVis/stable-diffusion-v1-4 (自定义CustomImg2ImgPipeline + DDIMScheduler)",
+  "device": "cuda",
+  "初始图": "代码内numpy生成的512x512蓝紫渐变（无外部图片依赖）",
+  "prompt": "a dramatic sunset over dark mountain silhouettes, purple and orange sky with glowing clouds, highly detailed landscape photo",
+  "教学配置说明": {
+    "prompt设计": "使用具体的风景描述（暗色山脉剪影、紫橙色天空、发光云层）而非自描述词，以便在无结构的渐变初始图上清晰展示文本条件对输出语义的注入",
+    "strength选择": "0.9：在初始图本身不含空间结构的前提下，把主导权交给文本条件，使'从扩散轨迹中段接管 + CFG文本引导'的效果（山脉/晚霞）在多种子下稳定可见；strength越小保留初始图越多，教师可自行改0.6/0.7/0.8对比权衡",
+    "复现说明": "所有随机源（VAE latent采样、加噪）均传入固定generator；同diffusers/torch版本下同seed可像素级复现，换版本timestep取整可能略有差异"
+  },
+  "strength": 0.9,
+  "guidance_scale": 7.5,
+  "seed": 42,
+  "num_inference_steps": 50,
+  "加噪起点": "实际起始timestep=881, alpha_bar=0.0172, 逆向去噪45步（timestep取整/offset随diffusers版本略有差异，以本次实测为准）",
+  "CFG实现": "显式uncond/cond拼接 + 线性混合 eps_uncond+s*(eps_cond-eps_uncond)，与diffusers官方StableDiffusionImg2ImgPipeline逐项等价",
+  "随机源": "VAE latent采样与加噪均传入同一个generator，同环境同版本下结果可复现",
+  "依赖版本": {
+    "diffusers": "0.40.0",
+    "transformers": "5.17.0",
+    "torch": "2.11.0+cu130",
+    "accelerate": "1.15.0"
+  },
+  "generated_at": "2026-10-05T12:28:49",
+  "存档图": "img2img对比.png",
+  "output_stats": {
+    "mean_RGB": [
+      119.82,
+      46.17,
+      154.18
+    ],
+    "grain_std": 2.617,
+    "edge_y_mean": 0.717,
+    "ridge_grad_min": -2.641,
+    "dark_frac(<110)_top_mid_bottom": [
+      0.228,
+      0.606,
+      0.653
+    ]
+  },
+  "seed扫描": {
+    "教学目的": "演示扩散采样的随机性：同一初始图、同一prompt、同一参数，仅换随机种子，输出构图也会不同（与实验13.6-2的多样性演示同构）；也借此说明学生自行运行得到的画面与教材不同是正常现象，不代表代码有误",
+    "状态": "ok",
+    "成功数": 4,
+    "总数": 4,
+    "逐种子stats": [
+      {
+        "seed": 42,
+        "stats": {
+          "mean_RGB": [
+            119.82,
+            46.17,
+            154.18
+          ],
+          "grain_std": 2.617,
+          "edge_y_mean": 0.717,
+          "ridge_grad_min": -2.641,
+          "dark_frac(<110)_top_mid_bottom": [
+            0.228,
+            0.606,
+            0.653
+          ]
+        }
+      },
+      {
+        "seed": 7,
+        "stats": {
+          "mean_RGB": [
+            118.75,
+            53.62,
+            162.03
+          ],
+          "grain_std": 1.039,
+          "edge_y_mean": 0.619,
+          "ridge_grad_min": -0.362,
+          "dark_frac(<110)_top_mid_bottom": [
+            0.25,
+            0.213,
+            0.546
+          ]
+        }
+      },
+      {
+        "seed": 123,
+        "stats": {
+          "mean_RGB": [
+            124.24,
+            60.13,
+            162.48
+          ],
+          "grain_std": 2.423,
+          "edge_y_mean": 0.675,
+          "ridge_grad_min": -3.342,
+          "dark_frac(<110)_top_mid_bottom": [
+            0.0,
+            0.044,
+            0.847
+          ]
+        }
+      },
+      {
+        "seed": 2024,
+        "stats": {
+          "mean_RGB": [
+            115.2,
+            43.97,
+            171.13
+          ],
+          "grain_std": 2.634,
+          "edge_y_mean": 0.696,
+          "ridge_grad_min": -0.267,
+          "dark_frac(<110)_top_mid_bottom": [
+            0.726,
+            0.259,
+            0.402
+          ]
+        }
+      }
+    ],
+    "输出图": "img2img_seed扫描.png",
+    "error": ""
+  },
+  "官方管线对照": {
+    "教学目的": "验证本实验自定义实现的管线与diffusers官方StableDiffusionImg2ImgPipeline在同一环境、同一权重、同一seed下数值等价，从而确认手写的VAE编码→按strength加噪→CFG拼接混合→DDIM去噪→VAE解码全流程正确",
+    "状态": "ok",
+    "输出图": "img2img_官方管线对照.png",
+    "官方stats": {
+      "mean_RGB": [
+        120.35,
+        46.67,
+        154.58
+      ],
+      "grain_std": 2.619,
+      "edge_y_mean": 0.718,
+      "ridge_grad_min": -2.631,
+      "dark_frac(<110)_top_mid_bottom": [
+        0.21,
+        0.59,
+        0.648
+      ]
+    },
+    "手写vs官方_MAE(0-255)": 0.502,
+    "手写vs官方_相关系数": 1.0,
+    "判读": "MAE≈0（约0.5/255，浮点舍入级）、相关系数≈1：自定义管线与官方实现数值等价，手写全流程正确",
+    "error": ""
+  },
+  "观察": "①主对比图（img2img对比.png）：初始图是无任何语义的平滑渐变，输出在保留紫色调的同时生成了暗色山脉剪影与晚霞云层——初始图不存在的语义结构完全由文本条件经CFG注入，直观展示img2img'从扩散轨迹中段接管'的机制与strength的权衡作用。②种子扫描（img2img_seed扫描.png）：同配置仅换种子，多数面板都出现山脉与天空结构，但具体形态各异，说明采样随机性真实存在、定性结果不应以单一样本外推。③官方对照（img2img_官方管线对照.png）：手写实现与官方管线MAE≈0.5/255、相关系数≈1，验证自定义管线实现正确。④stats字段（mean_RGB/grain_std/ridge_grad_min等）为自动计算的客观图像特征，仅作辅助线索，语义达成度以对照存档图的人工判读为准。"
+}

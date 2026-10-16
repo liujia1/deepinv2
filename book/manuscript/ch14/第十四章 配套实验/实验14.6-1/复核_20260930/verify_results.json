@@ -1,0 +1,221 @@
+{
+  "meta": {
+    "torch": "2.11.0+cpu",
+    "n_samples": 256,
+    "n_steps": 32,
+    "train_seeds": [
+      42,
+      7,
+      123
+    ],
+    "sample_seeds": [
+      2025,
+      2026
+    ],
+    "tpl30_corpus": [
+      "a big cat ate it up",
+      "a big cat sat on it",
+      "a big dog ate it up",
+      "a big dog sat on it",
+      "a cat ate the red fish",
+      "a cat ate the small fish",
+      "a cat ate the yellow fish",
+      "a cat sat on the bed",
+      "a cat sat on the rug",
+      "a dog ate the red fish",
+      "a dog ate the small fish",
+      "a dog ate the yellow fish",
+      "a dog sat on the mat",
+      "a dog sat on the rug",
+      "a dog sat on the sofa",
+      "the big cat sat on it",
+      "the big dog ate it up",
+      "the big dog sat on it",
+      "the cat ate the big fish",
+      "the cat ate the yellow fish",
+      "the cat sat on the bed",
+      "the cat sat on the mat",
+      "the cat sat on the rug",
+      "the cat sat on the sofa",
+      "the dog ate the big fish",
+      "the dog ate the red fish",
+      "the dog sat on the bed",
+      "the dog sat on the mat",
+      "the dog sat on the rug",
+      "the dog sat on the sofa"
+    ],
+    "tpl30_words": [
+      "a",
+      "ate",
+      "bed",
+      "big",
+      "cat",
+      "dog",
+      "fish",
+      "it",
+      "mat",
+      "on",
+      "red",
+      "rug",
+      "sat",
+      "small",
+      "sofa",
+      "the",
+      "up",
+      "yellow"
+    ]
+  },
+  "A_6tpl": {
+    "name": "A_6tpl",
+    "n_templates": 6,
+    "rows": [
+      {
+        "train_seed": 42,
+        "sample_seed": 2025,
+        "hit_mlm": 0.9375,
+        "hit_unif": 0.9766,
+        "diff_unif_minus_mlm": 0.0391,
+        "rewrite_mlm": 0.001057,
+        "rewrite_unif": 0.029928,
+        "loss_mlm": 0.209268,
+        "loss_unif": 0.32421
+      },
+      {
+        "train_seed": 42,
+        "sample_seed": 2026,
+        "hit_mlm": 0.9336,
+        "hit_unif": 0.9727,
+        "diff_unif_minus_mlm": 0.0391,
+        "rewrite_mlm": 0.001269,
+        "rewrite_unif": 0.030904,
+        "loss_mlm": 0.209268,
+        "loss_unif": 0.32421
+      },
+      {
+        "train_seed": 7,
+        "sample_seed": 2025,
+        "hit_mlm": 0.9297,
+        "hit_unif": 0.9766,
+        "diff_unif_minus_mlm": 0.0469,
+        "rewrite_mlm": 0.001099,
+        "rewrite_unif": 0.030904,
+        "loss_mlm": 0.207611,
+        "loss_unif": 0.465989
+      },
+      {
+        "train_seed": 7,
+        "sample_seed": 2026,
+        "hit_mlm": 0.9336,
+        "hit_unif": 0.9688,
+        "diff_unif_minus_mlm": 0.0352,
+        "rewrite_mlm": 0.001312,
+        "rewrite_unif": 0.031433,
+        "loss_mlm": 0.207611,
+        "loss_unif": 0.465989
+      },
+      {
+        "train_seed": 123,
+        "sample_seed": 2025,
+        "hit_mlm": 0.9336,
+        "hit_unif": 0.9727,
+        "diff_unif_minus_mlm": 0.0391,
+        "rewrite_mlm": 0.000761,
+        "rewrite_unif": 0.029134,
+        "loss_mlm": 0.131572,
+        "loss_unif": 0.337888
+      },
+      {
+        "train_seed": 123,
+        "sample_seed": 2026,
+        "hit_mlm": 0.9219,
+        "hit_unif": 0.9609,
+        "diff_unif_minus_mlm": 0.0391,
+        "rewrite_mlm": 0.001312,
+        "rewrite_unif": 0.030334,
+        "loss_mlm": 0.131572,
+        "loss_unif": 0.337888
+      }
+    ],
+    "mlm_wins": 0,
+    "ties": 0,
+    "diff_min": 0.0352,
+    "diff_max": 0.0469
+  },
+  "B_30tpl": {
+    "name": "B_30tpl",
+    "n_templates": 30,
+    "rows": [
+      {
+        "train_seed": 42,
+        "sample_seed": 2025,
+        "hit_mlm": 0.8672,
+        "hit_unif": 0.8633,
+        "diff_unif_minus_mlm": -0.0039,
+        "rewrite_mlm": 0.001305,
+        "rewrite_unif": 0.031372,
+        "loss_mlm": 0.440636,
+        "loss_unif": 0.523548
+      },
+      {
+        "train_seed": 42,
+        "sample_seed": 2026,
+        "hit_mlm": 0.8594,
+        "hit_unif": 0.9062,
+        "diff_unif_minus_mlm": 0.0469,
+        "rewrite_mlm": 0.001089,
+        "rewrite_unif": 0.030518,
+        "loss_mlm": 0.440636,
+        "loss_unif": 0.523548
+      },
+      {
+        "train_seed": 7,
+        "sample_seed": 2025,
+        "hit_mlm": 0.8828,
+        "hit_unif": 0.9141,
+        "diff_unif_minus_mlm": 0.0312,
+        "rewrite_mlm": 0.001136,
+        "rewrite_unif": 0.03123,
+        "loss_mlm": 0.302282,
+        "loss_unif": 0.627431
+      },
+      {
+        "train_seed": 7,
+        "sample_seed": 2026,
+        "hit_mlm": 0.8477,
+        "hit_unif": 0.9336,
+        "diff_unif_minus_mlm": 0.0859,
+        "rewrite_mlm": 0.001048,
+        "rewrite_unif": 0.030314,
+        "loss_mlm": 0.302282,
+        "loss_unif": 0.627431
+      },
+      {
+        "train_seed": 123,
+        "sample_seed": 2025,
+        "hit_mlm": 0.9023,
+        "hit_unif": 0.8828,
+        "diff_unif_minus_mlm": -0.0195,
+        "rewrite_mlm": 0.001094,
+        "rewrite_unif": 0.031067,
+        "loss_mlm": 0.393034,
+        "loss_unif": 0.526282
+      },
+      {
+        "train_seed": 123,
+        "sample_seed": 2026,
+        "hit_mlm": 0.8438,
+        "hit_unif": 0.9102,
+        "diff_unif_minus_mlm": 0.0664,
+        "rewrite_mlm": 0.00067,
+        "rewrite_unif": 0.030457,
+        "loss_mlm": 0.393034,
+        "loss_unif": 0.526282
+      }
+    ],
+    "mlm_wins": 2,
+    "ties": 0,
+    "diff_min": -0.0195,
+    "diff_max": 0.0859
+  },
+  "N1_theory_hit_6tpl": 0.0057
+}

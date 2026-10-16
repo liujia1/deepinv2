@@ -1,0 +1,62 @@
+{
+  "single_realization_seed42": {
+    "psnr_linear_dB": 22.81,
+    "psnr_tikhonov_wiener_lam0.01_dB": 14.78,
+    "psnr_tikhonov_cg_lam0.05_dB": 21.89,
+    "psnr_tv_lbfgs_lam0.03_dB": 32.88,
+    "psnr_pnp_gd_dB": 33.57,
+    "psnr_single_pass_sigma0.05_dB": 23.23,
+    "psnr_single_pass_sigma0.2_dB": 22.36
+  },
+  "parameters": {
+    "noise_sigma": 0.05,
+    "lambda_tikhonov_wiener_headline": 0.01,
+    "lambda_tikhonov_cg_tuned": 0.05,
+    "lambda_tv": 0.03,
+    "tv_solver": "L-BFGS + strong_wolfe (max_iter=500, 解至收敛)",
+    "pnp_tau_step": 0.5,
+    "pnp_sigma_denoise": 0.05,
+    "pnp_num_iters": 50
+  },
+  "multi_seed_robustness": {
+    "num_seeds": 16,
+    "seed_range": [
+      1000,
+      1015
+    ],
+    "mean_std_dB": {
+      "linear": {
+        "mean": 22.741,
+        "std": 0.03
+      },
+      "tikhonov_wiener_0.01": {
+        "mean": 14.9,
+        "std": 0.095
+      },
+      "tikhonov_cg_0.05": {
+        "mean": 21.912,
+        "std": 0.09
+      },
+      "single_pass_0.05": {
+        "mean": 23.152,
+        "std": 0.034
+      },
+      "single_pass_0.2": {
+        "mean": 22.298,
+        "std": 0.028
+      },
+      "tv_lbfgs_0.03": {
+        "mean": 32.23,
+        "std": 0.388
+      },
+      "pnp_gd_50": {
+        "mean": 32.625,
+        "std": 0.614
+      }
+    },
+    "pnp_gd_minus_tv_mean_dB": 0.395,
+    "pnp_gd_vs_tv_win_rate": 0.75,
+    "single0.05_minus_linear_mean_dB": 0.411,
+    "single0.05_vs_linear_win_rate": 1.0
+  }
+}

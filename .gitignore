@@ -51,3 +51,12 @@ data/cache/
 # Logs
 *.log
 logs/
+
+# === book build products ===
+book/build/
+
+# === local-only working areas (not part of the book) ===
+.uploads/
+.audit_tmp/
+.codebuddy/plans/
+_review_scratch/

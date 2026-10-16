@@ -1,0 +1,155 @@
+{
+  "step1_conjugates": {
+    "x²/2, y=2": {
+      "theory": 2.0,
+      "theory_str": "y²/2",
+      "numeric": 2.0,
+      "argmax_x": 2.0,
+      "abs_error": 0.0
+    },
+    "|x|, y=0.5": {
+      "theory": 0.0,
+      "theory_str": "0 (|y|≤1)",
+      "numeric": 0.0,
+      "argmax_x": 0.0,
+      "abs_error": 0.0
+    },
+    "|x|, y=1.5": {
+      "theory": null,
+      "theory_str": "+inf (|y|>1)",
+      "numeric": 5.0,
+      "argmax_x": 10.0,
+      "abs_error": null
+    },
+    "-log(x), y=-1.5": {
+      "theory": -1.4054651081081644,
+      "theory_str": "-1-log(-y)",
+      "numeric": -1.4054662222485006,
+      "argmax_x": 0.6656719999999999,
+      "abs_error": 1.1141403362113778e-06
+    },
+    "exp(x), y=2": {
+      "theory": -0.6137056388801094,
+      "theory_str": "y*log(y)-y",
+      "numeric": -0.6137057633763079,
+      "argmax_x": 0.6935000000000002,
+      "abs_error": 1.2449619846144344e-07
+    }
+  },
+  "step1_infinity_case_xrange_growth": [
+    {
+      "x_range_upper": 10,
+      "numeric_sup": 5.0
+    },
+    {
+      "x_range_upper": 100,
+      "numeric_sup": 50.0
+    },
+    {
+      "x_range_upper": 1000,
+      "numeric_sup": 500.0
+    },
+    {
+      "x_range_upper": 10000,
+      "numeric_sup": 5000.0
+    }
+  ],
+  "step2": [
+    {
+      "config": "配置A（原设定：先验双峰但后验被观测拉成单峰）",
+      "model": {
+        "prior_weights": [
+          0.3,
+          0.7
+        ],
+        "prior_means": [
+          -2.0,
+          1.0
+        ],
+        "prior_stds": [
+          1.0,
+          1.0
+        ],
+        "sigma_obs": 0.5,
+        "x_obs": 0.5
+      },
+      "log_px_quad": -1.4490428873568022,
+      "log_px_closed_form": -1.4490428873568024,
+      "posterior_weights": [
+        0.03742410640816233,
+        0.9625758935918377
+      ],
+      "posterior_means": [
+        0.0,
+        0.6
+      ],
+      "posterior_std": 0.4472135954999579,
+      "posterior_peaks": [
+        0.5908000000000015
+      ],
+      "q_star": {
+        "mu": 0.5774804131187998,
+        "sigma": 0.46073333250499404
+      },
+      "elbo_mc_crn": -1.449505062950126,
+      "elbo_analytic": -1.4495225688023172,
+      "gap_mc": 0.0004621755933238436,
+      "gap_analytic": 0.00047968144551502334,
+      "kl_q_to_posterior_direct": 0.00047968144551519904,
+      "minus_log_pi_max": 0.038142365443707665
+    },
+    {
+      "config": "配置B（强分离先验+紧似然：后验真正双峰）",
+      "model": {
+        "prior_weights": [
+          0.3,
+          0.7
+        ],
+        "prior_means": [
+          -2.5,
+          2.5
+        ],
+        "prior_stds": [
+          0.5,
+          0.5
+        ],
+        "sigma_obs": 0.4,
+        "x_obs": 0.0
+      },
+      "log_px_quad": -8.095090693074976,
+      "log_px_closed_form": -8.095090693074976,
+      "posterior_weights": [
+        0.2999999999999998,
+        0.7000000000000001
+      ],
+      "posterior_means": [
+        -0.975609756097561,
+        0.975609756097561
+      ],
+      "posterior_std": 0.31234752377721214,
+      "posterior_peaks": [
+        -0.9758500000000012,
+        0.9758499999999994
+      ],
+      "q_star": {
+        "mu": 0.9737374754183176,
+        "sigma": 0.31557189736354185
+      },
+      "elbo_mc_crn": -8.449861523329627,
+      "elbo_analytic": -8.450042673757668,
+      "gap_mc": 0.35477083025465106,
+      "gap_analytic": 0.3549519806826922,
+      "kl_q_to_posterior_direct": 0.3549519785802809,
+      "minus_log_pi_max": 0.3566749439387323,
+      "secondary_basin": {
+        "mu": -0.970395715078003,
+        "sigma": 0.32013419199155174,
+        "elbo": -9.294461825963978,
+        "gap": 1.1993711328890022,
+        "below_global_by": 0.84441915220631,
+        "prediction_log_weight_ratio": 0.8472978603872042
+      }
+    }
+  ],
+  "note": "步骤1 的 |x|(|y|>1) 行不给误差：理论值为 +∞，有限域网格搜索只能给出截断端点值，属共轭定义域的固有属性；已用区间扩容实验（数值解单调增长至 5000）实证。步骤2 配置A 后验为单峰（分量间距≤2·std），间隙 ~5e-4 只反映形状残余；配置B 后验真正双峰，间隙 ≈ -log(π_max)。MC-CRN 间隙与解析间隙差 ~1e-5，源于固定样本上的轻微过拟合。"
+}

@@ -1,0 +1,39 @@
+{
+  "image_size": 32,
+  "matrix_size": 1024,
+  "noise_sigma": 0.01,
+  "condition_number_A": 1101915027.7593,
+  "psnr_convention": {
+    "raw_dB": "主口径：直接在重建值上以 data_range=1 计算，如实反映 1/sigma_i 的噪声放大",
+    "clipped_dB": "对照口径：先 np.clip 到 [0,1] 再计算，与显示范围一致，但会为崩坏重建的误差封顶"
+  },
+  "psnr_pseudo_inverse_dB": {
+    "raw_dB": -113.64,
+    "clipped_dB": 3.58
+  },
+  "psnr_truncated_SVD": {
+    "50": {
+      "raw_dB": 15.06,
+      "clipped_dB": 15.1
+    },
+    "100": {
+      "raw_dB": 15.44,
+      "clipped_dB": 15.46
+    },
+    "200": {
+      "raw_dB": 16.12,
+      "clipped_dB": 16.24
+    },
+    "500": {
+      "raw_dB": -4.6,
+      "clipped_dB": 4.78
+    }
+  },
+  "best_k_global_scan": 202,
+  "psnr_best_global_dB": {
+    "raw_dB": 16.14,
+    "clipped_dB": 16.26
+  },
+  "selection_rule_note": "best_k 按真值 PSNR 在 k=1..1024 上事后选峰（oracle），仅供教学；实战无真值时用 GCV、L 曲线或 Morozov 偏差原理",
+  "inverse_crime_note": "正、反演刻意共用同一离散算子 A 以隔离噪声放大机制；建模误差（Inverse Crime）的影响见实验 1.3-4"
+}
