@@ -191,9 +191,16 @@ RULESETS = {
 
 
 def find_chapter_dirs(exclude=frozenset()):
-    return [d for d in REPO.iterdir()
-            if d.is_dir() and re.match(r"^第\d+章", d.name)
-            and int(re.match(r"^第(\d+)章", d.name).group(1)) not in exclude]
+    dirs = []
+    for d in REPO.iterdir():
+        if d.is_dir() and re.match(r"^第\d+章", d.name):
+            no = int(re.match(r"^第(\d+)章", d.name).group(1))
+            if no not in exclude:
+                dirs.append(d)
+    intro = REPO / "绪论"
+    if intro.is_dir() and 0 not in exclude:
+        dirs.append(intro)   # 绪论 = 排除编号 0（与 audit_notation 的 ch00 同口径）
+    return dirs
 
 
 def count_math_x(seg):
