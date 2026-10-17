@@ -104,3 +104,40 @@ $w(t)$ 由 $(s(t), \sigma(t))$ 的动力学方程确定。
 $$\frac{\lambda_\text{VP}(t)}{s^2(t)\sigma_\text{VP}^2(t)} = \frac{(1-\bar\alpha_t)/\bar\alpha_t}{\bar\alpha_t \cdot (1-\bar\alpha_t)/\bar\alpha_t} = \frac{1}{\bar\alpha_t}$$
 
 这与 VP-SDE 下简化 VLB 的权重一致（均匀权重，仅差 $\bar\alpha_t$ 的缩放，当 $\bar\alpha_t \approx 1$ 时近似为 1）。
+
+---
+
+## B.5 EDM 最优网络预处理（preconditioning）
+
+> 本节回应附录 7B 的迁移说明：7.2 与附录 7B 只给出"VE/VP 等价"的结论与直觉，此处补上 Karras et al. (2022) 最优设计 $c_{\text{skip}}/c_{\text{out}}/c_{\text{in}}/c_{\text{noise}}$ 的逐项推导。这也是实验 7.7-1 代码中同名变量的公式出处。
+
+### 为什么不让网络直接学去噪器
+
+B.1 已说明推理只取决于噪声水平 $\sigma$。但若把去噪器直接实现为网络 $D_\theta(x,\sigma)$ 来训练并不理想——含噪输入 $x = x_0 + \sigma\,\epsilon$ 的数值幅度随 $\sigma$ 剧烈变化（$\sigma$ 越大输入越"爆"），直接回归会使梯度尺度失衡。Karras et al. 的做法是训练一个"良态"网络 $F_\theta$，再用一组只依赖 $\sigma$ 的缩放函数把它组装成去噪器：
+
+$$D_\theta(x;\sigma) = c_{\text{skip}}(\sigma)\,x + c_{\text{out}}(\sigma)\,F_\theta\!\big(c_{\text{in}}(\sigma)\,x,\; c_{\text{noise}}(\sigma)\big)$$
+
+四个系数各司其职：$c_{\text{in}}$ 把输入归一到单位方差，$c_{\text{out}}$ 缩放输出，$c_{\text{skip}}$ 是一条跳连、让网络在"预测 $x_0$"与"预测噪声"之间自动插值，$c_{\text{noise}}$ 把噪声水平映射成网络的条件输入。
+
+### 从第一性原理导出最优设计
+
+记数据的标准差为 $\sigma_{\text{data}}$（对归一化到 $[-1,1]$ 的图像约 $0.5$）。把上式代入 B.3 的统一 DSM 目标，网络 $F_\theta$ 的**有效训练目标**与**有效权重**为：
+
+$$F_{\text{target}}(x_0,\epsilon;\sigma) = \frac{1}{c_{\text{out}}(\sigma)}\big(x_0 - c_{\text{skip}}(\sigma)\,(x_0 + \sigma\,\epsilon)\big), \qquad w(\sigma) = \lambda(\sigma)\,c_{\text{out}}(\sigma)^2$$
+
+Karras et al. 用四条原则唯一定出各系数：
+
+1. **输入单位方差** $\Rightarrow c_{\text{in}}(\sigma) = 1/\sqrt{\sigma^2 + \sigma_{\text{data}}^2}$；
+2. **有效目标单位方差** $\Rightarrow c_{\text{out}}(\sigma)^2 = (1-c_{\text{skip}})^2\,\sigma_{\text{data}}^2 + c_{\text{skip}}^2\,\sigma^2$；
+3. **最小化 $c_{\text{out}}$（尽量少放大网络误差）**：对上式关于 $c_{\text{skip}}$ 求导置零，得 $c_{\text{skip}}(\sigma) = \sigma_{\text{data}}^2/(\sigma^2 + \sigma_{\text{data}}^2)$，回代得 $c_{\text{out}}(\sigma) = \sigma\,\sigma_{\text{data}}/\sqrt{\sigma^2 + \sigma_{\text{data}}^2}$；
+4. **有效权重对 $\sigma$ 均匀**（$w(\sigma)=1$）$\Rightarrow \lambda(\sigma) = 1/c_{\text{out}}(\sigma)^2 = (\sigma^2 + \sigma_{\text{data}}^2)/(\sigma\,\sigma_{\text{data}})^2$。
+
+条件输入 $c_{\text{noise}}$ 不受最优性约束，经验取 $c_{\text{noise}}(\sigma) = \tfrac{1}{4}\ln\sigma$。汇总即 EDM 论文 Table 1 的 "Ours" 列：
+
+$$c_{\text{in}}(\sigma) = \frac{1}{\sqrt{\sigma^2 + \sigma_{\text{data}}^2}},\quad c_{\text{skip}}(\sigma) = \frac{\sigma_{\text{data}}^2}{\sigma^2 + \sigma_{\text{data}}^2},\quad c_{\text{out}}(\sigma) = \frac{\sigma\,\sigma_{\text{data}}}{\sqrt{\sigma^2 + \sigma_{\text{data}}^2}},\quad c_{\text{noise}}(\sigma) = \tfrac{1}{4}\ln\sigma$$
+
+### 与 VE / VP 的关系：一套设计"一记两通"
+
+上述推导写在 VE 规范（$s(t)=1$，$x = x_0 + \sigma\,\epsilon$）下，四个系数**只依赖 $\sigma$**。回到 B.1 的核心观察——推理只取决于噪声水平 $\sigma(t)$、与信号缩放 $s(t)$ 无关——对 VP-SDE 只需把 $\sigma$ 换成 $\sigma_{\text{VP}}(t) = \sqrt{(1-\bar\alpha_t)/\bar\alpha_t}$，整套最优设计原样适用；两种参数化下网络输出动态范围的差异，由 $c_{\text{in}}, c_{\text{out}}$ 自动吸收。
+
+这说明"VE 与 VP 是同一框架的两种参数化"不仅体现在推理层面（B.1–B.2），也落地到**训练实现**层面：连最优网络预处理都共享同一组关于 $\sigma$ 的闭式公式。至此，正向 SDE 与转移核（B.1）、得分与训练目标（B.2–B.3）、权重映射（B.4）与最优预处理（本节）五个环节，都被统一在同一组 $(s(t), \sigma(t))$ 参数化之下——附录 7B 遗留的"表面差异"被彻底消解。
