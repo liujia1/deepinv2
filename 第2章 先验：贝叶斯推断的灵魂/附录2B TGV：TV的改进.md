@@ -4,13 +4,13 @@
 
 ## 阶梯效应的根源回顾
 
-TV 先验的正则项为 $\text{TV}(x) = \|\nabla x\|_1$，惩罚图像梯度 $\ell^1$ 范数。函数空间中，TV 解属于 **BV（有界变差）空间**——BV 允许不连续函数（边缘），但 TV 最小化解倾向**分段常数**函数。
+TV 先验的正则项为 $\text{TV}(\mathbf{x}) = \|\nabla \mathbf{x}\|_1$，惩罚图像梯度 $\ell^1$ 范数。函数空间中，TV 解属于 **BV（有界变差）空间**——BV 允许不连续函数（边缘），但 TV 最小化解倾向**分段常数**函数。
 
-这并非偶然。考虑最简单去噪问题：区间 $[0,1]$ 上给定含噪一维信号 $y$，TV 去噪解 $x^*$ 满足：
+这并非偶然。考虑最简单去噪问题：区间 $[0,1]$ 上给定含噪一维信号 $\mathbf{y}$，TV 去噪解 $\mathbf{x}^*$ 满足：
 
-$$x^* = \arg\min_x \frac{1}{2}\|x - y\|_2^2 + \lambda \int_0^1 |x'| \, dt$$
+$$\mathbf{x}^* = \arg\min_x \frac{1}{2}\|\mathbf{x} - \mathbf{y}\|_2^2 + \lambda \int_0^1 |\mathbf{x}'| \, dt$$
 
-当 $\lambda$ 较大时，正则项 $\int |x'| \, dt$ 强烈偏好 $x' = 0$——即 $x$ 为常数。对真正渐变信号（如 $x(t) = t$，$x' = 1 \neq 0$），TV 只能用一系列分段常数近似线性函数，产生阶梯状人工结构。
+当 $\lambda$ 较大时，正则项 $\int |\mathbf{x}'| \, dt$ 强烈偏好 $\mathbf{x}' = 0$——即 $\mathbf{x}$ 为常数。对真正渐变信号（如 $\mathbf{x}(t) = t$，$\mathbf{x}' = 1 \neq 0$），TV 只能用一系列分段常数近似线性函数，产生阶梯状人工结构。
 
 阶梯效应**本质原因**在于：TV 只用一阶导数信息，将函数空间限制为分段常数。若引入二阶导数信息，就可允许分段仿射（一次函数）解——这正是 TGV 改进思路。
 
@@ -20,25 +20,25 @@ $$x^* = \arg\min_x \frac{1}{2}\|x - y\|_2^2 + \lambda \int_0^1 |x'| \, dt$$
 
 TGV 要回答的问题可以概括为一句话：如何在保留 $\ell^1$ 型边缘促进机制的同时，把"正则化代价为零"的函数类从分段常数扩大到分段仿射？Bredies、Kunisch 和 Pock（2010）给出的答案是 **TGV**（Total Generalized Variation，广义全变差）——TV 的高阶推广。二阶 TGV 的连续（对偶）定义：
 
-$$\text{TGV}_\alpha^2(x) = \sup\left\{\int_\Omega x \, \text{div}^2 p \, dx \;\Big|\; p \in C_c^\infty(\Omega, \text{Sym}_{2\times2}),\;\|p\|_\infty \leq \alpha_0,\;\|\text{div}\, p\|_\infty \leq \alpha_1\right\}$$
+$$\text{TGV}_\alpha^2(\mathbf{x}) = \sup\left\{\int_\Omega \mathbf{x} \, \text{div}^2 p \, dx \;\Big|\; p \in C_c^\infty(\Omega, \text{Sym}_{2\times2}),\;\|p\|_\infty \leq \alpha_0,\;\|\text{div}\, p\|_\infty \leq \alpha_1\right\}$$
 
 其中 $\alpha = (\alpha_0, \alpha_1)$ 是两个正参数，$\text{Sym}_{2\times2}$ 是 $2\times 2$ 对称矩阵空间，$\text{div}^2$ 是二阶散度算子。
 
 定义较抽象。更直观的理解来自 TGV 的**原始形式**（primal formulation）：
 
-$$\text{TGV}_\alpha^2(x) = \min_w \;\alpha_1\|\nabla x - w\|_1 + \alpha_0\|\mathcal{E}(w)\|_1$$
+$$\text{TGV}_\alpha^2(\mathbf{x}) = \min_w \;\alpha_1\|\nabla \mathbf{x} - w\|_1 + \alpha_0\|\mathcal{E}(w)\|_1$$
 
 其中：
-- $w$ 是辅助向量场（可理解为对梯度 $\nabla x$ 中"光滑分量"的逼近）
-- $\mathcal{E}(w) = \frac{1}{2}(\nabla w + \nabla w^\top)$ 是 $w$ 的**对称梯度**（symmetrized gradient）——它是 $w$ 的一阶导数，即 $x$ 的二阶导数信息
+- $w$ 是辅助向量场（可理解为对梯度 $\nabla \mathbf{x}$ 中"光滑分量"的逼近）
+- $\mathcal{E}(w) = \frac{1}{2}(\nabla w + \nabla w^\top)$ 是 $w$ 的**对称梯度**（symmetrized gradient）——它是 $w$ 的一阶导数，即 $\mathbf{x}$ 的二阶导数信息
 
 ### 逐项解读
 
-**第一项** $\alpha_1\|\nabla x - w\|_1$：惩罚图像梯度 $\nabla x$ 与辅助场 $w$ 的偏差。当 $w = 0$ 时，第一项退化为 $\alpha_1\|\nabla x\|_1 = \alpha_1 \text{TV}(x)$——TGV 退化为加权 TV。
+**第一项** $\alpha_1\|\nabla \mathbf{x} - w\|_1$：惩罚图像梯度 $\nabla \mathbf{x}$ 与辅助场 $w$ 的偏差。当 $w = 0$ 时，第一项退化为 $\alpha_1\|\nabla \mathbf{x}\|_1 = \alpha_1 \text{TV}(\mathbf{x})$——TGV 退化为加权 TV。
 
 **第二项** $\alpha_0\|\mathcal{E}(w)\|_1$：惩罚 $w$ 的对称梯度 $\ell^1$ 范数。$\mathcal{E}(w)$ 度量 $w$ 的"形变部分"：若 $w$ 为常数场（更一般地，线性部分反对称的仿射场，即无穷小刚体运动），则 $\mathcal{E}(w) = 0$，第二项为零。
 
-**两者协同**：最小化在对 $w$ 取下确界后，TGV 允许图像梯度 $\nabla x$ 与辅助场 $w$ 偏离，同时只惩罚 $w$ 的形变部分。关键情形是分段仿射图像（渐变区域 + 边缘）：此时 $\nabla x$ 近似分段常数，取 $w \approx \nabla x$ 使第一项小，而分段常数场的对称梯度几乎为零，第二项也小——从而 TGV 值低，TGV 正则化不会惩罚分段仿射结构。这正是"引入二阶信息即可放宽常数假设"这一设计思想的兑现。
+**两者协同**：最小化在对 $w$ 取下确界后，TGV 允许图像梯度 $\nabla \mathbf{x}$ 与辅助场 $w$ 偏离，同时只惩罚 $w$ 的形变部分。关键情形是分段仿射图像（渐变区域 + 边缘）：此时 $\nabla \mathbf{x}$ 近似分段常数，取 $w \approx \nabla \mathbf{x}$ 使第一项小，而分段常数场的对称梯度几乎为零，第二项也小——从而 TGV 值低，TGV 正则化不会惩罚分段仿射结构。这正是"引入二阶信息即可放宽常数假设"这一设计思想的兑现。
 
 ---
 
@@ -48,7 +48,7 @@ $$\text{TGV}_\alpha^2(x) = \min_w \;\alpha_1\|\nabla x - w\|_1 + \alpha_0\|\math
 
 当 $\alpha_0 \to \infty$ 时，第二项 $\alpha_0\|\mathcal{E}(w)\|_1$ 权重趋于无穷，迫使 $\mathcal{E}(w) = 0$，即 $w$ 只能是无穷小刚体运动（常数场，或线性部分反对称的仿射场）。若在此基础上进一步限制 $w = 0$（最简单的刚体运动），则 TGV 退化为 TV：
 
-$$\text{TGV}_{(\alpha_0 \to \infty, \alpha_1)}^2(x) \to \alpha_1\|\nabla x\|_1 = \alpha_1 \text{TV}(x)$$
+$$\text{TGV}_{(\alpha_0 \to \infty, \alpha_1)}^2(\mathbf{x}) \to \alpha_1\|\nabla \mathbf{x}\|_1 = \alpha_1 \text{TV}(\mathbf{x})$$
 
 因此，**TV 是 TGV 在 $\alpha_0 \to \infty$（并限制 $w=0$）时的特例**。TGV 比 TV 多一个自由度 $\alpha_0$，用于控制对二阶信息的容忍程度。
 
@@ -56,7 +56,7 @@ $$\text{TGV}_{(\alpha_0 \to \infty, \alpha_1)}^2(x) \to \alpha_1\|\nabla x\|_1 =
 
 | | TV | TGV$^2$ |
 |---|---|---|
-| **惩罚** | $\|\nabla x\|_1$（一阶） | $\alpha_1\|\nabla x - w\|_1 + \alpha_0\|\mathcal{E}(w)\|_1$（一阶+二阶） |
+| **惩罚** | $\|\nabla \mathbf{x}\|_1$（一阶） | $\alpha_1\|\nabla \mathbf{x} - w\|_1 + \alpha_0\|\mathcal{E}(w)\|_1$（一阶+二阶） |
 | **偏好解** | 分段常数 | 分段仿射 |
 | **渐变区域** | 阶梯效应 | 自然渐变 |
 | **边缘保持** | 能 | 能 |
@@ -71,15 +71,15 @@ $$\text{TGV}_{(\alpha_0 \to \infty, \alpha_1)}^2(x) \to \alpha_1\|\nabla x\|_1 =
 
 理论定义最终要落到可计算的格式上。实际计算中需将连续 TGV 离散化。设图像定义在离散网格上，$D$ 为有限差分算子，$E$ 为对称梯度算子。离散 TGV：
 
-$$\text{TGV}(x) = \min_w \;\alpha_1\|Dx - w\|_1 + \alpha_0\|Ew\|_1$$
+$$\text{TGV}(\mathbf{x}) = \min_w \;\alpha_1\|Dx - w\|_1 + \alpha_0\|Ew\|_1$$
 
 其中 $Dx$ 给出图像水平和垂直有限差分，$Ew$ 给出辅助场 $w$ 的对称梯度（含 $w$ 二阶和混合差分）。
 
 TGV 正则化去噪模型：
 
-$$\min_{x, w} \;\frac{1}{2}\|x - y\|_2^2 + \alpha_1\|Dx - w\|_1 + \alpha_0\|Ew\|_1$$
+$$\min_{x, w} \;\frac{1}{2}\|\mathbf{x} - \mathbf{y}\|_2^2 + \alpha_1\|Dx - w\|_1 + \alpha_0\|Ew\|_1$$
 
-这是凸优化问题（目标为凸函数之和，对 $(x,w)$ 联合凸），可用**原始-对偶方法**（primal-dual method）高效求解。与 TV 去噪比，TGV 优化变量增加 $w$，但算法框架相同，只是变量和约束更多。
+这是凸优化问题（目标为凸函数之和，对 $(\mathbf{x},w)$ 联合凸），可用**原始-对偶方法**（primal-dual method）高效求解。与 TV 去噪比，TGV 优化变量增加 $w$，但算法框架相同，只是变量和约束更多。
 
 参数 $(\alpha_0, \alpha_1)$ 选取通常经验调参或 L-曲线法确定。Bredies 等人建议 $\alpha_0 / \alpha_1 \approx 2$ 作为起点。
 
@@ -129,7 +129,7 @@ TGV 在以下场景相比 TV 有显著优势：
 2. **理解辅助向量场 $w$ 作用**：可视化 $w$ 幅值分布和方向性流动，揭示 TGV 如何识别仿射结构
 3. **评估参数敏感性**：固定 $\alpha_1 = 0.15$，变化 $\alpha_0/\alpha_1$ 比值（从 0.5 到 8.0），观察全局指标与局部视觉质量差异
 4. **认识算法实现细节**：掌握 Chambolle-Pock 原始-对偶方法收敛条件、离散算子伴随关系及数值稳定性要点
-5. **对比 TV 与 TGV 计算开销**：TGV 需对 $x$ 和 $w$ 两组变量迭代数千次，而 TV 调用高度优化的集成求解器；本例墙钟时间 TV 约 0.004 s、TGV 约 7 s（约三个数量级，主因是迭代次数与实现优化程度，单步计算量仅多约 2-3 倍）
+5. **对比 TV 与 TGV 计算开销**：TGV 需对 $\mathbf{x}$ 和 $w$ 两组变量迭代数千次，而 TV 调用高度优化的集成求解器；本例墙钟时间 TV 约 0.004 s、TGV 约 7 s（约三个数量级，主因是迭代次数与实现优化程度，单步计算量仅多约 2-3 倍）
 
 ### 实验结果
 
@@ -216,9 +216,9 @@ TGV 在以下场景相比 TV 有显著优势：
 ### 关键观察
 
 1. **全局指标与局部视觉收益必须分开陈述**：同预算/最优调参两种口径下，TGV 在 cameraman 上的全局 PSNR 都不占优（26.23 vs 26.99，最优 TV 28.24）；但在分段仿射金标准上 TGV 领先 7–10 dB。评估 TGV 必须结合视觉检查与仿射区局部指标，不能只报单一 PSNR。
-2. **参数方向与极限行为（勘误）**：$\alpha_0/\alpha_1$ **越大**，二阶项相对越受压制、$Ew=0$ 越被偏好，TGV 行为越接近 TV；比值越小则解越自由（$\alpha_0\to 0$ 时退化为不做正则、$x\to y$）。严格意义上，$\alpha_0\to\infty$ 迫使 $w$ 为无穷小刚体运动场，**再附加 $w\equiv 0$ 的限制**才精确退化为 $\alpha_1\mathrm{TV}$——即 TV 是 TGV 的特例。Bredies 等人的 $\alpha_0/\alpha_1\approx 2$ 只是起点，本例全局指标峰在 0.5，须按数据重新标定。
+2. **参数方向与极限行为（勘误）**：$\alpha_0/\alpha_1$ **越大**，二阶项相对越受压制、$Ew=0$ 越被偏好，TGV 行为越接近 TV；比值越小则解越自由（$\alpha_0\to 0$ 时退化为不做正则、$\mathbf{x}\to \mathbf{y}$）。严格意义上，$\alpha_0\to\infty$ 迫使 $w$ 为无穷小刚体运动场，**再附加 $w\equiv 0$ 的限制**才精确退化为 $\alpha_1\mathrm{TV}$——即 TV 是 TGV 的特例。Bredies 等人的 $\alpha_0/\alpha_1\approx 2$ 只是起点，本例全局指标峰在 0.5，须按数据重新标定。
 3. **辅助向量场 $w$ 可解释性**：$w$ 提供"梯度仿射分量"结构化信息——$|w|$ 在强边缘处最大、平坦区接近零、平滑斜坡上为小幅值一致场——这是 TV 不具备的可解释性。
-4. **计算开销权衡**：TGV 需同时对 $x$ 和 $w$ 两组变量迭代求解（本例 1200–5000 次，7 s 量级），而 TV 调用高度优化的集成求解器（0.004 s）。墙钟差距约三个数量级主要来自迭代次数与工程优化，单次迭代计算量仅多约 2–3 倍；实时应用需慎重。
+4. **计算开销权衡**：TGV 需同时对 $\mathbf{x}$ 和 $w$ 两组变量迭代求解（本例 1200–5000 次，7 s 量级），而 TV 调用高度优化的集成求解器（0.004 s）。墙钟差距约三个数量级主要来自迭代次数与工程优化，单次迭代计算量仅多约 2–3 倍；实时应用需慎重。
 5. **离散算子与对偶投影必须严格配套（本版修订两处）**：
    - Chambolle-Pock 要求散度严格为前向梯度的负伴随（$\mathrm{div}=-D^\top$），早期版本曾因切片方向写反得到 $+D^\top$ 而发散（PSNR 跌到约 7.5 dB 的棋盘噪声）；
    - 本代码取对称梯度的"半剪切"分量 $E_3=\tfrac12(\partial_h w_v+\partial_v w_h)$，此时 $\|Ew\|_F^2=E_1^2+E_2^2+2E_3^2$，Fenchel 对偶投影球必须是 $\sqrt{q_1^2+q_2^2+0.5q_3^2}\le\alpha_0$。旧版误写成系数 2，实际求解的是剪切项权重折半的各向异性变体（非教科书 TGV²）；修订为 0.5 后幻影 PSNR 49.5→49.7 dB（本图像上解的差异 RMSE 约 0.3%–0.4%，定性结论不变，但模型定义必须正确）；
