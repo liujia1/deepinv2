@@ -1,12 +1,12 @@
 # 附录 10A 层级 ELBO 的完整推导
 
-> 定位：给 10.1 节"层级 ELBO 推导"补上详细代数。如果你只想用结论，可以跳过本附录——记住那行框起来的公式就够了。本附录只做一件事：把"单层 ELBO 推广到多层"的每一步补齐，并验证 $L=1$ 时退化回标准单层 ELBO。从更深层次看，这份推导正是本书变分路径的承重墙——后面把每个 $z_l$ 换成时间步 $x_t$ 时，10.2 节的三项 VLB 就从这堵墙里自然长出来；把它走一遍，你就理解了为什么扩散的训练目标"从头到尾都是 KL 散度在排队"。
+> 定位：给 10.1 节"层级 ELBO 推导"补上详细代数。如果你只想用结论，可以跳过本附录——记住那行框起来的公式就够了。本附录只做一件事：把"单层 ELBO 推广到多层"的每一步补齐，并验证 $L=1$ 时退化回标准单层 ELBO。从更深层次看，这份推导正是本书变分路径的承重墙——后面把每个 $z_l$ 换成时间步 $\mathbf{x}_t$ 时，10.2 节的三项 VLB 就从这堵墙里自然长出来；把它走一遍，你就理解了为什么扩散的训练目标"从头到尾都是 KL 散度在排队"。
 
 ---
 
 ## 起点：对数似然分解
 
-我们想给数据 $x$ 的对数似然 $\log p(x)$ 找一个"可计算的下界"。办法是引入一个变分分布（variational distribution，我们故意选的简单分布，用来近似难算的真实后验）$q(z_{1:L}|x)$，在积分里乘一个 $q/q=1$：
+我们想给数据 $\mathbf{x}$ 的对数似然 $\log p(\mathbf{x})$ 找一个"可计算的下界"。办法是引入一个变分分布（variational distribution，我们故意选的简单分布，用来近似难算的真实后验）$q(z_{1:L}|\mathbf{x})$，在积分里乘一个 $q/q=1$：
 
 $$\log p(\mathbf{x}) = \log \int p(\mathbf{x}, \mathbf{z}_{1:L})\,d\mathbf{z}_{1:L}
 = \log \mathbb{E}_{q(\mathbf{z}_{1:L}|\mathbf{x})}\left[\frac{p(\mathbf{x}, \mathbf{z}_{1:L})}{q(\mathbf{z}_{1:L}|\mathbf{x})}\right]$$
@@ -15,7 +15,7 @@ $$\log p(\mathbf{x}) = \log \int p(\mathbf{x}, \mathbf{z}_{1:L})\,d\mathbf{z}_{1
 
 $$\log p(\mathbf{x}) \geq \mathbb{E}_{q(\mathbf{z}_{1:L}|\mathbf{x})}\left[\log \frac{p(\mathbf{x}, \mathbf{z}_{1:L})}{q(\mathbf{z}_{1:L}|\mathbf{x})}\right] =: \text{ELBO}(\mathbf{x})$$
 
-等号成立当且仅当 $q(z_{1:L}|x)=p(z_{1:L}|x)$（近似分布正好等于真实后验）。这个下界就是 ELBO（evidence lower bound，证据下界）。
+等号成立当且仅当 $q(z_{1:L}|\mathbf{x})=p(z_{1:L}|\mathbf{x})$（近似分布正好等于真实后验）。这个下界就是 ELBO（evidence lower bound，证据下界）。
 
 ---
 
@@ -90,11 +90,11 @@ $$\text{ELBO}(\mathbf{x}) = \mathbb{E}_{q(\mathbf{z}_1|\mathbf{x})}[\log p(\math
 
 ## 扩散模型记号下的等价形式
 
-把 $z_l$ 换成 $x_t$、$z_0=x$ 换成 $x_0$，层级 ELBO 变成：
+把 $z_l$ 换成 $\mathbf{x}_t$、$z_0=\mathbf{x}$ 换成 $\mathbf{x}_0$，层级 ELBO 变成：
 
 $$\text{ELBO}(\mathbf{x}_0) = \mathbb{E}_{q(\mathbf{x}_1|\mathbf{x}_0)}[\log p_\theta(\mathbf{x}_0|\mathbf{x}_1)] - \sum_{t=1}^{T-1} \mathbb{E}_{q(\mathbf{x}_{t-1}, \mathbf{x}_{t+1}|\mathbf{x}_0)}\left[D_{\text{KL}}(q(\mathbf{x}_t|\mathbf{x}_{t-1}) \| p_\theta(\mathbf{x}_t|\mathbf{x}_{t+1}))\right] - D_{\text{KL}}(q(\mathbf{x}_T|\mathbf{x}_{T-1}) \| p(\mathbf{x}_T))$$
 
-再用 10.2 节的贝叶斯反转技巧（把"正向相邻"的条件翻成"带 $x_0$ 的后验"），可化成更实用的 VLB 形式（Tutorial on Diffusion Models 的 Theorem 2.4）：
+再用 10.2 节的贝叶斯反转技巧（把"正向相邻"的条件翻成"带 $\mathbf{x}_0$ 的后验"），可化成更实用的 VLB 形式（Tutorial on Diffusion Models 的 Theorem 2.4）：
 
 $$\text{ELBO}(\mathbf{x}_0) = \mathbb{E}_{q(\mathbf{x}_1|\mathbf{x}_0)}[\log p_\theta(\mathbf{x}_0|\mathbf{x}_1)] - D_{\text{KL}}(q(\mathbf{x}_T|\mathbf{x}_0) \| p(\mathbf{x}_T)) - \sum_{t=2}^{T} \mathbb{E}_{q(\mathbf{x}_t|\mathbf{x}_0)}\left[D_{\text{KL}}(q(\mathbf{x}_{t-1}|\mathbf{x}_t, \mathbf{x}_0) \| p_\theta(\mathbf{x}_{t-1}|\mathbf{x}_t))\right]$$
 

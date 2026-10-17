@@ -8,17 +8,17 @@
 
 ## 等价性的直观解释：重缩放一下就一样了
 
-**VE-SDE**：$x_t = x_0 + \sigma(t)\,\varepsilon$
+**VE-SDE**：$\mathbf{x}_t = \mathbf{x}_0 + \sigma(t)\,\varepsilon$
 
 含噪信号 = 原始信号 + 加性噪声。信号不缩放，噪声方差 $\sigma(t)^2$ 随时间增长。
 
-**VP-SDE**：$x_t = \sqrt{\bar\alpha_t}\,x_0 + \sqrt{1-\bar\alpha_t}\,\varepsilon$
+**VP-SDE**：$\mathbf{x}_t = \sqrt{\bar\alpha_t}\,\mathbf{x}_0 + \sqrt{1-\bar\alpha_t}\,\varepsilon$
 
 含噪信号 = 缩放信号 + 加性噪声。信号被 $\sqrt{\bar\alpha_t}$ 缩放，总方差保持有界。
 
-**关键观察**：对 VP-SDE 的含噪信号做重缩放。令 $\hat{x}_t = x_t / \sqrt{\bar\alpha_t}$：
+**关键观察**：对 VP-SDE 的含噪信号做重缩放。令 $\hat{x}_t = \mathbf{x}_t / \sqrt{\bar\alpha_t}$：
 
-$$\hat{x}_t = x_0 + \hat{\sigma}(t)\,\varepsilon$$
+$$\hat{x}_t = \mathbf{x}_0 + \hat{\sigma}(t)\,\varepsilon$$
 
 其中 $\hat{\sigma}(t) = \sqrt{(1-\bar\alpha_t)/\bar\alpha_t}$。重缩放后的 VP-SDE 在形式上**完全等同于 VE-SDE**——都是纯加性噪声模型。只是"噪声尺度"换了个名字。
 
@@ -26,7 +26,7 @@ $$\hat{x}_t = x_0 + \hat{\sigma}(t)\,\varepsilon$$
 
 推理等价性意味着：给定相同的得分函数估计器，VE-SDE 采样和 VP-SDE 采样产生的样本分布相同（在重缩放意义下）。
 
-具体来说，设 VE-SDE 的得分网络为 $s_\theta^{(\text{VE})}(x, t)$，VP-SDE 的得分网络为 $s_\theta^{(\text{VP})}(x, t)$。若它们在各自框架下被正确训练，则：
+具体来说，设 VE-SDE 的得分网络为 $s_\theta^{(\text{VE})}(\mathbf{x}, t)$，VP-SDE 的得分网络为 $s_\theta^{(\text{VP})}(\mathbf{x}, t)$。若它们在各自框架下被正确训练，则：
 
 - VE-SDE 的逆向采样：从 $\mathcal{N}(0, \sigma_{\max}^2 I)$ 出发，解逆向 VE-SDE；
 - VP-SDE 的逆向采样：从 $\mathcal{N}(0, I)$ 出发，解逆向 VP-SDE。
@@ -39,8 +39,8 @@ $$\hat{x}_t = x_0 + \hat{\sigma}(t)\,\varepsilon$$
 
 尽管推理等价，两种 SDE 在**训练**阶段有显著差异：
 
-- **VP-SDE 训练更稳定**：信号缩放 $\sqrt{\bar\alpha_t}$ 让含噪信号 $x_t$ 的数值范围在不同时间步大致一致，利于梯度稳定；
-- **VE-SDE 训练需多注意**：大方差时 $x_t$ 数值范围很大，需适当加权函数 $\lambda(t)=\sigma(t)^2$ 来平衡不同时间步的损失。
+- **VP-SDE 训练更稳定**：信号缩放 $\sqrt{\bar\alpha_t}$ 让含噪信号 $\mathbf{x}_t$ 的数值范围在不同时间步大致一致，利于梯度稳定；
+- **VE-SDE 训练需多注意**：大方差时 $\mathbf{x}_t$ 数值范围很大，需适当加权函数 $\lambda(t)=\sigma(t)^2$ 来平衡不同时间步的损失。
 
 ### 实践中的选择
 

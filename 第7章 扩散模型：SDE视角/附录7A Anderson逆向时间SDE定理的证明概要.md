@@ -10,13 +10,13 @@
 
 **Anderson (1982) 逆向时间SDE定理**：设正向SDE
 
-$$dx = f(x,t)\,dt + g(t)\,dw, \quad t \in [0, T]$$
+$$dx = f(\mathbf{x},t)\,dt + g(t)\,dw, \quad t \in [0, T]$$
 
-其中 $f: \mathbb{R}^d \times [0,T] \to \mathbb{R}^d$ 是漂移系数，$g: [0,T] \to \mathbb{R}_+$ 是扩散系数，$w$ 是标准布朗运动。则逆向时间过程 $y(s) = x(T-s)$ 满足
+其中 $f: \mathbb{R}^d \times [0,T] \to \mathbb{R}^d$ 是漂移系数，$g: [0,T] \to \mathbb{R}_+$ 是扩散系数，$w$ 是标准布朗运动。则逆向时间过程 $y(s) = \mathbf{x}(T-s)$ 满足
 
 $$dy = \left[f(y, T-s) - g(T-s)^2\,\nabla_y\log p_{T-s}(y)\right]\,ds + g(T-s)\,d\bar{w}$$
 
-其中 $p_t(y)$ 是 $x(t)$ 在时刻 $t$ 的边际密度，$\bar{w}$ 是另一标准布朗运动。
+其中 $p_t(y)$ 是 $\mathbf{x}(t)$ 在时刻 $t$ 的边际密度，$\bar{w}$ 是另一标准布朗运动。
 
 ## 证明思路（四步，密度→方程→识别→换回时间）
 
@@ -24,7 +24,7 @@ $$dy = \left[f(y, T-s) - g(T-s)^2\,\nabla_y\log p_{T-s}(y)\right]\,ds + g(T-s)\,
 
 令 $q_s(y) = p_{T-s}(y)$——逆向时间的边际密度。由正向SDE的Fokker-Planck方程（描述密度如何随时间变化）：
 
-$$\frac{\partial p_t}{\partial t} = -\nabla\cdot[f(x,t)\,p_t] + \frac{1}{2}g(t)^2\,\Delta p_t$$
+$$\frac{\partial p_t}{\partial t} = -\nabla\cdot[f(\mathbf{x},t)\,p_t] + \frac{1}{2}g(t)^2\,\Delta p_t$$
 
 对 $q_s(y) = p_{T-s}(y)$ 求导（链式法则，时间反了所以多个负号）：
 
@@ -52,28 +52,28 @@ $$dy = \left[f(y,T-s) - g(T-s)^2\,\nabla\log p_{T-s}(y)\right]\,ds + g(T-s)\,d\b
 
 ### 第四步：变回原始时间变量
 
-令 $t = T-s$，$x(t) = y(T-t) = x(t)$，$d\bar{w}$ 为逆向布朗运动，得：
+令 $t = T-s$，$\mathbf{x}(t) = y(T-t) = \mathbf{x}(t)$，$d\bar{w}$ 为逆向布朗运动，得：
 
-$$dx = \left[f(x,t) - g(t)^2\,\nabla\log p_t(x)\right]\,dt + g(t)\,d\bar{w} \quad \checkmark$$
+$$dx = \left[f(\mathbf{x},t) - g(t)^2\,\nabla\log p_t(\mathbf{x})\right]\,dt + g(t)\,d\bar{w} \quad \checkmark$$
 
 证毕。注意关键：我们得到的漂移项正好是"原漂移 **减** 得分修正"——这就是为什么 7.3 节说"改符号、加得分"。
 
 ## 特殊情况：Langevin SDE（帮你核对直觉）
 
-正向 Langevin SDE：$dx = \nabla\log p(x)\,dt + \sqrt{2}\,dW$，$f=\nabla\log p$，$g=\sqrt{2}$。
+正向 Langevin SDE：$dx = \nabla\log p(\mathbf{x})\,dt + \sqrt{2}\,dW$，$f=\nabla\log p$，$g=\sqrt{2}$。
 
 逆向 SDE：
 
-$$dx = \left[\nabla\log p(x) - 2\nabla\log p(x)\right]\,dt + \sqrt{2}\,d\bar{w} = -\nabla\log p(x)\,dt + \sqrt{2}\,d\bar{w}$$
+$$dx = \left[\nabla\log p(\mathbf{x}) - 2\nabla\log p(\mathbf{x})\right]\,dt + \sqrt{2}\,d\bar{w} = -\nabla\log p(\mathbf{x})\,dt + \sqrt{2}\,d\bar{w}$$
 
-逆向 Langevin 的漂移项**反号**——从"爬坡"（推向高概率区）变"下坡"（推向低概率区）。但因为时间方向也反转了，逆向过程的效果仍是：粒子从初始分布出发，经逆向 Langevin 演化后收敛到 $p(x)$。这条小练习也印证了 7.3 节的画面：得分函数就是"指南针"，时间倒流时它照样把你领回家。
+逆向 Langevin 的漂移项**反号**——从"爬坡"（推向高概率区）变"下坡"（推向低概率区）。但因为时间方向也反转了，逆向过程的效果仍是：粒子从初始分布出发，经逆向 Langevin 演化后收敛到 $p(\mathbf{x})$。这条小练习也印证了 7.3 节的画面：得分函数就是"指南针"，时间倒流时它照样把你领回家。
 
 ## 得分修正项的直觉
 
-逆向 SDE 里的得分修正项 $-g(t)^2\nabla\log p_t(x)$ 这样理解：
+逆向 SDE 里的得分修正项 $-g(t)^2\nabla\log p_t(\mathbf{x})$ 这样理解：
 
 - 正向 SDE 把概率分布"抹平"——信息逐步丢失；
-- 逆向过程需"恢复"信息——得分函数 $\nabla\log p_t(x)$ 指向概率增长方向；
+- 逆向过程需"恢复"信息——得分函数 $\nabla\log p_t(\mathbf{x})$ 指向概率增长方向；
 - $-g(t)^2$ 的系数确保修正强度与正向噪声强度匹配——噪声越强，修正越大。
 
 **来源**：Anderson (1982); Winkler (2021); Risken (1996); Song et al. (2021)

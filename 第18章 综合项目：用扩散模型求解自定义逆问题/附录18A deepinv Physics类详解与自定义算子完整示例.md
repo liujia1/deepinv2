@@ -320,9 +320,9 @@ auto_adjoint = adjoint_function(my_forward, (1, 3, 256, 256))
 z = auto_adjoint(y)  # 等价于 A^T y
 ```
 
-**原理**：自动伴随利用PyTorch的自动微分系统，通过向量-Jacobian乘积（vJP）计算$A^\top y$。具体地，对$A(x)$关于$x$求方向导数：
+**原理**：自动伴随利用PyTorch的自动微分系统，通过向量-Jacobian乘积（vJP）计算$A^\top y$。具体地，对$A(\mathbf{x})$关于$\mathbf{x}$求方向导数：
 
-$$A^\top y = \frac{\partial}{\partial x}\langle A(x), y\rangle$$
+$$A^\top y = \frac{\partial}{\partial \mathbf{x}}\langle A(\mathbf{x}), y\rangle$$
 
 **优势**：无需手动推导和实现伴随算子
 **劣势**：计算效率略低于手动实现（约慢10-50%，取决于算子复杂度）

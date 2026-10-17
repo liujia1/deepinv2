@@ -24,10 +24,10 @@ $$\text{MHA}(X) = [\text{head}_1;\ldots;\text{head}_h]\,W_O,\quad W_O\in\mathbb{
 ## 前馈网络（MLP）
 
 Transformer Block 里夹在注意力之间的前馈网络是个两层全连接：
-$$\text{MLP}(x) = W_2\cdot\text{GELU}(W_1 x + b_1) + b_2$$
+$$\text{MLP}(\mathbf{x}) = W_2\cdot\text{GELU}(W_1 \mathbf{x} + b_1) + b_2$$
 - $W_1\in\mathbb{R}^{d_{\text{ff}}\times d}$，$W_2\in\mathbb{R}^{d\times d_{\text{ff}}}$；
 - 隐层维度 $d_{\text{ff}}=4d$（标准）；
-- GELU 激活：$\text{GELU}(x)=x\cdot\Phi(x)$，$\Phi$ 是标准正态分布的 CDF（累积分布函数）。
+- GELU 激活：$\text{GELU}(\mathbf{x})=\mathbf{x}\cdot\Phi(\mathbf{x})$，$\Phi$ 是标准正态分布的 CDF（累积分布函数）。
 
 **GELU vs ReLU**：GELU 在 0 附近平滑过渡（ReLU 有不可导点）；GELU 对负值不完全截断（小负值仍有输出），保留更多信息；Transformer 里默认用 GELU。
 

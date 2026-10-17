@@ -29,13 +29,13 @@ $$A = U\Sigma V^\top$$
 
 定义频谱域变量：
 
-$$\bar{y} = U^\top y \in \mathbb{R}^m, \quad \bar{x} = V^\top x \in \mathbb{R}^n, \quad \bar{\varepsilon} = U^\top \varepsilon \in \mathbb{R}^m$$
+$$\bar{y} = U^\top y \in \mathbb{R}^m, \quad \bar{x} = V^\top \mathbf{x} \in \mathbb{R}^n, \quad \bar{\varepsilon} = U^\top \varepsilon \in \mathbb{R}^m$$
 
 因 `U` 和 `V` 是正交矩阵，上述变换保距（isometry）：`‖ȳ‖ = ‖y‖`，`‖x̄‖ = ‖x‖`。这一变换不丢失任何信息——它只是换了个视角看同一个问题。
 
 频谱域下，线性测量模型 `y = Ax + ε_y`（`ε_y ~ N(0, σ_y²I)`）变：
 
-$$\bar{y} = U^\top(Ax + \varepsilon_y) = U^\top U\Sigma V^\top x + U^\top\varepsilon_y = \Sigma\bar{x} + \bar{\varepsilon}$$
+$$\bar{y} = U^\top(Ax + \varepsilon_y) = U^\top U\Sigma V^\top \mathbf{x} + U^\top\varepsilon_y = \Sigma\bar{x} + \bar{\varepsilon}$$
 
 因 `U` 正交且 `ε_y ~ N(0, σ_y²I)`，有 `ε̄ = U^⊤ε_y ~ N(0, σ_y²I)`——噪声在频谱域仍是独立同分布高斯噪声。这一步同样关键：换坐标系不会把简单的噪声搅乱，它仍然是白噪声。
 
@@ -101,7 +101,7 @@ DDRM 关键判断：对每个频谱分量，**当前扩散噪声水平与测量�
 
 `s_i = 0` 时观测 `ȳ_i` 不含关于 `x̄_0^i` 任何信息——这分量完全处于算子 `A` 零空间。此时只能依赖先验：
 
-$$p(\bar{x}_{t-1}^i | x_t, y) = \mathcal{N}(\bar{x}_{t-1}^i;\, \hat{\bar{x}}_{0|t}^i,\, \sigma_{t-1}^2)$$
+$$p(\bar{x}_{t-1}^i | \mathbf{x}_t, y) = \mathcal{N}(\bar{x}_{t-1}^i;\, \hat{\bar{x}}_{0|t}^i,\, \sigma_{t-1}^2)$$
 
 `x̂̄_{0|t}^i` 是先验后验均值（Tweedie 估计给），`σ_{t-1}²` 是下一步扩散噪声方差。这里测量完全帮不上忙，条件化退化为普通去噪——Tweedie 估计给出这个分量最合理的推测。
 
@@ -109,7 +109,7 @@ $$p(\bar{x}_{t-1}^i | x_t, y) = \mathcal{N}(\bar{x}_{t-1}^i;\, \hat{\bar{x}}_{0|
 
 `σ_t < σ_y/s_i` 时当前扩散噪声水平低于测量噪声有效水平——意味扩散过程已去除大部分噪声，图像在该频谱分量估计精度**高于**测量能提供精度。此时信任测量反而引入更多噪声，故仍依赖先验：
 
-$$p(\bar{x}_{t-1}^i | x_t, y) = \mathcal{N}(\bar{x}_{t-1}^i;\, \hat{\bar{x}}_{0|t}^i,\, \sigma_{t-1}^2)$$
+$$p(\bar{x}_{t-1}^i | \mathbf{x}_t, y) = \mathcal{N}(\bar{x}_{t-1}^i;\, \hat{\bar{x}}_{0|t}^i,\, \sigma_{t-1}^2)$$
 
 与情况一同先验驱动采样。这一转变意味着：即使不在零空间，当测量本身比当前估计更不准时，强行信测量是得不偿失——所以仍退回先验。
 
@@ -117,7 +117,7 @@ $$p(\bar{x}_{t-1}^i | x_t, y) = \mathcal{N}(\bar{x}_{t-1}^i;\, \hat{\bar{x}}_{0|
 
 `σ_t ≥ σ_y/s_i` 时当前扩散噪声水平不低于测量噪声有效水平——意味测量提供信息比当前含噪状态估计更可靠。此时应信任测量，用测量信息条件化：
 
-$$p(\bar{x}_{t-1}^i | x_t, y) = \mathcal{N}\!\left(\bar{x}_{t-1}^i;\, \frac{\bar{y}_i}{s_i},\, \frac{\sigma_y^2}{s_i^2} - \sigma_t^2\right)$$
+$$p(\bar{x}_{t-1}^i | \mathbf{x}_t, y) = \mathcal{N}\!\left(\bar{x}_{t-1}^i;\, \frac{\bar{y}_i}{s_i},\, \frac{\sigma_y^2}{s_i^2} - \sigma_t^2\right)$$
 
 **推导**：这条件分布可严格推导。频谱域中 `x̄_0^i` 后验分布：
 
@@ -161,11 +161,11 @@ DDRM 带 `η` 条件化公式：
 
 **情况三**（`σ_t ≥ σ_y/s_i`）：
 
-$$p(\bar{x}_{t-1}^i | x_t, y) = \mathcal{N}\!\left(\bar{x}_{t-1}^i;\, \frac{\bar{y}_i}{s_i},\, \eta^2\left(\frac{\sigma_y^2}{s_i^2} - \sigma_t^2\right)\right)$$
+$$p(\bar{x}_{t-1}^i | \mathbf{x}_t, y) = \mathcal{N}\!\left(\bar{x}_{t-1}^i;\, \frac{\bar{y}_i}{s_i},\, \eta^2\left(\frac{\sigma_y^2}{s_i^2} - \sigma_t^2\right)\right)$$
 
 **情况一和二**（先验驱动）：
 
-$$p(\bar{x}_{t-1}^i | x_t, y) = \mathcal{N}\!\left(\bar{x}_{t-1}^i;\, \hat{\bar{x}}_{0|t}^i,\, \eta^2\sigma_{t-1}^2\right)$$
+$$p(\bar{x}_{t-1}^i | \mathbf{x}_t, y) = \mathcal{N}\!\left(\bar{x}_{t-1}^i;\, \hat{\bar{x}}_{0|t}^i,\, \eta^2\sigma_{t-1}^2\right)$$
 
 注意 `η` 只缩方差、不动均值——它不改变"往哪走了"，只控制"走得多随机"。条件均值的含义与前文完全一致，方差的缩放就是我们对随机性的取舍。
 
@@ -217,7 +217,7 @@ $$p(\bar{x}_{t-1}^i | x_t, y) = \mathcal{N}\!\left(\bar{x}_{t-1}^i;\, \hat{\bar{
 
 从后验得分分解角度，DDRM 和 DPS 差异可统一理解：
 
-$$\nabla_{x_t}\log p(x_t|y) = \underbrace{\nabla_{x_t}\log p(x_t)}_{\text{先验得分（两者相同）}} + \underbrace{\nabla_{x_t}\log p(y|x_t)}_{\text{似然得分（近似策略不同）}}$$
+$$\nabla_{\mathbf{x}_t}\log p(\mathbf{x}_t|y) = \underbrace{\nabla_{\mathbf{x}_t}\log p(\mathbf{x}_t)}_{\text{先验得分（两者相同）}} + \underbrace{\nabla_{\mathbf{x}_t}\log p(y|\mathbf{x}_t)}_{\text{似然得分（近似策略不同）}}$$
 
 - **DDRM**：通过 SVD 在频谱域精确算 `∇_{x_t}log p(y|x_t)`，但仅限线性 `A`
 - **DPS**：通过 Tweedie 近似算 `∇_{x_t}log p(y|x_t)`，但适用任意 `A`

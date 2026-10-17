@@ -24,9 +24,9 @@ $$\frac{\partial \mu_t}{\partial t}\bigg|_{t=0} + \nabla \cdot (\mu\,v_0) = 0$$
 
 Wasserstein 空间上的黎曼度量由切向量的 $L^2$ 内积定义：对切向量 $v_1,v_2$，
 
-$$\langle v_1, v_2 \rangle_\mu = \int \langle v_1(x), v_2(x) \rangle\,d\mu(x)$$
+$$\langle v_1, v_2 \rangle_\mu = \int \langle v_1(\mathbf{x}), v_2(\mathbf{x}) \rangle\,d\mu(\mathbf{x})$$
 
-诱导的范数 $\|v\|_\mu^2=\int\|v(x)\|^2d\mu(x)$ **恰是无穷小传输代价**——沿常速测地线把这个速率对时间积分，正好还原出 $W_2$ 距离。这把"搬运代价"和"几何长度"统一了。
+诱导的范数 $\|v\|_\mu^2=\int\|v(\mathbf{x})\|^2d\mu(\mathbf{x})$ **恰是无穷小传输代价**——沿常速测地线把这个速率对时间积分，正好还原出 $W_2$ 距离。这把"搬运代价"和"几何长度"统一了。
 
 ### Otto calculus（白话：在分布空间里做微积分）
 
@@ -46,7 +46,7 @@ Wasserstein 梯度流：
 
 $$\frac{\partial \mu_t}{\partial t} = \nabla\cdot(\mu_t\,\text{grad}_W\text{KL}) = \nabla\cdot(\mu_t\nabla\log\mu_t) - \nabla\cdot(\mu_t\nabla\log p) = \Delta\mu_t - \nabla\cdot(\mu_t\nabla\log p)$$
 
-这正是 Fokker-Planck 方程——Langevin SDE $dx=\nabla\log p(x)\,dt+\sqrt{2}\,dw$ 的概率密度演化。**含义：Langevin 动力学 = KL 散度在 Wasserstein 空间上的梯度流 + 噪声。** 梯度流部分把分布推向 $p$，噪声部分防止坍缩到众数。这深化了第4-5章的讨论：Langevin 不仅是"得分驱动采样"，更是 Wasserstein 空间里的"梯度下降 + 正则化"。
+这正是 Fokker-Planck 方程——Langevin SDE $dx=\nabla\log p(\mathbf{x})\,dt+\sqrt{2}\,dw$ 的概率密度演化。**含义：Langevin 动力学 = KL 散度在 Wasserstein 空间上的梯度流 + 噪声。** 梯度流部分把分布推向 $p$，噪声部分防止坍缩到众数。这深化了第4-5章的讨论：Langevin 不仅是"得分驱动采样"，更是 Wasserstein 空间里的"梯度下降 + 正则化"。
 
 ### 与 Flow Matching 的联系（因果收束）
 
