@@ -120,7 +120,7 @@ ax.axvline(x=x_mmse_a, color='green', linestyle='--', linewidth=2, alpha=0.8)
 mmse_p_idx_a = np.argmin(np.abs(x_range_a - x_mmse_a))
 ax.plot(x_mmse_a, p_a[mmse_p_idx_a], 'go', markersize=12, zorder=5)
 ax.annotate(f'MMSE = {x_mmse_a:.2f}\n(均值，被尾部拉远)',
-            xy=(x_mmse_a, p_a[mmse_p_idx_a]), xytext=(2.5, p_a[mmse_p_idx_a] * 0.5),
+            xy=(x_mmse_a, p_a[mmse_p_idx_a]), xytext=(3.7, p_a[mmse_p_idx_a] * 0.5),
             fontsize=11, ha='center', color='green',
             arrowprops=dict(arrowstyle='->', color='green', lw=1.5))
 

@@ -33,6 +33,7 @@ from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 import os
 import sys
 import io
@@ -509,6 +510,11 @@ for patch, c in zip(bp['boxes'], colors_b):
     patch.set_facecolor(c)
     patch.set_alpha(0.35)
 axes[0].set_yscale('log')
+# 对数轴默认 LogFormatter 的标签含 \mathdefault{-1}，负号会回退到中文字体（SimHei 缺 U+2212）
+# 渲染成豆腐块；改用纯 mathtext 格式器由数学字体渲染，负指数正常显示
+plt.rcParams['mathtext.fontset'] = 'cm'
+axes[0].yaxis.set_major_formatter(FuncFormatter(
+    lambda v, _: f'$10^{{{int(round(np.log10(v)))}}}$'))
 axes[0].set_ylabel('相对恢复误差（30 个 seed 的分布，对数轴）')
 axes[0].set_title(f'误差分布（菱形=均值；rel>{FAIL_THRESH} 记为失败）')
 axes[0].grid(alpha=0.3, which='both', axis='y')

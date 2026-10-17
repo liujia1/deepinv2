@@ -230,8 +230,9 @@ plt.close()
 # ══════════════════════════════════════════════════════════
 # 3. 步骤2：方差与偏差随步长的变化
 # ══════════════════════════════════════════════════════════
-# 限制 delta_fine 到 1.5，使曲线在 ylim 范围内完整可见
-delta_fine = np.linspace(0.001, 1.5, 300)
+# 理论曲线一直画到 delta=1.9：它会沿纵轴顶部冲出画面，
+# 直观展示 delta->2 时方差/偏差的爆炸式增长（超出量程的部分被裁掉）。
+delta_fine = np.linspace(0.001, 1.9, 500)
 var_theo_fine = np.where(delta_fine < 2, 2 / (2 - delta_fine), np.nan)
 bias_fine = np.where(delta_fine < 2, delta_fine / (2 - delta_fine), np.nan)
 
@@ -252,10 +253,15 @@ for r in results:
         axes[0].scatter(r[0], r[1], color='green', s=60, zorder=5, label='经验值' if r[0] == 0.01 else '')
         axes[0].scatter(r[0], r[2], color='orange', marker='x', s=60, zorder=5, label='理论值（离散点）' if r[0] == 0.01 else '')
 
-# delta=1.9 的散点超出 ylim，用文字注释标注
-# 注意：若修改 delta_list，需同步更新此处的注释内容和坐标
-axes[0].annotate(r'$\delta=1.9$: 方差$\approx 20$（超出纵轴范围）',
-                 xy=(1.9, 3.9), xytext=(1.0, 3.5),
+# delta=1.9 的点（方差=2/(2-1.9)=20）远在纵轴范围之外。
+# 曲线延伸到 delta=1.9 后，会在 delta=1.5（此处 y=4=纵轴顶）穿出画面；
+# 在出界点放一个朝上的绿色箭头示意"继续飙升出顶"，文字框用引线指向该出界点。
+# 注意：若修改 delta_list 或 ylim，需同步更新出界点坐标。
+axes[0].annotate('', xy=(1.5, 4.16), xytext=(1.5, 3.95),
+                 arrowprops=dict(arrowstyle='-|>', color='darkgreen', lw=1.6),
+                 annotation_clip=False)
+axes[0].annotate(r'$\delta=1.9$: 方差$\approx 20$，超出纵轴上限',
+                 xy=(1.5, 4.0), xytext=(0.82, 3.35),
                  fontsize=9, color='darkgreen',
                  arrowprops=dict(arrowstyle='->', color='darkgreen', lw=1),
                  bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow', alpha=0.8))
@@ -284,10 +290,15 @@ for r in results:
         axes[1].scatter(r[0], emp_bias, color='green', s=60, zorder=5, label='经验偏差' if r[0] == 0.01 else '')
         axes[1].scatter(r[0], theo_bias, color='orange', marker='x', s=60, zorder=5, label='理论偏差（离散点）' if r[0] == 0.01 else '')
 
-# delta=1.9 的偏差超出 ylim，用文字注释标注
-# 注意：若修改 delta_list，需同步更新此处的注释内容和坐标
-axes[1].annotate(r'$\delta=1.9$: 偏差$\approx 19$（超出纵轴范围）',
-                 xy=(1.9, 3.9), xytext=(1.0, 3.5),
+# delta=1.9 的点（偏差=1.9/(2-1.9)=19）远在纵轴范围之外。
+# 曲线延伸到 delta=1.9 后，会在 delta=1.6（此处 y=4=纵轴顶）穿出画面；
+# 在出界点放一个朝上的绿色箭头示意"继续飙升出顶"，文字框用引线指向该出界点。
+# 注意：若修改 delta_list 或 ylim，需同步更新出界点坐标。
+axes[1].annotate('', xy=(1.6, 4.16), xytext=(1.6, 3.95),
+                 arrowprops=dict(arrowstyle='-|>', color='darkgreen', lw=1.6),
+                 annotation_clip=False)
+axes[1].annotate(r'$\delta=1.9$: 偏差$\approx 19$，超出纵轴上限',
+                 xy=(1.6, 4.0), xytext=(0.82, 3.35),
                  fontsize=9, color='darkgreen',
                  arrowprops=dict(arrowstyle='->', color='darkgreen', lw=1),
                  bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow', alpha=0.8))

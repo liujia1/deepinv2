@@ -283,7 +283,7 @@ ax_prof.plot(x_tikh_grad[center, :], color='orange', linewidth=1.2, label='Tikho
 ax_prof.plot(x_lasso[center, :], 'g-', linewidth=1, label='LASSO')
 ax_prof.plot(x_tv[center, :], 'r-', linewidth=1.2, label='TV')
 ax_prof.set_title('中心行剖面对比：梯度域Tikhonov整体平滑（边缘被抹圆），TV在平坦区抹平、边缘保持锐利')
-ax_prof.legend(loc='upper right')
+ax_prof.legend(loc='lower right')
 ax_prof.set_xlabel('像素索引')
 ax_prof.grid(True, alpha=0.3)
 

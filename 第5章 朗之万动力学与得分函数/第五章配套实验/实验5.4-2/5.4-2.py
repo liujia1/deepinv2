@@ -513,7 +513,7 @@ if _run_ok:
     # ============================================================
     # 步骤3：显式先验(TV) vs 隐式先验(学习去噪器) —— 两种 MMSE 的对比
     # ============================================================
-    fig, axes = plt.subplots(3, 4, figsize=(20, 15))
+    fig, axes = plt.subplots(2, 4, figsize=(20, 10))
 
     axes[0][0].imshow(im, cmap='gray')
     axes[0][0].set_title('原始图像 $x$')
@@ -531,24 +531,20 @@ if _run_ok:
     axes[0][3].set_title(f'PnP-ULA 后验均值 (MMSE, T=1)\nPSNR: {psnr_pnp:.2f} dB')
     axes[0][3].axis('off')
 
+    axes[1][0].imshow(tv_res['final'].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+    axes[1][0].set_title('TV-ULA 最终样本（带噪，非MAP）')
     axes[1][0].axis('off')
+    axes[1][1].imshow(pnp_res['final'].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
+    axes[1][1].set_title('PnP-ULA 最终样本（带噪，非MAP）')
     axes[1][1].axis('off')
-    axes[1][2].imshow(tv_res['final'].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-    axes[1][2].set_title('TV-ULA 最终样本（带噪，非MAP）')
-    axes[1][2].axis('off')
-    axes[1][3].imshow(pnp_res['final'].cpu().numpy(), cmap='gray', vmin=0, vmax=1)
-    axes[1][3].set_title('PnP-ULA 最终样本（带噪，非MAP）')
-    axes[1][3].axis('off')
 
     vmax_std = max(float(tv_res['std'].max()), float(pnp_res['std'].max()))
-    axes[2][0].axis('off')
-    axes[2][1].axis('off')
-    im2 = axes[2][2].imshow(tv_res['std'].cpu().numpy(), cmap='hot', vmin=0, vmax=vmax_std)
-    axes[2][2].set_title('TV-ULA 后验标准差')
-    axes[2][2].axis('off')
-    axes[2][3].imshow(pnp_res['std'].cpu().numpy(), cmap='hot', vmin=0, vmax=vmax_std)
-    axes[2][3].set_title('PnP-ULA 后验标准差')
-    axes[2][3].axis('off')
+    axes[1][2].imshow(tv_res['std'].cpu().numpy(), cmap='hot', vmin=0, vmax=vmax_std)
+    axes[1][2].set_title('TV-ULA 后验标准差')
+    axes[1][2].axis('off')
+    axes[1][3].imshow(pnp_res['std'].cpu().numpy(), cmap='hot', vmin=0, vmax=vmax_std)
+    axes[1][3].set_title('PnP-ULA 后验标准差')
+    axes[1][3].axis('off')
 
     fig.suptitle('实验5.4-2 显式先验(TV) vs 隐式先验(学习去噪器)：两条链均为 T=1 的后验均值(MMSE)',
                  fontsize=14, y=1.01)

@@ -500,10 +500,10 @@ def plot_denoise_before_after(model_before, model_after, x_gt_test, save_path, y
     axes[1, 2].set_title(f"{cols[2]}\nPSNR={psnr_a:.2f}dB", color=_white(), fontsize=11, pad=8)
     axes[1, 2].axis('off')
 
-    # 行标签 (用左侧空白区文字标注 训练前/训练后)
-    fig.text(0.02, 0.70, "训练前", color='#00f2fe', fontsize=13, rotation=90,
+    # 行标签 (用左侧空白区横排文字标注 训练前/训练后)
+    fig.text(0.035, 0.70, "训练前", color='#00f2fe', fontsize=13,
              va='center', ha='center', fontweight='bold')
-    fig.text(0.02, 0.30, "训练后", color='#00f2fe', fontsize=13, rotation=90,
+    fig.text(0.035, 0.30, "训练后", color='#00f2fe', fontsize=13,
              va='center', ha='center', fontweight='bold')
 
     plt.subplots_adjust(wspace=0.1, hspace=0.25, left=0.07, right=0.97,
