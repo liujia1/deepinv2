@@ -15,7 +15,7 @@
 设：
 
 - $p(x)$：数据分布；
-- $q_\sigma(\tilde x|x)=\mathcal N(\tilde x|x,\sigma^2 I)$：条件噪声分布；
+- $q_\sigma(\tilde x|x)=\mathcal \mathcal{N}(\tilde x|x,\sigma^2 I)$：条件噪声分布；
 - $q_\sigma(\tilde x)=\int p(x)\,q_\sigma(\tilde x|x)\,dx$：噪声扰动后的边际分布；
 - $q_\sigma(x|\tilde x)=\dfrac{p(x)\,q_\sigma(\tilde x|x)}{q_\sigma(\tilde x)}$：后验分布。
 

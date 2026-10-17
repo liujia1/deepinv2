@@ -10,7 +10,7 @@
 
 Karras et al. (2022) 把扩散模型的加噪过程统一为：
 
-$$x_t = s(t)\,x_0 + s(t)\,\sigma(t)\,\epsilon, \quad \epsilon \sim \mathcal{N}(0, I)$$
+$$x_t = s(t)\,x_0 + s(t)\,\sigma(t)\,\varepsilon, \quad \varepsilon \sim \mathcal{N}(0, I)$$
 
 其中：
 - $s(t)$：信号缩放因子（$s(t) > 0$）
@@ -26,13 +26,13 @@ $$q(x_t|x_0) = \mathcal{N}(x_t | s(t)\,x_0,\, s^2(t)\sigma^2(t)\,I)$$
 
 $$s(t) = 1, \quad \sigma(t) = \sigma_{\min}\left(\frac{\sigma_{\max}}{\sigma_{\min}}\right)^t$$
 
-加噪过程：$x_t = x_0 + \sigma(t)\epsilon$——信号幅度不变，噪声叠加增长。
+加噪过程：$x_t = x_0 + \sigma(t)\varepsilon$——信号幅度不变，噪声叠加增长。
 
 **VP-SDE（DDPM）**：
 
 $$s(t) = \sqrt{\bar\alpha(t)}, \quad \sigma(t) = \sqrt{\frac{1-\bar\alpha(t)}{\bar\alpha(t)}}$$
 
-加噪过程：$x_t = \sqrt{\bar\alpha(t)}\,x_0 + \sqrt{1-\bar\alpha(t)}\,\epsilon$——信号逐渐衰减，噪声相对增长。
+加噪过程：$x_t = \sqrt{\bar\alpha(t)}\,x_0 + \sqrt{1-\bar\alpha(t)}\,\varepsilon$——信号逐渐衰减，噪声相对增长。
 
 ### 等价的推理过程
 
@@ -54,16 +54,16 @@ $$\hat{x}_0(x_t) = \mathbb{E}[x_0|x_t] = \frac{x_t + \sigma^2(t)\nabla_{x_t}\log
 
 $$\nabla_{x_t}\log p_t(x_t) = \frac{s(t)\,\mathbb{E}[x_0|x_t] - x_t}{s^2(t)\sigma^2(t)} = \frac{\hat{x}_0(x_t) - x_t/s(t)}{s(t)\sigma^2(t)}$$
 
-在 ε 预测参数化下（$\hat{x}_0 = (x_t - s(t)\sigma(t)\epsilon_\theta)/(s(t))$）：
+在 ε 预测参数化下（$\hat{x}_0 = (x_t - s(t)\sigma(t)\varepsilon_\theta)/(s(t))$）：
 
-$$\nabla_{x_t}\log p_t(x_t) = -\frac{\epsilon_\theta(x_t, t)}{s(t)\sigma(t)}$$
+$$\nabla_{x_t}\log p_t(x_t) = -\frac{\varepsilon_\theta(x_t, t)}{s(t)\sigma(t)}$$
 
 ### VE-SDE 特例
-$s(t)=1$：$\nabla\log p_t(x_t) = -\epsilon_\theta/\sigma(t)$
+$s(t)=1$：$\nabla\log p_t(x_t) = -\varepsilon_\theta/\sigma(t)$
 
 ### VP-SDE 特例
 $s(t)=\sqrt{\bar\alpha_t}$，$s(t)\sigma(t)=\sqrt{1-\bar\alpha_t}$：
-$$\nabla\log p_t(x_t) = -\frac{\epsilon_\theta(x_t, t)}{\sqrt{1-\bar\alpha_t}}$$
+$$\nabla\log p_t(x_t) = -\frac{\varepsilon_\theta(x_t, t)}{\sqrt{1-\bar\alpha_t}}$$
 
 ---
 
@@ -71,7 +71,7 @@ $$\nabla\log p_t(x_t) = -\frac{\epsilon_\theta(x_t, t)}{\sqrt{1-\bar\alpha_t}}$$
 
 ### 统一 DSM 目标
 
-$$\mathcal{J}_\text{DSM}(\theta) = \frac{1}{2}\int \frac{\lambda(t)}{s^2(t)\sigma^2(t)}\,\mathbb{E}_{x_0,\epsilon}\left[\|\epsilon - \epsilon_\theta(x_t, t)\|^2\right]dt$$
+$$\mathcal{J}_\text{DSM}(\theta) = \frac{1}{2}\int \frac{\lambda(t)}{s^2(t)\sigma^2(t)}\,\mathbb{E}_{x_0,\varepsilon}\left[\|\varepsilon - \varepsilon_\theta(x_t, t)\|^2\right]dt$$
 
 注意分母 $s^2(t)\sigma^2(t)$ 正是扰动方差（B.1 中 $q(x_t|x_0)$ 的方差），它统一了 12.4 里"VE 用 $\sigma^2$、VP 用 $1-\bar\alpha$"两种分母——因为 VP 下 $s^2\sigma^2 = \bar\alpha \cdot (1-\bar\alpha)/\bar\alpha = 1-\bar\alpha$。
 
@@ -79,7 +79,7 @@ $$\mathcal{J}_\text{DSM}(\theta) = \frac{1}{2}\int \frac{\lambda(t)}{s^2(t)\sigm
 
 连续时间 VLB 的一致性积分在统一参数化下为：
 
-$$L_\text{VLB}(\theta) = \int w(t)\,\mathbb{E}_{x_0,\epsilon}\left[\|\epsilon - \epsilon_\theta(x_t, t)\|^2\right]dt$$
+$$L_\text{VLB}(\theta) = \int w(t)\,\mathbb{E}_{x_0,\varepsilon}\left[\|\varepsilon - \varepsilon_\theta(x_t, t)\|^2\right]dt$$
 
 $w(t)$ 由 $(s(t), \sigma(t))$ 的动力学方程确定。
 
@@ -113,7 +113,7 @@ $$\frac{\lambda_\text{VP}(t)}{s^2(t)\sigma_\text{VP}^2(t)} = \frac{(1-\bar\alpha
 
 ### 为什么不让网络直接学去噪器
 
-B.1 已说明推理只取决于噪声水平 $\sigma$。但若把去噪器直接实现为网络 $D_\theta(x,\sigma)$ 来训练并不理想——含噪输入 $x = x_0 + \sigma\,\epsilon$ 的数值幅度随 $\sigma$ 剧烈变化（$\sigma$ 越大输入越"爆"），直接回归会使梯度尺度失衡。Karras et al. 的做法是训练一个"良态"网络 $F_\theta$，再用一组只依赖 $\sigma$ 的缩放函数把它组装成去噪器：
+B.1 已说明推理只取决于噪声水平 $\sigma$。但若把去噪器直接实现为网络 $D_\theta(x,\sigma)$ 来训练并不理想——含噪输入 $x = x_0 + \sigma\,\varepsilon$ 的数值幅度随 $\sigma$ 剧烈变化（$\sigma$ 越大输入越"爆"），直接回归会使梯度尺度失衡。Karras et al. 的做法是训练一个"良态"网络 $F_\theta$，再用一组只依赖 $\sigma$ 的缩放函数把它组装成去噪器：
 
 $$D_\theta(x;\sigma) = c_{\text{skip}}(\sigma)\,x + c_{\text{out}}(\sigma)\,F_\theta\!\big(c_{\text{in}}(\sigma)\,x,\; c_{\text{noise}}(\sigma)\big)$$
 
@@ -123,7 +123,7 @@ $$D_\theta(x;\sigma) = c_{\text{skip}}(\sigma)\,x + c_{\text{out}}(\sigma)\,F_\t
 
 记数据的标准差为 $\sigma_{\text{data}}$（对归一化到 $[-1,1]$ 的图像约 $0.5$）。把上式代入 B.3 的统一 DSM 目标，网络 $F_\theta$ 的**有效训练目标**与**有效权重**为：
 
-$$F_{\text{target}}(x_0,\epsilon;\sigma) = \frac{1}{c_{\text{out}}(\sigma)}\big(x_0 - c_{\text{skip}}(\sigma)\,(x_0 + \sigma\,\epsilon)\big), \qquad w(\sigma) = \lambda(\sigma)\,c_{\text{out}}(\sigma)^2$$
+$$F_{\text{target}}(x_0,\varepsilon;\sigma) = \frac{1}{c_{\text{out}}(\sigma)}\big(x_0 - c_{\text{skip}}(\sigma)\,(x_0 + \sigma\,\varepsilon)\big), \qquad w(\sigma) = \lambda(\sigma)\,c_{\text{out}}(\sigma)^2$$
 
 Karras et al. 用四条原则唯一定出各系数：
 
@@ -138,6 +138,6 @@ $$c_{\text{in}}(\sigma) = \frac{1}{\sqrt{\sigma^2 + \sigma_{\text{data}}^2}},\qu
 
 ### 与 VE / VP 的关系：一套设计"一记两通"
 
-上述推导写在 VE 规范（$s(t)=1$，$x = x_0 + \sigma\,\epsilon$）下，四个系数**只依赖 $\sigma$**。回到 B.1 的核心观察——推理只取决于噪声水平 $\sigma(t)$、与信号缩放 $s(t)$ 无关——对 VP-SDE 只需把 $\sigma$ 换成 $\sigma_{\text{VP}}(t) = \sqrt{(1-\bar\alpha_t)/\bar\alpha_t}$，整套最优设计原样适用；两种参数化下网络输出动态范围的差异，由 $c_{\text{in}}, c_{\text{out}}$ 自动吸收。
+上述推导写在 VE 规范（$s(t)=1$，$x = x_0 + \sigma\,\varepsilon$）下，四个系数**只依赖 $\sigma$**。回到 B.1 的核心观察——推理只取决于噪声水平 $\sigma(t)$、与信号缩放 $s(t)$ 无关——对 VP-SDE 只需把 $\sigma$ 换成 $\sigma_{\text{VP}}(t) = \sqrt{(1-\bar\alpha_t)/\bar\alpha_t}$，整套最优设计原样适用；两种参数化下网络输出动态范围的差异，由 $c_{\text{in}}, c_{\text{out}}$ 自动吸收。
 
 这说明"VE 与 VP 是同一框架的两种参数化"不仅体现在推理层面（B.1–B.2），也落地到**训练实现**层面：连最优网络预处理都共享同一组关于 $\sigma$ 的闭式公式。至此，正向 SDE 与转移核（B.1）、得分与训练目标（B.2–B.3）、权重映射（B.4）与最优预处理（本节）五个环节，都被统一在同一组 $(s(t), \sigma(t))$ 参数化之下——附录 7B 遗留的"表面差异"被彻底消解。

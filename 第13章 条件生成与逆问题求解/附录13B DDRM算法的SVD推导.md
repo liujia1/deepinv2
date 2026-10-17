@@ -29,13 +29,13 @@ $$A = U\Sigma V^\top$$
 
 定义频谱域变量：
 
-$$\bar{y} = U^\top y \in \mathbb{R}^m, \quad \bar{x} = V^\top x \in \mathbb{R}^n, \quad \bar{\epsilon} = U^\top \epsilon \in \mathbb{R}^m$$
+$$\bar{y} = U^\top y \in \mathbb{R}^m, \quad \bar{x} = V^\top x \in \mathbb{R}^n, \quad \bar{\varepsilon} = U^\top \varepsilon \in \mathbb{R}^m$$
 
 因 `U` 和 `V` 是正交矩阵，上述变换保距（isometry）：`‖ȳ‖ = ‖y‖`，`‖x̄‖ = ‖x‖`。这一变换不丢失任何信息——它只是换了个视角看同一个问题。
 
 频谱域下，线性测量模型 `y = Ax + ε_y`（`ε_y ~ N(0, σ_y²I)`）变：
 
-$$\bar{y} = U^\top(Ax + \epsilon_y) = U^\top U\Sigma V^\top x + U^\top\epsilon_y = \Sigma\bar{x} + \bar{\epsilon}$$
+$$\bar{y} = U^\top(Ax + \varepsilon_y) = U^\top U\Sigma V^\top x + U^\top\varepsilon_y = \Sigma\bar{x} + \bar{\varepsilon}$$
 
 因 `U` 正交且 `ε_y ~ N(0, σ_y²I)`，有 `ε̄ = U^⊤ε_y ~ N(0, σ_y²I)`——噪声在频谱域仍是独立同分布高斯噪声。这一步同样关键：换坐标系不会把简单的噪声搅乱，它仍然是白噪声。
 
@@ -43,7 +43,7 @@ $$\bar{y} = U^\top(Ax + \epsilon_y) = U^\top U\Sigma V^\top x + U^\top\epsilon_y
 
 频谱域方程逐分量写：
 
-$$\bar{y}_i = s_i\bar{x}_i + \sigma_y\bar{\epsilon}_i, \quad i = 1, \ldots, \min(m, n)$$
+$$\bar{y}_i = s_i\bar{x}_i + \sigma_y\bar{\varepsilon}_i, \quad i = 1, \ldots, \min(m, n)$$
 
 对 `i > r`（即 `s_i = 0`），方程退化为 `ȳ_i = σ_y ε̄_i`——观测不含关于 `x̄_i` 任何信息，这些分量完全由先验决定。
 
@@ -87,7 +87,7 @@ DDRM 核心：在逆向采样每步 `t → t-1`，对每个频谱分量 `x̄_t^i
 
 考虑时刻 `t` 含噪状态 `x_t`。VP-SDE 下与干净图 `x_0` 关系 `x_t = √ᾱ_t x_0 + √(1-ᾱ_t)ε`。变换到频谱域：
 
-$$\bar{x}_t^i = \sqrt{\bar\alpha_t}\,\bar{x}_0^i + \sqrt{1-\bar\alpha_t}\,\bar{\epsilon}_t^i$$
+$$\bar{x}_t^i = \sqrt{\bar\alpha_t}\,\bar{x}_0^i + \sqrt{1-\bar\alpha_t}\,\bar{\varepsilon}_t^i$$
 
 `ε̄_t^i ~ N(0, 1)`。频谱域中测量方程 `ȳ_i = s_i x̄_0^i + σ_y ε̄_i`。
 

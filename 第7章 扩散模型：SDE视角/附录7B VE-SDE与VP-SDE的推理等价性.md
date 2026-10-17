@@ -8,17 +8,17 @@
 
 ## 等价性的直观解释：重缩放一下就一样了
 
-**VE-SDE**：$x_t = x_0 + \sigma(t)\,\epsilon$
+**VE-SDE**：$x_t = x_0 + \sigma(t)\,\varepsilon$
 
 含噪信号 = 原始信号 + 加性噪声。信号不缩放，噪声方差 $\sigma(t)^2$ 随时间增长。
 
-**VP-SDE**：$x_t = \sqrt{\bar\alpha_t}\,x_0 + \sqrt{1-\bar\alpha_t}\,\epsilon$
+**VP-SDE**：$x_t = \sqrt{\bar\alpha_t}\,x_0 + \sqrt{1-\bar\alpha_t}\,\varepsilon$
 
 含噪信号 = 缩放信号 + 加性噪声。信号被 $\sqrt{\bar\alpha_t}$ 缩放，总方差保持有界。
 
 **关键观察**：对 VP-SDE 的含噪信号做重缩放。令 $\hat{x}_t = x_t / \sqrt{\bar\alpha_t}$：
 
-$$\hat{x}_t = x_0 + \hat{\sigma}(t)\,\epsilon$$
+$$\hat{x}_t = x_0 + \hat{\sigma}(t)\,\varepsilon$$
 
 其中 $\hat{\sigma}(t) = \sqrt{(1-\bar\alpha_t)/\bar\alpha_t}$。重缩放后的 VP-SDE 在形式上**完全等同于 VE-SDE**——都是纯加性噪声模型。只是"噪声尺度"换了个名字。
 

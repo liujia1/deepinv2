@@ -30,7 +30,7 @@ $$\widehat{\mathrm{Tr}}_M(A)=\frac{1}{M}\sum_{j=1}^M v_j^T A v_j.$$
 
 ## 方差分析：不同采样分布
 
-**高斯** $v\sim\mathcal N(0,I)$：方差
+**高斯** $v\sim\mathcal \mathcal{N}(0,I)$：方差
 
 $$\mathrm{Var}(v^T A v)=2\|A\|_F^2,$$
 

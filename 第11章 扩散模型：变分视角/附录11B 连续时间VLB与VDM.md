@@ -12,9 +12,9 @@ $$L_\text{VLB} = \underbrace{D_\text{KL}(q(x_T|x_0) \| p(x_T))}_{L_T} + \sum_{t=
 
 当 $T\to\infty$、$\Delta t=1/T\to 0$，求和趋于积分。在连续时间 $t\in[0,1]$ 下：
 
-$$L_\text{VLB}^\text{cont} = \underbrace{D_\text{KL}(q(x_1|x_0) \| p(x_1))}_{L_1} + \int_0^1 \mathbb{E}_q\left[\frac{1}{2}\left\|\frac{\mu_\theta(x_t,t) - \tilde\mu_t(x_t,x_0)}{\sigma_t}\right\|^2\right]dt - \underbrace{\mathbb{E}_q[\log p_\theta(x_0|x_{\epsilon})]}_{L_0}$$
+$$L_\text{VLB}^\text{cont} = \underbrace{D_\text{KL}(q(x_1|x_0) \| p(x_1))}_{L_1} + \int_0^1 \mathbb{E}_q\left[\frac{1}{2}\left\|\frac{\mu_\theta(x_t,t) - \tilde\mu_t(x_t,x_0)}{\sigma_t}\right\|^2\right]dt - \underbrace{\mathbb{E}_q[\log p_\theta(x_0|x_{\varepsilon})]}_{L_0}$$
 
-其中 $x_\epsilon$ 是 $t\to 0^+$ 时的含噪状态。形式没变，只是"求和"换成了"沿时间的积分"。这一转变意味着：离散公式里的每一项、每个符号在连续下都有对应物，因此本章所有化简直觉依然成立，只是求和变成了积分、权重由离散点取均匀变成连续权重。
+其中 $x_\varepsilon$ 是 $t\to 0^+$ 时的含噪状态。形式没变，只是"求和"换成了"沿时间的积分"。这一转变意味着：离散公式里的每一项、每个符号在连续下都有对应物，因此本章所有化简直觉依然成立，只是求和变成了积分、权重由离散点取均匀变成连续权重。
 
 ## VDM 的核心贡献：噪声调度也能学
 

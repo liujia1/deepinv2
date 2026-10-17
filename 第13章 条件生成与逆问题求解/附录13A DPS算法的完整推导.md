@@ -174,7 +174,7 @@ $$\boxed{\nabla_{x_t}\log p(y|x_t) \approx \zeta \cdot \frac{A^\top(y - A\hat{x}
 
 VP-SDE（Variance Preserving SDE，第7章 7.2）正向过程：
 
-$$x_t = \sqrt{\bar\alpha_t}\,x_0 + \sqrt{1 - \bar\alpha_t}\,\epsilon, \quad \epsilon \sim \mathcal{N}(0, I)$$
+$$x_t = \sqrt{\bar\alpha_t}\,x_0 + \sqrt{1 - \bar\alpha_t}\,\varepsilon, \quad \varepsilon \sim \mathcal{N}(0, I)$$
 
 `ᾱ_t = ∏_{s=1}^{t}(1 - β_s)` 是累积乘积，`β_t` 是噪声调度。正向转移核：
 
@@ -188,7 +188,7 @@ $$\hat{x}_{0|t} = \mathbb{E}[x_0|x_t] = \frac{x_t + (1-\bar\alpha_t)\,\nabla_{x_
 
 用 ε 预测参数化 `∇_{x_t}log p_t(x_t) = -ε_θ(x_t, t)/√(1-ᾱ_t)`（第11章 11.3），Tweedie 估计等价写成：
 
-$$\boxed{\hat{x}_{0|t} = \frac{x_t - \sqrt{1-\bar\alpha_t}\,\epsilon_\theta(x_t, t)}{\sqrt{\bar\alpha_t}}}$$
+$$\boxed{\hat{x}_{0|t} = \frac{x_t - \sqrt{1-\bar\alpha_t}\,\varepsilon_\theta(x_t, t)}{\sqrt{\bar\alpha_t}}}$$
 
 这是 VP-SDE 下 DPS 算法用的去噪估计公式。
 
@@ -206,13 +206,13 @@ $$\nabla_{x_t}\log p(x_t|y) \approx s_\theta(x_t, t) + \zeta \cdot \frac{A^\top\
 
 其中：
 
-$$\hat{x}_{0|t} = \frac{x_t - \sqrt{1-\bar\alpha_t}\,\epsilon_\theta(x_t, t)}{\sqrt{\bar\alpha_t}}$$
+$$\hat{x}_{0|t} = \frac{x_t - \sqrt{1-\bar\alpha_t}\,\varepsilon_\theta(x_t, t)}{\sqrt{\bar\alpha_t}}$$
 
 **VP-SDE 下 DPS 采样步骤**（从 `t = T` 到 `t = 0`）：
 
 **Step 1**：算先验得分和去噪估计
 
-$$\epsilon_t = \epsilon_\theta(x_t, t), \quad \hat{x}_{0|t} = \frac{x_t - \sqrt{1-\bar\alpha_t}\,\epsilon_t}{\sqrt{\bar\alpha_t}}$$
+$$\varepsilon_t = \varepsilon_\theta(x_t, t), \quad \hat{x}_{0|t} = \frac{x_t - \sqrt{1-\bar\alpha_t}\,\varepsilon_t}{\sqrt{\bar\alpha_t}}$$
 
 **Step 2**：算似然梯度修正项
 
@@ -220,7 +220,7 @@ $$g_t = \zeta \cdot \frac{A^\top(y - A\hat{x}_{0|t})}{\sigma_y^2}$$
 
 **Step 3**：执行条件逆向 SDE 一步（以 DDPM 离散化为例）
 
-$$x_{t-1} = \frac{1}{\sqrt{1-\beta_t}}\left(x_t - \frac{\beta_t}{\sqrt{1-\bar\alpha_t}}\epsilon_t\right) - \beta_t\,g_t + \sigma_t\,\epsilon, \quad \epsilon \sim \mathcal{N}(0, I)$$
+$$x_{t-1} = \frac{1}{\sqrt{1-\beta_t}}\left(x_t - \frac{\beta_t}{\sqrt{1-\bar\alpha_t}}\varepsilon_t\right) - \beta_t\,g_t + \sigma_t\,\varepsilon, \quad \varepsilon \sim \mathcal{N}(0, I)$$
 
 `σ_t` 是 DDPM 随机性参数。
 
@@ -234,7 +234,7 @@ $$x_{t-1} = \frac{1}{\sqrt{1-\beta_t}}\left(x_t - \frac{\beta_t}{\sqrt{1-\bar\al
 
 VE-SDE（Variance Exploding SDE，第7章 7.2）正向过程：
 
-$$x_t = x_0 + \sigma_t\,\epsilon, \quad \epsilon \sim \mathcal{N}(0, I)$$
+$$x_t = x_0 + \sigma_t\,\varepsilon, \quad \varepsilon \sim \mathcal{N}(0, I)$$
 
 `σ_t` 是随时间单调递增噪声标准差，满足 `σ_0 ≈ 0`（几乎无噪声）、`σ_T ≫ 1`（几乎纯噪声）。正向转移核：
 
@@ -270,7 +270,7 @@ $$g_t = \zeta \cdot \frac{A^\top(y - A\hat{x}_{0|t})}{\sigma_y^2}$$
 
 **Step 3**：执行条件逆向 SDE 一步（以 Euler-Maruyama 离散化为例）
 
-$$x_{t-1} = x_t + \left(\sigma_t^2\,s_t + \sigma_t^2\,g_t\right)\frac{\sigma_{t-1}^2 - \sigma_t^2}{\sigma_t^2} + \sqrt{\sigma_t^2 - \sigma_{t-1}^2}\,\epsilon, \quad \epsilon \sim \mathcal{N}(0, I)$$
+$$x_{t-1} = x_t + \left(\sigma_t^2\,s_t + \sigma_t^2\,g_t\right)\frac{\sigma_{t-1}^2 - \sigma_t^2}{\sigma_t^2} + \sqrt{\sigma_t^2 - \sigma_{t-1}^2}\,\varepsilon, \quad \varepsilon \sim \mathcal{N}(0, I)$$
 
 ### 6.4 VP-SDE 与 VE-SDE 下 DPS 对比
 
