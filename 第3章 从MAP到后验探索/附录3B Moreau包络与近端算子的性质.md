@@ -10,7 +10,7 @@
 
 3.4 定义了近端算子 $\text{prox}_{\lambda g}(v)=\arg\min_x\{\frac12\|\mathbf{x}-v\|^2+\lambda g(\mathbf{x})\}$。现在看近端问题的最优值——**Moreau 包络**（Moreau-Yoshida 正则化）：
 
-$$g^\lambda(\mathbf{x}) = \inf_y \left\{g(y) + \frac{1}{2\lambda}\|y - \mathbf{x}\|^2\right\}$$
+$$g^\lambda(\mathbf{x}) = \inf_y \left\{g(\mathbf{y}) + \frac{1}{2\lambda}\|\mathbf{y} - \mathbf{x}\|^2\right\}$$
 
 它是 $g$ 的光滑近似——把不可微的 $g$"磨光"成可微的 $g^\lambda$。直观理解：$g^\lambda(\mathbf{x})$ 是在 $\mathbf{x}$ 附近"加权"地取 $g$ 的最小值，权重随距 $\mathbf{x}$ 的距离衰减；$\lambda$ 越大，越多的远处信息被纳入平均，曲线越平滑，但离原函数越远。
 
@@ -38,7 +38,7 @@ $g^*$ 是 $g$ 的 Fenchel 共轭。两层含义：
 
 ### 应用于 L1 范数
 
-对 $g(\mathbf{x})=\|\mathbf{x}\|_1$，$g^*(y)=\iota_{\|\cdot\|_\infty\leq 1}(y)$。Moreau 恒等式给：
+对 $g(\mathbf{x})=\|\mathbf{x}\|_1$，$g^*(\mathbf{y})=\iota_{\|\cdot\|_\infty\leq 1}(\mathbf{y})$。Moreau 恒等式给：
 
 $$\text{prox}_{\lambda\|\cdot\|_1}(\mathbf{x}) + \lambda \, \text{proj}_{[-1,1]}(\mathbf{x}/\lambda) = \mathbf{x}$$
 
@@ -50,9 +50,9 @@ $$\text{prox}_{\lambda\|\cdot\|_1}(\mathbf{x}) + \lambda \, \text{proj}_{[-1,1]}
 
 Moreau 包络的重要应用是构造 **MYULA（Moreau-Yoshida Unadjusted Langevin Algorithm）**。
 
-Langevin 采样（第4章）需要后验梯度 $\nabla_x\ln p(\mathbf{x}|y)$。当后验含不可微先验（如 Laplace→L1），梯度不存在。MYULA 用 Moreau 包络 $g^\lambda$ 替换不可微的 $g$，使后验变光滑近似：
+Langevin 采样（第4章）需要后验梯度 $\nabla_x\ln p(\mathbf{x}|\mathbf{y})$。当后验含不可微先验（如 Laplace→L1），梯度不存在。MYULA 用 Moreau 包络 $g^\lambda$ 替换不可微的 $g$，使后验变光滑近似：
 
-$$\tilde{p}_\lambda(\mathbf{x}|y) \propto p(y|\mathbf{x}) \exp(-g^\lambda(\mathbf{x}))$$
+$$\tilde{p}_\lambda(\mathbf{x}|\mathbf{y}) \propto p(\mathbf{y}|\mathbf{x}) \exp(-g^\lambda(\mathbf{x}))$$
 
 这近似后验处处可微，Langevin 可直接用。$\lambda\to 0$ 时近似后验收敛到真实后验——MYULA 在光滑性与逼近精度间用 $\lambda$ 取平衡。
 

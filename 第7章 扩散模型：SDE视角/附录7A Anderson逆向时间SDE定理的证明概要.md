@@ -12,47 +12,47 @@
 
 $$dx = f(\mathbf{x},t)\,dt + g(t)\,dw, \quad t \in [0, T]$$
 
-其中 $f: \mathbb{R}^d \times [0,T] \to \mathbb{R}^d$ 是漂移系数，$g: [0,T] \to \mathbb{R}_+$ 是扩散系数，$w$ 是标准布朗运动。则逆向时间过程 $y(s) = \mathbf{x}(T-s)$ 满足
+其中 $f: \mathbb{R}^d \times [0,T] \to \mathbb{R}^d$ 是漂移系数，$g: [0,T] \to \mathbb{R}_+$ 是扩散系数，$w$ 是标准布朗运动。则逆向时间过程 $\mathbf{y}(s) = \mathbf{x}(T-s)$ 满足
 
-$$dy = \left[f(y, T-s) - g(T-s)^2\,\nabla_y\log p_{T-s}(y)\right]\,ds + g(T-s)\,d\bar{w}$$
+$$dy = \left[f(\mathbf{y}, T-s) - g(T-s)^2\,\nabla_y\log p_{T-s}(\mathbf{y})\right]\,ds + g(T-s)\,d\bar{w}$$
 
-其中 $p_t(y)$ 是 $\mathbf{x}(t)$ 在时刻 $t$ 的边际密度，$\bar{w}$ 是另一标准布朗运动。
+其中 $p_t(\mathbf{y})$ 是 $\mathbf{x}(t)$ 在时刻 $t$ 的边际密度，$\bar{w}$ 是另一标准布朗运动。
 
 ## 证明思路（四步，密度→方程→识别→换回时间）
 
 ### 第一步：建立逆向时间的密度演化方程
 
-令 $q_s(y) = p_{T-s}(y)$——逆向时间的边际密度。由正向SDE的Fokker-Planck方程（描述密度如何随时间变化）：
+令 $q_s(\mathbf{y}) = p_{T-s}(\mathbf{y})$——逆向时间的边际密度。由正向SDE的Fokker-Planck方程（描述密度如何随时间变化）：
 
 $$\frac{\partial p_t}{\partial t} = -\nabla\cdot[f(\mathbf{x},t)\,p_t] + \frac{1}{2}g(t)^2\,\Delta p_t$$
 
-对 $q_s(y) = p_{T-s}(y)$ 求导（链式法则，时间反了所以多个负号）：
+对 $q_s(\mathbf{y}) = p_{T-s}(\mathbf{y})$ 求导（链式法则，时间反了所以多个负号）：
 
-$$\frac{\partial q_s}{\partial s} = -\frac{\partial p_{T-s}}{\partial t} = \nabla\cdot[f(y,T-s)\,q_s] - \frac{1}{2}g(T-s)^2\,\Delta q_s$$
+$$\frac{\partial q_s}{\partial s} = -\frac{\partial p_{T-s}}{\partial t} = \nabla\cdot[f(\mathbf{y},T-s)\,q_s] - \frac{1}{2}g(T-s)^2\,\Delta q_s$$
 
 ### 第二步：把扩散项重组
 
 将 $\Delta q_s$ 写成 $\nabla\cdot[\nabla q_s]$，并利用 $\nabla q_s = q_s \nabla\log q_s$（得分就是对数密度的梯度）：
 
-$$\frac{\partial q_s}{\partial s} = \nabla\cdot\left[f(y,T-s)\,q_s - \frac{1}{2}g(T-s)^2\,q_s\,\nabla\log q_s\right]$$
+$$\frac{\partial q_s}{\partial s} = \nabla\cdot\left[f(\mathbf{y},T-s)\,q_s - \frac{1}{2}g(T-s)^2\,q_s\,\nabla\log q_s\right]$$
 
-$$= -\nabla\cdot\left[\left(-f(y,T-s) + \frac{1}{2}g(T-s)^2\,\nabla\log q_s\right)q_s\right]$$
+$$= -\nabla\cdot\left[\left(-f(\mathbf{y},T-s) + \frac{1}{2}g(T-s)^2\,\nabla\log q_s\right)q_s\right]$$
 
 ### 第三步：识别SDE的漂移项
 
-密度演化方程 $\frac{\partial q_s}{\partial s} = -\nabla\cdot[b(y,s)\,q_s] + \frac{1}{2}\nabla\cdot[\sigma^2(s)\nabla q_s]$ 对应 SDE $dy = b(y,s)\,ds + \sigma(s)\,d\bar{w}$。把第二步结果对照，识别：
+密度演化方程 $\frac{\partial q_s}{\partial s} = -\nabla\cdot[b(\mathbf{y},s)\,q_s] + \frac{1}{2}\nabla\cdot[\sigma^2(s)\nabla q_s]$ 对应 SDE $dy = b(\mathbf{y},s)\,ds + \sigma(s)\,d\bar{w}$。把第二步结果对照，识别：
 
-$$b(y,s) = f(y,T-s) - g(T-s)^2\,\nabla\log q_s(y) = f(y,T-s) - g(T-s)^2\,\nabla\log p_{T-s}(y)$$
+$$b(\mathbf{y},s) = f(\mathbf{y},T-s) - g(T-s)^2\,\nabla\log q_s(\mathbf{y}) = f(\mathbf{y},T-s) - g(T-s)^2\,\nabla\log p_{T-s}(\mathbf{y})$$
 
 $$\sigma(s) = g(T-s)$$
 
 因此逆向SDE为：
 
-$$dy = \left[f(y,T-s) - g(T-s)^2\,\nabla\log p_{T-s}(y)\right]\,ds + g(T-s)\,d\bar{w}$$
+$$dy = \left[f(\mathbf{y},T-s) - g(T-s)^2\,\nabla\log p_{T-s}(\mathbf{y})\right]\,ds + g(T-s)\,d\bar{w}$$
 
 ### 第四步：变回原始时间变量
 
-令 $t = T-s$，$\mathbf{x}(t) = y(T-t) = \mathbf{x}(t)$，$d\bar{w}$ 为逆向布朗运动，得：
+令 $t = T-s$，$\mathbf{x}(t) = \mathbf{y}(T-t) = \mathbf{x}(t)$，$d\bar{w}$ 为逆向布朗运动，得：
 
 $$dx = \left[f(\mathbf{x},t) - g(t)^2\,\nabla\log p_t(\mathbf{x})\right]\,dt + g(t)\,d\bar{w} \quad \checkmark$$
 

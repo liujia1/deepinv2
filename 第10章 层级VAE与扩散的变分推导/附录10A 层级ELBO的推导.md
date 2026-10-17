@@ -1,12 +1,12 @@
 # 附录 10A 层级 ELBO 的完整推导
 
-> 定位：给 10.1 节"层级 ELBO 推导"补上详细代数。如果你只想用结论，可以跳过本附录——记住那行框起来的公式就够了。本附录只做一件事：把"单层 ELBO 推广到多层"的每一步补齐，并验证 $L=1$ 时退化回标准单层 ELBO。从更深层次看，这份推导正是本书变分路径的承重墙——后面把每个 $z_l$ 换成时间步 $\mathbf{x}_t$ 时，10.2 节的三项 VLB 就从这堵墙里自然长出来；把它走一遍，你就理解了为什么扩散的训练目标"从头到尾都是 KL 散度在排队"。
+> 定位：给 10.1 节"层级 ELBO 推导"补上详细代数。如果你只想用结论，可以跳过本附录——记住那行框起来的公式就够了。本附录只做一件事：把"单层 ELBO 推广到多层"的每一步补齐，并验证 $L=1$ 时退化回标准单层 ELBO。从更深层次看，这份推导正是本书变分路径的承重墙——后面把每个 $\mathbf{z}_l$ 换成时间步 $\mathbf{x}_t$ 时，10.2 节的三项 VLB 就从这堵墙里自然长出来；把它走一遍，你就理解了为什么扩散的训练目标"从头到尾都是 KL 散度在排队"。
 
 ---
 
 ## 起点：对数似然分解
 
-我们想给数据 $\mathbf{x}$ 的对数似然 $\log p(\mathbf{x})$ 找一个"可计算的下界"。办法是引入一个变分分布（variational distribution，我们故意选的简单分布，用来近似难算的真实后验）$q(z_{1:L}|\mathbf{x})$，在积分里乘一个 $q/q=1$：
+我们想给数据 $\mathbf{x}$ 的对数似然 $\log p(\mathbf{x})$ 找一个"可计算的下界"。办法是引入一个变分分布（variational distribution，我们故意选的简单分布，用来近似难算的真实后验）$q(\mathbf{z}_{1:L}|\mathbf{x})$，在积分里乘一个 $q/q=1$：
 
 $$\log p(\mathbf{x}) = \log \int p(\mathbf{x}, \mathbf{z}_{1:L})\,d\mathbf{z}_{1:L}
 = \log \mathbb{E}_{q(\mathbf{z}_{1:L}|\mathbf{x})}\left[\frac{p(\mathbf{x}, \mathbf{z}_{1:L})}{q(\mathbf{z}_{1:L}|\mathbf{x})}\right]$$
@@ -15,7 +15,7 @@ $$\log p(\mathbf{x}) = \log \int p(\mathbf{x}, \mathbf{z}_{1:L})\,d\mathbf{z}_{1
 
 $$\log p(\mathbf{x}) \geq \mathbb{E}_{q(\mathbf{z}_{1:L}|\mathbf{x})}\left[\log \frac{p(\mathbf{x}, \mathbf{z}_{1:L})}{q(\mathbf{z}_{1:L}|\mathbf{x})}\right] =: \text{ELBO}(\mathbf{x})$$
 
-等号成立当且仅当 $q(z_{1:L}|\mathbf{x})=p(z_{1:L}|\mathbf{x})$（近似分布正好等于真实后验）。这个下界就是 ELBO（evidence lower bound，证据下界）。
+等号成立当且仅当 $q(\mathbf{z}_{1:L}|\mathbf{x})=p(\mathbf{z}_{1:L}|\mathbf{x})$（近似分布正好等于真实后验）。这个下界就是 ELBO（evidence lower bound，证据下界）。
 
 ---
 
@@ -55,9 +55,9 @@ $$= \mathbb{E}_{q}[\log p(\mathbf{x}|\mathbf{z}_1)] + \sum_{l=1}^{L-1} \mathbb{E
 
 ## 转化为 KL 散度
 
-这里有个小坎：对 $l=1,\ldots,L-1$，上面那一项里 $p$ 的条件变量是 $z_{l+1}$（生成方向，自顶向下），而 $q$ 的条件变量是 $z_{l-1}$（推断方向，自底向上）——两边条件不同，不能直接认作 KL 散度。
+这里有个小坎：对 $l=1,\ldots,L-1$，上面那一项里 $p$ 的条件变量是 $\mathbf{z}_{l+1}$（生成方向，自顶向下），而 $q$ 的条件变量是 $\mathbf{z}_{l-1}$（推断方向，自底向上）——两边条件不同，不能直接认作 KL 散度。
 
-KL 散度（Kullback–Leibler divergence，衡量两个分布差异、永远 ≥0 的量）要求同一个条件下的两个分布之比。所以我们改在"恰当的边际"上取期望。对第 $l$ 层，在 $z_{l-1},z_{l+1}$ 的边际上：
+KL 散度（Kullback–Leibler divergence，衡量两个分布差异、永远 ≥0 的量）要求同一个条件下的两个分布之比。所以我们改在"恰当的边际"上取期望。对第 $l$ 层，在 $\mathbf{z}_{l-1},\mathbf{z}_{l+1}$ 的边际上：
 
 $$\mathbb{E}_{q(\mathbf{z}_{l-1}, \mathbf{z}_{l+1}|\mathbf{x})}\left[D_{\text{KL}}(q(\mathbf{z}_l|\mathbf{z}_{l-1}) \| p(\mathbf{z}_l|\mathbf{z}_{l+1}))\right]
 = \mathbb{E}_{q(\mathbf{z}_{l-1}, \mathbf{z}_{l+1}|\mathbf{x})}\left[\int q(\mathbf{z}_l|\mathbf{z}_{l-1}) \log \frac{q(\mathbf{z}_l|\mathbf{z}_{l-1})}{p(\mathbf{z}_l|\mathbf{z}_{l+1})} d\mathbf{z}_l\right]$$
@@ -70,7 +70,7 @@ $$\mathbb{E}_{q(\mathbf{z}_{L-1}|\mathbf{x})}\left[D_{\text{KL}}(q(\mathbf{z}_L|
 
 ## 最终形式
 
-把以上拼起来，并约定 $p(z_L|z_{L+1})\equiv p(z_L)$、$\mathbf{z}_0=\mathbf{x}$，得到正文里那行框起来的公式：
+把以上拼起来，并约定 $p(\mathbf{z}_L|\mathbf{z}_{L+1})\equiv p(\mathbf{z}_L)$、$\mathbf{z}_0=\mathbf{x}$，得到正文里那行框起来的公式：
 
 $$\boxed{\text{ELBO}(\mathbf{x}) = \mathbb{E}_{q(\mathbf{z}_{1:L}|\mathbf{x})}[\log p(\mathbf{x}|\mathbf{z}_1)] - \sum_{l=1}^{L} \mathbb{E}_{q(\mathbf{z}_{l-1}, \mathbf{z}_{l+1}|\mathbf{x})}\left[D_{\text{KL}}(q(\mathbf{z}_l|\mathbf{z}_{l-1}) \| p(\mathbf{z}_l|\mathbf{z}_{l+1}))\right]}$$
 
@@ -80,7 +80,7 @@ $$\boxed{\text{ELBO}(\mathbf{x}) = \mathbb{E}_{q(\mathbf{z}_{1:L}|\mathbf{x})}[\
 
 ## 与单层 ELBO 的一致性验证
 
-把 $L=1$ 代进去，只剩一个潜变量 $z_1$：
+把 $L=1$ 代进去，只剩一个潜变量 $\mathbf{z}_1$：
 
 $$\text{ELBO}(\mathbf{x}) = \mathbb{E}_{q(\mathbf{z}_1|\mathbf{x})}[\log p(\mathbf{x}|\mathbf{z}_1)] - D_{\text{KL}}(q(\mathbf{z}_1|\mathbf{x}) \| p(\mathbf{z}_1))$$
 
@@ -90,7 +90,7 @@ $$\text{ELBO}(\mathbf{x}) = \mathbb{E}_{q(\mathbf{z}_1|\mathbf{x})}[\log p(\math
 
 ## 扩散模型记号下的等价形式
 
-把 $z_l$ 换成 $\mathbf{x}_t$、$z_0=\mathbf{x}$ 换成 $\mathbf{x}_0$，层级 ELBO 变成：
+把 $\mathbf{z}_l$ 换成 $\mathbf{x}_t$、$\mathbf{z}_0=\mathbf{x}$ 换成 $\mathbf{x}_0$，层级 ELBO 变成：
 
 $$\text{ELBO}(\mathbf{x}_0) = \mathbb{E}_{q(\mathbf{x}_1|\mathbf{x}_0)}[\log p_\theta(\mathbf{x}_0|\mathbf{x}_1)] - \sum_{t=1}^{T-1} \mathbb{E}_{q(\mathbf{x}_{t-1}, \mathbf{x}_{t+1}|\mathbf{x}_0)}\left[D_{\text{KL}}(q(\mathbf{x}_t|\mathbf{x}_{t-1}) \| p_\theta(\mathbf{x}_t|\mathbf{x}_{t+1}))\right] - D_{\text{KL}}(q(\mathbf{x}_T|\mathbf{x}_{T-1}) \| p(\mathbf{x}_T))$$
 

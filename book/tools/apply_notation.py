@@ -144,6 +144,37 @@ def rule_mathbf_x(seg):         # #3b
     return "".join(chars)
 
 
+# #11：y/z 粗体化（作者拍板：y/z 与 x 对称粗体，ε 保持裸斜体）
+# 与 x 同口径：仅数学环境、仅高置信形态；
+# 保留：分量下标 y_i/z_i、微分记号 dy/dz、σ_y、\hat{y} 等 hat/tilde 形态。
+def _make_bold_rules(var, extra=""):
+    re_sub = re.compile(
+        rf"(?<![\\A-Za-z_]){var}_(\{{?(?:[012]|t(?:[-+]1)?|T|s|S|l|L|1:T{extra})(?:[-+]1)?\}}?)"
+    )
+    re_alone = re.compile(rf"(?<![\\A-Za-z_{{}}]){var}(?![a-zA-Z_0-9])")
+    return re_sub, re_alone
+
+
+RE_Y_SUB, RE_Y_ALONE = _make_bold_rules("y")
+# z 额外覆盖层级 VAE 层索引下标：z_l / z_L / z_{l-1}（每层潜变量是向量）
+RE_Z_SUB, RE_Z_ALONE = _make_bold_rules("z")
+
+
+def rule_mathbf_yz(seg):        # #11
+    spans = math_spans(seg)
+    if not spans:
+        return seg
+    chars = list(seg)
+    for a, b in sorted(spans, reverse=True):
+        frag = "".join(chars[a:b])
+        frag = RE_Y_SUB.sub(r"\\mathbf{y}_\1", frag)
+        frag = RE_Y_ALONE.sub(r"\\mathbf{y}", frag)
+        frag = RE_Z_SUB.sub(r"\\mathbf{z}_\1", frag)
+        frag = RE_Z_ALONE.sub(r"\\mathbf{z}", frag)
+        chars[a:b] = list(frag)
+    return "".join(chars)
+
+
 RULESETS = {
     1: ("ε → \\varepsilon", rule_epsilon),
     2: ("ᾱ/\\bar{\\alpha} → \\bar\\alpha", rule_bar_alpha),
@@ -155,6 +186,7 @@ RULESETS = {
     8: ("Unicode ‖ → \\|", rule_norm),
     9: ("\\( \\) → $ $", rule_inline_dollar),
     10: ("x 粗体化（高置信）", rule_mathbf_x),
+    11: ("y/z 粗体化（高置信）", rule_mathbf_yz),
 }
 
 
@@ -170,6 +202,16 @@ def count_math_x(seg):
     for a, b in math_spans(seg):
         frag = seg[a:b]
         n += len(RE_X_SUB.findall(frag)) + len(RE_X_ALONE.findall(frag))
+    return n
+
+
+def count_math_yz(seg):
+    """统计数学环境内高置信裸 y/z（供 dry-run 预览 #11 的影响面）。"""
+    n = 0
+    for a, b in math_spans(seg):
+        frag = seg[a:b]
+        n += (len(RE_Y_SUB.findall(frag)) + len(RE_Y_ALONE.findall(frag))
+              + len(RE_Z_SUB.findall(frag)) + len(RE_Z_ALONE.findall(frag)))
     return n
 
 
@@ -200,13 +242,11 @@ def main():
         for ch in sorted(chapters):
             for md in sorted(ch.glob("*.md")):
                 text = md.read_text(encoding="utf-8", errors="replace")
-                if gno == 10 and not apply:
-                    new = text  # dry-run：只统计
+                if gno in (10, 11) and not apply:
+                    counter = count_math_x if gno == 10 else count_math_yz
                     for seg, code in split_code(text):
                         if not code:
-                            n_sub += count_math_x(seg)
-                    if n_sub:
-                        pass
+                            n_sub += counter(seg)
                     continue
                 new = apply_on_prose(text, fn)
                 if new != text:
@@ -217,8 +257,9 @@ def main():
         mode = "APPLY" if apply else "DRY-RUN"
         print(f"[{mode}] 组#{gno} {label}：变更 {n_files} 个文件")
 
-    if not apply and 10 in groups:
-        print(f"[DRY-RUN] 组#10 预估替换（数学环境内高置信裸 x）：约 {n_sub} 处")
+    if not apply and groups and groups[-1] in (10, 11):
+        what = "裸 x" if groups[-1] == 10 else "裸 y/z"
+        print(f"[DRY-RUN] 组#{groups[-1]} 预估替换（数学环境内高置信{what}）：约 {n_sub} 处")
 
 
 if __name__ == "__main__":

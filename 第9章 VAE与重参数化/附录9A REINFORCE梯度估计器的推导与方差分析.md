@@ -4,7 +4,7 @@
 
 ## 为什么需要 REINFORCE？先理解它的位置
 
-正文 9.2 讲：重参数化把随机性外移到 $\varepsilon$，梯度顺滑通过。但它要求分布能写成 $z=g_\phi(\varepsilon,\mathbf{x})$ 且可微。碰到**离散隐变量**或**不可重参数化的分布**，这招失效。REINFORCE（也叫得分函数估计器）是更通用的后备方案：只要你能从 $q_\phi$ 采样、且知道它的密度，就能估梯度——代价是高方差。从思想定位上看，重参数化与 REINFORCE 是"同一条路的两条岔口"：它们都试图把随机节点处的梯度搬出来，只是一个靠"换一个可微的抽样方式"，一个靠"对密度取对数求导"。
+正文 9.2 讲：重参数化把随机性外移到 $\varepsilon$，梯度顺滑通过。但它要求分布能写成 $\mathbf{z}=g_\phi(\varepsilon,\mathbf{x})$ 且可微。碰到**离散隐变量**或**不可重参数化的分布**，这招失效。REINFORCE（也叫得分函数估计器）是更通用的后备方案：只要你能从 $q_\phi$ 采样、且知道它的密度，就能估梯度——代价是高方差。从思想定位上看，重参数化与 REINFORCE 是"同一条路的两条岔口"：它们都试图把随机节点处的梯度搬出来，只是一个靠"换一个可微的抽样方式"，一个靠"对密度取对数求导"。
 
 **本附录目标**：
 - 推得 REINFORCE 估计器并证明它无偏；
@@ -17,9 +17,9 @@
 
 ### 问题设定
 
-给定分布 $q_\phi(z|\mathbf{x})$ 和函数 $f(z)$，要算：
+给定分布 $q_\phi(\mathbf{z}|\mathbf{x})$ 和函数 $f(\mathbf{z})$，要算：
 
-$$\nabla_\phi \mathbb{E}_{q_\phi(z|\mathbf{x})}[f(z)] = \nabla_\phi \int q_\phi(z|\mathbf{x}) f(z) dz$$
+$$\nabla_\phi \mathbb{E}_{q_\phi(\mathbf{z}|\mathbf{x})}[f(\mathbf{z})] = \nabla_\phi \int q_\phi(\mathbf{z}|\mathbf{x}) f(\mathbf{z}) dz$$
 
 因为 $q_\phi$ 依赖 $\phi$，梯度和期望不能直接交换。于是问题变成：怎么把"对 $\phi$ 求导"移进期望号里？
 
@@ -27,21 +27,21 @@ $$\nabla_\phi \mathbb{E}_{q_\phi(z|\mathbf{x})}[f(z)] = \nabla_\phi \int q_\phi(
 
 借一个恒等式 $\nabla_\phi q_\phi = q_\phi \nabla_\phi \log q_\phi$（它就是"先取对数再求导"的连锁结果）：
 
-$$\nabla_\phi \int q_\phi(z|\mathbf{x}) f(z) dz = \int \nabla_\phi q_\phi(z|\mathbf{x}) f(z) dz = \int q_\phi(z|\mathbf{x}) \nabla_\phi \log q_\phi(z|\mathbf{x}) f(z) dz$$
+$$\nabla_\phi \int q_\phi(\mathbf{z}|\mathbf{x}) f(\mathbf{z}) dz = \int \nabla_\phi q_\phi(\mathbf{z}|\mathbf{x}) f(\mathbf{z}) dz = \int q_\phi(\mathbf{z}|\mathbf{x}) \nabla_\phi \log q_\phi(\mathbf{z}|\mathbf{x}) f(\mathbf{z}) dz$$
 
 于是得到 REINFORCE 估计器：
 
-$$\boxed{\nabla_\phi \mathbb{E}_{q_\phi(z|\mathbf{x})}[f(z)] = \mathbb{E}_{q_\phi(z|\mathbf{x})}[f(z) \nabla_\phi \log q_\phi(z|\mathbf{x})]}$$
+$$\boxed{\nabla_\phi \mathbb{E}_{q_\phi(\mathbf{z}|\mathbf{x})}[f(\mathbf{z})] = \mathbb{E}_{q_\phi(\mathbf{z}|\mathbf{x})}[f(\mathbf{z}) \nabla_\phi \log q_\phi(\mathbf{z}|\mathbf{x})]}$$
 
 蒙特卡罗估计：
 
-$$\nabla_\phi \mathbb{E}_{q_\phi(z|\mathbf{x})}[f(z)] \approx \frac{1}{L}\sum_{l=1}^{L} f(z^{(l)}) \nabla_\phi \log q_\phi(z^{(l)}|\mathbf{x}), \quad z^{(l)} \sim q_\phi(z|\mathbf{x})$$
+$$\nabla_\phi \mathbb{E}_{q_\phi(\mathbf{z}|\mathbf{x})}[f(\mathbf{z})] \approx \frac{1}{L}\sum_{l=1}^{L} f(\mathbf{z}^{(l)}) \nabla_\phi \log q_\phi(\mathbf{z}^{(l)}|\mathbf{x}), \quad \mathbf{z}^{(l)} \sim q_\phi(\mathbf{z}|\mathbf{x})$$
 
 ### 对高斯编码器的具体形式
 
-当 $q_\phi(z|\mathbf{x})=\mathcal{N}(z|\mu_\phi(\mathbf{x}),\text{diag}(\sigma_\phi^2(\mathbf{x})))$ 时：
+当 $q_\phi(\mathbf{z}|\mathbf{x})=\mathcal{N}(\mathbf{z}|\mu_\phi(\mathbf{x}),\text{diag}(\sigma_\phi^2(\mathbf{x})))$ 时：
 
-$$\log q_\phi(z|\mathbf{x}) = -\frac{1}{2}\sum_{j=1}^{d_z}\left[\log\sigma_j^2 + \frac{(z_j - \mu_j)^2}{\sigma_j^2}\right] + \text{const}$$
+$$\log q_\phi(\mathbf{z}|\mathbf{x}) = -\frac{1}{2}\sum_{j=1}^{d_z}\left[\log\sigma_j^2 + \frac{(z_j - \mu_j)^2}{\sigma_j^2}\right] + \text{const}$$
 
 对 $\mu_j$ 和 $\log\sigma_j^2$ 求梯度（"得分"）：
 
@@ -49,9 +49,9 @@ $$\frac{\partial \log q_\phi}{\partial \mu_j} = \frac{z_j - \mu_j}{\sigma_j^2}, 
 
 代回 REINFORCE：
 
-$$\nabla_{\mu_j} \mathbb{E}_{q_\phi}[f(z)] \approx \frac{1}{L}\sum_{l=1}^{L} f(z^{(l)}) \frac{z_j^{(l)} - \mu_j}{\sigma_j^2}$$
+$$\nabla_{\mu_j} \mathbb{E}_{q_\phi}[f(\mathbf{z})] \approx \frac{1}{L}\sum_{l=1}^{L} f(\mathbf{z}^{(l)}) \frac{z_j^{(l)} - \mu_j}{\sigma_j^2}$$
 
-$$\nabla_{\log\sigma_j^2} \mathbb{E}_{q_\phi}[f(z)] \approx \frac{1}{2L}\sum_{l=1}^{L} f(z^{(l)}) \left[\frac{(z_j^{(l)} - \mu_j)^2}{\sigma_j^2} - 1\right]$$
+$$\nabla_{\log\sigma_j^2} \mathbb{E}_{q_\phi}[f(\mathbf{z})] \approx \frac{1}{2L}\sum_{l=1}^{L} f(\mathbf{z}^{(l)}) \left[\frac{(z_j^{(l)} - \mu_j)^2}{\sigma_j^2} - 1\right]$$
 
 ---
 
@@ -61,9 +61,9 @@ $$\nabla_{\log\sigma_j^2} \mathbb{E}_{q_\phi}[f(z)] \approx \frac{1}{2L}\sum_{l=
 
 **证明**：
 
-$$\mathbb{E}_{q_\phi(z|\mathbf{x})}[f(z) \nabla_\phi \log q_\phi(z|\mathbf{x})] = \int q_\phi(z|\mathbf{x}) f(z) \frac{\nabla_\phi q_\phi(z|\mathbf{x})}{q_\phi(z|\mathbf{x})} dz = \int f(z) \nabla_\phi q_\phi(z|\mathbf{x}) dz$$
+$$\mathbb{E}_{q_\phi(\mathbf{z}|\mathbf{x})}[f(\mathbf{z}) \nabla_\phi \log q_\phi(\mathbf{z}|\mathbf{x})] = \int q_\phi(\mathbf{z}|\mathbf{x}) f(\mathbf{z}) \frac{\nabla_\phi q_\phi(\mathbf{z}|\mathbf{x})}{q_\phi(\mathbf{z}|\mathbf{x})} dz = \int f(\mathbf{z}) \nabla_\phi q_\phi(\mathbf{z}|\mathbf{x}) dz$$
 
-$$= \nabla_\phi \int q_\phi(z|\mathbf{x}) f(z) dz = \nabla_\phi \mathbb{E}_{q_\phi(z|\mathbf{x})}[f(z)]$$
+$$= \nabla_\phi \int q_\phi(\mathbf{z}|\mathbf{x}) f(\mathbf{z}) dz = \nabla_\phi \mathbb{E}_{q_\phi(\mathbf{z}|\mathbf{x})}[f(\mathbf{z})]$$
 
 交换积分与梯度需要正则性条件（密度对参数可微，且"函数值 × 对数密度梯度"这一乘积项的二阶矩有限，即积分号下求导所需的矩条件）。注意条件并不要求 f 有界：本章实验取 f(z)=z² 虽无界，但在高斯分布下各阶矩都有限，所需矩条件满足，结论照样成立。$\square$
 
@@ -75,11 +75,11 @@ $$= \nabla_\phi \int q_\phi(z|\mathbf{x}) f(z) dz = \nabla_\phi \mathbb{E}_{q_\p
 
 ### REINFORCE 的方差
 
-$$\text{Var}[f(z) \nabla_\phi \log q_\phi(z|\mathbf{x})] = \mathbb{E}[\|f(z) \nabla_\phi \log q_\phi(z|\mathbf{x})\|^2] - \|\mathbb{E}[f(z) \nabla_\phi \log q_\phi(z|\mathbf{x})]\|^2$$
+$$\text{Var}[f(\mathbf{z}) \nabla_\phi \log q_\phi(\mathbf{z}|\mathbf{x})] = \mathbb{E}[\|f(\mathbf{z}) \nabla_\phi \log q_\phi(\mathbf{z}|\mathbf{x})\|^2] - \|\mathbb{E}[f(\mathbf{z}) \nabla_\phi \log q_\phi(\mathbf{z}|\mathbf{x})]\|^2$$
 
 方差来自三层叠加：
-1. **$f(z)$ 的波动**；
-2. **$\nabla_\phi\log q_\phi$ 的波动**（得分方向随 $z$ 变）；
+1. **$f(\mathbf{z})$ 的波动**；
+2. **$\nabla_\phi\log q_\phi$ 的波动**（得分方向随 $\mathbf{z}$ 变）；
 3. **两者乘积的波动**——乘积的方差通常远大于各自方差之和，这是 REINFORCE 方差大的根源。
 
 对高斯编码器，$\nabla_{\mu_j}\log q_\phi=(z_j-\mu_j)/\sigma_j^2$ 量级是 $O(1/\sigma_j)$。**$\sigma_j$ 越小，得分方向波动越剧烈，方差越大**。
@@ -92,11 +92,11 @@ $$\text{Var}[\nabla_\phi f(g_\phi(\varepsilon, \mathbf{x}))] = \mathbb{E}[\|\nab
 
 ### 定量对比（最简一维例子）
 
-取 $q_\phi(z)=\mathcal{N}(\mu,\sigma^2)$，$f(z)=z^2$。
+取 $q_\phi(\mathbf{z})=\mathcal{N}(\mu,\sigma^2)$，$f(\mathbf{z})=\mathbf{z}^2$。
 
 **REINFORCE**：
 
-$$\nabla_\mu \mathbb{E}_{q_\phi}[z^2] \approx \frac{1}{L}\sum_{l=1}^{L} (z^{(l)})^2 \frac{z^{(l)} - \mu}{\sigma^2}$$
+$$\nabla_\mu \mathbb{E}_{q_\phi}[\mathbf{z}^2] \approx \frac{1}{L}\sum_{l=1}^{L} (\mathbf{z}^{(l)})^2 \frac{z^{(l)} - \mu}{\sigma^2}$$
 
 方差 $\propto O(\sigma^2 + \mu^2\sigma^{-2})$——$\sigma$ 小时方差极大。
 
@@ -111,7 +111,7 @@ $$\nabla_\mu \mathbb{E}_{q_\phi}[z^2] \approx \frac{1}{L}\sum_{l=1}^{L} (z^{(l)}
 
 **重参数化**：
 
-$$z = \mu + \sigma\varepsilon,\quad f(z)=(\mu+\sigma\varepsilon)^2,\quad \nabla_\mu f = 2(\mu+\sigma\varepsilon)$$
+$$\mathbf{z} = \mu + \sigma\varepsilon,\quad f(\mathbf{z})=(\mu+\sigma\varepsilon)^2,\quad \nabla_\mu f = 2(\mu+\sigma\varepsilon)$$
 
 方差 $\propto O(\sigma^2)$——随 $\sigma$ 减小而减小。
 
@@ -123,17 +123,17 @@ $$z = \mu + \sigma\varepsilon,\quad f(z)=(\mu+\sigma\varepsilon)^2,\quad \nabla_
 
 ### Baseline（基线）
 
-用 $f(z)-b$ 替换 $f(z)$，$b$ 与 $z$ 无关：
+用 $f(\mathbf{z})-b$ 替换 $f(\mathbf{z})$，$b$ 与 $\mathbf{z}$ 无关：
 
-$$\nabla_\phi \mathbb{E}_{q_\phi}[f(z)] = \mathbb{E}_{q_\phi}[(f(z) - b) \nabla_\phi \log q_\phi(z|\mathbf{x})]$$
+$$\nabla_\phi \mathbb{E}_{q_\phi}[f(\mathbf{z})] = \mathbb{E}_{q_\phi}[(f(\mathbf{z}) - b) \nabla_\phi \log q_\phi(\mathbf{z}|\mathbf{x})]$$
 
-无偏性不变（因为 $\mathbb{E}_{q_\phi}[\nabla_\phi\log q_\phi]=\nabla_\phi\mathbb{E}_{q_\phi}[1]=0$），但方差可降。最优基线 $b^*=\mathbb{E}[f(z)\|\nabla_\phi\log q_\phi\|^2]/\mathbb{E}[\|\nabla_\phi\log q_\phi\|^2]$，实践常用 $f(z)$ 的运行平均近似。
+无偏性不变（因为 $\mathbb{E}_{q_\phi}[\nabla_\phi\log q_\phi]=\nabla_\phi\mathbb{E}_{q_\phi}[1]=0$），但方差可降。最优基线 $b^*=\mathbb{E}[f(\mathbf{z})\|\nabla_\phi\log q_\phi\|^2]/\mathbb{E}[\|\nabla_\phi\log q_\phi\|^2]$，实践常用 $f(\mathbf{z})$ 的运行平均近似。
 
 ### Control Variate（控制变量）
 
-引入和 $f(z)$ 相关、但梯度已知的函数 $h(z)$：
+引入和 $f(\mathbf{z})$ 相关、但梯度已知的函数 $h(\mathbf{z})$：
 
-$$\nabla_\phi \mathbb{E}_{q_\phi}[f(z)] = \mathbb{E}_{q_\phi}[f(z) \nabla_\phi \log q_\phi] - c\cdot(\mathbb{E}_{q_\phi}[h(z)\nabla_\phi \log q_\phi] - \nabla_\phi \mathbb{E}_{q_\phi}[h(z)])$$
+$$\nabla_\phi \mathbb{E}_{q_\phi}[f(\mathbf{z})] = \mathbb{E}_{q_\phi}[f(\mathbf{z}) \nabla_\phi \log q_\phi] - c\cdot(\mathbb{E}_{q_\phi}[h(\mathbf{z})\nabla_\phi \log q_\phi] - \nabla_\phi \mathbb{E}_{q_\phi}[h(\mathbf{z})])$$
 
 选好 $c$ 和 $h$ 能降方差，但设计好控制变量需要领域知识。
 

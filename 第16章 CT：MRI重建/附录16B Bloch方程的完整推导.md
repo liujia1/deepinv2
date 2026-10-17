@@ -20,11 +20,11 @@ $$A(t) = \begin{pmatrix} -1/T_2 & \gamma B_z & -\gamma B_y \\ -\gamma B_z & -1/T
 
 ## B.2 旋转部分的解析解
 
-在没有弛豫项时（$T_1,T_2 \to \infty$），磁化矢量绕 $z$ 轴做 Larmor 进动（Larmor precession，像陀螺绕轴转）：
+在没有弛豫项时（$T_1,T_2 \to \infty$），磁化矢量绕 $\mathbf{z}$ 轴做 Larmor 进动（Larmor precession，像陀螺绕轴转）：
 
 $$\mathbf{m}(t) = R_z(\omega_0 t) \mathbf{m}(0)$$
 
-其中 $\omega_0 = \gamma B_0$ 是 Larmor 频率，$R_z(\phi)$ 是绕 $z$ 轴转 $\phi$ 角的旋转矩阵：
+其中 $\omega_0 = \gamma B_0$ 是 Larmor 频率，$R_z(\phi)$ 是绕 $\mathbf{z}$ 轴转 $\phi$ 角的旋转矩阵：
 
 $$R_z(\phi) = \begin{pmatrix} \cos\phi & -\sin\phi & 0 \\ \sin\phi & \cos\phi & 0 \\ 0 & 0 & 1 \end{pmatrix}$$
 

@@ -54,7 +54,7 @@ $$\text{可逆性} \implies \text{平稳性} \implies \text{遍历性（在不�
 
 **Gibbs 分布**（又称 Boltzmann 分布）是统计物理与概率论的基本分布族：
 $$p(\mathbf{x}) = \frac{1}{Z}\exp(-E(\mathbf{x}))$$
-$E(\mathbf{x})$ 是**能量函数**，$Z=\int\exp(-E(\mathbf{x}))\,\mathrm{d}x$ 是配分函数（归一化常数）。贝叶斯后验是它的特例：$E(\mathbf{x})=-\log p(y|\mathbf{x})-\log p(\mathbf{x})$，$Z=p(y)$。这也解释了正文为何把 $-\log p(\mathbf{x}|y)$ 称为"势能"——采样算法"在能量地形上行走"的图像正源于此。
+$E(\mathbf{x})$ 是**能量函数**，$Z=\int\exp(-E(\mathbf{x}))\,\mathrm{d}x$ 是配分函数（归一化常数）。贝叶斯后验是它的特例：$E(\mathbf{x})=-\log p(\mathbf{y}|\mathbf{x})-\log p(\mathbf{x})$，$Z=p(\mathbf{y})$。这也解释了正文为何把 $-\log p(\mathbf{x}|\mathbf{y})$ 称为"势能"——采样算法"在能量地形上行走"的图像正源于此。
 
 ### 高斯 Gibbs分布
 
@@ -77,7 +77,7 @@ Gibbs 在 TV 先验下要从 GIG 抽样（4.5 节）。这里给出定义和抽�
 ### 定义
 
 **广义逆高斯分布**（Generalized Inverse Gaussian, GIG）密度为：
-$$p(z) = \frac{(a/b)^{p/2}}{2K_p(\sqrt{ab})}\,z^{p-1}\exp\left(-\frac{1}{2}(az+b/z)\right),\quad z>0$$
+$$p(\mathbf{z}) = \frac{(a/b)^{p/2}}{2K_p(\sqrt{ab})}\,\mathbf{z}^{p-1}\exp\left(-\frac{1}{2}(az+b/\mathbf{z})\right),\quad \mathbf{z}>0$$
 $K_p$ 是修正 Bessel 函数，参数 $a>0,\ b>0,\ p\in\mathbb{R}$。
 
 ### TV 先验下的 GIG
