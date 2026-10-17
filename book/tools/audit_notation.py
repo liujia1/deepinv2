@@ -33,7 +33,15 @@ NOTATION_GROUPS = {
     },
     "x 的粗体": {
         r"\\mathbf{x}": re.compile(r"\\mathbf\{x\}"),
-        r"纯 x": re.compile(r"(?<![\\a-zA-Z])x(?![a-zA-Z_])"),
+        r"纯 x": re.compile(r"(?<![\\a-zA-Z{])x(?![a-zA-Z_])"),
+    },
+    "y 的粗体": {
+        r"\\mathbf{y}": re.compile(r"\\mathbf\{y\}"),
+        r"纯 y": re.compile(r"(?<![\\a-zA-Z{])y(?![a-zA-Z_])"),
+    },
+    "z 的粗体": {
+        r"\\mathbf{z}": re.compile(r"\\mathbf\{z\}"),
+        r"纯 z": re.compile(r"(?<![\\a-zA-Z{])z(?![a-zA-Z_])"),
     },
     "ε_θ 的 hat": {
         r"\\hat\\epsilon_\\theta": re.compile(r"\\hat\\epsilon_\\theta"),

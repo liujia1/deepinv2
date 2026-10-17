@@ -10,7 +10,7 @@
 
 3.3 节给了 Tikhonov 的 SVD 表示：
 
-$$\hat{x}_\lambda = \sum_{i=1}^n \frac{\sigma_i}{\sigma_i^2 + \lambda}\langle y, u_i\rangle v_i$$
+$$\hat{x}_\lambda = \sum_{i=1}^n \frac{\sigma_i}{\sigma_i^2 + \lambda}\langle \mathbf{y}, u_i\rangle v_i$$
 
 它的滤波函数 $\frac{\sigma_i}{\sigma_i^2+\lambda}$ 对所有奇异值做**平滑衰减**——小奇异值被大幅压，但不完全归零。
 
@@ -18,7 +18,7 @@ $$\hat{x}_\lambda = \sum_{i=1}^n \frac{\sigma_i}{\sigma_i^2 + \lambda}\langle y,
 
 **截断SVD（TSVD）**换一种策略——**硬截断**：
 
-$$\hat{x}_r = \sum_{i=1}^r \frac{1}{\sigma_i}\langle y, u_i\rangle v_i$$
+$$\hat{x}_r = \sum_{i=1}^r \frac{1}{\sigma_i}\langle \mathbf{y}, u_i\rangle v_i$$
 
 只保留前 $r$ 个奇异值分量，后面的全扔。截断点 $r$ 扮演正则化参数的角色。和 Tikhonov 一样，这里的 $r$ 也是"先验信念强度"的变体：$r$ 越小，我们越相信"解只在前 $r$ 个方向上包含可恢复的信息"，从而施加更强的正则。
 
@@ -48,7 +48,7 @@ $$\hat{x}_r = \sum_{i=1}^r \frac{1}{\sigma_i}\langle y, u_i\rangle v_i$$
 - $r$ 小（或 $\lambda$ 大）→ 更多分量被压 → 更强正则化 → 偏差大、方差小；
 - $r$ 大（或 $\lambda$ 小）→ 更多分量留 → 更弱正则化 → 偏差小、方差大。
 
-都面临偏差-方差权衡。Morozov 偏差原理同样适用 TSVD：选 $r$ 使 $\|A\hat{x}_r-y^\delta\|\approx\delta$。
+都面临偏差-方差权衡。Morozov 偏差原理同样适用 TSVD：选 $r$ 使 $\|A\hat{x}_r-\mathbf{y}^\delta\|\approx\delta$。
 
 ---
 
@@ -56,7 +56,7 @@ $$\hat{x}_r = \sum_{i=1}^r \frac{1}{\sigma_i}\langle y, u_i\rangle v_i$$
 
 更一般地，可定义一族**谱正则化方法**，每种对应不同滤波函数 $\varphi(\sigma,\alpha)$：
 
-$$\hat{x}_\alpha = \sum_i \varphi(\sigma_i, \alpha) \frac{\langle y, u_i\rangle}{\sigma_i} v_i$$
+$$\hat{x}_\alpha = \sum_i \varphi(\sigma_i, \alpha) \frac{\langle \mathbf{y}, u_i\rangle}{\sigma_i} v_i$$
 
 滤波函数需满足：
 

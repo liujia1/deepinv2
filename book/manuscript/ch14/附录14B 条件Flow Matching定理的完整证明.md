@@ -69,11 +69,11 @@ $$= \int p_{\text{data}}(\mathbf{x}_0)\,p_t(\mathbf{x}|\mathbf{x}_0)\,v_t(\mathb
 
 ## 更一般的 CFM 定理
 
-上述定理可推广到更一般的条件变量 $z$（不限于 $\mathbf{x}_0$）。设 $q(z)$ 是条件变量分布，$p_t(\mathbf{x}|z)$ 是条件路径，$v_t(\mathbf{x}|z)$ 是条件向量场，则 $\nabla_\theta\mathcal{L}_{\text{FM}}=\nabla_\theta\mathcal{L}_{\text{CFM}}$ 仍成立。这允许：
-- $z=\mathbf{x}_0$：标准 CFM；
-- $z=(\mathbf{x}_0,\mathbf{x}_1)$（数据-噪声对）：双向条件 FM（用于 OT-CFM）；
-- $z=y$（标签/文本）：条件生成 FM（文生图等）。
+上述定理可推广到更一般的条件变量 $\mathbf{z}$（不限于 $\mathbf{x}_0$）。设 $q(\mathbf{z})$ 是条件变量分布，$p_t(\mathbf{x}|\mathbf{z})$ 是条件路径，$v_t(\mathbf{x}|\mathbf{z})$ 是条件向量场，则 $\nabla_\theta\mathcal{L}_{\text{FM}}=\nabla_\theta\mathcal{L}_{\text{CFM}}$ 仍成立。这允许：
+- $\mathbf{z}=\mathbf{x}_0$：标准 CFM；
+- $\mathbf{z}=(\mathbf{x}_0,\mathbf{x}_1)$（数据-噪声对）：双向条件 FM（用于 OT-CFM）；
+- $\mathbf{z}=\mathbf{y}$（标签/文本）：条件生成 FM（文生图等）。
 
-这一推广正是 14.3 的 OT-CFM（$z$ 取数据-噪声对）与 14.5 的条件生成（$z$ 取文本）能够共用同一套训练逻辑的理论原因：无论条件变量取什么，梯度等价性岿然不动。
+这一推广正是 14.3 的 OT-CFM（$\mathbf{z}$ 取数据-噪声对）与 14.5 的条件生成（$\mathbf{z}$ 取文本）能够共用同一套训练逻辑的理论原因：无论条件变量取什么，梯度等价性岿然不动。
 
 **来源**：Lipman et al. (2023) "Flow Matching for Generative Modeling" Theorem 1-2 & Appendix B; Tong et al. (2024) "Conditional Flow Matching" Theorem 2.2

@@ -179,31 +179,21 @@ for idx, delta in enumerate(delta_list):
         results.append((delta, var_emp, var_theory, mean_emp, 'converged'))
     else:
         # 发散面板：绘制溢出前的真实轨迹 |X_m|（对数纵轴）。
-        # 渐近增长率由确定性项决定：|X_m| ~ C·|1-δ|^m（δ=2.2 时 φ=1-δ<0，
-        # 链锯齿振荡，偶/奇子列各自指数增长；C 为随机常数，由噪声历史
-        # 决定，初值 X_0=0 时前几步受噪声主导，锯齿过零产生瞬时深谷）。
+        # 因 φ=1-δ=-1.2<0，链符号逐步交替（锯齿），但幅值满足
+        # |X_m| ≈ |C|·|1-δ|^m：C 为由噪声历史决定的单一随机常数，
+        # 偶/奇子列共享同一前因子（实测均≈同一值），故 |X_m| 在
+        # 对数轴上是一条干净直线，斜率即 log|1-δ|。初值 X_0=0 使
+        # 前几步受噪声主导而偏离直线（图左下小抖弯）。
         # 剔除 m=0（X_0=0 非真实动力学，取绝对值后会被下限钳位成假下坠）
         m = np.arange(1, len(traj))
         abs_traj = np.abs(traj[1:])
         log_abs = np.log(np.maximum(abs_traj, 1e-12))
         growth = np.log(abs(delta - 1.0))  # 理论斜率 log|1-δ|
 
-        # 拟合斜率：取链尾 60%（纯指数增长段，前期受随机前因子主导）；
-        # 因 φ<0 的锯齿使过零点被噪声抬高，对偶/奇子列各拟一次取中位数
-        # （相邻子列斜率理论值均为 2·log|1-δ|，除以 2 后得单步增长率）
-        def _tail_slope(idx):
-            y = log_abs[idx]
-            if len(idx) < 8:
-                return None
-            return np.polyfit(idx, y, 1)[0] / 2.0
-
+        # 拟合斜率：取链尾 60%（纯指数增长段，排除前几步噪声暂态）
         tail_from = int(0.6 * len(m))
-        idx_even = np.arange(tail_from, len(m), 2)
-        idx_odd = np.arange(tail_from + 1, len(m), 2)
-        slopes = [s for s in (_tail_slope(idx_even), _tail_slope(idx_odd))
-                  if s is not None]
-        if slopes:
-            fit = float(np.median(slopes))
+        if len(m) - tail_from >= 8:
+            fit = float(np.polyfit(m[tail_from:], log_abs[tail_from:], 1)[0])
             title2 = (rf'尾部斜率 实测={fit:.3f} vs '
                       rf'理论 $\log|1-\delta|$={growth:.3f}')
         else:

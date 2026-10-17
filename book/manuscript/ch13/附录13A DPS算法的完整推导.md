@@ -10,7 +10,7 @@
 
 DPS 理论起点是 13.2.2 节后验得分分解定理。给定观测 `y`，条件得分可拆成先验得分 + 似然得分：
 
-$$\boxed{\nabla_{\mathbf{x}_t}\log p(\mathbf{x}_t|y) = \nabla_{\mathbf{x}_t}\log p(\mathbf{x}_t) + \nabla_{\mathbf{x}_t}\log p(y|\mathbf{x}_t)}$$
+$$\boxed{\nabla_{\mathbf{x}_t}\log p(\mathbf{x}_t|\mathbf{y}) = \nabla_{\mathbf{x}_t}\log p(\mathbf{x}_t) + \nabla_{\mathbf{x}_t}\log p(\mathbf{y}|\mathbf{x}_t)}$$
 
 两项角色截然不同：
 
@@ -29,7 +29,7 @@ DPS 全部工作集中在怎么近似 `∇_{x_t}log p(y|x_t)`。下面推导从�
 
 由全概率公式，`p(y|x_t)` 可展开为对 `x_0` 的边际化积分：
 
-$$p(y|\mathbf{x}_t) = \int p(y|\mathbf{x}_0)\,p(\mathbf{x}_0|\mathbf{x}_t)\,dx_0 = \mathbb{E}_{\mathbf{x}_0 \sim p(\mathbf{x}_0|\mathbf{x}_t)}\bigl[p(y|\mathbf{x}_0)\bigr]$$
+$$p(\mathbf{y}|\mathbf{x}_t) = \int p(\mathbf{y}|\mathbf{x}_0)\,p(\mathbf{x}_0|\mathbf{x}_t)\,dx_0 = \mathbb{E}_{\mathbf{x}_0 \sim p(\mathbf{x}_0|\mathbf{x}_t)}\bigl[p(\mathbf{y}|\mathbf{x}_0)\bigr]$$
 
 物理含义：含噪状态 `x_t` 对观测 `y` 的似然，需通过对所有可能干净图 `x_0` 求期望获得——因 `x_t` 不直接决定 `y`，而是通过"去噪到 `x_0` → 经正向模型映到 `y`"这条间接路径产生关联。
 
@@ -61,11 +61,11 @@ $$p(\mathbf{x}_0|\mathbf{x}_t) \approx \delta(\mathbf{x}_0 - \hat{x}_{0|t})$$
 
 由 Jensen 不等式，对凸函数 `log(·)`，对数期望不超过期望对数：
 
-$$\log p(y|\mathbf{x}_t) = \log \mathbb{E}_{\mathbf{x}_0 \sim p(\mathbf{x}_0|\mathbf{x}_t)}\bigl[p(y|\mathbf{x}_0)\bigr] \geq \mathbb{E}_{\mathbf{x}_0 \sim p(\mathbf{x}_0|\mathbf{x}_t)}\bigl[\log p(y|\mathbf{x}_0)\bigr]$$
+$$\log p(\mathbf{y}|\mathbf{x}_t) = \log \mathbb{E}_{\mathbf{x}_0 \sim p(\mathbf{x}_0|\mathbf{x}_t)}\bigl[p(\mathbf{y}|\mathbf{x}_0)\bigr] \geq \mathbb{E}_{\mathbf{x}_0 \sim p(\mathbf{x}_0|\mathbf{x}_t)}\bigl[\log p(\mathbf{y}|\mathbf{x}_0)\bigr]$$
 
 即：
 
-$$\log p(y|\mathbf{x}_t) \geq \int \log p(y|\mathbf{x}_0)\,p(\mathbf{x}_0|\mathbf{x}_t)\,dx_0$$
+$$\log p(\mathbf{y}|\mathbf{x}_t) \geq \int \log p(\mathbf{y}|\mathbf{x}_0)\,p(\mathbf{x}_0|\mathbf{x}_t)\,dx_0$$
 
 Jensen 取等号条件是 `p(y|x_0)` 在 `p(x_0|x_t)` 支集上为常数——一般不成立，故下界严格。
 
@@ -73,7 +73,7 @@ Jensen 取等号条件是 `p(y|x_0)` 在 `p(x_0|x_t)` 支集上为常数——�
 
 DPS 未直接用 Jensen 下界。取而代之，把积分换成后验均值处单点估计：
 
-$$p(y|\mathbf{x}_t) = \mathbb{E}_{\mathbf{x}_0 \sim p(\mathbf{x}_0|\mathbf{x}_t)}\bigl[p(y|\mathbf{x}_0)\bigr] \approx p(y|\hat{x}_{0|t})$$
+$$p(\mathbf{y}|\mathbf{x}_t) = \mathbb{E}_{\mathbf{x}_0 \sim p(\mathbf{x}_0|\mathbf{x}_t)}\bigl[p(\mathbf{y}|\mathbf{x}_0)\bigr] \approx p(\mathbf{y}|\hat{x}_{0|t})$$
 
 `x̂_{0|t} = E[x_0|x_t]` 是 Tweedie 估计。这近似等价于把后验分布换成 delta 函数：
 
@@ -81,7 +81,7 @@ $$p(\mathbf{x}_0|\mathbf{x}_t) \approx \delta(\mathbf{x}_0 - \hat{x}_{0|t})$$
 
 代入积分：
 
-$$p(y|\mathbf{x}_t) = \int p(y|\mathbf{x}_0)\,p(\mathbf{x}_0|\mathbf{x}_t)\,dx_0 \approx \int p(y|\mathbf{x}_0)\,\delta(\mathbf{x}_0 - \hat{x}_{0|t})\,dx_0 = p(y|\hat{x}_{0|t})$$
+$$p(\mathbf{y}|\mathbf{x}_t) = \int p(\mathbf{y}|\mathbf{x}_0)\,p(\mathbf{x}_0|\mathbf{x}_t)\,dx_0 \approx \int p(\mathbf{y}|\mathbf{x}_0)\,\delta(\mathbf{x}_0 - \hat{x}_{0|t})\,dx_0 = p(\mathbf{y}|\hat{x}_{0|t})$$
 
 **近似解读**：DPS 假设给定 `x_t` 时 `x_0` 全部概率质量集中在后验均值 `x̂_{0|t}` 处。这是最粗近似——丢了 `p(x_0|x_t)` 所有高阶矩（方差、偏度等），只留一阶矩（均值）。从更深层次看，这一步等价于把"对整条去噪不确定性的平均"塌缩成"对最可能去噪结果的单点信任"——计算上换来巨大便利，代价是丢失不确定性信息。
 
@@ -97,7 +97,7 @@ $$p(y|\mathbf{x}_t) = \int p(y|\mathbf{x}_0)\,p(\mathbf{x}_0|\mathbf{x}_t)\,dx_0
 
 对高斯测量 `y = Ax_0 + n`，`n ~ N(0, σ_y²I)`，似然：
 
-$$p(y|\mathbf{x}_0) = \frac{1}{(2\pi\sigma_y^2)^{m/2}} \exp\left(-\frac{\|y - Ax_0\|^2}{2\sigma_y^2}\right)$$
+$$p(\mathbf{y}|\mathbf{x}_0) = \frac{1}{(2\pi\sigma_y^2)^{m/2}} \exp\left(-\frac{\|\mathbf{y} - Ax_0\|^2}{2\sigma_y^2}\right)$$
 
 DPS 近似 `p(y|x_t) ≈ p(y|x̂_{0|t})`，误差可定性分析：
 
@@ -107,7 +107,7 @@ DPS 近似 `p(y|x_t) ≈ p(y|x̂_{0|t})`，误差可定性分析：
 
 **高斯测量下可控性**：线性高斯测量 `p(y|x_0)` 是 `x_0` 二次函数（对数似然二次），故 `p(y|x̂_{0|t})` 与 `E_{x_0}[p(y|x_0)]` 差异可用 `A` 和 `Var[x_0|x_t]` 函数界定。利用高斯积分性质：
 
-$$\mathbb{E}_{\mathbf{x}_0 \sim p(\mathbf{x}_0|\mathbf{x}_t)}\bigl[\|y - Ax_0\|^2\bigr] = \|y - A\hat{x}_{0|t}\|^2 + \text{tr}(A\,\text{Var}[\mathbf{x}_0|\mathbf{x}_t]\,A^\top)$$
+$$\mathbb{E}_{\mathbf{x}_0 \sim p(\mathbf{x}_0|\mathbf{x}_t)}\bigl[\|\mathbf{y} - Ax_0\|^2\bigr] = \|\mathbf{y} - A\hat{x}_{0|t}\|^2 + \text{tr}(A\,\text{Var}[\mathbf{x}_0|\mathbf{x}_t]\,A^\top)$$
 
 故 DPS 近似把重建误差低估了 `tr(A Var[x_0|x_t] A^⊤)` 这一项——等价忽略后验不确定性对测量一致性的影响。这误差项在后验方差小时可忽略，高噪声阶段可能显著——也解释 DPS 在高噪声阶段表现不佳的实验现象（13.3.2节）。
 
@@ -119,11 +119,11 @@ $$\mathbb{E}_{\mathbf{x}_0 \sim p(\mathbf{x}_0|\mathbf{x}_t)}\bigl[\|y - Ax_0\|^
 
 DPS 近似 `p(y|x_t) ≈ p(y|x̂_{0|t})` 下，似然得分变：
 
-$$\nabla_{\mathbf{x}_t}\log p(y|\mathbf{x}_t) \approx \nabla_{\mathbf{x}_t}\log p(y|\hat{x}_{0|t})$$
+$$\nabla_{\mathbf{x}_t}\log p(\mathbf{y}|\mathbf{x}_t) \approx \nabla_{\mathbf{x}_t}\log p(\mathbf{y}|\hat{x}_{0|t})$$
 
 因 `x̂_{0|t}` 是 `x_t` 函数（经 Tweedie 等式），由链式法则：
 
-$$\boxed{\nabla_{\mathbf{x}_t}\log p(y|\hat{x}_{0|t}) = \left(\nabla_{\mathbf{x}_0}\log p(y|\mathbf{x}_0)\Big|_{\mathbf{x}_0 = \hat{x}_{0|t}}\right)^\top \cdot \nabla_{\mathbf{x}_t}\hat{x}_{0|t}}$$
+$$\boxed{\nabla_{\mathbf{x}_t}\log p(\mathbf{y}|\hat{x}_{0|t}) = \left(\nabla_{\mathbf{x}_0}\log p(\mathbf{y}|\mathbf{x}_0)\Big|_{\mathbf{x}_0 = \hat{x}_{0|t}}\right)^\top \cdot \nabla_{\mathbf{x}_t}\hat{x}_{0|t}}$$
 
 `∇_{x_t}x̂_{0|t} ∈ R^{n×n}` 是 Tweedie 估计关于含噪状态的 Jacobian 矩阵。这个式子把"关于 `x_0` 的似然梯度"经 Jacobian 回传到"关于 `x_t` 的梯度"——问题也从"算测量空间的梯度"变成"算含噪状态空间的梯度"。
 
@@ -131,19 +131,19 @@ $$\boxed{\nabla_{\mathbf{x}_t}\log p(y|\hat{x}_{0|t}) = \left(\nabla_{\mathbf{x}
 
 对线性高斯测量 `y = Ax_0 + n`，`n ~ N(0, σ_y²I)`，似然：
 
-$$p(y|\mathbf{x}_0) \propto \exp\left(-\frac{\|y - Ax_0\|^2}{2\sigma_y^2}\right)$$
+$$p(\mathbf{y}|\mathbf{x}_0) \propto \exp\left(-\frac{\|\mathbf{y} - Ax_0\|^2}{2\sigma_y^2}\right)$$
 
 其对数似然关于 `x_0` 梯度：
 
-$$\nabla_{\mathbf{x}_0}\log p(y|\mathbf{x}_0) = \frac{A^\top(y - Ax_0)}{\sigma_y^2}$$
+$$\nabla_{\mathbf{x}_0}\log p(\mathbf{y}|\mathbf{x}_0) = \frac{A^\top(\mathbf{y} - Ax_0)}{\sigma_y^2}$$
 
 代入链式法则：
 
-$$\nabla_{\mathbf{x}_t}\log p(y|\hat{x}_{0|t}) = \frac{1}{\sigma_y^2}\left(A^\top(y - A\hat{x}_{0|t})\right)^\top \cdot \nabla_{\mathbf{x}_t}\hat{x}_{0|t}$$
+$$\nabla_{\mathbf{x}_t}\log p(\mathbf{y}|\hat{x}_{0|t}) = \frac{1}{\sigma_y^2}\left(A^\top(\mathbf{y} - A\hat{x}_{0|t})\right)^\top \cdot \nabla_{\mathbf{x}_t}\hat{x}_{0|t}$$
 
 展开内积：
 
-$$\boxed{\nabla_{\mathbf{x}_t}\log p(y|\hat{x}_{0|t}) = \frac{1}{\sigma_y^2}\,(\nabla_{\mathbf{x}_t}\hat{x}_{0|t})^\top \cdot A^\top(y - A\hat{x}_{0|t})}$$
+$$\boxed{\nabla_{\mathbf{x}_t}\log p(\mathbf{y}|\hat{x}_{0|t}) = \frac{1}{\sigma_y^2}\,(\nabla_{\mathbf{x}_t}\hat{x}_{0|t})^\top \cdot A^\top(\mathbf{y} - A\hat{x}_{0|t})}$$
 
 这是 DPS 似然得分近似完整表达式。它含两部分：
 - **数据一致性梯度** `A^⊤(y - A(x̂_{0|t}))/σ_y²`：关于 `x̂_{0|t}` 标准最小二乘梯度，指向使测量残差减小方向。在测量空间定义，与具体扩散模型无关。
@@ -153,11 +153,11 @@ $$\boxed{\nabla_{\mathbf{x}_t}\log p(y|\hat{x}_{0|t}) = \frac{1}{\sigma_y^2}\,(\
 
 实践 Jacobian 矩阵 `∇_{x_t}x̂_{0|t}` 是 `n×n` 矩阵（`n` 图像像素数），直接计算代价极高。DPS 做关键简化：**省略 Jacobian 矩阵**，把似然得分近似为：
 
-$$\nabla_{\mathbf{x}_t}\log p(y|\hat{x}_{0|t}) \approx \frac{1}{\sigma_y^2}\,A^\top(y - A\hat{x}_{0|t})$$
+$$\nabla_{\mathbf{x}_t}\log p(\mathbf{y}|\hat{x}_{0|t}) \approx \frac{1}{\sigma_y^2}\,A^\top(\mathbf{y} - A\hat{x}_{0|t})$$
 
 更精确，DPS 引入缩放因子 `ζ` 补偿 Jacobian 省略影响：
 
-$$\boxed{\nabla_{\mathbf{x}_t}\log p(y|\mathbf{x}_t) \approx \zeta \cdot \frac{A^\top(y - A\hat{x}_{0|t})}{\sigma_y^2}}$$
+$$\boxed{\nabla_{\mathbf{x}_t}\log p(\mathbf{y}|\mathbf{x}_t) \approx \zeta \cdot \frac{A^\top(\mathbf{y} - A\hat{x}_{0|t})}{\sigma_y^2}}$$
 
 **Jacobian 省略合理性论证**：
 1. **量级吸收**：Jacobian `∇_{x_t}x̂_{0|t}` 本质是把 `x_0` 空间梯度重新缩放到 `x_t` 空间。这重新缩放效果可用标量因子 `ζ` 近似——把 Jacobian"平均缩放效果"吸收进 `ζ`。
@@ -202,7 +202,7 @@ $$\hat{x}_{0|t} = \frac{\mathbf{x}_t + (1-\bar\alpha_t)\,s_\theta(\mathbf{x}_t, 
 
 把 Tweedie 估计代入似然得分近似，VP-SDE 下 DPS 条件得分：
 
-$$\nabla_{\mathbf{x}_t}\log p(\mathbf{x}_t|y) \approx s_\theta(\mathbf{x}_t, t) + \zeta \cdot \frac{A^\top\!\left(y - A\hat{x}_{0|t}\right)}{\sigma_y^2}$$
+$$\nabla_{\mathbf{x}_t}\log p(\mathbf{x}_t|\mathbf{y}) \approx s_\theta(\mathbf{x}_t, t) + \zeta \cdot \frac{A^\top\!\left(\mathbf{y} - A\hat{x}_{0|t}\right)}{\sigma_y^2}$$
 
 其中：
 
@@ -216,7 +216,7 @@ $$\varepsilon_t = \varepsilon_\theta(\mathbf{x}_t, t), \quad \hat{x}_{0|t} = \fr
 
 **Step 2**：算似然梯度修正项
 
-$$g_t = \zeta \cdot \frac{A^\top(y - A\hat{x}_{0|t})}{\sigma_y^2}$$
+$$g_t = \zeta \cdot \frac{A^\top(\mathbf{y} - A\hat{x}_{0|t})}{\sigma_y^2}$$
 
 **Step 3**：执行条件逆向 SDE 一步（以 DDPM 离散化为例）
 
@@ -252,7 +252,7 @@ $$\boxed{\hat{x}_{0|t} = \mathbf{x}_t + \sigma_t^2\,s_\theta(\mathbf{x}_t, \sigm
 
 VE-SDE 下 DPS 条件得分：
 
-$$\nabla_{\mathbf{x}_t}\log p(\mathbf{x}_t|y) \approx s_\theta(\mathbf{x}_t, \sigma_t) + \zeta \cdot \frac{A^\top\!\left(y - A\hat{x}_{0|t}\right)}{\sigma_y^2}$$
+$$\nabla_{\mathbf{x}_t}\log p(\mathbf{x}_t|\mathbf{y}) \approx s_\theta(\mathbf{x}_t, \sigma_t) + \zeta \cdot \frac{A^\top\!\left(\mathbf{y} - A\hat{x}_{0|t}\right)}{\sigma_y^2}$$
 
 其中：
 
@@ -266,7 +266,7 @@ $$s_t = s_\theta(\mathbf{x}_t, \sigma_t), \quad \hat{x}_{0|t} = \mathbf{x}_t + \
 
 **Step 2**：算似然梯度修正项
 
-$$g_t = \zeta \cdot \frac{A^\top(y - A\hat{x}_{0|t})}{\sigma_y^2}$$
+$$g_t = \zeta \cdot \frac{A^\top(\mathbf{y} - A\hat{x}_{0|t})}{\sigma_y^2}$$
 
 **Step 3**：执行条件逆向 SDE 一步（以 Euler-Maruyama 离散化为例）
 
@@ -291,7 +291,7 @@ $$\mathbf{x}_{t-1} = \mathbf{x}_t + \left(\sigma_t^2\,s_t + \sigma_t^2\,g_t\righ
 
 DPS 算法完整推导路径可总结为关键步骤：
 
-$$\underbrace{\nabla\log p(\mathbf{x}_t|y) = \nabla\log p(\mathbf{x}_t) + \nabla\log p(y|\mathbf{x}_t)}_{\text{后验得分分解}} \xrightarrow{p(y|\mathbf{x}_t) \approx p(y|\hat{x}_{0|t})} \underbrace{\nabla\log p(\mathbf{x}_t|y) \approx s_\theta + \zeta \cdot \frac{A^\top(y - A\hat{x}_0)}{\sigma_y^2}}_{\text{DPS近似}}$$
+$$\underbrace{\nabla\log p(\mathbf{x}_t|\mathbf{y}) = \nabla\log p(\mathbf{x}_t) + \nabla\log p(\mathbf{y}|\mathbf{x}_t)}_{\text{后验得分分解}} \xrightarrow{p(\mathbf{y}|\mathbf{x}_t) \approx p(\mathbf{y}|\hat{x}_{0|t})} \underbrace{\nabla\log p(\mathbf{x}_t|\mathbf{y}) \approx s_\theta + \zeta \cdot \frac{A^\top(\mathbf{y} - A\hat{x}_0)}{\sigma_y^2}}_{\text{DPS近似}}$$
 
 每步引入近似及后果：
 
