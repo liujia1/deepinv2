@@ -67,7 +67,7 @@ except ImportError:
     print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
 # ========================================================
 
-OUT_DIR = os.path.join(SAVE_DIR, 'outputs')
+OUT_DIR = SAVE_DIR
 os.makedirs(OUT_DIR, exist_ok=True)
 RNG = np.random.default_rng(20240723)
 
@@ -203,10 +203,10 @@ ax[1].set_title(r'步骤1: 平稳接受率随维数（线性坐标）', fontsize
 ax[1].legend(fontsize=10)
 ax[1].grid(True, which='both', alpha=0.3)
 plt.tight_layout()
-fig.savefig(os.path.join(OUT_DIR, 'exp4_2-3_step1_acceptance_decay.png'),
+fig.savefig(os.path.join(OUT_DIR, 'step1_acceptance_decay.png'),
             dpi=150, bbox_inches='tight')
 plt.close()
-print(f"  图已保存: {os.path.join(OUT_DIR, 'exp4_2-3_step1_acceptance_decay.png')}")
+print(f"  图已保存: {os.path.join(OUT_DIR, 'step1_acceptance_decay.png')}")
 
 # ── 步骤2：最优步长缩放 σ = 2.38/√d，接受率收敛到 ≈0.234 ──────────
 # 注：σ_opt = 2.38/√d 是 Roberts, Gelman & Gilks (1997) 渐近 (d→∞) 最优
@@ -241,10 +241,10 @@ ax[1].set_ylabel(r'最优步长 $\sigma=2.38/\sqrt{d}$（对数轴）', fontsize
 ax[1].set_title(r'步骤2: 步长必须随 $\sqrt{d}$ 缩小', fontsize=12)
 ax[1].grid(True, which='both', alpha=0.3)
 plt.tight_layout()
-fig.savefig(os.path.join(OUT_DIR, 'exp4_2-3_step2_optimal_scaling.png'),
+fig.savefig(os.path.join(OUT_DIR, 'step2_optimal_scaling.png'),
             dpi=150, bbox_inches='tight')
 plt.close()
-print(f"  图已保存: {os.path.join(OUT_DIR, 'exp4_2-3_step2_optimal_scaling.png')}")
+print(f"  图已保存: {os.path.join(OUT_DIR, 'step2_optimal_scaling.png')}")
 
 # ── 步骤3：有效样本率 ESS/N 随维数衰减 ───────────────────────────
 print("\n[步骤3] 最优步长下有效样本率 ESS/N 随维数衰减（效率崩塌）")
@@ -268,10 +268,10 @@ ax.set_ylabel(r'有效样本率 $\mathrm{ESS}/N$（对数轴）', fontsize=12)
 ax.set_title(r'步骤3: 高维下 RWM 有效样本率衰减', fontsize=12)
 ax.grid(True, which='both', alpha=0.3)
 plt.tight_layout()
-fig.savefig(os.path.join(OUT_DIR, 'exp4_2-3_step3_ess_decay.png'),
+fig.savefig(os.path.join(OUT_DIR, 'step3_ess_decay.png'),
             dpi=150, bbox_inches='tight')
 plt.close()
-print(f"  图已保存: {os.path.join(OUT_DIR, 'exp4_2-3_step3_ess_decay.png')}")
+print(f"  图已保存: {os.path.join(OUT_DIR, 'step3_ess_decay.png')}")
 
 # ── 小结 ──────────────────────────────────────────────────────────
 summary = {
@@ -291,7 +291,7 @@ summary = {
              "且有效样本率 ESS/N 仍随维数下降（Geyer IPSE 截断估计），说明 RWM 在高维下"
              "效率崩塌，需要维度无关的提议（见实验4.2-4 的 pCN）。")
 }
-with open(os.path.join(OUT_DIR, 'exp4_2-3_summary.json'), 'w', encoding='utf-8') as f:
+with open(os.path.join(OUT_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
     json.dump(summary, f, ensure_ascii=False, indent=2)
 
 print("\n" + "=" * 60)

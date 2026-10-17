@@ -77,7 +77,7 @@ except ImportError:
     print("警告: chinese_font 模块未找到，中文字体可能无法正常显示")
 # ========================================================
 
-OUT_DIR = os.path.join(SAVE_DIR, 'outputs')
+OUT_DIR = SAVE_DIR
 os.makedirs(OUT_DIR, exist_ok=True)
 RNG = np.random.default_rng(20240724)
 
@@ -287,10 +287,10 @@ ax[1].set_title(r'对数轴：pCN 平坦，RWM 失效', fontsize=12)
 ax[1].legend(fontsize=10)
 ax[1].grid(True, which='both', alpha=0.3)
 plt.tight_layout()
-fig.savefig(os.path.join(OUT_DIR, 'exp4_2-4_acceptance_vs_dim.png'),
+fig.savefig(os.path.join(OUT_DIR, 'acceptance_vs_dim.png'),
             dpi=150, bbox_inches='tight')
 plt.close()
-print(f"  图已保存: {os.path.join(OUT_DIR, 'exp4_2-4_acceptance_vs_dim.png')}")
+print(f"  图已保存: {os.path.join(OUT_DIR, 'acceptance_vs_dim.png')}")
 
 # 绘图：RWM 调参扫描
 fig, ax = plt.subplots(1, 2, figsize=(13, 5))
@@ -318,10 +318,10 @@ ax[1].set_ylabel(r'每步净移动 / 先验典型半径 $\sqrt{\mathrm{tr}\,C}$'
 ax[1].set_title(r'但移动速度按 $d^{-1/2}$ 收缩（遍历时间 $O(d)$），pCN 平坦',
                 fontsize=12)
 plt.tight_layout()
-fig.savefig(os.path.join(OUT_DIR, 'exp4_2-4_rwm_sweep.png'),
+fig.savefig(os.path.join(OUT_DIR, 'rwm_sweep.png'),
             dpi=150, bbox_inches='tight')
 plt.close()
-print(f"  图已保存: {os.path.join(OUT_DIR, 'exp4_2-4_rwm_sweep.png')}")
+print(f"  图已保存: {os.path.join(OUT_DIR, 'rwm_sweep.png')}")
 
 # ── 步骤4：pCN 经验后验均值 vs 解析后验均值（校验正确性）──────────
 print("\n[步骤4] d=256 下 pCN 经验后验均值 vs 解析后验均值（校验收敛）")
@@ -391,10 +391,10 @@ ax[3].set_xlabel(r'空间频率 $|k|$', fontsize=11)
 ax[3].set_title('Fourier 模态级校验（可辨识模态误差极小）', fontsize=12)
 ax[3].legend(fontsize=8)
 plt.tight_layout()
-fig.savefig(os.path.join(OUT_DIR, 'exp4_2-4_reconstruction.png'),
+fig.savefig(os.path.join(OUT_DIR, 'reconstruction.png'),
             dpi=150, bbox_inches='tight')
 plt.close()
-print(f"  图已保存: {os.path.join(OUT_DIR, 'exp4_2-4_reconstruction.png')}")
+print(f"  图已保存: {os.path.join(OUT_DIR, 'reconstruction.png')}")
 
 # ── 叠加图：真值 / 带噪观测 / 解析后验均值 / pCN 经验后验均值 ──────
 # 把解析均值（红色实线）与 pCN 均值（绿色虚线）画在同一坐标上，
@@ -409,10 +409,10 @@ ax.set_title(r'$d=256$：pCN 经验后验均值（绿虚线）叠加于解析后
 ax.legend(fontsize=9, ncol=2)
 ax.grid(True, alpha=0.3)
 plt.tight_layout()
-fig.savefig(os.path.join(OUT_DIR, 'exp4_2-4_overlay.png'),
+fig.savefig(os.path.join(OUT_DIR, 'overlay.png'),
             dpi=150, bbox_inches='tight')
 plt.close()
-print(f"  图已保存: {os.path.join(OUT_DIR, 'exp4_2-4_overlay.png')}")
+print(f"  图已保存: {os.path.join(OUT_DIR, 'overlay.png')}")
 
 # ── 小结 ──────────────────────────────────────────────────────────
 # 动态计算统计量，避免硬编码结论
@@ -466,7 +466,7 @@ summary = {
              f"相对误差≤{worst_mode_err:.1e}，IACT≈{iact_est:.1f}；"
              f"|k|>=2 模态被模糊抹除（后验均值本就≈0），其重建残差不反映算法问题。")
 }
-with open(os.path.join(OUT_DIR, 'exp4_2-4_summary.json'), 'w', encoding='utf-8') as f:
+with open(os.path.join(OUT_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
     json.dump(summary, f, ensure_ascii=False, indent=2)
 
 print("\n" + "=" * 60)
