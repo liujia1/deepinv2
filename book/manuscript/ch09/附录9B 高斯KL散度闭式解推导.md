@@ -1,10 +1,10 @@
 # 附录9B 重参数化技巧的多元推广：高斯 KL 散度的闭式解
 
-> 正文 9.3 用到了一个关键公式：对角高斯编码器 $q_\phi(z|x)$ 与标准正态先验 $p(z)=\mathcal{N}(0,I)$ 之间的 KL 散度有闭式解 $D_{\text{KL}}=\frac12\sum_j(\mu_j^2+\sigma_j^2-\log\sigma_j^2-1)$。本附录把它从最一般的高斯 KL 一路推到这个简化式，并讲清楚每一项的含义和实现时的数值坑。
+> 正文 9.3 用到了一个关键公式：对角高斯编码器 $q_\phi(z|\mathbf{x})$ 与标准正态先验 $p(z)=\mathcal{N}(0,I)$ 之间的 KL 散度有闭式解 $D_{\text{KL}}=\frac12\sum_j(\mu_j^2+\sigma_j^2-\log\sigma_j^2-1)$。本附录把它从最一般的高斯 KL 一路推到这个简化式，并讲清楚每一项的含义和实现时的数值坑。
 
 ## 先建立直觉：KL 衡量"两个分布差多少"
 
-KL 散度（Kullback–Leibler 散度）$D_{\text{KL}}(q\|p)$ 回答一个问题："如果我用 $q$ 当真相、$p$ 当近似，平均会多丢多少信息？"它不对称、且非负，等于 0 当且仅当两分布相同。VAE 里，我们希望编码器分布 $q_\phi(z|x)$ 别和先验 $p(z)$ 差太远——于是 KL 成了天然的"纪律罚分"。换句话说，这个闭式解不是一堆公式变形，而是把"解码器该忠实还原、同时编码器得守纪律"这一整场比赛，落地成一串能直接被反向传播求出梯度的解析项。
+KL 散度（Kullback–Leibler 散度）$D_{\text{KL}}(q\|p)$ 回答一个问题："如果我用 $q$ 当真相、$p$ 当近似，平均会多丢多少信息？"它不对称、且非负，等于 0 当且仅当两分布相同。VAE 里，我们希望编码器分布 $q_\phi(z|\mathbf{x})$ 别和先验 $p(z)$ 差太远——于是 KL 成了天然的"纪律罚分"。换句话说，这个闭式解不是一堆公式变形，而是把"解码器该忠实还原、同时编码器得守纪律"这一整场比赛，落地成一串能直接被反向传播求出梯度的解析项。
 
 **本附录目标**：
 - 从一般高斯 KL 公式推出对角高斯 vs 标准正态的简化式；
@@ -51,18 +51,18 @@ $$\mathbb{E}_q[(z-\mu_1)^\top\Sigma_1^{-1}(z-\mu_1)] = \text{tr}(\Sigma_1^{-1}\S
 
 ## VAE 中的简化情形：对角高斯 vs 标准正态
 
-VAE 里 $q_\phi(z|x)=\mathcal{N}(\mu_\phi(x),\text{diag}(\sigma_\phi^2(x))$，$p(z)=\mathcal{N}(0,I)$。即 $\mu_0=\mu_\phi(x),\ \mu_1=0,\ \Sigma_0=\text{diag}(\sigma_\phi^2),\ \Sigma_1=I$。逐项代入定理：
+VAE 里 $q_\phi(z|\mathbf{x})=\mathcal{N}(\mu_\phi(\mathbf{x}),\text{diag}(\sigma_\phi^2(\mathbf{x}))$，$p(z)=\mathcal{N}(0,I)$。即 $\mu_0=\mu_\phi(\mathbf{x}),\ \mu_1=0,\ \Sigma_0=\text{diag}(\sigma_\phi^2),\ \Sigma_1=I$。逐项代入定理：
 
 - $\text{tr}(\Sigma_1^{-1}\Sigma_0)=\text{tr}(\text{diag}(\sigma_\phi^2))=\sum_j\sigma_j^2$
 - $d = d_z$
-- $(\mu_1-\mu_0)^\top\Sigma_1^{-1}(\mu_1-\mu_0)=\|\mu_\phi(x)\|^2=\sum_j\mu_j^2$
+- $(\mu_1-\mu_0)^\top\Sigma_1^{-1}(\mu_1-\mu_0)=\|\mu_\phi(\mathbf{x})\|^2=\sum_j\mu_j^2$
 - $\ln\frac{\det\Sigma_1}{\det\Sigma_0}=-\ln\det(\text{diag}(\sigma_\phi^2))=-\sum_j\ln\sigma_j^2$
 
 合并：
 
-$$D_{\text{KL}}(q_\phi(z|x) \| p(z)) = \frac{1}{2}\sum_{j=1}^{d_z}\left[\sigma_j^2 - 1 + \mu_j^2 - \ln\sigma_j^2\right]$$
+$$D_{\text{KL}}(q_\phi(z|\mathbf{x}) \| p(z)) = \frac{1}{2}\sum_{j=1}^{d_z}\left[\sigma_j^2 - 1 + \mu_j^2 - \ln\sigma_j^2\right]$$
 
-$$\boxed{D_{\text{KL}}(q_\phi(z|x) \| p(z)) = \frac{1}{2}\sum_{j=1}^{d_z}\left(\mu_j^2 + \sigma_j^2 - \ln\sigma_j^2 - 1\right)}$$
+$$\boxed{D_{\text{KL}}(q_\phi(z|\mathbf{x}) \| p(z)) = \frac{1}{2}\sum_{j=1}^{d_z}\left(\mu_j^2 + \sigma_j^2 - \ln\sigma_j^2 - 1\right)}$$
 
 ---
 
@@ -79,7 +79,7 @@ $$D_{\text{KL},j} = \frac{1}{2}\left(\mu_j^2 + \sigma_j^2 - \ln\sigma_j^2 - 1\ri
 | $-\ln\sigma_j^2$ | 方差偏小（偏离 1）的惩罚（"编码也别太窄"） |
 | $-1$ | 常数，保证 $\mu_j=0,\sigma_j^2=1$ 时 $D_{\text{KL},j}=0$ |
 
-**验证**：当 $q_\phi(z_j|x)=\mathcal{N}(0,1)=p(z_j)$ 时，$\mu_j=0,\sigma_j^2=1$：
+**验证**：当 $q_\phi(z_j|\mathbf{x})=\mathcal{N}(0,1)=p(z_j)$ 时，$\mu_j=0,\sigma_j^2=1$：
 
 $$D_{\text{KL},j}=\frac12(0+1-0-1)=0 \quad \checkmark$$
 

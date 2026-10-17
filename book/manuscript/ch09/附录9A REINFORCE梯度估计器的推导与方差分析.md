@@ -4,7 +4,7 @@
 
 ## 为什么需要 REINFORCE？先理解它的位置
 
-正文 9.2 讲：重参数化把随机性外移到 $\epsilon$，梯度顺滑通过。但它要求分布能写成 $z=g_\phi(\epsilon,x)$ 且可微。碰到**离散隐变量**或**不可重参数化的分布**，这招失效。REINFORCE（也叫得分函数估计器）是更通用的后备方案：只要你能从 $q_\phi$ 采样、且知道它的密度，就能估梯度——代价是高方差。从思想定位上看，重参数化与 REINFORCE 是"同一条路的两条岔口"：它们都试图把随机节点处的梯度搬出来，只是一个靠"换一个可微的抽样方式"，一个靠"对密度取对数求导"。
+正文 9.2 讲：重参数化把随机性外移到 $\varepsilon$，梯度顺滑通过。但它要求分布能写成 $z=g_\phi(\varepsilon,\mathbf{x})$ 且可微。碰到**离散隐变量**或**不可重参数化的分布**，这招失效。REINFORCE（也叫得分函数估计器）是更通用的后备方案：只要你能从 $q_\phi$ 采样、且知道它的密度，就能估梯度——代价是高方差。从思想定位上看，重参数化与 REINFORCE 是"同一条路的两条岔口"：它们都试图把随机节点处的梯度搬出来，只是一个靠"换一个可微的抽样方式"，一个靠"对密度取对数求导"。
 
 **本附录目标**：
 - 推得 REINFORCE 估计器并证明它无偏；
@@ -17,9 +17,9 @@
 
 ### 问题设定
 
-给定分布 $q_\phi(z|x)$ 和函数 $f(z)$，要算：
+给定分布 $q_\phi(z|\mathbf{x})$ 和函数 $f(z)$，要算：
 
-$$\nabla_\phi \mathbb{E}_{q_\phi(z|x)}[f(z)] = \nabla_\phi \int q_\phi(z|x) f(z) dz$$
+$$\nabla_\phi \mathbb{E}_{q_\phi(z|\mathbf{x})}[f(z)] = \nabla_\phi \int q_\phi(z|\mathbf{x}) f(z) dz$$
 
 因为 $q_\phi$ 依赖 $\phi$，梯度和期望不能直接交换。于是问题变成：怎么把"对 $\phi$ 求导"移进期望号里？
 
@@ -27,21 +27,21 @@ $$\nabla_\phi \mathbb{E}_{q_\phi(z|x)}[f(z)] = \nabla_\phi \int q_\phi(z|x) f(z)
 
 借一个恒等式 $\nabla_\phi q_\phi = q_\phi \nabla_\phi \log q_\phi$（它就是"先取对数再求导"的连锁结果）：
 
-$$\nabla_\phi \int q_\phi(z|x) f(z) dz = \int \nabla_\phi q_\phi(z|x) f(z) dz = \int q_\phi(z|x) \nabla_\phi \log q_\phi(z|x) f(z) dz$$
+$$\nabla_\phi \int q_\phi(z|\mathbf{x}) f(z) dz = \int \nabla_\phi q_\phi(z|\mathbf{x}) f(z) dz = \int q_\phi(z|\mathbf{x}) \nabla_\phi \log q_\phi(z|\mathbf{x}) f(z) dz$$
 
 于是得到 REINFORCE 估计器：
 
-$$\boxed{\nabla_\phi \mathbb{E}_{q_\phi(z|x)}[f(z)] = \mathbb{E}_{q_\phi(z|x)}[f(z) \nabla_\phi \log q_\phi(z|x)]}$$
+$$\boxed{\nabla_\phi \mathbb{E}_{q_\phi(z|\mathbf{x})}[f(z)] = \mathbb{E}_{q_\phi(z|\mathbf{x})}[f(z) \nabla_\phi \log q_\phi(z|\mathbf{x})]}$$
 
 蒙特卡罗估计：
 
-$$\nabla_\phi \mathbb{E}_{q_\phi(z|x)}[f(z)] \approx \frac{1}{L}\sum_{l=1}^{L} f(z^{(l)}) \nabla_\phi \log q_\phi(z^{(l)}|x), \quad z^{(l)} \sim q_\phi(z|x)$$
+$$\nabla_\phi \mathbb{E}_{q_\phi(z|\mathbf{x})}[f(z)] \approx \frac{1}{L}\sum_{l=1}^{L} f(z^{(l)}) \nabla_\phi \log q_\phi(z^{(l)}|\mathbf{x}), \quad z^{(l)} \sim q_\phi(z|\mathbf{x})$$
 
 ### 对高斯编码器的具体形式
 
-当 $q_\phi(z|x)=\mathcal{N}(z|\mu_\phi(x),\text{diag}(\sigma_\phi^2(x)))$ 时：
+当 $q_\phi(z|\mathbf{x})=\mathcal{N}(z|\mu_\phi(\mathbf{x}),\text{diag}(\sigma_\phi^2(\mathbf{x})))$ 时：
 
-$$\log q_\phi(z|x) = -\frac{1}{2}\sum_{j=1}^{d_z}\left[\log\sigma_j^2 + \frac{(z_j - \mu_j)^2}{\sigma_j^2}\right] + \text{const}$$
+$$\log q_\phi(z|\mathbf{x}) = -\frac{1}{2}\sum_{j=1}^{d_z}\left[\log\sigma_j^2 + \frac{(z_j - \mu_j)^2}{\sigma_j^2}\right] + \text{const}$$
 
 对 $\mu_j$ 和 $\log\sigma_j^2$ 求梯度（"得分"）：
 
@@ -61,9 +61,9 @@ $$\nabla_{\log\sigma_j^2} \mathbb{E}_{q_\phi}[f(z)] \approx \frac{1}{2L}\sum_{l=
 
 **证明**：
 
-$$\mathbb{E}_{q_\phi(z|x)}[f(z) \nabla_\phi \log q_\phi(z|x)] = \int q_\phi(z|x) f(z) \frac{\nabla_\phi q_\phi(z|x)}{q_\phi(z|x)} dz = \int f(z) \nabla_\phi q_\phi(z|x) dz$$
+$$\mathbb{E}_{q_\phi(z|\mathbf{x})}[f(z) \nabla_\phi \log q_\phi(z|\mathbf{x})] = \int q_\phi(z|\mathbf{x}) f(z) \frac{\nabla_\phi q_\phi(z|\mathbf{x})}{q_\phi(z|\mathbf{x})} dz = \int f(z) \nabla_\phi q_\phi(z|\mathbf{x}) dz$$
 
-$$= \nabla_\phi \int q_\phi(z|x) f(z) dz = \nabla_\phi \mathbb{E}_{q_\phi(z|x)}[f(z)]$$
+$$= \nabla_\phi \int q_\phi(z|\mathbf{x}) f(z) dz = \nabla_\phi \mathbb{E}_{q_\phi(z|\mathbf{x})}[f(z)]$$
 
 交换积分与梯度需要正则性条件（密度对参数可微，且"函数值 × 对数密度梯度"这一乘积项的二阶矩有限，即积分号下求导所需的矩条件）。注意条件并不要求 f 有界：本章实验取 f(z)=z² 虽无界，但在高斯分布下各阶矩都有限，所需矩条件满足，结论照样成立。$\square$
 
@@ -75,7 +75,7 @@ $$= \nabla_\phi \int q_\phi(z|x) f(z) dz = \nabla_\phi \mathbb{E}_{q_\phi(z|x)}[
 
 ### REINFORCE 的方差
 
-$$\text{Var}[f(z) \nabla_\phi \log q_\phi(z|x)] = \mathbb{E}[\|f(z) \nabla_\phi \log q_\phi(z|x)\|^2] - \|\mathbb{E}[f(z) \nabla_\phi \log q_\phi(z|x)]\|^2$$
+$$\text{Var}[f(z) \nabla_\phi \log q_\phi(z|\mathbf{x})] = \mathbb{E}[\|f(z) \nabla_\phi \log q_\phi(z|\mathbf{x})\|^2] - \|\mathbb{E}[f(z) \nabla_\phi \log q_\phi(z|\mathbf{x})]\|^2$$
 
 方差来自三层叠加：
 1. **$f(z)$ 的波动**；
@@ -86,9 +86,9 @@ $$\text{Var}[f(z) \nabla_\phi \log q_\phi(z|x)] = \mathbb{E}[\|f(z) \nabla_\phi 
 
 ### 重参数化的方差
 
-$$\text{Var}[\nabla_\phi f(g_\phi(\epsilon, x))] = \mathbb{E}[\|\nabla_\phi f(g_\phi(\epsilon, x))\|^2] - \|\mathbb{E}[\nabla_\phi f(g_\phi(\epsilon, x))]\|^2$$
+$$\text{Var}[\nabla_\phi f(g_\phi(\varepsilon, \mathbf{x}))] = \mathbb{E}[\|\nabla_\phi f(g_\phi(\varepsilon, \mathbf{x}))\|^2] - \|\mathbb{E}[\nabla_\phi f(g_\phi(\varepsilon, \mathbf{x}))]\|^2$$
 
-方差的唯一来源是 $\epsilon$ 的采样。因为 $g_\phi$ 是确定性的，给定 $\epsilon$，梯度就确定了——没有"乘积放大"。
+方差的唯一来源是 $\varepsilon$ 的采样。因为 $g_\phi$ 是确定性的，给定 $\varepsilon$，梯度就确定了——没有"乘积放大"。
 
 ### 定量对比（最简一维例子）
 
@@ -102,7 +102,7 @@ $$\nabla_\mu \mathbb{E}_{q_\phi}[z^2] \approx \frac{1}{L}\sum_{l=1}^{L} (z^{(l)}
 
 > **精确方差（实验9.2-1 实际比对的闭式解）**：把单样本 REINFORCE 估计量用 ε 展开，
 > g = z²(z−μ)/σ² = (μ²/σ)ε + 2με² + σε³，
-> 利用 ε 的 2/4/6 阶矩（E[ε²]=1、E[ε⁴]=3、E[ε⁶]=15）可得 E[g]=2μ，且
+> 利用 ε 的 2/4/6 阶矩（\mathbb{E}[ε²]=1、\mathbb{E}[ε⁴]=3、\mathbb{E}[ε⁶]=15）可得 \mathbb{E}[g]=2μ，且
 > **Var[g] = μ⁴/σ² + 14μ² + 15σ²**，L 个样本取均值再除以 L。
 > 这比上面的大 O 标度多出两层信息：σ→0 时按 μ⁴/σ² 发散（系数就是 1）；中间存在约 14μ² 的常数平台，
 > U 形最低点在 σ=(μ⁴/15)^(1/4)≈1.02（μ=2 时），实测最低点约在 σ=1.14；σ→∞ 时由 15σ² 主导。
@@ -111,7 +111,7 @@ $$\nabla_\mu \mathbb{E}_{q_\phi}[z^2] \approx \frac{1}{L}\sum_{l=1}^{L} (z^{(l)}
 
 **重参数化**：
 
-$$z = \mu + \sigma\epsilon,\quad f(z)=(\mu+\sigma\epsilon)^2,\quad \nabla_\mu f = 2(\mu+\sigma\epsilon)$$
+$$z = \mu + \sigma\varepsilon,\quad f(z)=(\mu+\sigma\varepsilon)^2,\quad \nabla_\mu f = 2(\mu+\sigma\varepsilon)$$
 
 方差 $\propto O(\sigma^2)$——随 $\sigma$ 减小而减小。
 
@@ -125,7 +125,7 @@ $$z = \mu + \sigma\epsilon,\quad f(z)=(\mu+\sigma\epsilon)^2,\quad \nabla_\mu f 
 
 用 $f(z)-b$ 替换 $f(z)$，$b$ 与 $z$ 无关：
 
-$$\nabla_\phi \mathbb{E}_{q_\phi}[f(z)] = \mathbb{E}_{q_\phi}[(f(z) - b) \nabla_\phi \log q_\phi(z|x)]$$
+$$\nabla_\phi \mathbb{E}_{q_\phi}[f(z)] = \mathbb{E}_{q_\phi}[(f(z) - b) \nabla_\phi \log q_\phi(z|\mathbf{x})]$$
 
 无偏性不变（因为 $\mathbb{E}_{q_\phi}[\nabla_\phi\log q_\phi]=\nabla_\phi\mathbb{E}_{q_\phi}[1]=0$），但方差可降。最优基线 $b^*=\mathbb{E}[f(z)\|\nabla_\phi\log q_\phi\|^2]/\mathbb{E}[\|\nabla_\phi\log q_\phi\|^2]$，实践常用 $f(z)$ 的运行平均近似。
 
@@ -149,6 +149,6 @@ $$\nabla_\phi \mathbb{E}_{q_\phi}[f(z)] = \mathbb{E}_{q_\phi}[f(z) \nabla_\phi \
 
 ## 收尾：为什么这件事重要
 
-REINFORCE 不是错的——它无偏、通用、连离散分布都能用。但它"两个随机量相乘"的结构，让它在编码器很确信（$\sigma$ 小）时方差爆炸，而那恰恰是 VAE 训练后期最常见的状态。重参数化正是绕开了"相乘"，把随机性锁在 $\epsilon$ 里，让梯度只来自确定性的 $g_\phi$。所以结论很朴素：**只要能重参数化，就别用 REINFORCE**——这正是 VAE 工程实践里那把省下的算力。
+REINFORCE 不是错的——它无偏、通用、连离散分布都能用。但它"两个随机量相乘"的结构，让它在编码器很确信（$\sigma$ 小）时方差爆炸，而那恰恰是 VAE 训练后期最常见的状态。重参数化正是绕开了"相乘"，把随机性锁在 $\varepsilon$ 里，让梯度只来自确定性的 $g_\phi$。所以结论很朴素：**只要能重参数化，就别用 REINFORCE**——这正是 VAE 工程实践里那把省下的算力。
 
 从更深层次看，这个"方差之痛"并非单纯的工程细节：它决定了深度生成模型里"随机性该放在哪"。重参数化把随机性当作"可被微分的噪声"，让梯度的方向不再被采样噪声淹没，VAE 才得以稳定地学到隐空间结构——而这份"让噪声可微分"的设计哲学，也正是扩散模型把整个生成过程写成一条加噪-去噪、处处可反向传播链路的思想先声。

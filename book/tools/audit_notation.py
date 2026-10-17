@@ -93,6 +93,19 @@ def find_chapter_dirs():
     return sorted(dirs, key=lambda d: (0, int(re.match(r"^第(\d+)章", d.name).group(1)))
                   if re.match(r"^第\d+章", d.name) else (-1, 0))
 
+
+def strip_code(text: str) -> str:
+    """剔除围栏（```...```）与行内代码（`...`）段，只留正文。
+    与 apply_notation.py 的替换范围同口径：代码块内的记号不参与排版统计。"""
+    out, pos = [], 0
+    for m in re.finditer(r"```.*?```", text, re.S):
+        if m.start() > pos:
+            out.append(re.sub(r"`[^`\n]+`", "", text[pos:m.start()]))
+        pos = m.end()
+    if pos < len(text):
+        out.append(re.sub(r"`[^`\n]+`", "", text[pos:]))
+    return "\n".join(out)
+
 def chapter_label(d: Path) -> str:
     m = re.match(r"^第(\d+)章", d.name)
     return f"ch{int(m.group(1)):02d}" if m else "ch00绪论"
@@ -106,7 +119,7 @@ def main():
         label = chapter_label(d)
         text_all = []
         for p in d.rglob("*.md"):
-            text_all.append(p.read_text(encoding="utf-8", errors="replace"))
+            text_all.append(strip_code(p.read_text(encoding="utf-8", errors="replace")))
         text = "\n".join(text_all)
         for g, pats in NOTATION_GROUPS.items():
             for nname, pat in pats.items():

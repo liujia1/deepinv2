@@ -4,11 +4,11 @@
 
 ## 定理陈述
 
-**条件Flow Matching定理**（Lipman et al., 2023, Theorem 1 & 2）：设 $v_t(x|x_0)$ 生成条件概率路径 $p_t(x|x_0)$，$v_t^*(x)$ 是对应边际向量场。定义两个损失：
+**条件Flow Matching定理**（Lipman et al., 2023, Theorem 1 & 2）：设 $v_t(\mathbf{x}|\mathbf{x}_0)$ 生成条件概率路径 $p_t(\mathbf{x}|\mathbf{x}_0)$，$v_t^*(\mathbf{x})$ 是对应边际向量场。定义两个损失：
 
-$$\mathcal{L}_{\text{FM}}(\theta) = \mathbb{E}_{t, p_t(x)}\left[\|v_\theta(x, t) - v_t^*(x)\|^2\right]$$
+$$\mathcal{L}_{\text{FM}}(\theta) = \mathbb{E}_{t, p_t(\mathbf{x})}\left[\|v_\theta(\mathbf{x}, t) - v_t^*(\mathbf{x})\|^2\right]$$
 
-$$\mathcal{L}_{\text{CFM}}(\theta) = \mathbb{E}_{t,\, p_{\text{data}}(x_0),\, p_t(x|x_0)}\left[\|v_\theta(x, t) - v_t(x|x_0)\|^2\right]$$
+$$\mathcal{L}_{\text{CFM}}(\theta) = \mathbb{E}_{t,\, p_{\text{data}}(\mathbf{x}_0),\, p_t(\mathbf{x}|\mathbf{x}_0)}\left[\|v_\theta(\mathbf{x}, t) - v_t(\mathbf{x}|\mathbf{x}_0)\|^2\right]$$
 
 则：
 
@@ -22,33 +22,33 @@ $$\boxed{\nabla_\theta \mathcal{L}_{\text{FM}}(\theta) = \nabla_\theta \mathcal{
 
 ### 第一步：展开 FM 损失的梯度
 
-$$\nabla_\theta \mathcal{L}_{\text{FM}}(\theta) = \nabla_\theta \mathbb{E}_{t, p_t(x)}\left[\|v_\theta - v_t^*\|^2\right]$$
+$$\nabla_\theta \mathcal{L}_{\text{FM}}(\theta) = \nabla_\theta \mathbb{E}_{t, p_t(\mathbf{x})}\left[\|v_\theta - v_t^*\|^2\right]$$
 
-$$= 2\,\mathbb{E}_{t, p_t(x)}\left[(v_\theta - v_t^*)\,\nabla_\theta v_\theta\right] = 2\,\mathbb{E}_{t, p_t(x)}\left[v_\theta\,\nabla_\theta v_\theta\right] - 2\,\mathbb{E}_{t, p_t(x)}\left[v_t^*\,\nabla_\theta v_\theta\right]$$
+$$= 2\,\mathbb{E}_{t, p_t(\mathbf{x})}\left[(v_\theta - v_t^*)\,\nabla_\theta v_\theta\right] = 2\,\mathbb{E}_{t, p_t(\mathbf{x})}\left[v_\theta\,\nabla_\theta v_\theta\right] - 2\,\mathbb{E}_{t, p_t(\mathbf{x})}\left[v_t^*\,\nabla_\theta v_\theta\right]$$
 
 ### 第二步：展开 CFM 损失的梯度
 
-$$\nabla_\theta \mathcal{L}_{\text{CFM}}(\theta) = \nabla_\theta \mathbb{E}_{t, q(x_0), p_t(x|x_0)}\left[\|v_\theta - v_t(\cdot|x_0)\|^2\right]$$
+$$\nabla_\theta \mathcal{L}_{\text{CFM}}(\theta) = \nabla_\theta \mathbb{E}_{t, q(\mathbf{x}_0), p_t(\mathbf{x}|\mathbf{x}_0)}\left[\|v_\theta - v_t(\cdot|\mathbf{x}_0)\|^2\right]$$
 
-$$= 2\,\mathbb{E}_{t, q(x_0), p_t(x|x_0)}\left[(v_\theta - v_t(\cdot|x_0))\,\nabla_\theta v_\theta\right]$$
+$$= 2\,\mathbb{E}_{t, q(\mathbf{x}_0), p_t(\mathbf{x}|\mathbf{x}_0)}\left[(v_\theta - v_t(\cdot|\mathbf{x}_0))\,\nabla_\theta v_\theta\right]$$
 
-$$= 2\,\mathbb{E}_{t, q(x_0), p_t(x|x_0)}\left[v_\theta\,\nabla_\theta v_\theta\right] - 2\,\mathbb{E}_{t, q(x_0), p_t(x|x_0)}\left[v_t(\cdot|x_0)\,\nabla_\theta v_\theta\right]$$
+$$= 2\,\mathbb{E}_{t, q(\mathbf{x}_0), p_t(\mathbf{x}|\mathbf{x}_0)}\left[v_\theta\,\nabla_\theta v_\theta\right] - 2\,\mathbb{E}_{t, q(\mathbf{x}_0), p_t(\mathbf{x}|\mathbf{x}_0)}\left[v_t(\cdot|\mathbf{x}_0)\,\nabla_\theta v_\theta\right]$$
 
 ### 第三步：比较——关键在第二项
 
 两个梯度第一项相同（都含 $v_\theta\nabla_\theta v_\theta$），只需看第二项：
-- FM 第二项：$-2\,\mathbb{E}_{t, p_t(x)}\left[v_t^*(x)\,\nabla_\theta v_\theta(x,t)\right] = -2\,\mathbb{E}_{t, p_t(x)}\left[\mathbb{E}_{x_0|x}[v_t(x|x_0)]\,\nabla_\theta v_\theta(x,t)\right]$
-- CFM 第二项：$-2\,\mathbb{E}_{t, p_{\text{data}}(x_0), p_t(x|x_0)}\left[v_t(x|x_0)\,\nabla_\theta v_\theta(x,t)\right]$
+- FM 第二项：$-2\,\mathbb{E}_{t, p_t(\mathbf{x})}\left[v_t^*(\mathbf{x})\,\nabla_\theta v_\theta(\mathbf{x},t)\right] = -2\,\mathbb{E}_{t, p_t(\mathbf{x})}\left[\mathbb{E}_{\mathbf{x}_0|\mathbf{x}}[v_t(\mathbf{x}|\mathbf{x}_0)]\,\nabla_\theta v_\theta(\mathbf{x},t)\right]$
+- CFM 第二项：$-2\,\mathbb{E}_{t, p_{\text{data}}(\mathbf{x}_0), p_t(\mathbf{x}|\mathbf{x}_0)}\left[v_t(\mathbf{x}|\mathbf{x}_0)\,\nabla_\theta v_\theta(\mathbf{x},t)\right]$
 
 ### 第四步：两项相等（塔性质 / law of total expectation）
 
-$$\mathbb{E}_{t, p_t(x)}\left[\mathbb{E}_{x_0|x}[v_t(x|x_0)]\,\nabla_\theta v_\theta(x, t)\right] = \mathbb{E}_{t, p_{\text{data}}(x_0), p_t(x|x_0)}\left[v_t(x|x_0)\,\nabla_\theta v_\theta(x, t)\right]$$
+$$\mathbb{E}_{t, p_t(\mathbf{x})}\left[\mathbb{E}_{\mathbf{x}_0|\mathbf{x}}[v_t(\mathbf{x}|\mathbf{x}_0)]\,\nabla_\theta v_\theta(\mathbf{x}, t)\right] = \mathbb{E}_{t, p_{\text{data}}(\mathbf{x}_0), p_t(\mathbf{x}|\mathbf{x}_0)}\left[v_t(\mathbf{x}|\mathbf{x}_0)\,\nabla_\theta v_\theta(\mathbf{x}, t)\right]$$
 
 展开看就清楚了：
 
-$$\int p_t(x)\,\mathbb{E}_{x_0|x}[v_t(x|x_0)]\,\nabla_\theta v_\theta(x,t)\,dx = \int\!\left(\int p_t(x|x_0)p_{\text{data}}(x_0)v_t(x|x_0)dx_0\right)\nabla_\theta v_\theta(x,t)\,dx$$
+$$\int p_t(\mathbf{x})\,\mathbb{E}_{\mathbf{x}_0|\mathbf{x}}[v_t(\mathbf{x}|\mathbf{x}_0)]\,\nabla_\theta v_\theta(\mathbf{x},t)\,dx = \int\!\left(\int p_t(\mathbf{x}|\mathbf{x}_0)p_{\text{data}}(\mathbf{x}_0)v_t(\mathbf{x}|\mathbf{x}_0)dx_0\right)\nabla_\theta v_\theta(\mathbf{x},t)\,dx$$
 
-$$= \int p_{\text{data}}(x_0)\,p_t(x|x_0)\,v_t(x|x_0)\,\nabla_\theta v_\theta(x,t)\,dx\,dx_0 = \mathbb{E}_{p_{\text{data}}(x_0), p_t(x|x_0)}\left[v_t(x|x_0)\,\nabla_\theta v_\theta(x,t)\right]$$
+$$= \int p_{\text{data}}(\mathbf{x}_0)\,p_t(\mathbf{x}|\mathbf{x}_0)\,v_t(\mathbf{x}|\mathbf{x}_0)\,\nabla_\theta v_\theta(\mathbf{x},t)\,dx\,dx_0 = \mathbb{E}_{p_{\text{data}}(\mathbf{x}_0), p_t(\mathbf{x}|\mathbf{x}_0)}\left[v_t(\mathbf{x}|\mathbf{x}_0)\,\nabla_\theta v_\theta(\mathbf{x},t)\right]$$
 
 ### 第五步：结论
 
@@ -60,8 +60,8 @@ $$= \int p_{\text{data}}(x_0)\,p_t(x|x_0)\,v_t(x|x_0)\,\nabla_\theta v_\theta(x,
 |---|---|---|
 | 不可计算目标 | $\mathcal{L}_{\text{ESM}}$（显式得分匹配） | $\mathcal{L}_{\text{FM}}$（Flow Matching） |
 | 可计算替代 | $\mathcal{L}_{\text{DSM}}$（去噪得分匹配） | $\mathcal{L}_{\text{CFM}}$（条件FM） |
-| 不可计算项 | $\nabla\log p_t(x)$（真实得分） | $v_t^*(x)$（边际向量场） |
-| 可计算项 | $\nabla\log p_t(x\|x_0)$（条件得分） | $v_t(x\|x_0)$（条件向量场） |
+| 不可计算项 | $\nabla\log p_t(\mathbf{x})$（真实得分） | $v_t^*(\mathbf{x})$（边际向量场） |
+| 可计算项 | $\nabla\log p_t(\mathbf{x}\|\mathbf{x}_0)$（条件得分） | $v_t(\mathbf{x}\|\mathbf{x}_0)$（条件向量场） |
 | 消去机制 | 分部积分 + 塔性质 | 塔性质 |
 | 结论 | 梯度相等 | 梯度相等 |
 
@@ -69,9 +69,9 @@ $$= \int p_{\text{data}}(x_0)\,p_t(x|x_0)\,v_t(x|x_0)\,\nabla_\theta v_\theta(x,
 
 ## 更一般的 CFM 定理
 
-上述定理可推广到更一般的条件变量 $z$（不限于 $x_0$）。设 $q(z)$ 是条件变量分布，$p_t(x|z)$ 是条件路径，$v_t(x|z)$ 是条件向量场，则 $\nabla_\theta\mathcal{L}_{\text{FM}}=\nabla_\theta\mathcal{L}_{\text{CFM}}$ 仍成立。这允许：
-- $z=x_0$：标准 CFM；
-- $z=(x_0,x_1)$（数据-噪声对）：双向条件 FM（用于 OT-CFM）；
+上述定理可推广到更一般的条件变量 $z$（不限于 $\mathbf{x}_0$）。设 $q(z)$ 是条件变量分布，$p_t(\mathbf{x}|z)$ 是条件路径，$v_t(\mathbf{x}|z)$ 是条件向量场，则 $\nabla_\theta\mathcal{L}_{\text{FM}}=\nabla_\theta\mathcal{L}_{\text{CFM}}$ 仍成立。这允许：
+- $z=\mathbf{x}_0$：标准 CFM；
+- $z=(\mathbf{x}_0,\mathbf{x}_1)$（数据-噪声对）：双向条件 FM（用于 OT-CFM）；
 - $z=y$（标签/文本）：条件生成 FM（文生图等）。
 
 这一推广正是 14.3 的 OT-CFM（$z$ 取数据-噪声对）与 14.5 的条件生成（$z$ 取文本）能够共用同一套训练逻辑的理论原因：无论条件变量取什么，梯度等价性岿然不动。

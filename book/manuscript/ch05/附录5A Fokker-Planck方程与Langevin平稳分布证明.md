@@ -14,9 +14,9 @@
 
 考虑 Langevin SDE：
 
-$$dX_t = s(X_t)\,dt + \sqrt{2}\,dW_t, \quad X_0 = x_0$$
+$$dX_t = s(X_t)\,dt + \sqrt{2}\,dW_t, \quad X_0 = \mathbf{x}_0$$
 
-其中 $s(x)=\nabla\log p(x)$ 是得分函数，$W_t$ 是标准布朗运动。设 $\rho_t(x)$ 是 $X_t$ 的概率密度。目标是推导 $\rho_t$ 满足的偏微分方程——Fokker-Planck 方程。
+其中 $s(\mathbf{x})=\nabla\log p(\mathbf{x})$ 是得分函数，$W_t$ 是标准布朗运动。设 $\rho_t(\mathbf{x})$ 是 $X_t$ 的概率密度。目标是推导 $\rho_t$ 满足的偏微分方程——Fokker-Planck 方程。
 
 逐项把你现在看到的东西和物理图像对上：第一项 $s(X_t)\,dt$ 是漂移——沿着得分（密度增长方向）把粒子向前推的确定性力；第二项 $\sqrt{2}\,dW_t$ 是扩散——布朗运动带来的随机扰动。正是这两股力的角力，决定了密度 $\rho_t$ 会被揉成什么形状、朝哪个方向流。
 
@@ -44,7 +44,7 @@ $$\frac{d}{dt}\mathbb{E}[\phi(X_t)] = \mathbb{E}[\nabla\phi(X_t) \cdot s(X_t)] +
 
 用密度 $\rho_t$ 写期望：
 
-$$\frac{d}{dt}\int\phi(x)\,\rho_t(x)\,dx = \int\nabla\phi(x) \cdot s(x)\,\rho_t(x)\,dx + \int\Delta\phi(x)\,\rho_t(x)\,dx$$
+$$\frac{d}{dt}\int\phi(\mathbf{x})\,\rho_t(\mathbf{x})\,dx = \int\nabla\phi(\mathbf{x}) \cdot s(\mathbf{x})\,\rho_t(\mathbf{x})\,dx + \int\Delta\phi(\mathbf{x})\,\rho_t(\mathbf{x})\,dx$$
 
 取期望这一刀砍掉的是随机性：布朗项期望为零，意味着从"单个粒子的随机轨迹"跃迁到"群体的密度演化"时，我们只需关心漂移项与扩散项对密度的一阶与二阶贡献。
 
@@ -54,11 +54,11 @@ $$\frac{d}{dt}\int\phi(x)\,\rho_t(x)\,dx = \int\nabla\phi(x) \cdot s(x)\,\rho_t(
 
 **第一项**（散度定理）：
 
-$$\int\nabla\phi(x) \cdot s(x)\,\rho_t(x)\,dx = -\int\phi(x)\,\nabla\cdot[s(x)\,\rho_t(x)]\,dx$$
+$$\int\nabla\phi(\mathbf{x}) \cdot s(\mathbf{x})\,\rho_t(\mathbf{x})\,dx = -\int\phi(\mathbf{x})\,\nabla\cdot[s(\mathbf{x})\,\rho_t(\mathbf{x})]\,dx$$
 
 **第二项**（两次分部积分）：
 
-$$\int\Delta\phi(x)\,\rho_t(x)\,dx = \int\phi(x)\,\Delta\rho_t(x)\,dx$$
+$$\int\Delta\phi(\mathbf{x})\,\rho_t(\mathbf{x})\,dx = \int\phi(\mathbf{x})\,\Delta\rho_t(\mathbf{x})\,dx$$
 
 关键的一步是把梯度从试探函数身上"搬到"密度身上：这相当于把流量的净变化（散度）与曲率的净贡献（拉普拉斯）从探针转移到密度函数本身，是我们能从"关于 $\phi$ 的恒等式"提炼出"关于 $\rho_t$ 的方程"的前提。
 
@@ -66,11 +66,11 @@ $$\int\Delta\phi(x)\,\rho_t(x)\,dx = \int\phi(x)\,\Delta\rho_t(x)\,dx$$
 
 代入整理：
 
-$$\int\phi(x)\,\frac{\partial\rho_t}{\partial t}\,dx = \int\phi(x)\left\{-\nabla\cdot[s(x)\,\rho_t] + \Delta\rho_t\right\}dx$$
+$$\int\phi(\mathbf{x})\,\frac{\partial\rho_t}{\partial t}\,dx = \int\phi(\mathbf{x})\left\{-\nabla\cdot[s(\mathbf{x})\,\rho_t] + \Delta\rho_t\right\}dx$$
 
 由于 $\phi$ 任意，被积函数必相等：
 
-$$\boxed{\frac{\partial \rho_t}{\partial t} = -\nabla\cdot[s(x)\,\rho_t] + \Delta\rho_t}$$
+$$\boxed{\frac{\partial \rho_t}{\partial t} = -\nabla\cdot[s(\mathbf{x})\,\rho_t] + \Delta\rho_t}$$
 
 这就是 **Fokker-Planck 方程**（前向 Kolmogorov 方程），描述 Langevin SDE 驱动的概率密度随时间演化。
 
@@ -78,39 +78,39 @@ $\phi$ 的任意性换来的这条等式，是把"许多粒子分散每个角落
 
 ---
 
-## 验证 $p(x)$ 是平稳分布
+## 验证 $p(\mathbf{x})$ 是平稳分布
 
 ### 平稳分布的定义
 
 平稳分布 $\rho^*$ 满足 $\partial\rho^*/\partial t = 0$：
 
-$$0 = -\nabla\cdot[s(x)\,\rho^*] + \Delta\rho^*$$
+$$0 = -\nabla\cdot[s(\mathbf{x})\,\rho^*] + \Delta\rho^*$$
 
 平稳在这里的含义要读清楚："不再随时间变化"并不等于"所有粒子都停下来"，而是"流入某个区域的概率质量恰好等于流出的质量"——是一种动态下的收支平衡。
 
-### 代入 $\rho^* = p(x)$
+### 代入 $\rho^* = p(\mathbf{x})$
 
-$$-\nabla\cdot[s(x)\,p(x)] + \Delta p(x)$$
+$$-\nabla\cdot[s(\mathbf{x})\,p(\mathbf{x})] + \Delta p(\mathbf{x})$$
 
-关键观察：$s(x)\,p(x)=\nabla\log p(x)\cdot p(x)=\nabla p(x)$，**于是**：
+关键观察：$s(\mathbf{x})\,p(\mathbf{x})=\nabla\log p(\mathbf{x})\cdot p(\mathbf{x})=\nabla p(\mathbf{x})$，**于是**：
 
-$$-\nabla\cdot[\nabla p(x)] + \Delta p(x) = -\Delta p(x) + \Delta p(x) = 0 \quad \checkmark$$
+$$-\nabla\cdot[\nabla p(\mathbf{x})] + \Delta p(\mathbf{x}) = -\Delta p(\mathbf{x}) + \Delta p(\mathbf{x}) = 0 \quad \checkmark$$
 
-**$p(x)$ 确实是 Langevin SDE 的平稳分布。**
+**$p(\mathbf{x})$ 确实是 Langevin SDE 的平稳分布。**
 
-这一行等式是整节推导的"报偿时刻"：当我们让漂移力 $s(x)$ 恰好等于得分函数 $\nabla\log p(x)$ 时，漂移项 $s\,p=\nabla p$ 的散度与扩散项成对相消。换句话说，得分函数不是被我们对概率的直觉"硬凑"成漂移力的，而是千古不变的统计平衡——只要漂移与得分成对，均衡就自动成立。
+这一行等式是整节推导的"报偿时刻"：当我们让漂移力 $s(\mathbf{x})$ 恰好等于得分函数 $\nabla\log p(\mathbf{x})$ 时，漂移项 $s\,p=\nabla p$ 的散度与扩散项成对相消。换句话说，得分函数不是被我们对概率的直觉"硬凑"成漂移力的，而是千古不变的统计平衡——只要漂移与得分成对，均衡就自动成立。
 
 ### 物理解释的严格化
 
 Fokker-Planck 方程可写成"概率流"形式：
 
-$$\frac{\partial\rho_t}{\partial t} = -\nabla\cdot J(x, t)$$
+$$\frac{\partial\rho_t}{\partial t} = -\nabla\cdot J(\mathbf{x}, t)$$
 
-其中概率流 $J = s(x)\,\rho_t(x) - \nabla\rho_t(x) = \rho_t(x)\left[s(x) - \frac{\nabla\rho_t}{\rho_t}\right] = \rho_t(x)\left[\nabla\log p(x) - \nabla\log\rho_t(x)\right]$。
+其中概率流 $J = s(\mathbf{x})\,\rho_t(\mathbf{x}) - \nabla\rho_t(\mathbf{x}) = \rho_t(\mathbf{x})\left[s(\mathbf{x}) - \frac{\nabla\rho_t}{\rho_t}\right] = \rho_t(\mathbf{x})\left[\nabla\log p(\mathbf{x}) - \nabla\log\rho_t(\mathbf{x})\right]$。
 
 平稳态 $\rho_t=p$ 时：
 
-$$J(x) = p(x)[\nabla\log p(x) - \nabla\log p(x)] = 0$$
+$$J(\mathbf{x}) = p(\mathbf{x})[\nabla\log p(\mathbf{x}) - \nabla\log p(\mathbf{x})] = 0$$
 
 平稳态**概率流为零**——粒子虽在动，但净流量为零，形成动态平衡。这正是细致平衡（detailed balance）：每点流入量等于流出量。
 
@@ -122,9 +122,9 @@ $$J(x) = p(x)[\nabla\log p(x) - \nabla\log p(x)] = 0$$
 
 ### Bakry-Émery 理论
 
-当势能 $U(x)=-\log p(x)$ 满足 Bakry-Émery 曲率条件：
+当势能 $U(\mathbf{x})=-\log p(\mathbf{x})$ 满足 Bakry-Émery 曲率条件：
 
-$$\text{Hess}\,U(x) \succeq m\,I, \quad m>0$$
+$$\text{Hess}\,U(\mathbf{x}) \succeq m\,I, \quad m>0$$
 
 即 $U$ 是 $m$-强凸。
 

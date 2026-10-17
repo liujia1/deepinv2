@@ -8,20 +8,20 @@
 
 ## Moreau包络：不可微函数的光滑化
 
-3.4 定义了近端算子 $\text{prox}_{\lambda g}(v)=\arg\min_x\{\frac12\|x-v\|^2+\lambda g(x)\}$。现在看近端问题的最优值——**Moreau 包络**（Moreau-Yoshida 正则化）：
+3.4 定义了近端算子 $\text{prox}_{\lambda g}(v)=\arg\min_x\{\frac12\|\mathbf{x}-v\|^2+\lambda g(\mathbf{x})\}$。现在看近端问题的最优值——**Moreau 包络**（Moreau-Yoshida 正则化）：
 
-$$g^\lambda(x) = \inf_y \left\{g(y) + \frac{1}{2\lambda}\|y - x\|^2\right\}$$
+$$g^\lambda(\mathbf{x}) = \inf_y \left\{g(y) + \frac{1}{2\lambda}\|y - \mathbf{x}\|^2\right\}$$
 
-它是 $g$ 的光滑近似——把不可微的 $g$"磨光"成可微的 $g^\lambda$。直观理解：$g^\lambda(x)$ 是在 $x$ 附近"加权"地取 $g$ 的最小值，权重随距 $x$ 的距离衰减；$\lambda$ 越大，越多的远处信息被纳入平均，曲线越平滑，但离原函数越远。
+它是 $g$ 的光滑近似——把不可微的 $g$"磨光"成可微的 $g^\lambda$。直观理解：$g^\lambda(\mathbf{x})$ 是在 $\mathbf{x}$ 附近"加权"地取 $g$ 的最小值，权重随距 $\mathbf{x}$ 的距离衰减；$\lambda$ 越大，越多的远处信息被纳入平均，曲线越平滑，但离原函数越远。
 
 ### 核心性质
 
-1. **光滑性**：若 $g$ 凸且正常，则 $g^\lambda$ 是 $\frac{1}{\lambda}$-光滑的（$\nabla$ 的 Lipschitz 常数为 $\frac{1}{\lambda}$）。即使 $g$ 不可微（如 $\|x\|_1$），$g^\lambda$ 处处可微。
+1. **光滑性**：若 $g$ 凸且正常，则 $g^\lambda$ 是 $\frac{1}{\lambda}$-光滑的（$\nabla$ 的 Lipschitz 常数为 $\frac{1}{\lambda}$）。即使 $g$ 不可微（如 $\|\mathbf{x}\|_1$），$g^\lambda$ 处处可微。
 2. **相同极小点**：$g^\lambda$ 与 $g$ 极小点集相同——$\arg\min g=\arg\min g^\lambda$。磨光不改变最优解位置，只让优化路径更平滑。
 3. **梯度公式**：
-   $$\nabla g^\lambda(x) = \frac{1}{\lambda}\big(x - \text{prox}_{\lambda g}(x)\big)$$
+   $$\nabla g^\lambda(\mathbf{x}) = \frac{1}{\lambda}\big(\mathbf{x} - \text{prox}_{\lambda g}(\mathbf{x})\big)$$
    包络的梯度由近端算子给出——近端算子不仅给迭代点，还给出光滑近似函数的梯度。这正是"prox 是 Moreau 包络的梯度"这一衔接 3.2 节光滑化与 3.4 节近端方法的关键事实。
-4. **单调逼近**：$\lambda\to 0$ 时 $g^\lambda(x)\to g(x)$（逐点）。$\lambda$ 越小越接近原函数，但光滑性越弱。
+4. **单调逼近**：$\lambda\to 0$ 时 $g^\lambda(\mathbf{x})\to g(\mathbf{x})$（逐点）。$\lambda$ 越小越接近原函数，但光滑性越弱。
 
 ---
 
@@ -29,20 +29,20 @@ $$g^\lambda(x) = \inf_y \left\{g(y) + \frac{1}{2\lambda}\|y - x\|^2\right\}$$
 
 **Moreau 恒等式**建立近端算子与其共轭近端算子的关系：
 
-$$\text{prox}_{\lambda g}(x) + \lambda \, \text{prox}_{g^*/\lambda}(x/\lambda) = x$$
+$$\text{prox}_{\lambda g}(\mathbf{x}) + \lambda \, \text{prox}_{g^*/\lambda}(\mathbf{x}/\lambda) = \mathbf{x}$$
 
 $g^*$ 是 $g$ 的 Fenchel 共轭。两层含义：
 
 1. **计算意义**：若 $g$ 的近端难算但 $g^*$ 的近端易算，可经 Moreau 恒等式间接算——正是 3.5 节 Chambolle-Pock 的思路；
-2. **对偶意义**：近端算子把 $x$ 拆成两部分——原始近端 $\text{prox}_{\lambda g}(x)$ 与对偶近端 $\lambda\,\text{prox}_{g^*/\lambda}(x/\lambda)$，互补。
+2. **对偶意义**：近端算子把 $\mathbf{x}$ 拆成两部分——原始近端 $\text{prox}_{\lambda g}(\mathbf{x})$ 与对偶近端 $\lambda\,\text{prox}_{g^*/\lambda}(\mathbf{x}/\lambda)$，互补。
 
 ### 应用于 L1 范数
 
-对 $g(x)=\|x\|_1$，$g^*(y)=\iota_{\|\cdot\|_\infty\leq 1}(y)$。Moreau 恒等式给：
+对 $g(\mathbf{x})=\|\mathbf{x}\|_1$，$g^*(y)=\iota_{\|\cdot\|_\infty\leq 1}(y)$。Moreau 恒等式给：
 
-$$\text{prox}_{\lambda\|\cdot\|_1}(x) + \lambda \, \text{proj}_{[-1,1]}(x/\lambda) = x$$
+$$\text{prox}_{\lambda\|\cdot\|_1}(\mathbf{x}) + \lambda \, \text{proj}_{[-1,1]}(\mathbf{x}/\lambda) = \mathbf{x}$$
 
-即软阈值 $\mathcal{S}_\lambda(x) = x - \lambda\,\text{proj}_{[-1,1]}(x/\lambda)$——软阈值可理解为从 $x$ 中减去对偶投影。
+即软阈值 $\mathcal{S}_\lambda(\mathbf{x}) = \mathbf{x} - \lambda\,\text{proj}_{[-1,1]}(\mathbf{x}/\lambda)$——软阈值可理解为从 $\mathbf{x}$ 中减去对偶投影。
 
 ---
 
@@ -50,9 +50,9 @@ $$\text{prox}_{\lambda\|\cdot\|_1}(x) + \lambda \, \text{proj}_{[-1,1]}(x/\lambd
 
 Moreau 包络的重要应用是构造 **MYULA（Moreau-Yoshida Unadjusted Langevin Algorithm）**。
 
-Langevin 采样（第4章）需要后验梯度 $\nabla_x\ln p(x|y)$。当后验含不可微先验（如 Laplace→L1），梯度不存在。MYULA 用 Moreau 包络 $g^\lambda$ 替换不可微的 $g$，使后验变光滑近似：
+Langevin 采样（第4章）需要后验梯度 $\nabla_x\ln p(\mathbf{x}|y)$。当后验含不可微先验（如 Laplace→L1），梯度不存在。MYULA 用 Moreau 包络 $g^\lambda$ 替换不可微的 $g$，使后验变光滑近似：
 
-$$\tilde{p}_\lambda(x|y) \propto p(y|x) \exp(-g^\lambda(x))$$
+$$\tilde{p}_\lambda(\mathbf{x}|y) \propto p(y|\mathbf{x}) \exp(-g^\lambda(\mathbf{x}))$$
 
 这近似后验处处可微，Langevin 可直接用。$\lambda\to 0$ 时近似后验收敛到真实后验——MYULA 在光滑性与逼近精度间用 $\lambda$ 取平衡。
 

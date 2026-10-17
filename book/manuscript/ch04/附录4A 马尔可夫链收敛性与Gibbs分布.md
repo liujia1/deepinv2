@@ -11,7 +11,7 @@
 MCMC 的理论基石是马尔可夫链的**遍历定理**（ergodic theorem）：
 
 **定理**（遍历定理）：设 $(X_m)_{m\ge1}$ 是以 $\mu$ 为平稳分布的不可约、非周期、Harris 常返马尔可夫链，则对任意可积函数 $h$：
-$$\frac{1}{M}\sum_{m=1}^M h(X_m) \xrightarrow{\text{a.s.}} \int h(x)\,\mu(\mathrm{d}x), \quad M\to\infty$$
+$$\frac{1}{M}\sum_{m=1}^M h(X_m) \xrightarrow{\text{a.s.}} \int h(\mathbf{x})\,\mu(\mathrm{d}x), \quad M\to\infty$$
 这就是 MCMC 的理论保证：即使样本不独立，样本均值照样收敛到期望。换言之，4.1 节的 Monte Carlo 积分在"样本相关"的情形下依然成立——代价只是收敛常数变大（这正是 4.7 节 ESS 要量化的东西）。
 
 ### 不可约性、非周期性与常返性
@@ -26,7 +26,7 @@ $$\frac{1}{M}\sum_{m=1}^M h(X_m) \xrightarrow{\text{a.s.}} \int h(x)\,\mu(\mathr
 ### 收敛速率
 
 遍历定理只保证收敛、不给速率。速率由**谱间隙**（spectral gap）决定：
-- **几何遍历**（geometrically ergodic）：$\|K^m(x,\cdot)-\mu\|_{\text{TV}}\le C(x)r^m,\ r<1$——最快的实用速率；
+- **几何遍历**（geometrically ergodic）：$\|K^m(\mathbf{x},\cdot)-\mu\|_{\text{TV}}\le C(\mathbf{x})r^m,\ r<1$——最快的实用速率；
 - **多项式遍历**：速率 $O(1/m^\alpha)$——慢。
 
 ULA 在强对数凹条件下是几何遍历的，速率 $O(e^{-cm})$。
@@ -38,13 +38,13 @@ ULA 在强对数凹条件下是几何遍历的，速率 $O(e^{-cm})$。
 ### 可逆性
 
 4.2 节的细致平衡条件等价于马尔可夫核 $K$ 关于 $\mu$ **可逆**（reversible）：
-$$\int_A K(B|x)\,\mu(\mathrm{d}x) = \int_B K(A|x)\,\mu(\mathrm{d}x), \quad \forall A,B$$
+$$\int_A K(B|\mathbf{x})\,\mu(\mathrm{d}x) = \int_B K(A|\mathbf{x})\,\mu(\mathrm{d}x), \quad \forall A,B$$
 可逆性比平稳性更强：
 $$\text{可逆性} \implies \text{平稳性} \implies \text{遍历性（在不可约非周期条件下）$$
 
 ### 不可逆 MCMC
 
-不满足细致平衡但仍具有正确平稳分布的链，称为**不可逆 MCMC**。理论上它可以获得更小的自相关与更快的收敛——打破细致平衡允许链中存在"定向流"。ILA（4.6 节）在某种意义上"部分不可逆"：动量项引入了非对称的转移方向。欠阻尼 Langevin SDE 的连续极限同样不满足细致平衡（在 $(x,v)$ 空间存在定向流），但平稳分布仍然正确。
+不满足细致平衡但仍具有正确平稳分布的链，称为**不可逆 MCMC**。理论上它可以获得更小的自相关与更快的收敛——打破细致平衡允许链中存在"定向流"。ILA（4.6 节）在某种意义上"部分不可逆"：动量项引入了非对称的转移方向。欠阻尼 Langevin SDE 的连续极限同样不满足细致平衡（在 $(\mathbf{x},v)$ 空间存在定向流），但平稳分布仍然正确。
 
 ---
 
@@ -53,20 +53,20 @@ $$\text{可逆性} \implies \text{平稳性} \implies \text{遍历性（在不�
 ### Gibbs分布
 
 **Gibbs 分布**（又称 Boltzmann 分布）是统计物理与概率论的基本分布族：
-$$p(x) = \frac{1}{Z}\exp(-E(x))$$
-$E(x)$ 是**能量函数**，$Z=\int\exp(-E(x))\,\mathrm{d}x$ 是配分函数（归一化常数）。贝叶斯后验是它的特例：$E(x)=-\log p(y|x)-\log p(x)$，$Z=p(y)$。这也解释了正文为何把 $-\log p(x|y)$ 称为"势能"——采样算法"在能量地形上行走"的图像正源于此。
+$$p(\mathbf{x}) = \frac{1}{Z}\exp(-E(\mathbf{x}))$$
+$E(\mathbf{x})$ 是**能量函数**，$Z=\int\exp(-E(\mathbf{x}))\,\mathrm{d}x$ 是配分函数（归一化常数）。贝叶斯后验是它的特例：$E(\mathbf{x})=-\log p(y|\mathbf{x})-\log p(\mathbf{x})$，$Z=p(y)$。这也解释了正文为何把 $-\log p(\mathbf{x}|y)$ 称为"势能"——采样算法"在能量地形上行走"的图像正源于此。
 
 ### 高斯 Gibbs分布
 
-当能量是二次型 $E(x)=\frac{1}{2}(x-\mu)^\top Q(x-\mu)$，Gibbs 分布就是高斯：
-$$p(x)=\mathcal{N}(x\mid\mu, Q^{-1})$$
+当能量是二次型 $E(\mathbf{x})=\frac{1}{2}(\mathbf{x}-\mu)^\top Q(\mathbf{x}-\mu)$，Gibbs 分布就是高斯：
+$$p(\mathbf{x})=\mathcal{N}(\mathbf{x}\mid\mu, Q^{-1})$$
 $Q$ 是精度矩阵（precision matrix，协方差的逆）。高斯 Gibbs 的**条件分布也是高斯**——这是 Gibbs 采样在高斯模型上高效的根本原因（4.5 节 GLM 框架的 $p_{X|Z}$ 一步正建立在此性质上）。
 
 ### 二元高斯的条件分布
 
-设 $x=(x_1,x_2)\sim\mathcal{N}(\mu,Q^{-1})$，精度矩阵 $Q=\begin{pmatrix}Q_{11}&Q_{12}\\Q_{21}&Q_{22}\end{pmatrix}$，则
-$$p(x_1|x_2)=\mathcal{N}(x_1\mid\mu_{1|2},\ Q_{11}^{-1}),\quad \mu_{1|2}=\mu_1-Q_{11}^{-1}Q_{12}(x_2-\mu_2)$$
-注意条件方差 $Q_{11}^{-1}$ **不依赖** $x_2$——这是高斯的特殊性质，让 Gibbs 采样里的条件分布易于计算。
+设 $\mathbf{x}=(\mathbf{x}_1,\mathbf{x}_2)\sim\mathcal{N}(\mu,Q^{-1})$，精度矩阵 $Q=\begin{pmatrix}Q_{11}&Q_{12}\\Q_{21}&Q_{22}\end{pmatrix}$，则
+$$p(\mathbf{x}_1|\mathbf{x}_2)=\mathcal{N}(\mathbf{x}_1\mid\mu_{1|2},\ Q_{11}^{-1}),\quad \mu_{1|2}=\mu_1-Q_{11}^{-1}Q_{12}(\mathbf{x}_2-\mu_2)$$
+注意条件方差 $Q_{11}^{-1}$ **不依赖** $\mathbf{x}_2$——这是高斯的特殊性质，让 Gibbs 采样里的条件分布易于计算。
 
 ---
 

@@ -6,7 +6,7 @@
 
 ## A. $y_a$ 和 $y_b$ 的条件独立性
 
-**命题**：设 $y = x + \varepsilon$，$\varepsilon \sim \mathcal{N}(0, \sigma^2 I_n)$。定义 $y_a = y + \alpha\omega$，$y_b = y - \omega/\alpha$，其中 $\omega \sim \mathcal{N}(0, \sigma^2 I_n)$ 且独立于 $\varepsilon$。则 $y_a, y_b$ 在给定 $x$ 时条件独立。
+**命题**：设 $y = \mathbf{x} + \varepsilon$，$\varepsilon \sim \mathcal{N}(0, \sigma^2 I_n)$。定义 $y_a = y + \alpha\omega$，$y_b = y - \omega/\alpha$，其中 $\omega \sim \mathcal{N}(0, \sigma^2 I_n)$ 且独立于 $\varepsilon$。则 $y_a, y_b$ 在给定 $\mathbf{x}$ 时条件独立。
 
 这一步是 R2R 全部魔法的源头：只要两路噪声"互不通气"，它们之间的误差才可能成为干净信号差异的化身。
 
@@ -14,11 +14,11 @@
 
 **第一步**：写出两者的噪声分量。
 
-$$y_a = x + \underbrace{(\varepsilon + \alpha\omega)}_{\varepsilon_a}, \qquad y_b = x + \underbrace{(\varepsilon - \omega/\alpha)}_{\varepsilon_b}$$
+$$y_a = \mathbf{x} + \underbrace{(\varepsilon + \alpha\omega)}_{\varepsilon_a}, \qquad y_b = \mathbf{x} + \underbrace{(\varepsilon - \omega/\alpha)}_{\varepsilon_b}$$
 
 **第二步**：算条件协方差。
 
-$$\text{Cov}(\varepsilon_a, \varepsilon_b | x) = \mathbb{E}[(\varepsilon + \alpha\omega)(\varepsilon - \omega/\alpha)^\top | x]$$
+$$\text{Cov}(\varepsilon_a, \varepsilon_b | \mathbf{x}) = \mathbb{E}[(\varepsilon + \alpha\omega)(\varepsilon - \omega/\alpha)^\top | \mathbf{x}]$$
 
 $$= \mathbb{E}[\varepsilon\varepsilon^\top] - \frac{1}{\alpha}\mathbb{E}[\varepsilon\omega^\top] + \alpha\mathbb{E}[\omega\varepsilon^\top] - \mathbb{E}[\omega\omega^\top] = \sigma^2 I - 0 + 0 - \sigma^2 I = 0$$
 

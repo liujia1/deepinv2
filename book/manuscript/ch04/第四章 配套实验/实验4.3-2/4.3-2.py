@@ -59,7 +59,7 @@ np.random.seed(42)
 # - 1 < delta < 2: 负相关游走，方差膨胀更严重
 # - delta >= 2: 发散
 
-def ULA_gauss(niter, delta, x0=0, burn_in=1000):
+def ULA_gauss(niter, delta, x0=0, burn_in=1000, return_traj=False):
     """
     ULA 采样器（含 burn-in 和发散检测）
 
@@ -68,36 +68,50 @@ def ULA_gauss(niter, delta, x0=0, burn_in=1000):
         delta: 步长（>=2 时 AR(1) 系数 |1-delta|>=1，链发散）
         x0: 初始状态
         burn_in: 预烧期样本数
+        return_traj: 是否额外返回完整轨迹（含 burn-in，
+                     发散时为溢出前的部分，供绘制指数发散曲线）
 
     返回:
         Y: 采样结果（不含 burn-in；发散时返回全 nan）
         var_Y: 经验方差（发散时返回 inf）
         mean_Y: 经验均值（发散时返回 nan）
+        traj: （仅 return_traj=True 时）完整轨迹 np.ndarray
 
     说明:
         delta >= 2 时不抛异常，而是由下方溢出检测（|X|>1e10）返回
-        发散标记，使步骤1的"发散!"面板能被真正触发，演示稳定性边界。
+        发散标记，使步骤1的"发散"面板能被真正触发，演示稳定性边界。
         注意：须用严格 >2 的步长（如 2.2）；delta=2 为临界随机游走，
         方差仅按 O(n) 线性增长，短链内不会越过 1e10 阈值。
     """
     X = x0
+    traj = [x0]
 
-    # Burn-in 阶段：不记录样本
+    # Burn-in 阶段：不记录样本（但 traj 保留轨迹用于发散可视化）
     for _ in range(burn_in):
         X = (1 - delta) * X + np.sqrt(2 * delta) * np.random.randn()
+        traj.append(X)
         if abs(X) > 1e10:
             # 数值溢出检测（阈值 1e10，避免 δ 接近 2 时误判）
+            traj_ret = np.asarray(traj)
+            if return_traj:
+                return np.full(niter, np.nan), float('inf'), float('nan'), traj_ret
             return np.full(niter, np.nan), float('inf'), float('nan')
 
     # 采样阶段
     Y = np.zeros(niter)
     for i in range(niter):
         X = (1 - delta) * X + np.sqrt(2 * delta) * np.random.randn()
+        traj.append(X)
         if abs(X) > 1e10:
             # 数值溢出检测
+            traj_ret = np.asarray(traj)
+            if return_traj:
+                return np.full(niter, np.nan), float('inf'), float('nan'), traj_ret
             return np.full(niter, np.nan), float('inf'), float('nan')
         Y[i] = X
 
+    if return_traj:
+        return Y, np.var(Y), np.mean(Y), np.asarray(traj)
     return Y, np.var(Y), np.mean(Y)
 
 
@@ -126,7 +140,7 @@ for idx, delta in enumerate(delta_list):
     row, col = idx // ncols, idx % ncols
     ax = axes[row][col]
 
-    chain, var_emp, mean_emp = ULA_gauss(n_iter, delta)
+    chain, var_emp, mean_emp, traj = ULA_gauss(n_iter, delta, return_traj=True)
     diverged = np.any(np.isnan(chain))
 
     if not diverged:
@@ -164,16 +178,51 @@ for idx, delta in enumerate(delta_list):
                      + rf'方差={var_emp:.3f} (理论={var_theory:.3f})')
         results.append((delta, var_emp, var_theory, mean_emp, 'converged'))
     else:
-        ax.text(0.5, 0.5,
-                rf'$\delta={delta} \geq 2$' + '\n发散!',
-                transform=ax.transAxes, ha='center', va='center',
-                fontsize=14, color='red', fontweight='bold')
-        ax.set_title(rf'$\delta={delta}$: 发散')
+        # 发散面板：绘制溢出前的真实轨迹 |X_m|（对数纵轴）。
+        # 渐近增长率由确定性项决定：|X_m| ~ C·|1-δ|^m（δ=2.2 时 φ=1-δ<0，
+        # 链锯齿振荡，偶/奇子列各自指数增长；C 为随机常数，由噪声历史
+        # 决定，初值 X_0=0 时前几步受噪声主导，锯齿过零产生瞬时深谷）。
+        # 剔除 m=0（X_0=0 非真实动力学，取绝对值后会被下限钳位成假下坠）
+        m = np.arange(1, len(traj))
+        abs_traj = np.abs(traj[1:])
+        log_abs = np.log(np.maximum(abs_traj, 1e-12))
+        growth = np.log(abs(delta - 1.0))  # 理论斜率 log|1-δ|
+
+        # 拟合斜率：取链尾 60%（纯指数增长段，前期受随机前因子主导）；
+        # 因 φ<0 的锯齿使过零点被噪声抬高，对偶/奇子列各拟一次取中位数
+        # （相邻子列斜率理论值均为 2·log|1-δ|，除以 2 后得单步增长率）
+        def _tail_slope(idx):
+            y = log_abs[idx]
+            if len(idx) < 8:
+                return None
+            return np.polyfit(idx, y, 1)[0] / 2.0
+
+        tail_from = int(0.6 * len(m))
+        idx_even = np.arange(tail_from, len(m), 2)
+        idx_odd = np.arange(tail_from + 1, len(m), 2)
+        slopes = [s for s in (_tail_slope(idx_even), _tail_slope(idx_odd))
+                  if s is not None]
+        if slopes:
+            fit = float(np.median(slopes))
+            title2 = (rf'尾部斜率 实测={fit:.3f} vs '
+                      rf'理论 $\log|1-\delta|$={growth:.3f}')
+        else:
+            title2 = ''
+        ax.semilogy(m, abs_traj, color='tab:red', linewidth=1,
+                    label=r'链幅值 $|X_m|$')
+        # 理论增长率参考线：以末点为锚（前因子 C 随机，只对齐斜率）
+        ax.semilogy(m, abs_traj[-1] * np.exp(growth * (m - m[-1])), 'k--',
+                    linewidth=1.5, label=r'理论斜率 $|1-\delta|^m$')
+        ax.set_title(rf'$\delta={delta}\geq 2$: 发散'
+                     + (('\n' + title2) if title2 else ''))
+        ax.set_xlabel(r'迭代步 $m$（含 burn-in）', fontsize=12)
+        ax.set_ylabel(r'幅值 $|X_m|$（对数尺度）', fontsize=12)
+        ax.legend(fontsize=8)
         results.append((delta, float('inf'), float('inf'), float('nan'), 'diverged'))
 
-    ax.set_xlabel(r'$x$', fontsize=12)
-    ax.set_ylabel(r'密度', fontsize=12)
     if not diverged:
+        ax.set_xlabel(r'$x$', fontsize=12)
+        ax.set_ylabel(r'密度', fontsize=12)
         ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
 

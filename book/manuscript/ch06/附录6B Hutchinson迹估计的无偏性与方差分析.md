@@ -30,7 +30,7 @@ $$\widehat{\mathrm{Tr}}_M(A)=\frac{1}{M}\sum_{j=1}^M v_j^T A v_j.$$
 
 ## 方差分析：不同采样分布
 
-**高斯** $v\sim\mathcal N(0,I)$：方差
+**高斯** $v\sim\mathcal \mathcal{N}(0,I)$：方差
 
 $$\mathrm{Var}(v^T A v)=2\|A\|_F^2,$$
 
@@ -50,9 +50,9 @@ $$\mathrm{Var}_{\text{Rademacher}}-\mathrm{Var}_{\text{Gauss}}=-2\sum_i A_{ii}^2
 
 ## 在得分匹配中的应用
 
-SSM 里 $A=\nabla_x s_\theta(x)$ 是得分网络的 Jacobian。要估 $\mathrm{Tr}(\nabla_x s_\theta)=\mathbb{E}_v[v^T\nabla_x s_\theta\,v]$。
+SSM 里 $A=\nabla_x s_\theta(\mathbf{x})$ 是得分网络的 Jacobian。要估 $\mathrm{Tr}(\nabla_x s_\theta)=\mathbb{E}_v[v^T\nabla_x s_\theta\,v]$。
 
-**前向自动微分实现**：不需构造完整 Jacobian。定义 $g(t)=v^T s_\theta(x+tv)$，则 $g'(0)=v^T\nabla_x s_\theta(x)\,v$。在 PyTorch 里用 `torch.autograd.functional.jvp`（Jacobian–Vector Product），一次前向传播加一次前向自动微分即可。
+**前向自动微分实现**：不需构造完整 Jacobian。定义 $g(t)=v^T s_\theta(\mathbf{x}+tv)$，则 $g'(0)=v^T\nabla_x s_\theta(\mathbf{x})\,v$。在 PyTorch 里用 `torch.autograd.functional.jvp`（Jacobian–Vector Product），一次前向传播加一次前向自动微分即可。
 
 **计算复杂度对比**：
 

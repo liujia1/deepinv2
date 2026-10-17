@@ -6,39 +6,39 @@
 
 ## C.1 波前集的严格定义
 
-**局部傅里叶变换**（local Fourier transform，只在某点附近开窗再做傅里叶变换）：设 $u \in \mathcal{D}'(\mathbb{R}^n)$ 是一个分布（distribution，广义的函数，允许奇异），$\phi \in C_c^\infty(\mathbb{R}^n)$ 是在 $x_0$ 附近为 1 的截断函数。$u$ 在 $x_0$ 附近的局部傅里叶变换定义为：
+**局部傅里叶变换**（local Fourier transform，只在某点附近开窗再做傅里叶变换）：设 $u \in \mathcal{D}'(\mathbb{R}^n)$ 是一个分布（distribution，广义的函数，允许奇异），$\phi \in C_c^\infty(\mathbb{R}^n)$ 是在 $\mathbf{x}_0$ 附近为 1 的截断函数。$u$ 在 $\mathbf{x}_0$ 附近的局部傅里叶变换定义为：
 
-$$\widehat{\phi u}(\xi) = \int u(x) \phi(x) e^{-i x\cdot\xi} dx$$
+$$\widehat{\phi u}(\xi) = \int u(\mathbf{x}) \phi(\mathbf{x}) e^{-i \mathbf{x}\cdot\xi} dx$$
 
-**定义（波前集）**：点 $(x_0,\xi_0) \in \mathbb{R}^n \times (\mathbb{R}^n \setminus \{0\})$ **不属于** $u$ 的波前集 $WF(u)$，如果存在 $x_0$ 的邻域 $U$ 和 $\xi_0$ 的锥形邻域 $V$，使得对任意在 $U$ 中为 1 的截断函数 $\phi$，$\widehat{\phi u}(\xi)$ 在 $V$ 中快速衰减（即 $|\widehat{\phi u}(\xi)| \le C_N (1+|\xi|)^{-N}$ 对任意 $N$ 成立）。
+**定义（波前集）**：点 $(\mathbf{x}_0,\xi_0) \in \mathbb{R}^n \times (\mathbb{R}^n \setminus \{0\})$ **不属于** $u$ 的波前集 $WF(u)$，如果存在 $\mathbf{x}_0$ 的邻域 $U$ 和 $\xi_0$ 的锥形邻域 $V$，使得对任意在 $U$ 中为 1 的截断函数 $\phi$，$\widehat{\phi u}(\xi)$ 在 $V$ 中快速衰减（即 $|\widehat{\phi u}(\xi)| \le C_N (1+|\xi|)^{-N}$ 对任意 $N$ 成立）。
 
-直觉：$(x_0,\xi_0) \notin WF(u)$ 意味着 $u$ 在 $x_0$ 处沿方向 $\xi_0$ 是"光滑的"——局部傅里叶变换在 $\xi_0$ 方向快速衰减。反之 $(x_0,\xi_0) \in WF(u)$ 意味着 $u$ 在 $x_0$ 处沿方向 $\xi_0$ 有"奇异性"（边缘、尖点之类）。
+直觉：$(\mathbf{x}_0,\xi_0) \notin WF(u)$ 意味着 $u$ 在 $\mathbf{x}_0$ 处沿方向 $\xi_0$ 是"光滑的"——局部傅里叶变换在 $\xi_0$ 方向快速衰减。反之 $(\mathbf{x}_0,\xi_0) \in WF(u)$ 意味着 $u$ 在 $\mathbf{x}_0$ 处沿方向 $\xi_0$ 有"奇异性"（边缘、尖点之类）。
 
 **例子**：
 - $u = \delta_{(a,b)}$（点源），则 $WF(u) = \{(a,b,\xi) : \xi \neq 0\}$——点源在所有方向都奇异
-- $u = H(x_1)$（Heaviside，即 $x_1=0$ 处的阶跃），则 $WF(u) = \{(0,x_2,\xi_1,0) : \xi_1\neq 0, x_2\in\mathbb{R}\}$——阶跃边缘只在法线方向（$x_1$ 方向）奇异，切线方向（$x_2$ 方向）光滑
+- $u = H(\mathbf{x}_1)$（Heaviside，即 $\mathbf{x}_1=0$ 处的阶跃），则 $WF(u) = \{(0,\mathbf{x}_2,\xi_1,0) : \xi_1\neq 0, \mathbf{x}_2\in\mathbb{R}\}$——阶跃边缘只在法线方向（$\mathbf{x}_1$ 方向）奇异，切线方向（$\mathbf{x}_2$ 方向）光滑
 
 ## C.2 Radon变换的微局部性质
 
 **定理**（Quinto 1993）：设 $u \in \mathcal{E}'(\mathbb{R}^2)$（紧支撑分布），则 Radon 变换 $\mathcal{R}$ 保持波前集的如下关系：
 
-$$(x_0,\xi_0) \in WF(u) \iff \text{存在 }\theta_0\text{ 使得 }(\theta_0, s_0, \xi_0\cdot\theta_0^\perp) \in WF(\mathcal{R}u)$$
+$$(\mathbf{x}_0,\xi_0) \in WF(u) \iff \text{存在 }\theta_0\text{ 使得 }(\theta_0, s_0, \xi_0\cdot\theta_0^\perp) \in WF(\mathcal{R}u)$$
 
-其中 $s_0 = x_0\cdot\theta_0$，$\theta_0^\perp$ 是垂直于 $\theta_0$ 的单位向量。
+其中 $s_0 = \mathbf{x}_0\cdot\theta_0$，$\theta_0^\perp$ 是垂直于 $\theta_0$ 的单位向量。
 
-关键含义：Radon 变换把图像空间的波前集"投影"到 sinogram 空间的波前集——每个 $(x_0,\xi_0)$ 对对应 sinogram 里一个特定位置和方向。
+关键含义：Radon 变换把图像空间的波前集"投影"到 sinogram 空间的波前集——每个 $(\mathbf{x}_0,\xi_0)$ 对对应 sinogram 里一个特定位置和方向。
 
 ## C.3 有限角CT的可见性定理
 
 **定理**（Greenleaf & Uhlmann 1989；Frikel & Quinto 2013）：设测量角度范围为 $\Theta \subset [0,\pi)$，则从有限角度数据 $\mathcal{R}_\Theta u$ 能稳定恢复的波前集为：
 
-$$WF_{\text{visible}}(u) = \{(x,\xi) \in WF(u) : \xi/|\xi| = (\cos\theta,\sin\theta),\ \theta \in \Theta\}$$
+$$WF_{\text{visible}}(u) = \{(\mathbf{x},\xi) \in WF(u) : \xi/|\xi| = (\cos\theta,\sin\theta),\ \theta \in \Theta\}$$
 
 即：**只有法线方向落在测量角度范围内的边缘才可被稳定恢复**。
 
 **推论**：有限角 CT 的不可见波前集为：
 
-$$WF_{\text{invisible}}(u) = \{(x,\xi) \in WF(u) : \xi/|\xi| \notin \Theta\}$$
+$$WF_{\text{invisible}}(u) = \{(\mathbf{x},\xi) \in WF(u) : \xi/|\xi| \notin \Theta\}$$
 
 不可见波前集对应的边缘信息无法被任何线性方法或凸正则化方法稳定恢复。
 
