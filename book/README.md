@@ -24,14 +24,17 @@ python book/tools/sync_manuscript.py --ch 12  # 只同步某章
 python book/tools/audit_crossrefs.py          # 交叉引用：章/节/附录/实验 引用是否存在
 python book/tools/audit_notation.py           # 符号一致性：各章记法混用统计
 python book/tools/audit_numbers.py            # 数值对账：正文数字 ↔ results_summary.json
+
+# 参考文献反查（Phase 3）：正文 Author (Year) 引用扫描 → meta/citations_raw.csv + citations_review.md
+python book/tools/scan_citations.py
 ```
 
 ## 成书阶段（当前进度）
 
 - [x] Phase 0  书稿区分离与版本管理（2026-10-16）
 - [x] Phase 1  结构审计（2026-10-16，见 `meta/全书缺口报告.md`）
-- [ ] Phase 2  技术一致性校对（符号表 → 逐章修正）
-- [ ] Phase 3  参考文献体系（references.bib）
+- [x] Phase 2  技术一致性校对（符号表 → 逐章修正）
+- [ ] Phase 3  参考文献体系（references.bib）——反查已完成（`meta/citations_review.md`，198 条），待逐条补全生成 bib
 - [ ] Phase 4  成书组件补写（前言/符号总表/索引/后记）
 - [ ] Phase 5  排版构建管线（待定：Quarto / LaTeX / 出版社流程）
 - [ ] Phase 6  出版流程（定位：学术专著，Springer 式）

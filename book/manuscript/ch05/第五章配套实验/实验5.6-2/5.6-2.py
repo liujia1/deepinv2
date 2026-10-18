@@ -315,37 +315,68 @@ plt.close()
 
 
 # ============================================================
-# 步骤4：后验样本多样性展示
+# 步骤4：后验样本多样性展示（高分歧点高亮）
 # ============================================================
 print("\n" + "=" * 60)
 print("步骤4：后验样本多样性展示")
 print("=" * 60)
 
-num_show = min(16, len(mc_samples))
-step = max(1, len(mc_samples) // num_show)
-selected = mc_samples[::step][:num_show]
+# 16 张残差图彼此相似——因为样本间的"差异"本就落在同一批像素上。真正该展示的不是
+# "16 张相似图"，而是"哪些像素上样本分歧最大"。这里逐像素计算多样性 σ_samples
+# （全体抽稀样本的样本标准差），并在后验均值底图上高亮分歧最大的像素。
+samples_arr = np.asarray(mc_samples)                    # (N, H, W)
+post_mean_arr = np.asarray(post_mean)
+div_map = np.std(samples_arr, axis=0, ddof=1)           # 逐像素多样性
 
-ncols = 4
-nrows = (num_show + ncols - 1) // ncols
-fig, axes = plt.subplots(nrows, ncols, figsize=(16, 4*nrows))
+# 高分歧掩膜：多样性 ≥ 95 分位的像素（约前 5%）
+thr_hi = float(np.percentile(div_map, 95))
+hi_mask = div_map >= thr_hi
+# 分歧最大的前 5 个像素坐标 (row, col)
+_flat = np.argsort(div_map.ravel())[::-1][:5]
+top_rows, top_cols = np.unravel_index(_flat, div_map.shape)
 
-for i in range(nrows * ncols):
-    ax = axes[i // ncols][i % ncols] if nrows > 1 else axes[i]
-    if i < len(selected):
-        ax.imshow(selected[i], cmap='gray', vmin=0, vmax=1)
-        ax.set_title(f'样本 {i+1}')
-    ax.axis('off')
+fig, axes = plt.subplots(1, 3, figsize=(18, 6.2))
 
-fig.suptitle('PnP-ULA后验样本（展示后验分布的多样性）', fontsize=14, y=1.01)
+# (a) 后验均值：空间参照底图
+axes[0].imshow(post_mean_arr, cmap='gray', vmin=0, vmax=1)
+axes[0].set_title('后验均值（空间参照）')
+axes[0].axis('off')
+
+# (b) 逐像素多样性图
+im_div = axes[1].imshow(div_map, cmap='hot')
+axes[1].set_title(f'样本间多样性 σ（均值={div_map.mean():.4f}）')
+axes[1].axis('off')
+plt.colorbar(im_div, ax=axes[1], fraction=0.046, pad=0.04)
+
+# (c) 高亮：均值底图上叠加高分歧点
+axes[2].imshow(post_mean_arr, cmap='gray', vmin=0, vmax=1)
+_overlay = np.zeros((*div_map.shape, 4))
+_overlay[hi_mask, 0] = 1.0        # 红通道
+_overlay[hi_mask, 3] = 0.6        # 半透明
+axes[2].imshow(_overlay)
+axes[2].contour(hi_mask, levels=[0.5], colors='yellow', linewidths=0.8)
+for _r, _c in zip(top_rows, top_cols):
+    axes[2].plot(_c, _r, 'o', mfc='none', mec='cyan', ms=16, mew=1.6)
+axes[2].set_title('高亮：前5%高分歧像素(红) 与 Top5点(青圈)')
+axes[2].axis('off')
+
+fig.suptitle('后验样本多样性：高分歧点高亮\n'
+             '红=样本间分歧最大的像素(前5%)，集中在三脚架细腿/轮廓/背景建筑等高频弱信息区；平滑区多样性接近0（16张残差图相似正因差异落在同一批像素）',
+             fontsize=13, y=1.02)
 plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤4_后验样本多样性.png'), dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, '步骤4_后验样本多样性.png'), dpi=110, bbox_inches='tight')
 plt.close()
 
-print(f"展示了 {len(selected)} 个后验样本")
+_n_hi = int(hi_mask.sum())
+print(f"逐像素多样性 σ_samples：均值={div_map.mean():.4f}、最大={div_map.max():.4f}、高亮阈值(P95)={thr_hi:.4f}")
+print(f"高亮像素数：{_n_hi}（占 {_n_hi / div_map.size * 100:.1f}%）")
+print("分歧最大的前5个像素（行,列）及其多样性：")
+for _k, (_r, _c) in enumerate(zip(top_rows, top_cols)):
+    print(f"  #{_k + 1}: ({_r},{_c})  σ_samples={div_map[_r, _c]:.4f}  均值灰度={post_mean_arr[_r, _c]:.3f}")
 print("\n观察要点:")
-print("  - 共享相似的全局结构（先验约束）")
-print("  - 细节存在差异（数据一致性与先验的权衡）")
-print("  - 差异区域 = 高不确定性区域")
+print("  - 红色叠加+黄色等值线=样本间分歧最大的像素，集中在高频弱信息区，平滑背景几乎无高亮")
+print("  - 该空间格局应与步骤3 CI宽度图、步骤5 sample_std 热图一致（三者同源互证）")
+print("  - 注：背景仍有低幅逐像素抖动（抽稀间隔100<全链IAT≥1101），非真实空间多样性")
 
 
 # ============================================================
@@ -574,7 +605,15 @@ results_summary = {
         },
     },
     "步骤4_后验样本多样性": {
-        "展示样本数": int(len(selected)),
+        "视图": "高分歧点高亮（后验均值底图 + 前5%高多样性像素红色叠加 + Top5青圈）；旧版为16张残差图并排（因差异落在同一批像素而彼此相似）",
+        "样本数": int(len(mc_samples)),
+        "逐像素多样性均值": round(float(div_map.mean()), 6),
+        "逐像素多样性最大": round(float(div_map.max()), 6),
+        "高亮阈值_P95": round(thr_hi, 6),
+        "高亮像素占比": round(float(hi_mask.mean()), 6),
+        "Top5高分歧像素_行": [int(v) for v in top_rows],
+        "Top5高分歧像素_列": [int(v) for v in top_cols],
+        "改图理由": "后验高度集中（全链σ均值≈0.022），16张残差图因差异落在同一批像素而看起来相似；改为聚合的逐像素多样性图并高亮分歧最大处，直接回答'哪些点差异大'",
         "多峰性说明": "本例强数据约束(BSNR=40dB)+近对数凹去噪先验，样本为单峰附近小幅扰动；可分多峰演示见实验5.2-1",
     },
 }
