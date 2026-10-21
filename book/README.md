@@ -26,6 +26,8 @@ python book/tools/audit_notation.py           # 符号一致性：各章记法�
 python book/tools/audit_numbers.py            # 数值对账：正文数字 ↔ results_summary.json
 
 # 参考文献反查（Phase 3）：正文 Author (Year) 引用扫描 → meta/citations_raw.csv + citations_review.md
+# 覆盖形态：散文式/括号内式、"等人"式、中文连接符多作者、连字符姓氏、APA 全名式/斜体文献式、
+#           arXiv 编号式、括号内前缀/后缀/会场名、同括号多引用拆分（2026-10-18 升级 v3）
 python book/tools/scan_citations.py
 ```
 
@@ -34,7 +36,7 @@ python book/tools/scan_citations.py
 - [x] Phase 0  书稿区分离与版本管理（2026-10-16）
 - [x] Phase 1  结构审计（2026-10-16，见 `meta/全书缺口报告.md`）
 - [x] Phase 2  技术一致性校对（符号表 → 逐章修正）
-- [ ] Phase 3  参考文献体系（references.bib）——反查已完成（`meta/citations_review.md`，198 条），待逐条补全生成 bib
+- [ ] Phase 3  参考文献体系（references.bib）——反查已完成（`meta/citations_review.md`，**211 条**；已经独立交叉复核 + 工具升级 v3 对齐），待逐条补全生成 bib
 - [ ] Phase 4  成书组件补写（前言/符号总表/索引/后记）
 - [ ] Phase 5  排版构建管线（待定：Quarto / LaTeX / 出版社流程）
 - [ ] Phase 6  出版流程（定位：学术专著，Springer 式）
