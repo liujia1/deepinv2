@@ -82,7 +82,7 @@ np.random.seed(42)
 import torch
 torch.manual_seed(42)
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cpu')  # 固定 CPU：2D 点云无需 GPU，也避免有卡的机器悄悄换设备导致数值不可复现
 print(f"\n{'='*60}")
 print(f"实验14.4-3: 曲率单调性数值验证——Reflow定理")
 print(f"{'='*60}")
@@ -332,6 +332,7 @@ losses_1rf = train_rf_model(model_1rf, opt_1rf, z_1rf, x_1rf,
                              checkpoint_path=ckpt_paths[1],
                              final_checkpoint_path=final_paths[1],
                              model_label='1-RF')
+losses_by_round = {1: losses_1rf}  # 各轮训练 loss 曲线，供 json 存档
 
 # 生成固定噪声用于CRN曲率比较（跨轮共用同一批z，消除采样噪声对单调性判断的干扰）
 # 注意：z_curv 必须用独立固定种子抽取，否则其数值依赖于全局RNG历史——
@@ -377,6 +378,8 @@ for k in range(2, n_reflow_rounds + 1):
                                checkpoint_path=ckpt_paths[k],
                                final_checkpoint_path=final_paths[k],
                                model_label=f'{k}-RF')
+
+    losses_by_round[k] = losses_k  # 存档本轮 loss 曲线
 
     # 计算曲率（使用固定z_curv，CRN原则确保跨轮比较不受采样噪声干扰）
     kappa_k, traj_k = compute_curvature_from_model(model_k, n_samples=500, n_ode_steps=n_ode_steps, device=device, z=z_curv)
@@ -584,11 +587,29 @@ def _to_native(obj):
     except: pass
     return obj
 
+def _loss_tail(losses):
+    """末值 + 每 50 epoch 抽一点的曲线（含首末），空列表返回 None/[]。"""
+    if not losses:
+        return None, []
+    curve = [round(float(v), 6) for v in losses[:-1:50]] + [round(float(losses[-1]), 6)]
+    return round(float(losses[-1]), 6), curve
+
+_l1, _c1 = _loss_tail(losses_by_round[1])
+_l2, _c2 = _loss_tail(losses_by_round[2])
+_l3, _c3 = _loss_tail(losses_by_round[3])
 results_summary = {
     'curvature_1rf': round(float(curvatures[1]), 6),
     'curvature_2rf': round(float(curvatures[2]), 6),
     'curvature_3rf': round(float(curvatures[3]), 6),
     'monotonic': bool(monotonic),
+    # 训练 loss 存档：正文「1.865 -> 0.00098 断崖」必须可核对
+    'final_loss_1rf': _l1,
+    'final_loss_2rf': _l2,
+    'final_loss_3rf': _l3,
+    'loss_curve_1rf': _c1,
+    'loss_curve_2rf': _c2,
+    'loss_curve_3rf': _c3,
+    'loss_note': 'final_loss_* = 最后一个 epoch 的样本加权 MSE；loss_curve_* = 每 50 epoch 抽 1 点（含首末）；device=cpu',
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

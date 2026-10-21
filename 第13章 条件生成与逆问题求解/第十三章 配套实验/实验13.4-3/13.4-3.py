@@ -447,7 +447,7 @@ print("""
 """)
 
 zeta_values = [0.0, 0.3, 0.7, 1.0, 1.5, 3.0, 6.0, 10.0, 15.0, 30.0, 50.0, 100.0]
-zeta_values_chung = [0.1, 0.3, 0.6, 1.0, 3.0, 5.0, 10.0, 30.0]  # 覆盖论文惯例[0.1,1.0]与"ζ'>5伪影"区间
+zeta_values_chung = [0.01, 0.02, 0.03, 0.05, 0.08, 0.1, 0.3, 0.6, 1.0, 3.0, 5.0, 10.0, 30.0]  # 加密下边界以定位峰值；覆盖论文惯例[0.1,1.0]与"ζ'>5伪影"区间
 psnr_results = []
 psnr_results_chung = []
 
@@ -546,8 +546,8 @@ ax2.plot(best_zeta, best_psnr, 'b*', markersize=16, zorder=5,
          markeredgecolor='navy', markeredgewidth=0.5)
 ax2.annotate(rf'归一化实现最优 $\zeta$={best_zeta:g}' + '\n' + rf'PSNR={best_psnr:.2f}dB',
              xy=(best_zeta, best_psnr),
-             xytext=(best_zeta * 0.35, best_psnr + 1.2),
-             fontsize=9, ha='left',
+             xytext=(best_zeta * 0.5, best_psnr - 3.7),  # 移到红线下方，避开标题与曲线
+             fontsize=9, ha='left', va='center',
              arrowprops=dict(arrowstyle='->', color='gray', alpha=0.7),
              bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffeaa7', alpha=0.85))
 bc_idx = int(np.argmax(psnr_results_chung))
@@ -557,8 +557,8 @@ ax2.plot(bc_zeta, bc_psnr, 'g*', markersize=16, zorder=5,
          markeredgecolor='darkgreen', markeredgewidth=0.5)
 ax2.annotate(rf"Chung对照最优 $\zeta'$={bc_zeta:g}" + '\n' + rf'PSNR={bc_psnr:.2f}dB',
              xy=(bc_zeta, bc_psnr),
-             xytext=(bc_zeta * 0.25, bc_psnr - 4.5),
-             fontsize=9, ha='left',
+             xytext=(0.5, bc_psnr - 7.0),  # 右移到蓝线下方，避免遮挡上升段
+             fontsize=9, ha='left', va='center',
              arrowprops=dict(arrowstyle='->', color='gray', alpha=0.7),
              bbox=dict(boxstyle='round,pad=0.3', facecolor='#dff9e3', alpha=0.85))
 
@@ -572,7 +572,7 @@ print("\n" + "=" * 60)
 print("实验13.4-3 完成!")
 print("=" * 60)
 print(f"""
-关键结论(基于实测数据, 归一化ζ∈[0,100] / 原版ζ'∈[0.1,30], CRN seed={CRN_SEED}):
+关键结论(基于实测数据, 归一化ζ∈[0,100] / 原版ζ'∈[0.01,30], CRN seed={CRN_SEED}):
 1. zeta-重建质量权衡（13.4.3节）
    - zeta=0: 无条件采样, PSNR最低({psnr_results[0]:.1f}dB), 甚至低于含噪观测({psnr_obs:.1f}dB)
    - 归一化实现: PSNR随zeta先升后缓降, 最优zeta={best_zeta:g}(PSNR={best_psnr:.1f}dB),
@@ -583,7 +583,7 @@ print(f"""
      随β_t→β_min末段自动退场, "过拟合噪声"的下降段被结构性放缓(非完全消失)。
    - Chung原版步长(ζ'·∇‖r‖, 系数不随t衰减)对照: 最优ζ'={bc_zeta:g}
      (PSNR={bc_psnr:.1f}dB), 其数值尺度应与论文惯例[0.1,1.0]区间对照,
-     而非与归一化实现的ζ互比; 若ζ'>5段PSNR回落, 即复现论文记录的
+     而非与归一化实现的ζ互比; ζ'≳1后PSNR进入低平台并继续回落, 即复现论文记录的
      "饱和伪影/噪声放大"——峰值位置与下降段深浅由步长参数化方式决定。
 2. 实践要点
    - zeta的"最优区间"依赖引导步长的参数化方式, 不可照搬论文惯例数值,
@@ -613,6 +613,10 @@ def _to_native(obj):
     except: pass
     return obj
 
+def _chung_psnr(z):
+    """按 ζ' 取值查 PSNR，避免加密网格后索引错位"""
+    return psnr_results_chung[zeta_values_chung.index(z)]
+
 results_summary = {
     "zeta_values": zeta_values,
     "PSNR_各zeta": {f"zeta={z}": round(float(p), 2) for z, p in zip(zeta_values, psnr_results)},
@@ -633,8 +637,8 @@ results_summary = {
         f"归一化实现呈平缓倒U, 最优ζ={best_zeta:g}(PSNR={best_psnr:.2f}, 10~15为平台), "
         f"ζ=100回落至{psnr_results[-1]:.2f}; "
         f"Chung原版对照(ζ'·∇‖r‖,系数不随t衰减)最优ζ'={bc_zeta:g}(PSNR={bc_psnr:.2f}), "
-        f"位于论文惯例区间[0.1,1.0]下缘; ζ'>5后PSNR持续回落(ζ'=5/10/30分别为"
-        f"{psnr_results_chung[5]:.2f}/{psnr_results_chung[6]:.2f}/{psnr_results_chung[7]:.2f}dB), "
+        f"位于论文惯例区间[0.1,1.0]下缘; ζ'≳1后PSNR进入低平台并继续回落(ζ'=1/3/5/10/30分别为"
+        f"{_chung_psnr(1.0):.2f}/{_chung_psnr(3.0):.2f}/{_chung_psnr(5.0):.2f}/{_chung_psnr(10.0):.2f}/{_chung_psnr(30.0):.2f}dB), "
         "复现论文'ζ>5出现放大噪声的饱和伪影'记录; 两参数化最优权重相差约两个数量级, "
         "峰值位置与下降段深浅由步长参数化决定"
     ),

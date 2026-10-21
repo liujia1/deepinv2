@@ -262,7 +262,10 @@ class GaussianBlurOperator:
         self.pad = kernel_size // 2
 
     def __call__(self, x):
-        return F.conv2d(x, self.kernel, padding=self.pad)
+        # replicate padding：零填充在 [-1,1] 空间等价于补“中灰”(0)，
+        # 会把 MNIST 的黑色边界拉亮成光晕（实测边界偏差最大 0.27）。
+        x = F.pad(x, (self.pad,) * 4, mode='replicate')
+        return F.conv2d(x, self.kernel, padding=0)
 
 
 class InpaintingOperator:
@@ -484,7 +487,10 @@ blur_div = run_diversity(y_blur[0:1], test_images[0:1], blur_op)
 # ---- Inpainting观测 ----
 inpaint_op = InpaintingOperator(mask_ratio=0.3, device=device)
 sigma_y_inpaint = 0.01
-y_inpaint = inpaint_op(test_images) + torch.randn_like(test_images) * sigma_y_inpaint
+# 观测模型 y = M⊙(x+n)：噪声只加在已知像素上。
+# 若写成 M⊙x + n，噪声会落到被遮挡区域，而 forward_op 在那里输出 0，
+# 残差 y−M⊙x̂ 变成非零噪声，DPS 会把未知区域往噪声值上拉。
+y_inpaint = inpaint_op(test_images + torch.randn_like(test_images) * sigma_y_inpaint)
 psnr_inpaint_obs = compute_psnr(y_inpaint, test_images)
 
 print("\n[Inpainting] 质量对比（3条独立轨迹, CRN公平对比）...")
@@ -601,7 +607,7 @@ print(f"""
      (a) 引导经eps修正进入均值步进后实际位移∝ζ·β_t/√α_t, 末段β_t→β_min,
          引导相对注入噪声(∝√β_t)结构性放缓退场;
      (b) 本任务观测噪声很小(σ_y=0.01/0.02), 过拟合噪声的空间有限;
-     对照13.4-3(σ_y=0.3): 同一参数化在ζ=100时回落约4.5dB, 说明回落与噪声尺度相关。
+     对照13.4-3(σ_y=0.3): 同一参数化在ζ=100时回落约4.3dB, 说明回落与噪声尺度相关。
 
 4. 统计严谨性
    - ζ间对比采用CRN公共随机数; PSNR报告3条独立轨迹的均值±标准差

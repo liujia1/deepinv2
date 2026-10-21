@@ -38,6 +38,7 @@ import matplotlib.pyplot as plt
 import warnings
 import logging
 from tqdm import tqdm
+from copy import deepcopy
 
 # 设置控制台输出为 UTF-8 (Windows 下避免中文乱码)
 if sys.platform == 'win32':
@@ -313,7 +314,8 @@ class DiT(nn.Module):
         self.patchify = Patchify(patch_size, in_channels, hidden_size)
         self.unpatchify = Unpatchify(patch_size, in_channels, hidden_size)
 
-        # 可学习位置编码（15.3.2节 ViT使用可学习位置编码）
+        # 位置编码: 本章为简化使用可学习参数(与 ViT 一致);
+        # 注意 DiT 论文实际用固定的 2D sine-cosine 编码, 此处不影响参数量与架构对比结论
         num_patches = (28 // patch_size) ** 2  # 14*14=196 for p=2
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size))
         nn.init.trunc_normal_(self.pos_embed, std=0.02)
@@ -434,7 +436,9 @@ transform = transforms.Compose([
 ])
 train_dataset = datasets.MNIST(data_dir, train=True, download=True, transform=transform)
 train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
-print(f"  训练集大小: {len(train_dataset)}")
+test_dataset = datasets.MNIST(data_dir, train=False, download=True, transform=transform)
+test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+print(f"  训练集大小: {len(train_dataset)}, 测试集大小: {len(test_dataset)}")
 print(f"  数据范围: [-1, 1] (匹配标准高斯噪声先验)")
 
 
@@ -494,7 +498,10 @@ num_epochs = 30
 
 # 训练UNet
 print("\n训练UNet...")
-optimizer_unet = torch.optim.Adam(unet.parameters(), lr=2e-4)
+# ★ 与 DiT 严格同设置: AdamW(lr=2e-4, wd=0.01)。
+#   旧版此处用 Adam 且未设 weight_decay, 与正文"同一训练设置"矛盾,
+#   构成"架构 × 优化器"混杂(15.5 已实测同 wd 下 Adam 比 AdamW 差约 21%)
+optimizer_unet = torch.optim.AdamW(unet.parameters(), lr=2e-4, weight_decay=0.01)
 start_epoch_unet, is_final_unet, unet_losses = load_train_state(
     CKPT_UNET, unet, optimizer_unet, num_epochs)
 
@@ -623,7 +630,9 @@ print("""
 dit_zero = DiT(hidden_size=128, depth=4, num_heads=4, patch_size=2).to(device)
 
 # 无Zero初始化的DiT
-dit_no_zero = DiT(hidden_size=128, depth=4, num_heads=4, patch_size=2).to(device)
+# ★ 严格配对: 从同一模型 deepcopy, 保证除 adaLN 末层外所有权重完全一致;
+#   旧版连续构造两个模型, RNG 已推进, 两组初始化完全不同, 消融结果混入了初始化噪声
+dit_no_zero = deepcopy(dit_zero)
 # 手动覆盖所有adaLN的Zero初始化（确保对照组完全不含Zero初始化）
 for block in dit_no_zero.blocks:
     nn.init.xavier_uniform_(block.adaLN_modulation[-1].weight)
@@ -777,11 +786,11 @@ print("""
 """)
 
 unet.eval()
-dit_zero.eval()
+dit.eval()  # ★ 用步骤2训练30轮的 dit(而非步骤3只训20轮的 dit_zero), 保证与 unet 轮数一致
 
-# ★ 固定种子: 使图3完全可复现——同时锁定 train_loader 的shuffle取样的样本 与 randn_like 的噪声
+# ★ 固定种子: 使图3完全可复现——同时锁定 test_loader 的取样样本 与 randn_like 的噪声
 torch.manual_seed(42)
-test_batch = next(iter(train_loader))[0][:8].to(device)  # 范围 [-1, 1]
+test_batch = next(iter(test_loader))[0][:8].to(device)  # 范围 [-1, 1], shuffle=False 保证可复现
 noise_vis = torch.randn_like(test_batch)
 
 # ★ 反变换回 [0, 1] 区间用于可视化：x_vis = (x + 1) / 2
@@ -801,7 +810,7 @@ for col in range(8):
 
 # 行1-2: UNet t=5, t=100
 # 行3-4: DiT t=5, t=100
-for model_idx, (model, name) in enumerate([(unet, 'UNet'), (dit_zero, 'DiT')]):
+for model_idx, (model, name) in enumerate([(unet, 'UNet'), (dit, 'DiT')]):
     for t_idx, sub_row in [(5, 0), (100, 1)]:
         with torch.no_grad():
             t = torch.full((8,), t_idx, device=device, dtype=torch.long)

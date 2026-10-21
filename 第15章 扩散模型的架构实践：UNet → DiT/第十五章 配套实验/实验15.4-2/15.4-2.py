@@ -512,7 +512,10 @@ def sample_ddpm(model, n_samples):
         x0_pred = (x - torch.sqrt(1 - alpha_bar_t) * pred) / torch.sqrt(alpha_bar_t)
         x0_pred = x0_pred.clamp(-1, 1)
         if t_val > 0:
-            sigma_t = torch.sqrt(betas[t_val])
+            # ★ 严格后验方差 β̃_t = β_t·(1-ᾱ_{t-1})/(1-ᾱ_t)
+            #   下面的 "√(1-ᾱ_{t-1}-σ²)·ε̂" 重参数化写法只在 σ²=β̃_t 时
+            #   精确等于后验均值; 若用 σ²=β_t(DDPM的近似选项), 系数会偏离标准值
+            sigma_t = torch.sqrt(betas[t_val] * (1 - alpha_bar_prev) / (1 - alpha_bar_t))
             dir_xt = torch.sqrt(torch.clamp(1 - alpha_bar_prev - sigma_t**2, min=0)) * pred
             x = torch.sqrt(alpha_bar_prev) * x0_pred + dir_xt + sigma_t * torch.randn_like(x)
         else:

@@ -17,6 +17,10 @@ import sys
 import io
 import os
 import numpy as np
+# NumPy 2.0 起 np.trapz 更名为 np.trapezoid；这里兼容 1.x/2.x
+_trapz = getattr(np, "trapezoid", None)
+if _trapz is None:
+    _trapz = np.trapz
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
@@ -311,7 +315,7 @@ for zeta in zeta_values:
 # 做数值积分得到精确的 E|X−y|（避免蒙特卡洛噪声）
 true_diversity = post_std_true
 x_consistency_grid = np.linspace(-10, 10, 100000)
-true_consistency = np.trapezoid(
+true_consistency = _trapz(
     np.abs(x_consistency_grid - y_obs) * post_pdf_true(x_consistency_grid),
     x_consistency_grid,
 )

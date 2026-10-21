@@ -5,27 +5,27 @@
     "forward": "y = A x + ε, A=[[1,0]], σ_obs=0.25（只观测第一维）",
     "cinn": "两层交替仿射耦合层（RealNVP 风格），训练 6000 步 Adam lr=1e-3"
   },
-  "final_nll": -0.4410051107406616,
+  "final_nll": 1.4541839361190796,
   "test_statistics": [
     {
       "y": -2.5,
-      "mean_error_l2": 0.03040470399197253,
-      "cov_spectral_norm_error": 0.02581657595789607
+      "mean_error_l2": 0.0807288150534103,
+      "cov_spectral_norm_error": 0.09778797711845272
     },
     {
       "y": 0.0,
-      "mean_error_l2": 0.15353659849640477,
-      "cov_spectral_norm_error": 0.4951367818002975
+      "mean_error_l2": 0.013860244278423363,
+      "cov_spectral_norm_error": 0.46883657436755194
     },
     {
       "y": 2.5,
-      "mean_error_l2": 0.04438937934177376,
-      "cov_spectral_norm_error": 0.04453624303893926
+      "mean_error_l2": 0.03536818646160952,
+      "cov_spectral_norm_error": 0.1969936080379353
     }
   ],
   "output_files": [
-    "D:\\works\\deepinv\\.audit_tmp\\exp1422_verify\\步骤2_cINN训练收敛.png",
-    "D:\\works\\deepinv\\.audit_tmp\\exp1422_verify\\步骤3_cINN后验采样.png",
-    "D:\\works\\deepinv\\.audit_tmp\\exp1422_verify\\步骤4_后验统计对比.png"
+    "H:\\deepinv\\deepinv2\\.audit_tmp\\exp1422_verify\\步骤2_cINN训练收敛.png",
+    "H:\\deepinv\\deepinv2\\.audit_tmp\\exp1422_verify\\步骤3_cINN后验采样.png",
+    "H:\\deepinv\\deepinv2\\.audit_tmp\\exp1422_verify\\步骤4_后验统计对比.png"
   ]
 }

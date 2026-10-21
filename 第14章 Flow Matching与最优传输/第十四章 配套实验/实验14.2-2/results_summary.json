@@ -2,30 +2,76 @@
   "experiment": "实验14.2-2 cINN 条件归一化流：高维逆问题的后验采样",
   "setting": {
     "prior": "2D 双峰高斯混合 μ=(-2.5,-2.5),(2.5,2.5), σ=1.0",
-    "forward": "y = A x + ε, A=[[1,0]], σ_obs=0.25（只观测第一维）",
-    "cinn": "两层交替仿射耦合层（RealNVP 风格），训练 6000 步 Adam lr=1e-3"
+    "forward": "y = A x + ε, A=[[1,0]], σ_obs=1.0（只观测第一维；弱观测才能保留模式信息）",
+    "cinn": "2D 条件自回归流 MAF（z1=(x1-t1)/exp(s1), z2=(x2-t2(y,z1))/exp(s2)），6000 步 Adam lr=1e-3"
   },
-  "final_nll": 1.3965028524398804,
+  "final_nll": 2.5782790184020996,
   "test_statistics": [
     {
       "y": -2.5,
-      "mean_error_l2": 0.030839644677882163,
-      "cov_spectral_norm_error": 0.025776343768637782
+      "mean_error_l2": 0.026822783977265063,
+      "cov_spectral_norm_error": 0.22830559974362716,
+      "cov_spectral_norm_analytic": 1.0491512989653586
     },
     {
       "y": 0.0,
-      "mean_error_l2": 0.1753300562733044,
-      "cov_spectral_norm_error": 0.7509822532692954
+      "mean_error_l2": 0.029019626248887747,
+      "cov_spectral_norm_error": 0.7714514833836875,
+      "cov_spectral_norm_analytic": 8.717427669408222
     },
     {
       "y": 2.5,
-      "mean_error_l2": 0.04464219562700401,
-      "cov_spectral_norm_error": 0.04524224221084122
+      "mean_error_l2": 0.03039623713346744,
+      "cov_spectral_norm_error": 0.3590057213709967,
+      "cov_spectral_norm_analytic": 1.0491512989653586
     }
   ],
+  "mc_baseline_q95": [
+    {
+      "y": -2.5,
+      "mean_err_q95": 0.048402065191300365,
+      "cov_err_q95": 0.08619436970364074
+    },
+    {
+      "y": 0.0,
+      "mean_err_q95": 0.12824746515170865,
+      "cov_err_q95": 0.24784747277347724
+    },
+    {
+      "y": 2.5,
+      "mean_err_q95": 0.04503175012255538,
+      "cov_err_q95": 0.0972754853547181
+    }
+  ],
+  "posterior_shape_y0": {
+    "edge": "x2",
+    "bimodality_threshold": 0.5555555555555556,
+    "analytic": {
+      "var": 7.25,
+      "skew": 0.0,
+      "kurt": 1.5136741973840666,
+      "bc": 0.6606441476826395,
+      "gap_mass": 0.1055576964615268
+    },
+    "cinn_maf": {
+      "var": 6.978406166947634,
+      "skew": 0.0700804604305432,
+      "kurt": 1.8672736320873367,
+      "bc": 0.5381703322243213,
+      "gap_mass": 0.20345
+    },
+    "cinn_x1_transmit": {
+      "var": 7.067401040274285,
+      "skew": -0.009945437275701368,
+      "kurt": 2.9967393847282935,
+      "bc": 0.3337290245588978,
+      "gap_mass": 0.35685
+    }
+  },
   "output_files": [
-    "d:\\works\\deepinv\\第14章 Flow Matching与最优传输\\第十四章 配套实验\\实验14.2-2\\步骤2_cINN训练收敛.png",
-    "d:\\works\\deepinv\\第14章 Flow Matching与最优传输\\第十四章 配套实验\\实验14.2-2\\步骤3_cINN后验采样.png",
-    "d:\\works\\deepinv\\第14章 Flow Matching与最优传输\\第十四章 配套实验\\实验14.2-2\\步骤4_后验统计对比.png"
+    "步骤2_cINN训练收敛.png",
+    "步骤3_cINN后验采样.png",
+    "步骤4_后验统计对比.png",
+    "步骤5_边缘双峰诊断.png"
   ]
 }

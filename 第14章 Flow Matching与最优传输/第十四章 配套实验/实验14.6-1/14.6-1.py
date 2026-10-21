@@ -108,7 +108,11 @@ TEMPLATE_SET = {tuple(row) for row in TEMPLATE_IDS}
 N_TEMPLATES = len(TEMPLATES)
 
 def decode(ids):
-    """token id 序列 -> 可读字符串（[MASK] 显示为 ____）"""
+    """token id 序列 -> 可读字符串。
+
+    注意: [MASK] 不在 id2word 里（id2word 只含 14 个实词，MASK_ID=14 会越过表尾），
+    故必须先按 MASK_ID 单独映射为字面量 '[MASK]'，再查实词表——顺序不能反。
+    """
     toks = [MASK_TOKEN if i == MASK_ID else id2word[int(i)] for i in ids]
     return ' '.join(toks)
 
@@ -311,6 +315,9 @@ for j in range(SEQ_LEN):
 # conf[n, j] = 第 n 步(更新前, 位置仍为 MASK 时)网络给"该位置最终 token"的后验概率
 # 揭示发生在第 rs 步更新: traj[rs]=MASK, traj[rs+1]=实词, 落子用的后验正是 conf[rs]
 conf = probs_rec.gather(2, final_ids[None, :, None].expand(probs_rec.shape[0], -1, -1)).squeeze(-1)  # (32, d)
+# 越界防护: softmax 的 float32 归一化误差可能让单路 gather 出 1+ε，而正文/图把 conf
+# 当作概率引用（如"0.98 以上"），故显式裁剪到 [0, 1]，避免出现 >1 的"置信度"。
+conf = conf.clamp(0.0, 1.0)
 print("  各位置揭示详情: 位置 | token | 揭示步 t | 揭示时置信度 p_θ")
 for j in range(SEQ_LEN):
     rs = int(reveal_step[j])
@@ -382,11 +389,21 @@ final_unif, rw_unif, exp_unif, _ = sample_euler(model_unif, 'uniform', n_steps=N
                                                 n_samples=N_SAMPLES_EVAL, lock_revealed=False)
 hit_mlm = template_hit_rate(final_mlm)
 hit_unif = template_hit_rate(final_unif)
-rewrite_mlm = rw_mlm / max(exp_mlm, 1)
-rewrite_unif = rw_unif / max(exp_unif, 1)
-print(f"  MDLM   版: 模板命中率 {hit_mlm:.3f}, 已揭示token改写率 {rewrite_mlm:.4f}")
-print(f"  均匀噪声版: 模板命中率 {hit_unif:.3f}, 已揭示token改写率 {rewrite_unif:.4f}")
-print("  (均匀版每位置都可被反复改写; MDLM 版已揭示位置的后验集中在自身, 改写率应显著更低)")
+# 改写率口径统一: 分子都是"实词 -> 另一个实词"的改写次数（MDLM 的 MASK->实词 属揭示, 不计）；
+# 分母统一为"步数×句数×位置数"。旧写法对 MDLM 只除以"已揭示步·位"、对 uniform 除以
+# "全部步·位"（uniform 无 MASK, 任何位置都算），两版分母语义不同, 倍数会被口径混合。
+# 两个口径并列（分子相同: "实词 -> 另一个实词"的改写次数, MDLM 的 MASK->实词 属揭示不计）:
+#   主口径 = 分子 / "更新前处于实词状态的步·位"——条件语义两版一致（给定当前是实词, 被改写的概率）;
+#   附口径 = 分子 / "全部步·位"——MDLM 的 MASK 位置不可能改写, 会把率稀释近一半。
+n_slots = N_STEPS_MAIN * N_SAMPLES_EVAL * SEQ_LEN
+rewrite_mlm_all = rw_mlm / n_slots
+rewrite_unif_all = rw_unif / n_slots
+rewrite_mlm = rw_mlm / max(exp_mlm, 1)      # 主口径: 条件于更新前为实词
+rewrite_unif = rw_unif / max(exp_unif, 1)   # 主口径（uniform 无 MASK, 分母即全部步·位）
+print(f"  MDLM   版: 模板命中率 {hit_mlm:.3f}, token改写率 {rewrite_mlm:.4f}（每步每位置计 {rewrite_mlm_all:.4f}）")
+print(f"  均匀噪声版: 模板命中率 {hit_unif:.3f}, token改写率 {rewrite_unif:.4f}（每步每位置计 {rewrite_unif_all:.4f}）")
+print(f"  (改写 = 更新前为实词、这一步被换成另一个实词; 主口径分母 = 更新前实词状态的步·位, "
+      f"MDLM 共 {exp_mlm}, 均匀版共 {exp_unif}（= {N_STEPS_MAIN}步×{N_SAMPLES_EVAL}句×{SEQ_LEN}位置）)")
 
 # 步数扫描: 欧拉步数 N 对模板命中率的影响
 STEPS_SWEEP = [1, 2, 4, 8, 16, 32, 64]
@@ -455,7 +472,7 @@ ax = axes[1][1]
 bars = ax.bar(['MDLM版\n(全[MASK])', '均匀噪声版'],
               [rewrite_mlm, rewrite_unif], color=['#2a7de1', '#e1812c'], alpha=0.8, width=0.5)
 ax.grid(alpha=0.3, axis='y')
-ax.set_ylabel('已揭示 token 改写率（$N=32$）', fontsize=11)
+ax.set_ylabel('token 改写率（更新前为实词的位置）', fontsize=11)
 ax.set_title('(d) 轨迹形态: 揭示式 vs 改写式', fontsize=12)
 for b, v in zip(bars, [rewrite_mlm, rewrite_unif]):
     ax.text(b.get_x() + b.get_width()/2, v + max(rewrite_mlm, rewrite_unif)*0.02 + 0.001,
@@ -607,6 +624,10 @@ results_summary = {
         'template_hit_unif': round(float(hit_unif), 4),
         'rewrite_rate_mlm': round(float(rewrite_mlm), 6),
         'rewrite_rate_unif': round(float(rewrite_unif), 6),
+        'rewrite_rate_mlm_per_slot': round(float(rewrite_mlm_all), 6),
+        'rewrite_rate_unif_per_slot': round(float(rewrite_unif_all), 6),
+        'rewrite_rate_note': '主口径 = 改写次数 / 更新前为实词的步·位（两版同一条件语义）; per_slot = 改写次数 / (步数×句数×位置数)',
+
     },
     'template_coverage': {
         'templates': TEMPLATES,
@@ -644,7 +665,8 @@ print(f"""1. 免仿真训练（14.6.3）: DFM 损失 = 逐位置交叉熵, 单�
 
 3. 均匀噪声 vs [MASK]（14.6.4 对比表的定量版, N={N_STEPS_MAIN}）:
    - 模板命中率: MDLM {hit_mlm:.3f} vs 均匀 {hit_unif:.3f}
-   - 已揭示 token 改写率: MDLM {rewrite_mlm:.4f} vs 均匀 {rewrite_unif:.4f}
+   - token 改写率(更新前为实词的位置): MDLM {rewrite_mlm:.4f} vs 均匀 {rewrite_unif:.4f}
+     (若按每步每位置计: MDLM {rewrite_mlm_all:.4f} vs 均匀 {rewrite_unif_all:.4f})
    - MDLM = "从全[MASK]揭示", 均匀版 = "渐进改写"——轨迹形态肉眼可见不同
 
 4. softmax 参数化自动合法（14.6.3 红利）:

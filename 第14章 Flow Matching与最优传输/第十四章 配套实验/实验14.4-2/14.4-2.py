@@ -66,6 +66,15 @@ FINAL_CHECKPOINT_PATH_2RF = os.path.join(SAVE_DIR, 'model_2rf_final.pth')
 FINAL_CHECKPOINT_PATH_3RF = os.path.join(SAVE_DIR, 'model_3rf_final.pth')
 FINAL_CHECKPOINT_PATH_OT = os.path.join(SAVE_DIR, 'model_ot_final.pth')
 
+# ============================================================
+# 断点续训开关（默认关闭）
+# 教训：旧版本无条件复用目录下已有的 .pth，于是 json 可能是
+# “新代码 + 旧权重”的混合物，交付结果无法由当前脚本复现。
+# 现在默认每次从零训练；确实需要续训时设环境变量 EXP_RESUME=1。
+# ============================================================
+RESUME = os.environ.get('EXP_RESUME', '0') == '1'
+print(f"[配置] 断点续训 = {'开启' if RESUME else '关闭（从零训练）'}")
+
 
 # ============================================================
 # 2D点云分布定义
@@ -142,7 +151,7 @@ def train_cfm(n_epochs=2000, n_samples=256, coupling='independent', lr=1e-3,
     start_epoch = 0
 
     # 检查是否有最终权重
-    if final_checkpoint_path and os.path.exists(final_checkpoint_path):
+    if RESUME and final_checkpoint_path and os.path.exists(final_checkpoint_path):
         print(f"检测到最终权重: {final_checkpoint_path}")
         print("直接加载，跳过训练过程")
         checkpoint = torch.load(final_checkpoint_path, map_location='cpu', weights_only=False)
@@ -152,7 +161,7 @@ def train_cfm(n_epochs=2000, n_samples=256, coupling='independent', lr=1e-3,
         return model, losses
 
     # 检查是否有中间权重
-    if checkpoint_path and os.path.exists(checkpoint_path):
+    if RESUME and checkpoint_path and os.path.exists(checkpoint_path):
         print(f"检测到中间权重: {checkpoint_path}")
         print("继续训练...")
         checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
@@ -200,8 +209,8 @@ def train_cfm(n_epochs=2000, n_samples=256, coupling='independent', lr=1e-3,
             if (epoch + 1) % 500 == 0:
                 print(f"  [{coupling}] Epoch {epoch+1}/{n_epochs} Loss={loss.item():.6f}")
 
-        # 每200轮保存中间checkpoint
-        if checkpoint_path and (epoch + 1) % 200 == 0:
+        # 每200轮保存中间checkpoint（仅续训模式）
+        if RESUME and checkpoint_path and (epoch + 1) % 200 == 0:
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -302,18 +311,21 @@ def reflow_step(model, reflow_round, n_samples=256, n_epochs=1500, lr=1e-3,
     """执行一步Reflow：用当前模型的ODE端点重新配对（带checkpoint Resume能力）"""
     
     # 检查是否有最终权重
-    if final_checkpoint_path and os.path.exists(final_checkpoint_path):
+    if RESUME and final_checkpoint_path and os.path.exists(final_checkpoint_path):
         print(f"检测到最终权重: {final_checkpoint_path}")
         print("直接加载，跳过Reflow训练过程")
         checkpoint = torch.load(final_checkpoint_path, map_location='cpu', weights_only=False)
         new_model = VectorFieldNet()
         new_model.load_state_dict(checkpoint['model_state_dict'])
-        return new_model
+        z_saved = checkpoint.get('reflow_z', None)
+        # 训练用的端点必须由“上一轮模型”生成，不能用本轮新模型（否则端点对退化）
+        ep_saved = ode_endpoint(model, z_saved) if z_saved is not None else None
+        return new_model, z_saved, ep_saved
 
     # 检查是否有中间权重
     start_epoch = 0
     z = None  # 端点对的噪声起点
-    if checkpoint_path and os.path.exists(checkpoint_path):
+    if RESUME and checkpoint_path and os.path.exists(checkpoint_path):
         print(f"检测到中间权重: {checkpoint_path}")
         print("继续Reflow训练...")
         checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
@@ -369,8 +381,8 @@ def reflow_step(model, reflow_round, n_samples=256, n_epochs=1500, lr=1e-3,
         if (epoch + 1) % 200 == 0:
             print(f"  [Reflow-{reflow_round}] Epoch {epoch+1}/{n_epochs} Loss={loss.item():.6f}")
 
-        # 每200轮保存中间checkpoint
-        if checkpoint_path and (epoch + 1) % 200 == 0:
+        # 每200轮保存中间checkpoint（仅续训模式）
+        if RESUME and checkpoint_path and (epoch + 1) % 200 == 0:
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': new_model.state_dict(),
@@ -388,17 +400,17 @@ def reflow_step(model, reflow_round, n_samples=256, n_epochs=1500, lr=1e-3,
         }, final_checkpoint_path)
         print(f"最终权重已保存: {final_checkpoint_path}")
 
-    return new_model
+    return new_model, z, x_endpoint
 
 # 2-RF: Reflow一步
 print("\n训练 2-Rectified Flow (1次Reflow)...")
-model_2rf = reflow_step(model_1rf, reflow_round=1, n_samples=512, n_epochs=2000,
+model_2rf, z_rf1, x_rf1 = reflow_step(model_1rf, reflow_round=1, n_samples=512, n_epochs=2000,
                         checkpoint_path=CHECKPOINT_PATH_2RF,
                         final_checkpoint_path=FINAL_CHECKPOINT_PATH_2RF)
 
 # 3-RF: Reflow两步
 print("\n训练 3-Rectified Flow (2次Reflow)...")
-model_3rf = reflow_step(model_2rf, reflow_round=2, n_samples=512, n_epochs=2000,
+model_3rf, z_rf2, x_rf2 = reflow_step(model_2rf, reflow_round=2, n_samples=512, n_epochs=2000,
                         checkpoint_path=CHECKPOINT_PATH_3RF,
                         final_checkpoint_path=FINAL_CHECKPOINT_PATH_3RF)
 
@@ -408,10 +420,50 @@ model_3rf = reflow_step(model_2rf, reflow_round=2, n_samples=512, n_epochs=2000,
 # ============================================================
 from scipy.stats import wasserstein_distance_nd
 
+# ============================================================
+# 端点统计：Reflow 的训练数据来自上一轮模型自身输出，
+# 把“为何可能漂移”变成可测指标（总方差收缩 + 模式外泄漏）
+# ============================================================
+TARGET_CENTERS = np.array([[2.0, 2.0], [-2.0, -2.0]])   # 目标两模式中心
+
+def endpoint_stats(x, tag):
+    x = x.numpy() if torch.is_tensor(x) else np.asarray(x)
+    d = np.linalg.norm(x[:, None, :] - TARGET_CENTERS[None, :, :], axis=-1).min(1)
+    return {
+        'tag': tag, 'n': int(len(x)),
+        'total_var': float(np.var(x, axis=0).sum()),
+        'leak_3sigma': float((d > 0.9).mean()),   # 0.9 = 3σ（σ=0.3）
+        'leak_4sigma': float((d > 1.2).mean()),   # 1.2 = 4σ
+    }
+
+# 3-RF 自身端点：与 x_rf2 用同一批 z，便于看“模型是否把端点继续往内推”
+x_rf3 = ode_endpoint(model_3rf, z_rf2)
+
+ep_stats = [endpoint_stats(x_rf1, '1-RF端点(训练2-RF用)'),
+            endpoint_stats(x_rf2, '2-RF端点(训练3-RF用)'),
+            endpoint_stats(x_rf3, '3-RF端点(同一批z)')]
+print("\n端点统计（真实目标总方差 = 2×(2²+0.3²) = 8.18）:")
+for s in ep_stats:
+    print(f"  {s['tag']:<24s} 总方差={s['total_var']:.3f}  "
+          f"泄漏>3σ={100*s['leak_3sigma']:.2f}%  >4σ={100*s['leak_4sigma']:.2f}%")
+
+# 2-RF 对训练端点映射的复现精度（同一批 z）
+wd_repro_2rf = float(wasserstein_distance_nd(ode_endpoint(model_2rf, z_rf1).numpy(), x_rf1.numpy()))
+print(f"  2-RF 同批512个z重跑ODE vs 训练端点的W1 = {wd_repro_2rf:.4f}")
+
 n_test = 200
 np.random.seed(42)
 z_test_rf = torch.FloatTensor(sample_source(n_test))
 target_test = sample_target(n_test)
+
+# 零基线：用同一个 target_test 作参照，10 个种子下同分布独立样本的经验 W1
+wd_null_list = []
+for sd in range(10):
+    np.random.seed(1234 + sd)
+    wd_null_list.append(wasserstein_distance_nd(sample_target(n_test), target_test))
+wd_null = float(np.mean(wd_null_list))
+wd_null_std = float(np.std(wd_null_list))
+print(f"\n  ⓘ W1零基线（真实目标两个独立n={n_test}样本集之间的距离）= {wd_null:.4f} ± {wd_null_std:.4f}")
 
 traj_1rf = flow_sample(model_1rf, z_test_rf, n_steps=100)
 traj_2rf = flow_sample(model_2rf, z_test_rf, n_steps=100)
@@ -458,9 +510,10 @@ colors = ['purple', 'orange', 'green', 'steelblue']
 bars = ax.bar(labels, vals, color=colors, alpha=0.7)
 ax.set_ylabel('曲率 κ (0=直线)', fontsize=12)
 ax.set_title('(d) 曲率随Reflow降低', fontsize=12)
-ax.set_ylim(0, max(vals) * 1.3 + 0.01)
+ax.set_ylim(0, max(vals) * 1.35 + 0.005)
 for bar, val in zip(bars, vals):
-    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02, f'{val:.3f}',
+    # 偏移按数据量级取，避免固定 0.02 超过 ylim 把标签顶出坐标轴
+    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(vals) * 0.04, f'{val:.3f}',
             ha='center', fontsize=11, fontweight='bold')
 ax.grid(alpha=0.3, axis='y')
 
@@ -469,8 +522,10 @@ ax = axes[1, 1]
 labels = ['1-RF', '2-RF', '3-RF', 'OT-CFM']
 vals_wd = [wd_1rf, wd_2rf, wd_3rf, wd_ot]
 bars = ax.bar(labels, vals_wd, color=colors, alpha=0.7)
+ax.axhline(wd_null, color='gray', ls='--', lw=1.2, label=f'零基线 {wd_null:.3f}')
 ax.set_ylabel('Wasserstein-1 距离', fontsize=12)
-ax.set_title('(e) 100步采样W1距离（随Reflow轮数上升）', fontsize=12)
+ax.set_title('(e) 100步采样W1距离（灰虚线=有限样本地板）', fontsize=12)
+ax.legend(fontsize=9)
 for bar, val in zip(bars, vals_wd):
     ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01, f'{val:.3f}',
             ha='center', fontsize=11, fontweight='bold')
@@ -526,17 +581,11 @@ else:
 if S_1rf > S_3rf:
     print("\n  → 曲率层面：Reflow迭代使轨迹逐步变直" + ("，且3-RF曲率低于OT-CFM，趋近OT映射" if S_3rf <= S_ot else ""))
 
-# W1随轮数上升的机理提示：零基线（同分布两组独立样本间的经验W1，n=200）
-# 用于区分“真实分布漂移”与“有限样本噪声”；置于所有结果采样之后，不影响任何已算结果
-wd_null_list = []
-for sd in range(10):
-    np.random.seed(1234 + sd)
-    wd_null_list.append(wasserstein_distance_nd(sample_target(n_test), target_test))
-wd_null = float(np.mean(wd_null_list))
-wd_null_std = float(np.std(wd_null_list))
-print(f"\n  ⓘ W1零基线（真实目标两个独立n=200样本集之间的距离）= {wd_null:.4f} ± {wd_null_std:.4f}")
-print("    1-RF的W1与零基线同量级，而2-RF/3-RF明显超出→W1上升是真实的分布漂移，")
-print("    源于Reflow端点对取自上一轮模型自身输出、训练误差逐轮累积（见讲义分析）")
+# W1 与零基线的逐项对照（判断“超出地板”还是“同量级”）
+print(f"\n  ⓘ W1零基线 = {wd_null:.4f} ± {wd_null_std:.4f}（n={n_test}，10个种子）")
+for nm, v in [('1-RF', wd_1rf), ('2-RF', wd_2rf), ('3-RF', wd_3rf), ('OT-CFM', wd_ot)]:
+    verdict = "与地板同量级" if v < wd_null + 2 * wd_null_std else "明显高于地板"
+    print(f"     {nm:<7s} W1={v:.4f}  （较地板 {100*(v/wd_null-1):+.1f}%，{verdict}）")
 
 
 # ============================================================
@@ -597,6 +646,8 @@ results_summary = {
     'wd_ot': round(float(wd_ot), 4),
     'wd_null_baseline': round(wd_null, 4),  # 同分布独立样本间的经验W1（有限样本噪声水平）
     'wd_null_std': round(wd_null_std, 4),  # 零基线在10个种子下的标准差（W1评测的噪声尺度参照）
+    'endpoint_stats': ep_stats,   # 各轮 Reflow 训练端点的总方差与模式外泄漏
+    'wd_repro_2rf_on_train_endpoints': round(wd_repro_2rf, 4),  # 2-RF 对训练端点映射的复现精度
     'ode_steps': [1, 5, 10, 20, 50, 100],
     'wd_fewstep': {k: [round(float(v), 4) for v in lst] for k, lst in few_step_wd.items()},
 }

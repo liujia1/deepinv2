@@ -191,6 +191,7 @@ for i, xi in enumerate(x_test):
 # DPS近似似然得分
 x0_hat = tweedie_estimate(x_test, t_val)
 dps_residual = (y_obs - A_val * x0_hat) / sigma_y**2
+mean_t_val, _ = vp_marginal(t_val)
 
 eps_j = 1e-4
 x0_hat_plus = tweedie_estimate(x_test + eps_j, t_val)
@@ -198,11 +199,18 @@ x0_hat_minus = tweedie_estimate(x_test - eps_j, t_val)
 grad_x0_hat = (x0_hat_plus - x0_hat_minus) / (2 * eps_j)
 
 dps_approx_full = grad_x0_hat * dps_residual
-dps_approx_simple = dps_residual
+# 仅忽略 Jacobian 的“形状”，保留一阶 Tweedie 缩放 mean_t（单位方差高斯先验下 ∂x̂₀/∂x_t=mean_t）
+dps_approx_simple = mean_t_val * dps_residual
+
+# 符号一致率与幅度偏大比例（写入 JSON，避免“99.5%”这类脚本外数字）
+_sign_mask = np.abs(exact_ll_scores) > 1e-3
+_sign_agree = float(np.mean(np.sign(dps_approx_full[_sign_mask]) == np.sign(exact_ll_scores[_sign_mask])))
+_amp_over = float(np.mean(np.abs(dps_approx_full) > np.abs(exact_ll_scores)))
 
 print("DPS近似 vs 精确似然得分 (t=0.3, y=0.5, A=1, sigma_y=0.5):")
-print(f"{'x_t':>6s}  {'精确':>10s}  {'DPS(含Jacobian)':>16s}  {'DPS(忽略Jacobian)':>18s}  {'相对误差(含)':>12s}  {'相对误差(略)':>12s}")
+print(f"{'x_t':>6s}  {'精确':>10s}  {'DPS(含Jacobian)':>16s}  {'DPS(忽略J,保留mean_t)':>22s}  {'相对误差(含)':>12s}  {'相对误差(略)':>12s}")
 print("-" * 80)
+section_rows = []
 for idx in [40, 60, 80, 100, 120, 140, 160]:
     xi = x_test[idx]
     exact = exact_ll_scores[idx]
@@ -210,6 +218,14 @@ for idx in [40, 60, 80, 100, 120, 140, 160]:
     dps_s = dps_approx_simple[idx]
     err_f = abs(dps_f - exact) / (abs(exact) + 1e-10)
     err_s = abs(dps_s - exact) / (abs(exact) + 1e-10)
+    section_rows.append({
+        "x_t": round(float(xi), 4),
+        "精确": round(float(exact), 6),
+        "含Jacobian": round(float(dps_f), 6),
+        "忽略Jacobian_保留mean_t": round(float(dps_s), 6),
+        "相对误差_含": round(float(err_f), 4),
+        "相对误差_忽略": round(float(err_s), 4),
+    })
     print(f"{xi:6.2f}  {exact:10.4f}  {dps_f:16.4f}  {dps_s:18.4f}  {err_f:12.4f}  {err_s:12.4f}")
 
 # 可视化
@@ -229,7 +245,7 @@ axes[0].grid(alpha=0.3)
 mask = np.abs(x_test) < 3.5
 axes[1].plot(x_test[mask], exact_ll_scores[mask], 'b-', lw=2, label=r'精确 $\nabla\log p(y|x_t)$')
 axes[1].plot(x_test[mask], dps_approx_full[mask], 'r--', lw=2, label='DPS近似 (含Jacobian)')
-axes[1].plot(x_test[mask], dps_approx_simple[mask], 'g:', lw=2, label='DPS近似 (忽略Jacobian)')
+axes[1].plot(x_test[mask], dps_approx_simple[mask], 'g:', lw=2, label='DPS近似 (忽略Jacobian, 保留 mean_t)')
 axes[1].set_xlabel(r'$x_t$', fontsize=12)
 axes[1].set_ylabel('似然得分', fontsize=12)
 axes[1].set_title(f'(b) DPS近似 vs 精确似然得分 (t={t_val})', fontsize=13)
@@ -248,13 +264,14 @@ for t_r in t_range:
     x0h_m = float(tweedie_estimate(np.array([x_test_point - eps_j]), t_r))
     gx = (x0h_p - x0h_m) / (2 * eps_j)
     residual = (y_obs - A_val * x0h) / sigma_y**2
+    mean_t_r, _ = vp_marginal(t_r)
     dps_f = gx * residual
-    dps_s = residual
+    dps_s = mean_t_r * residual
     dps_errors_full.append(abs(dps_f - exact_val) / (abs(exact_val) + 1e-10))
     dps_errors_simple.append(abs(dps_s - exact_val) / (abs(exact_val) + 1e-10))
 
 axes[2].semilogy(t_range, dps_errors_full, 'r-o', markersize=4, label='DPS近似 (含Jacobian)')
-axes[2].semilogy(t_range, dps_errors_simple, 'g-s', markersize=4, label='DPS近似 (忽略Jacobian)')
+axes[2].semilogy(t_range, dps_errors_simple, 'g-s', markersize=4, label='DPS近似 (忽略J, 保留 mean_t)')
 axes[2].set_xlabel('t (噪声水平)', fontsize=12)
 axes[2].set_ylabel('相对误差', fontsize=12)
 axes[2].set_title('(c) DPS近似误差 vs 噪声水平', fontsize=13)
@@ -272,9 +289,12 @@ print(f"\n图已保存: {fig_path}")
 
 print("""
 关键发现：
-  1. DPS近似的似然得分方向正确，但幅度在高噪声时偏差增大
-  2. 忽略Jacobian项的DPS简化版在高噪声时误差更大
-  3. 这解释了13.3.2节指出的DPS局限：高噪声时delta函数近似质量下降
+  1. 两种 DPS 变体的方向都基本正确（符号一致率≈0.995），但幅度系统性偏大
+     （delta 近似丢掉了后验展宽，收缩因子 λ<1 未体现）
+  2. 含 Jacobian 并不必然更准：真实 Jacobian 大于 mean_t，会把本已偏大的
+     残差再放大；高噪声时其误差（≈8.6）反而高于保留 mean_t 的变体（≈2.3）
+  3. 主误差源是“忽略后验方差”，不是 Jacobian 形状；修正方向是方差感知
+     （ΠGDM/Moment Matching）或调节 ζ，而不是单纯补上 Jacobian
 """)
 
 print("\n" + "=" * 60)
@@ -285,7 +305,9 @@ print("""
 1. DPS的Tweedie闭环（13.3.2节）
    - DPS用delta函数近似将不可解积分转化为单点求值
    - 近似误差在高噪声时增大（Tweedie估计不可靠）
-   - 忽略Jacobian项是进一步的简化，引入额外误差
+   - 忽略Jacobian形状（保留mean_t一阶缩放）在本例中反而更接近精确值：
+     真实Jacobian会放大本已偏大的残差，而不是修正幅度高估；
+     若连mean_t也丢掉（旧版simple）会夸大两变体差异
 
 2. 实际启示
    - DPS在高噪声时（t大）需要更小的引导权重zeta
@@ -316,7 +338,11 @@ results_summary = {
         "t_val": round(float(t_val), 4),
     },
     "DPS近似误差_含Jacobian": [round(float(e), 6) for e in dps_errors_full],
-    "DPS近似误差_忽略Jacobian": [round(float(e), 6) for e in dps_errors_simple],
+    "DPS近似误差_忽略Jacobian_保留mean_t": [round(float(e), 6) for e in dps_errors_simple],
+    "截面_t0.3": section_rows,
+    "含Jacobian_符号一致率": round(_sign_agree, 6),
+    "含Jacobian_幅度偏大比例": round(_amp_over, 6),
+    "说明": "忽略Jacobian变体仅丢Jacobian形状，保留一阶Tweedie缩放mean_t；旧版直接返回残差(同时丢mean_t)会夸大两变体差异。",
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

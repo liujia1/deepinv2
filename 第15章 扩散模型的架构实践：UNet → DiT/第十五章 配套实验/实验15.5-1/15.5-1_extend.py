@@ -592,7 +592,8 @@ def sample_shared_noise(model):
         x0_pred = (x - torch.sqrt(1 - alpha_bar_t) * pred) / torch.sqrt(alpha_bar_t)
         x0_pred = x0_pred.clamp(-1, 1)
         if t_val > 0:
-            sigma_t = torch.sqrt(betas[t_val])
+            # ★ 与 15.5-1.py 主脚本保持同一口径: 严格后验方差 β̃_t
+            sigma_t = torch.sqrt(betas[t_val] * (1 - alpha_bar_prev) / (1 - alpha_bar_t))
             dir_xt = torch.sqrt(torch.clamp(1 - alpha_bar_prev - sigma_t**2, min=0)) * pred
             x = torch.sqrt(alpha_bar_prev) * x0_pred + dir_xt + sigma_t * _noise_shared[t_val]
         else:

@@ -316,13 +316,8 @@ DDRM优势：
   - 先验通道退化时（t大）仍靠观测通道保持精度
 """)
 
-# 生成真实信号x0和观测y
-x0_star = sample_from_prior(1)[0]  # 从先验采样一个真实信号
-noise_obs = np.random.randn(2) * 0.1  # 观测噪声
-y_obs = A @ np.array([x0_star, x0_star * 0.5]) + noise_obs  # 观测（简化：x是2维）
-
-print(f"真实信号 x* = {x0_star:.3f}")
-print(f"观测信号 y = {y_obs}")
+# 注：不再单独抽一条“演示用”观测量——主对比循环中每次都重新抽真值并据此生成观测，
+# 旧版的 x0_star/noise_obs/y_obs 只用于打印、与主循环无关，已删除。
 
 # DDRM频谱域条件化
 def ddrm_spectral_conditioning(y_obs, t_idx, A, U, S, Vt, x_t, sigma_obs=0.1):
@@ -397,7 +392,7 @@ for t_idx in test_times:
     w_obs_list = []
 
     for _ in range(n_trials):
-        # 生成真值x0（基于单个真实信号x0_star从先验抽样加噪声）
+        # 生成真值x0（每次试验独立从先验抽样）
         x0_true = sample_from_prior(1)[0]
         x2d = np.array([x0_true, x0_true * 0.5])
         # 观测必须基于同一次采样的x2d生成，保证"观测-真值"严格配对
@@ -460,7 +455,7 @@ print(f"  DPS平均误差: {np.mean(dps_errors):.4f}")
 print(f"  DDRM相对改进: {(np.mean(dps_errors) - np.mean(ddrm_errors)) / np.mean(dps_errors) * 100:.2f}%")
 print(f"  t=0时: DDRM误差={ddrm_errors[0]:.4f}, DPS误差={dps_errors[0]:.4f} "
       f"({'DPS更优' if dps_errors[0] < ddrm_errors[0] else 'DDRM更优/相当'})")
-print(f"  t=T-1时: DDRM误差={ddrm_errors[-1]:.4f}, DPS误差={dps_errors[-1]:.4f} "
+print(f"  t=T-1时（ᾱ≈{alpha_bars[-1]:.3f}，中等噪声起点）: DDRM误差={ddrm_errors[-1]:.4f}, DPS误差={dps_errors[-1]:.4f} "
       f"({'DDRM更优' if ddrm_errors[-1] < dps_errors[-1] else 'DPS更优'})")
 
 # ============================================================

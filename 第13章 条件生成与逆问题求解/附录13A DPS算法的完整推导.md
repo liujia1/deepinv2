@@ -220,9 +220,9 @@ $$g_t = \zeta \cdot \frac{A^\top(y - A\hat{x}_{0|t})}{\sigma_y^2}$$
 
 **Step 3**：执行条件逆向 SDE 一步（以 DDPM 离散化为例）
 
-$$x_{t-1} = \frac{1}{\sqrt{1-\beta_t}}\left(x_t - \frac{\beta_t}{\sqrt{1-\bar\alpha_t}}\epsilon_t\right) - \beta_t\,g_t + \sigma_t\,\epsilon, \quad \epsilon \sim \mathcal{N}(0, I)$$
+$$x_{t-1} = \frac{1}{\sqrt{1-\beta_t}}\left(x_t - \frac{\beta_t}{\sqrt{1-\bar\alpha_t}}\epsilon_t\right) + \beta_t\,g_t + \sigma_t\,\epsilon, \quad \epsilon \sim \mathcal{N}(0, I)$$
 
-`σ_t` 是 DDPM 随机性参数。
+`σ_t` 是 DDPM 随机性参数。注意 `g_t` 前的符号是 `+`：逆向 SDE 中条件得分整体为 `s_θ + g_t`，统一进入 `+β_t(·)` 项；无条件的 `−β_t ε_t/√(1−ᾱ_t)` 已经体现在括号内（因为 `s_θ = −ε_t/√(1−ᾱ_t)`）。VE 版本（式 6.3）同理为 `+σ_t² g_t`，两者符号一致。
 
 **关键观察**：DPS 额外计算量仅一次前向传播 `A(x̂_{0|t})` 和一次反传 `A^⊤(y - A(x̂_{0|t}))`——对线性算子 `A` 通常轻量（如 CT 重建 `A` 是 Radon 变换，`A^⊤` 是反 Radon 变换）。这使 DPS 计算效率远高于需完整 Jacobian 的方法。
 

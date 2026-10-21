@@ -15,8 +15,8 @@
   },
   "model_params": 75535,
   "schedule": "kappa_t = t (线性), hazard = 1/(1-t)",
-  "final_loss_mlm": 0.202177,
-  "final_loss_unif": 0.56018,
+  "final_loss_mlm": 0.202131,
+  "final_loss_unif": 0.560723,
   "euler_validity": {
     "n_steps": 32,
     "max_rate": 1.0,
@@ -43,7 +43,7 @@
       "pos": 2,
       "token": "dog",
       "t_reveal": 0.2188,
-      "conf_at_reveal": 0.9809
+      "conf_at_reveal": 0.9811
     },
     {
       "pos": 3,
@@ -55,7 +55,7 @@
       "pos": 4,
       "token": "on",
       "t_reveal": 0.9062,
-      "conf_at_reveal": 0.9959
+      "conf_at_reveal": 0.996
     },
     {
       "pos": 5,
@@ -67,14 +67,17 @@
       "pos": 6,
       "token": "rug",
       "t_reveal": 0.0,
-      "conf_at_reveal": 0.1615
+      "conf_at_reveal": 0.1611
     }
   ],
   "comparison_N32": {
     "template_hit_mlm": 0.9375,
     "template_hit_unif": 0.9766,
-    "rewrite_rate_mlm": 0.000888,
-    "rewrite_rate_unif": 0.030192
+    "rewrite_rate_mlm": 0.000972,
+    "rewrite_rate_unif": 0.030192,
+    "rewrite_rate_mlm_per_slot": 0.000468,
+    "rewrite_rate_unif_per_slot": 0.030192,
+    "rewrite_rate_note": "主口径 = 改写次数 / 更新前为实词的步·位（两版同一条件语义）; per_slot = 改写次数 / (步数×句数×位置数)"
   },
   "template_coverage": {
     "templates": [
@@ -86,20 +89,20 @@
       "a big dog ate it up"
     ],
     "count_mlm": [
-      39,
+      40,
       47,
       29,
       31,
       44,
-      50
+      49
     ],
     "count_unif": [
       27,
       35,
-      47,
-      65,
-      37,
-      39
+      46,
+      66,
+      36,
+      40
     ]
   },
   "steps_sweep": {
@@ -115,9 +118,9 @@
     "hit_mlm": [
       0.0039,
       0.2539,
-      0.5938,
+      0.5977,
       0.8047,
-      0.8711,
+      0.875,
       0.9414,
       0.9531
     ],
@@ -126,18 +129,18 @@
       0.4062,
       0.7656,
       0.8867,
-      0.9453,
+      0.9414,
       0.9727,
       0.9844
     ]
   },
   "rate_constraint_check": {
     "viol1_nondiag_softmax": 0.0,
-    "viol1_nondiag_raw": 2161.799805,
-    "frac_neg_rate_raw": 0.761486,
-    "viol2_diag_softmax": 7.534e-05,
-    "viol2_diag_raw": 7936.475098,
-    "euler_min_ptilde_softmax": 7.638e-07,
-    "euler_rowsum_dev_raw": 7936.475098
+    "viol1_nondiag_raw": 2165.529297,
+    "frac_neg_rate_raw": 0.76137,
+    "viol2_diag_softmax": 0.0001438,
+    "viol2_diag_raw": 7904.193359,
+    "euler_min_ptilde_softmax": 7.555e-07,
+    "euler_rowsum_dev_raw": 7904.193359
   }
 }

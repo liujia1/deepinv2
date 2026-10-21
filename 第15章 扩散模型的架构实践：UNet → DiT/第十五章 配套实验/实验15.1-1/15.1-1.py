@@ -421,34 +421,47 @@ attn_full = attn_full.to(device)
 attn_linear = attn_linear.to(device)
 _use_cuda = torch.cuda.is_available()
 attn_mem = {}
-mem_mode = '实测峰值显存(含反传)' if _use_cuda else '解析激活值(CPU无显存, 取主导激活张量)'
+attn_mem_analytic = {}
+mem_mode = '实测峰值显存增量(含反传)' if _use_cuda else '解析激活值(CPU无显存, 取主导激活张量)'
 print(f"\n  显存开销 [{mem_mode}]:")
 for size in [16, 32, 64]:
     x_s = torch.randn(1, 64, size, size, device=device)
     N = size * size
     row = {}
+    ana = {}
     for tag, mod in [('full', attn_full), ('linear', attn_linear)]:
+        # 解析值(仅单份主导中间量, float32 4B): Full=heads×N×N; Linear=N×hidden(=heads×dim_head)
+        n_bytes = (4 * 4 * N * N) if tag == 'full' else (4 * N * 128)
+        ana[tag] = round(n_bytes / 1024**2, 4)
         measured = False
         if _use_cuda:
             try:
                 mod.zero_grad(set_to_none=True)
                 torch.cuda.empty_cache()
                 torch.cuda.reset_peak_memory_stats()
+                # ★ 先记基线(常驻参数/输入/已分配缓存)再测增量:
+                #   max_memory_allocated 是进程级峰值, 不减基线时 16×16 下仅 1MB 的
+                #   注意力矩阵会被基线稀释, Full/Linear 比值严重失真
+                baseline = torch.cuda.memory_allocated()
                 y = mod(x_s)
                 y.sum().backward()
-                row[tag] = round(torch.cuda.max_memory_allocated() / 1024**2, 3)
+                delta = torch.cuda.max_memory_allocated() - baseline
+                row[tag] = round(delta / 1024**2, 3)
                 measured = True
             except RuntimeError:
                 torch.cuda.empty_cache()  # 显存不足时回退解析值
         if not measured:
-            # float32(4B): Full 主导项 heads×N×N; Linear 主导项 N×hidden(=heads×dim_head)
-            n_bytes = (4 * 4 * N * N) if tag == 'full' else (4 * N * 128)
-            row[tag] = round(n_bytes / 1024**2, 4)
+            row[tag] = ana[tag]
     row['unit'] = 'MB'
     row['measured_on_gpu'] = bool(_use_cuda)
+    ana['unit'] = 'MB'
+    ana['note'] = '仅计单份主导中间量, 不含反传额外保存; 与实测口径不同'
     attn_mem[str(size)] = row
+    attn_mem_analytic[str(size)] = ana
     r = row['full'] / row['linear'] if row['linear'] else float('inf')
-    print(f"    {size}×{size} (N={N}): Full={row['full']} MB, Linear={row['linear']} MB, Full/Linear={r:.2f}×")
+    r_ana = ana['full'] / ana['linear'] if ana['linear'] else float('inf')
+    print(f"    {size}×{size} (N={N}): Full={row['full']} MB, Linear={row['linear']} MB, "
+          f"实测比={r:.2f}×, 解析比={r_ana:.2f}×")
 
 
 # ============================================================
@@ -493,11 +506,14 @@ class _PostNormBlock(nn.Module):
 
 DEPTH_GF = 12
 grad_flow = {}
-print(f"\n  逐层梯度范数 (堆叠{DEPTH_GF}层, 前向+反传):")
+# ★ 梯度流固定用 CPU(float32): GPU 默认 TF32 会让极小的梯度范数产生 ~40% 抖动,
+#   导致 md 里的 1.5×/6×10⁶ 无法在不同设备上复现; 16×16×12 层在 CPU 上只需数秒
+gf_device = torch.device('cpu')
+print(f"\n  逐层梯度范数 (堆叠{DEPTH_GF}层, 前向+反传, 固定CPU·float32):")
 for tag, cls in [('PreNorm', _PreNormBlock), ('PostNorm', _PostNormBlock)]:
     torch.manual_seed(0)
-    layers = nn.ModuleList([cls(64) for _ in range(DEPTH_GF)]).to(device)
-    h = torch.randn(2, 64, 16, 16, device=device)
+    layers = nn.ModuleList([cls(64) for _ in range(DEPTH_GF)]).to(gf_device)
+    h = torch.randn(2, 64, 16, 16, device=gf_device)
     for l in layers:
         h = l(h)
     h.pow(2).mean().backward()
@@ -846,10 +862,13 @@ results_summary = {
     'total_params': int(total_params),
     'final_loss': round(float(loss_history[-1]), 6) if loss_history else None,
     'num_epochs': len(loss_history),
-    # 步骤2实测: Full vs Linear 注意力的显存开销(单位MB); GPU为实测峰值, CPU为主导激活解析值
+    # 步骤2实测: Full vs Linear 注意力的显存开销(单位MB); GPU为峰值增量实测, CPU为主导激活解析值
     'attn_memory_MB': attn_mem,
+    # 步骤2解析值: 仅计单份主导中间量(不含反传额外保存), 用于与实测口径对照
+    'attn_memory_analytic_MB': attn_mem_analytic,
     # 步骤3实测: PreNorm/PostNorm 堆叠12层的逐层归一化权重梯度L2范数
-    'grad_flow_by_layer': {k: [round(v, 8) for v in vals] for k, vals in grad_flow.items()},
+    # 用 6 位有效数字而非 round(...,8): PostNorm 输入侧低至 1e-8, 定点小数会丢精度
+    'grad_flow_by_layer': {k: [float(f"{v:.6e}") for v in vals] for k, vals in grad_flow.items()},
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
