@@ -80,13 +80,29 @@ NOTATION_GROUPS = {
         r"\\[ \\]（方括号）": re.compile(r"^\\\[|\\\]$", re.M),
     },
     "下标 0（x_0）": {
-        r"x_0": re.compile(r"x_0"),
+        # 排除 Ax_0 这类矩阵连写（裸体 x 属“矩阵连写”组，不是向量粗体问题）
+        r"x_0": re.compile(r"(?<![A-Za-z\\{])x_0"),
         r"\\mathbf{x}_0": re.compile(r"\\mathbf\{x\}_0"),
         r"\\mathbf{x_0}（粗体含下标）": re.compile(r"\\mathbf\{x_0\}"),
     },
     "σ（噪声水平）": {
         r"\\sigma": re.compile(r"\\sigma\b"),
         r"\\sigma_y": re.compile(r"\\sigma_y"),
+    },
+    # 以下三组为 Level 2 口径拍板后的防回退阀（2026-10-21）：
+    # 右列为“应当为 0”的旧写法，一旦重现即在报告中冒头。
+    "微分/积分号的 d": {
+        r"d（斜体）": re.compile(
+            r"(?<![\\a-zA-Z{])d(?=[xyztsWpVmrh](?![a-zA-Z])|[xyztsWpVmrh]_|\\mathbf\{[A-Za-z]\})"),
+        r"\\mathrm{d}（罗马体，应为0）": re.compile(r"\\mathrm\{d\}"),
+    },
+    "估计量的 hat": {
+        r"\\hat{x}（裸体）": re.compile(r"\\hat\{[xyz]\}"),
+        r"\\hat{\\mathbf{x}}（粗体，应为0）": re.compile(r"\\hat\{\\mathbf\{[xyz]\}\}"),
+    },
+    "矩阵连写": {
+        r"Ax（裸体）": re.compile(r"(?<![\^\\a-zA-Z{])([A-Z])([xyz])(?![a-zA-Z])"),
+        r"A\\mathbf{x}（粗体，应为0）": re.compile(r"(?<![\^\\a-zA-Z{])([A-Z])\\mathbf\{[xyz]\}"),
     },
 }
 

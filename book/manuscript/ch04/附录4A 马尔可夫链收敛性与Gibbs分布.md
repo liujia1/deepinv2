@@ -11,7 +11,7 @@
 MCMC 的理论基石是马尔可夫链的**遍历定理**（ergodic theorem）：
 
 **定理**（遍历定理）：设 $(X_m)_{m\ge1}$ 是以 $\mu$ 为平稳分布的不可约、非周期、Harris 常返马尔可夫链，则对任意可积函数 $h$：
-$$\frac{1}{M}\sum_{m=1}^M h(X_m) \xrightarrow{\text{a.s.}} \int h(\mathbf{x})\,\mu(\mathrm{d}x), \quad M\to\infty$$
+$$\frac{1}{M}\sum_{m=1}^M h(X_m) \xrightarrow{\text{a.s.}} \int h(\mathbf{x})\,\mu(dx), \quad M\to\infty$$
 这就是 MCMC 的理论保证：即使样本不独立，样本均值照样收敛到期望。换言之，4.1 节的 Monte Carlo 积分在"样本相关"的情形下依然成立——代价只是收敛常数变大（这正是 4.7 节 ESS 要量化的东西）。
 
 ### 不可约性、非周期性与常返性
@@ -38,7 +38,7 @@ ULA 在强对数凹条件下是几何遍历的，速率 $O(e^{-cm})$。
 ### 可逆性
 
 4.2 节的细致平衡条件等价于马尔可夫核 $K$ 关于 $\mu$ **可逆**（reversible）：
-$$\int_A K(B|\mathbf{x})\,\mu(\mathrm{d}x) = \int_B K(A|\mathbf{x})\,\mu(\mathrm{d}x), \quad \forall A,B$$
+$$\int_A K(B|\mathbf{x})\,\mu(dx) = \int_B K(A|\mathbf{x})\,\mu(dx), \quad \forall A,B$$
 可逆性比平稳性更强：
 $$\text{可逆性} \implies \text{平稳性} \implies \text{遍历性（在不可约非周期条件下）$$
 
@@ -54,7 +54,7 @@ $$\text{可逆性} \implies \text{平稳性} \implies \text{遍历性（在不�
 
 **Gibbs 分布**（又称 Boltzmann 分布）是统计物理与概率论的基本分布族：
 $$p(\mathbf{x}) = \frac{1}{Z}\exp(-E(\mathbf{x}))$$
-$E(\mathbf{x})$ 是**能量函数**，$Z=\int\exp(-E(\mathbf{x}))\,\mathrm{d}x$ 是配分函数（归一化常数）。贝叶斯后验是它的特例：$E(\mathbf{x})=-\log p(\mathbf{y}|\mathbf{x})-\log p(\mathbf{x})$，$Z=p(\mathbf{y})$。这也解释了正文为何把 $-\log p(\mathbf{x}|\mathbf{y})$ 称为"势能"——采样算法"在能量地形上行走"的图像正源于此。
+$E(\mathbf{x})$ 是**能量函数**，$Z=\int\exp(-E(\mathbf{x}))\,dx$ 是配分函数（归一化常数）。贝叶斯后验是它的特例：$E(\mathbf{x})=-\log p(\mathbf{y}|\mathbf{x})-\log p(\mathbf{x})$，$Z=p(\mathbf{y})$。这也解释了正文为何把 $-\log p(\mathbf{x}|\mathbf{y})$ 称为"势能"——采样算法"在能量地形上行走"的图像正源于此。
 
 ### 高斯 Gibbs分布
 
