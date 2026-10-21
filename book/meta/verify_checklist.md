@@ -380,5 +380,5 @@
 6. **正文两处张冠李戴已提前修正**（不等 Phase 5，写作源与成书树同步修改）：
    - 13.3#630 及 #815/#944 两处来源行的 "Wu et al. (2024) SMCDiff" → "Trippe et al. (2022)"（共 3 处；bib 键 `wu2024smcdiff` → `trippe2022smcdiff`，mapping 新增 #212 行）；
    - 12.7#158 与 13.3#742 的 "Chung et al. (2025)" → "Daras et al. (2024)"（原 chung2025survey redirect 落地，mapping #198 行消除、编号留空）。
-   - **遗留待核**：13.3#746 "DPPS（Wu et al., 2024）：每步去噪生成多个候选，仅留数据一致性最大的，降方差"——描述与 Trippe SMCDiff 不符，2026-10-21 网络不可达未能核实，暂列 mapping #196 ⚠ 待核（无 bib 键）。
-   - 扫描重跑：仍 **211 条 / 602 次**（+Trippe 2022 ×3、−Chung 2025 ×2、Wu 2024 余 1、Daras 2024 ×8）；`validate_bib.py` 全通过（1 条非阻塞 ⚠ 警告即上述 DPPS）。
+   - ✅ **DPPS 已坐实（同日后续）**：13.3#746 "DPPS（Wu et al., 2024）" 经作者提供线索 + OpenAlex 核实为 **Hongjie Wu 等 9 人，*Diffusion Posterior Proximal Sampling for Image Restoration*, ACM MM 2024, pp. 214–223**（doi:10.1145/3664647.3681556，arXiv:2402.16907；候选数按信噪比自适应的采样选择策略，与正文描述一致）——该处引用本就正确，新增 bib 键 `wu2024dpps`，mapping #196 转 ✓，⚠ 待核清零，正文无需改动。
+   - 扫描重跑：仍 **211 条 / 602 次**（+Trippe 2022 ×3、−Chung 2025 ×2、Wu 2024 余 1、Daras 2024 ×8）；`validate_bib.py` 全通过（0 警告）。

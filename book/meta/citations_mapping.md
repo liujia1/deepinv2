@@ -1,7 +1,7 @@
 # 正文引用 ↔ bib 键 对照表（Phase 3 交付物）
 
 > 用途：Phase 5 排版时，按本表把正文里每一处散文式 `Author (Year)` 替换为 `\cite{bibkey}`。
-> 输入：`meta/citations_review.md` 反查 211 条（实例计数）；产出键见 `meta/references.bib`（去重合并后 **196 键**，经 `book/tools/validate_bib.py` 校验通过；历史：200→198→197→196——废弃 2 键（holden2022langevin 后平反、chung2025survey redirect）+ 新增 laumont2023convergence + 2026-10-21 tachella2025unknown 合并入 tachella2025unsure）。
+> 输入：`meta/citations_review.md` 反查 211 条（实例计数）；产出键见 `meta/references.bib`（去重合并后 **197 键**，经 `book/tools/validate_bib.py` 校验通过；历史：200→198→197→196→197——废弃 2 键（holden2022langevin 后平反、chung2025survey redirect）+ 新增 laumont2023convergence + 2026-10-21 tachella2025unknown 合并入 tachella2025unsure + 新增 wu2024dpps（DPPS 坐实））。
 > 状态图例：`✓`=字段完整可信｜`⚠`=bib 中带 `note={⚠待补/待核}`，须作者坐实｜`合并`=多条正文写法并入同一键。
 > 口径（作者已拍板）：优先已发表版；非正式来源剔除；`Black Forest Labs (2024) Flux` 保留为 `@misc`；citekey=作者+年份+关键词小写。
 
@@ -19,7 +19,7 @@
 
 > 注：`#207 Tachella (2025)`（16.4#40 单作者）若确为上述讲座，则应移入本节剔除；当前保守列入主表并标 ⚠。
 
-## 二、主对照表（211 条反查 → 196 bib 键，1:1；另有 1 条 ⚠ 待核无键行；#198 为 2026-10-21 消除行，编号留空）
+## 二、主对照表（211 条反查 → 197 bib 键，1:1；#198 为 2026-10-21 消除行，编号留空）
 
 | # | 正文写法 | 年 | 首见位置 | bib 键 | 状态 |
 |---|---|---|---|---|---|
@@ -218,7 +218,7 @@
 | 193 | Patel et al | 2024 | ch13/13.3#750 | patel2024flowchef | ✓ |
 | 194 | Sahoo et al | 2024 | ch14/14.6#347 | sahoo2024mdlm | ✓ |
 | 195 | Tong et al | 2024 | ch14/14.3#719 | tong2024cfm | ✓ |
-| 196 | Wu et al | 2024 | ch13/13.3#746 | —（无键） | ⚠待核 |
+| 196 | Wu et al | 2024 | ch13/13.3#746 | wu2024dpps | ✓ |
 | 197 | Yang et al | 2024 | ch13/13.3#748 | yang2024dsg | ✓ |
 | 199 | Falk, Habring & Pock | 2025 | ch04/4.6#50 | falk2025overrelax | ✓ |
 | 200 | Gutha et al | 2025 | ch13/13.3#539 | gutha2025mapga | ✓ |
@@ -239,8 +239,8 @@
 
 > ✅ **第一组 11 个 `*unknown`** 已于 2026-10-20 经作者确认 + OpenAlex 坐实并回填；**第二组 17 个会场/卷页键**已于同日经作者裁决 + 联网核查并回填（含拆分 laumont、废弃 chung2025survey、删除占位；其中 holden2022langevin 已于 2026-10-21 平反——与 holden2022datadriven 为同一篇，正文 #152/#153 两处已合并）。剩余 **0** 键——全部完成！
 
-> ✅ **trippe2022smcdiff**（原 wu2024smcdiff）张冠李戴**已修正到正文**（2026-10-21）：13.3#630 及 #815/#944 两处来源行的 "Wu et al. (2024) SMCDiff" 已全部改为 "Trippe et al. (2022)"（写作源与成书树同步），citekey 同日更名为 trippe2022smcdiff。**遗留待核**：13.3#746 "DPPS（Wu et al., 2024）：每步去噪生成多个候选，仅留数据一致性最大的，降方差"——描述与 Trippe SMCDiff 不符，疑另一篇或误引；2026-10-21 网络不可达未能联网核实，暂列 #196 ⚠ 待核（无 bib 键），待作者/联网确认。
+> ✅ **trippe2022smcdiff**（原 wu2024smcdiff）张冠李戴**已修正到正文**（2026-10-21）：13.3#630 及 #815/#944 两处来源行的 "Wu et al. (2024) SMCDiff" 已全部改为 "Trippe et al. (2022)"（写作源与成书树同步），citekey 同日更名为 trippe2022smcdiff。**同章 #746 的 "Wu et al. (2024)" 是另一篇真引用**（DPPS），已于同日坐实为 `wu2024dpps`（Hongjie Wu 等 9 人，ACM MM 2024, pp. 214–223, doi:10.1145/3664647.3681556，arXiv:2402.16907；多候选+数据一致性筛选，与正文描述一致）——当时暂列 ⚠ 待核系与 SMCDiff 混淆，现已解除，⚠ 待核项清零。
 
-> 多轮联网/正文核实已将 ⚠ 由 80 降至 **0**（全部三组已坐实）；2026-10-20 坐实第一组 11 + 第二组 14 + 第三组 bubba + wu→Trippe 张冠李戴纠正，废弃 2 键、新增 laumont2023convergence；**2026-10-21 复核修订**：holden2022langevin 平反（与 holden2022datadriven 合并）、tachella2025unknown 合并入 tachella2025unsure、14 个 `*unknown` 键规范更名、新增 `book/tools/validate_bib.py` 结构校验（全通过），总键数 **196**；**两处正文张冠李戴已提前修正**（不必等 Phase 5）：① Wu et al. (2024) SMCDiff → Trippe et al. (2022)（3 处）；② 12.7#158 与 13.3#742 的 Chung et al. (2025) → Daras et al. (2024)（原 chung2025survey redirect，正文已改，#198 行随之消除，新增 #212 Trippe 行；扫描重跑后仍为 211 条 / 602 次）。
+> 多轮联网/正文核实已将 ⚠ 由 80 降至 **0**（全部三组已坐实）；2026-10-20 坐实第一组 11 + 第二组 14 + 第三组 bubba + wu→Trippe 张冠李戴纠正，废弃 2 键、新增 laumont2023convergence；**2026-10-21 复核修订**：holden2022langevin 平反（与 holden2022datadriven 合并）、tachella2025unknown 合并入 tachella2025unsure、14 个 `*unknown` 键规范更名、新增 `book/tools/validate_bib.py` 结构校验（全通过）、**两处正文张冠李戴提前修正**（Wu→Trippe SMCDiff ×3；Chung 2025→Daras 2024 ×2）、**DPPS 坐实**（13.3#746 "Wu et al. (2024)" = Hongjie Wu 等 ACM MM 2024，新增 wu2024dpps，⚠ 待核清零），总键数 **197**。
 
 > 生成时间：Phase 3（2026-10-19）。正文 `Author (Year)` 一字未改，Phase 5 依本表替换为 `\cite{}`。
