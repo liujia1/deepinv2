@@ -1,5 +1,12 @@
 # 正文引用反查清单（Phase 3 输入）
 
+> **2026-10-21 更新（权威源已转移）**：本清单是反查阶段的输入快照； bib 与正文引用的最终对应关系以 **`citations_mapping.md`（211 行 ↔ 196 键，1:1）** 和 **`references.bib`** 为准（经 `book/tools/validate_bib.py` 校验）。本文"人工复核注意项"中下列事项已有结论：
+> - A.1 "Holden et al (2022) 与 Holden, Pereyra & Zygalakis (2022) 可能不同篇" → **同一篇**（SIAM J. Imaging Sci. 15(2):892–924, 2022，arXiv:2103.10182），已合并为 `holden2022datadriven`；
+> - A.3 "Chung et al (2209.14687) 疑与 Chung et al (2023) 为同一篇" → **已确认合并**入 `chung2023dps`（ICLR 2023）；
+> - B.1 "Daras et al. Survey (2410.00083) 需人工补题名" → 已坐实为 `daras2024survey`（arXiv:2410.00083）；
+> - B/C 节其余非正式来源处置、A.2 同名消歧结论，见 `citations_mapping.md` 第一/三节与 `verify_checklist.md` 2026-10-21 修订日志。
+> 另：正文两处**张冠李戴**待 Phase 5 修正——13.3#630 "Wu et al. (2024)" 实为 Trippe et al. (2022)；12.7#158 与 13.3#742 "Chung et al. (2025)" 实为 Daras et al. (2024) 综述。
+
 > 工具：`book/tools/scan_citations.py`（2026-10-18 升级 v3：支持连字符姓氏跨大写、中文连接符多作者、"等人"式、APA 全名式/斜体文献式、arXiv 编号式、括号内前缀/后缀/会场名、同括号多引用拆分；作者串自动清洗：剥首字母缩写、去附录编号残留、标题/会场剥离、中文连接符归一、模型缩写过滤）。
 > 扫描范围：`book/manuscript/` 全部 180 个正文 md（排除代码块、行内代码、`$...$` 公式）。
 > 逐条上下文样例见 `.audit_tmp/scan_citations_out_utf8.txt`（旧版）与 `.audit_tmp/scan_v6_out.txt`（升级版）；机器可读版见 `citations_raw.csv`。

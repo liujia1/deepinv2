@@ -1,7 +1,7 @@
-# ⚠ 待终校清单——全部清零 ✅（原 80 → 29 → 第一组 11 ✅ → 第二组 14 ✅ + 2废弃 + 1拆分 → 第三组 bubba ✅ → wu→Trippe 张冠李戴纠正 → **0**）
+# ⚠ 待终校清单——全部清零 ✅（原 80 → 29 → 第一组 11 ✅ → 第二组 14 ✅ + 1废弃 + 1拆分 → 第三组 bubba ✅ → wu→Trippe 张冠李戴纠正 → **0**；2026-10-21 复核补记：holden2022langevin 平反恢复合并）
 
 > ✅ **第一组（11 个 `*unknown`）已于 2026-10-20 全部经作者确认 + OpenAlex 联网坐实并回填 bib。**
-> ✅ **第二组（17 个会场/卷页键）已于同日经作者裁决 + 联网核查回填**（含拆分 laumont 为两条、废弃 holden2022langevin/chung2025survey、纠正 kobler/frikel/greenleaf/tran/tachella 等多处作者/venue 错误）。
+> ✅ **第二组（17 个会场/卷页键）已于同日经作者裁决 + 联网核查回填**（含拆分 laumont 为两条、废弃 chung2025survey、纠正 kobler/frikel/greenleaf/tran/tachella 等多处作者/venue 错误；其中 holden2022langevin 的"废弃"已于 2026-10-21 平反——经 arXiv:2103.10182 坐实与 holden2022unknown 为同一篇 SIAM J. Imaging Sci. 15(2):892–924 (2022) 正式版，正文两处引用合并至 `holden2022datadriven`）。
 > ✅ **第三组 bubba2019learning** 已于同日修正：首名 Giorgia→**Tatiana A.**、篇名 Photoacoustic→**shearlet/limited angle CT**、完整 7 人名单。
 > ✅ **wu2024smcdiff** 最终确认为正文张冠李戴：13.3#630 "Wu et al. (2024)" 实为 **Trippe et al. (2022)** (arXiv:2206.04119)。bib 已回填正确作者/篇名，citekey 保留不改。Phase 5 须将正文作者引用一并修正。
 
@@ -103,6 +103,7 @@
     > > | 方法 | 是否需配对数据 | 噪声假设 | PSNR (dB) |
     > > |---|---|---|---|
 - 待确认要点（bib note 摘录）：⚠待补：正文 16.4#40 单作者 "Tachella (2025)"；首作者名应为 Juli{\'a}n（上一版误作 'J{\'e}r{\'e}my' 已更正）；若为讲座则属非正式来源应剔除，否则补条目}
+- ✅ **2026-10-21 合并**：经作者裁决为非讲座，坐实为 UNSURE 正式文献（Tachella, Davies \& Jacques, ICLR 2025, arXiv:2409.01985）——**与 17.4#301 的 `tachella2025unsure` 为同一篇**，本键已删除，映射表 #207/#208 两行统一指向 `tachella2025unsure`。
 
 ### `terris2022unknown`
 - 正文写法：**Terris et al**（年：2022）
@@ -237,13 +238,9 @@
 - 正文写法：**Holden, Pereyra & Zygalakis**（年：2022）
 - 定位：`ch02/2.4#293` → `book/manuscript/ch02/2.4 从显式先验到隐式先验.md`
   - 上下文摘录：
-    > $$p(\mathbf{z}|\mathbf{y}) = \frac{p(\mathbf{y}|\mathbf{x} = \nu_\theta(\mathbf{z})) \, p(\mathbf{z})}{p(\mathbf{y})}$$
-    > 
     > 将 $(\mathbf{z}|\mathbf{y})$ 通过 $\nu_\theta$ 推送，即得到图像空间的后验 $(\mathbf{x}|\mathbf{y})$。Holden, Pereyra 和 Zygalakis（2022）证明此后验在 Hadamard 意义下适定，且具有限矩——为生成式先验的贝叶斯推断提供了理论基础。
-    > 
-    > MNIST 数据集上的实验揭示了几个重要现象：
-    > 1. **流形维度识别**：当隐空间维度 $p \approx 12$ 时，先验的编码信息趋于饱和——继续增加维度不再显著提升性能。这表明 MNIST 图像的有效维度远低于像素空间维度 $d = 784$，验证了流形假设。
 - 待确认要点（bib note 摘录）：⚠待补：正文 2.4#293 "Holden, Pereyra & Zygalakis (2022)"；篇名须核}
+- ✅ **2026-10-21 平反恢复**：初判"废弃"有误。经 arXiv API（`all:Holden AND all:Zygalakis` → arXiv:2103.10182）与 OpenAlex（W4283643017）坐实——**Matthew Holden, Marcelo Pereyra, Konstantinos C. Zygalakis, "Bayesian Imaging with Data-Driven Priors Encoded by Neural Networks", SIAM Journal on Imaging Sciences 15(2):892–924, 2022**, doi:10.1137/21m1406313（arXiv 2021 预印本的正式版）。该文摘要"证明后验分布及后验矩的存在性与适定性"与正文断言逐字对应，且同节后续正是其 MNIST 实验；正文年份（2022）与正式版一致。**处理**：与 9.4#212 的 holden2022unknown 合并为同一键 `holden2022datadriven`，映射表 #152/#153 两行均指向该键；正文无需改动。
 
 ### `hudson1978sure`
 - 正文写法：**Hudson**（年：1978）
@@ -357,4 +354,25 @@
     > 
     > ## 16.2.4 正则化谱系：选什么得看不适定有多重
 - 待确认要点（bib note 摘录）：⚠待补：作者名单请按原文补全（16.2#85）}
+---
 
+## 2026-10-21 复核修订日志（citekey 规范化 + 误判平反）
+
+> 背景：对盘复核 Phase 3 交付物时发现 ① holden2022langevin 废弃存疑、② `validate_bib.py` 不存在、③ 映射表计数口径不一、④ 15 个 `*unknown` 占位键名。处理如下：
+
+1. **holden2022langevin 平反**（原"废弃"有误）：经 arXiv:2103.10182 + OpenAlex W4283643017 坐实为 Holden, Pereyra \& Zygalakis, *Bayesian Imaging with Data-Driven Priors Encoded by Neural Networks*, SIAM J. Imaging Sci. 15(2):892--924 (2022)。与 holden2022unknown 为同一篇，合并为 `holden2022datadriven`；正文 2.4#293 与 9.4#212 两处引用无需改动。
+2. **tachella2025unknown 合并**：与 17.4#301 的 `tachella2025unsure` 为同一篇 UNSURE（ICLR 2025），bib 条目删除，映射表 #207/#208 统一指向该键。
+3. **新增 `book/tools/validate_bib.py`**：bib 解析/重复键/花括号配平/citekey 规范/必填字段/活跃⚠/映射表与 CSV 双向覆盖五项校验；首跑即抓获并修复 `venkatakrishnan2013red` 类型标错（@article → @inproceedings，GlobalSIP 2013）。现全部通过。
+4. **14 个 `*unknown` 键规范更名**（内容不变，仅键名；映射表同步）：
+
+   | 旧键 | 新键 | | 旧键 | 新键 |
+   |---|---|---|---|---|
+   | fox2017unknown | fox2017accelerated | | bellec2021unknown | bellec2021sure |
+   | gozcu2018unknown | gozcu2018compressive | | pang2021unknown | pang2021r2r |
+   | kumar2018unknown | kumar2018disentangled | | winkler2021unknown | winkler2021reverse |
+   | belthangady2019unknown | belthangady2019fluorescence | | zhang2021unknown | zhang2021pnp |
+   | narnhofer2019unknown | narnhofer2019inversegan | | terris2022unknown | terris2022radio |
+   | holderrieth2024unknown | holderrieth2024genmatch | | monroy2025unknown | monroy2025gr2r |
+   | （holden2022unknown | holden2022datadriven） | | terris2025unknown | terris2025ram |
+
+5. **总键数 197 → 196**；README、缺口报告、映射表计数口径已统一。

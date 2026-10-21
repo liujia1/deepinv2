@@ -1,7 +1,7 @@
 # 正文引用 ↔ bib 键 对照表（Phase 3 交付物）
 
 > 用途：Phase 5 排版时，按本表把正文里每一处散文式 `Author (Year)` 替换为 `\cite{bibkey}`。
-> 输入：`meta/citations_review.md` 反查 211 条（实例计数）；产出键见 `meta/references.bib`（去重合并后 **197 键**，经 `validate_bib.py` 校验；早期快照曾记 200→198→197（废弃 2 键 + 新增 laumont2023convergence））。
+> 输入：`meta/citations_review.md` 反查 211 条（实例计数）；产出键见 `meta/references.bib`（去重合并后 **196 键**，经 `book/tools/validate_bib.py` 校验通过；历史：200→198→197→196——废弃 2 键（holden2022langevin 后平反、chung2025survey redirect）+ 新增 laumont2023convergence + 2026-10-21 tachella2025unknown 合并入 tachella2025unsure）。
 > 状态图例：`✓`=字段完整可信｜`⚠`=bib 中带 `note={⚠待补/待核}`，须作者坐实｜`合并`=多条正文写法并入同一键。
 > 口径（作者已拍板）：优先已发表版；非正式来源剔除；`Black Forest Labs (2024) Flux` 保留为 `@misc`；citekey=作者+年份+关键词小写。
 
@@ -19,7 +19,7 @@
 
 > 注：`#207 Tachella (2025)`（16.4#40 单作者）若确为上述讲座，则应移入本节剔除；当前保守列入主表并标 ⚠。
 
-## 二、主对照表（211 条反查 → 198 bib 键）
+## 二、主对照表（211 条反查 → 196 bib 键，1:1 无废弃）
 
 | # | 正文写法 | 年 | 首见位置 | bib 键 | 状态 |
 |---|---|---|---|---|---|
@@ -103,7 +103,7 @@
 | 78 | Blei et al | 2017 | ch08/8.1#238 | blei2017vi | ✓ |
 | 79 | Bora et al | 2017 | ch02/2.4#248 | bora2017ambientgan | ✓ |
 | 80 | Dinh et al | 2017 | ch14/14.2#234 | dinh2017realnvp | ✓ |
-| 81 | Fox & Parker | 2017 | ch04/4.6#42 | fox2017unknown | ✓ |
+| 81 | Fox & Parker | 2017 | ch04/4.6#42 | fox2017accelerated | ✓ |
 | 82 | Heusel et al | 2017 | ch01/1A#228 | heusel2017wgan | ✓ |
 | 83 | Higgins et al | 2017 | ch08/8C#77 | higgins2017betavae | ✓ |
 | 84 | Jang et al | 2017 | ch09/9.2#299 | jang2017gumbel | ✓ |
@@ -115,17 +115,17 @@
 | 90 | Chen et al | 2018 | ch14/14.2#52 | chen2018node | ✓ |
 | 91 | Durmus et al | 2018 | ch04/4.4#182 | durmus2018proximal | 合并 |
 | 92 | Durmus, Moulines & Pereyra | 2018 | ch04/4A#122 | durmus2018proximal | 合并 |
-| 93 | Gozcu et al | 2018 | ch16/16.4#107 | gozcu2018unknown | ✓ |
+| 93 | Gozcu et al | 2018 | ch16/16.4#107 | gozcu2018compressive | ✓ |
 | 94 | Jamil | 2018 | ch08/8.1#238 | jamil2018vi | ✓ |
 | 95 | Kim & Mnih | 2018 | ch09/9.3#273 | kim2018factorvae | ✓ |
 | 96 | Kingma & Dhariwal | 2018 | ch14/14.2#234 | kingma2018glow | ✓ |
-| 97 | Kumar et al | 2018 | ch09/9.3#274 | kumar2018unknown | ✓ |
+| 97 | Kumar et al | 2018 | ch09/9.3#274 | kumar2018disentangled | ✓ |
 | 98 | Lehtinen et al | 2018 | ch17/17.2#33 | lehtinen2018n2n | ✓ |
 | 99 | Perez et al | 2018 | ch15/15.2#320 | perez2018film | ✓ |
 | 100 | Ardizzone et al | 2019 | ch14/14.2#242 | ardizzone2019inn | ✓ |
 | 101 | Batson & Royer | 2019 | ch17/17.4#62 | batson2019n2s | ✓ |
 | 102 | Belkin et al | 2019 | ch09/9C#72 | belkin2019double | ✓ |
-| 103 | Belthangady & Royer | 2019 | ch17/17.1#30 | belthangady2019unknown | ✓ |
+| 103 | Belthangady & Royer | 2019 | ch17/17.1#30 | belthangady2019fluorescence | ✓ |
 | 104 | Bubba et al | 2019 | ch16/16.2#85 | bubba2019learning | ✓ |
 | 105 | Devlin et al | 2019 | ch14/14.6#204 | devlin2019bert | ✓ |
 | 106 | Durmus & Moulines | 2019 | ch04/4.3#115 | durmus2019ula | ✓ |
@@ -134,7 +134,7 @@
 | 109 | Krull et al | 2019 | ch17/17.4#33 | krull2019n2v | ✓ |
 | 110 | Laine et al | 2019 | ch17/17.4#46 | laine2019highquality | ✓ |
 | 111 | Loshchilov & Hutter | 2019 | ch15/15.5#23 | loshchilov2019adamw | ✓ |
-| 112 | Narnhofer et al | 2019 | ch02/2.4#248 | narnhofer2019unknown | ✓ |
+| 112 | Narnhofer et al | 2019 | ch02/2.4#248 | narnhofer2019inversegan | ✓ |
 | 113 | Pereyra | 2019 | ch03/3.1#69 | pereyra2019proximal | ✓ |
 | 114 | Peyré & Cuturi | 2019 | ch14/14.1#203 | peyre2019computational | ✓ |
 | 115 | Ryu et al | 2019 | ch05/5.5#248 | ryu2019pnp | ✓ |
@@ -152,7 +152,7 @@
 | 127 | Song et al | 2020 | ch07/7.4#3 | song2020ddim | ✓ |
 | 128 | Tancik et al | 2020 | ch15/15B#60 | tancik2020fourier | ✓ |
 | 129 | Austin et al | 2021 | ch14/14.6#345 | austin2021d3pm | ✓ |
-| 130 | Bellec et al | 2021 | ch17/17.7#104 | bellec2021unknown | ✓ |
+| 130 | Bellec et al | 2021 | ch17/17.7#104 | bellec2021sure | ✓ |
 | 131 | Chen, Tachella & Davies | 2021 | ch17/17.5#210 | chen2021equivariant | ✓ |
 | 132 | Dhariwal & Nichol | 2021 | ch13/13.3#944 | dhariwal2021guidance | ✓ |
 | 133 | Dosovitskiy et al | 2021 | ch15/15.3#59 | dosovitskiy2021vit | ✓ |
@@ -165,17 +165,17 @@
 | 140 | Laumont et al | 2021 | ch03/3.7#182 | laumont2022pnpdm | 合并 |
 | 141 | Nakkiran et al | 2021 | ch09/9C#72 | nakkiran2021double | ✓ |
 | 142 | Nichol & Dhariwal | 2021 | ch07/7.6#37 | nichol2021improved | ✓ |
-| 143 | Pang et al | 2021 | ch17/17.3#121 | pang2021unknown | ✓ |
+| 143 | Pang et al | 2021 | ch17/17.3#121 | pang2021r2r | ✓ |
 | 144 | Song et al | 2021 | ch06/6.5#111 | song2021scoresde | ✓ |
 | 145 | Tran et al | 2021 | ch08/8.5#113 | tran2021tutorialvb | ✓ |
-| 146 | Winkler | 2021 | ch07/7A#79 | winkler2021unknown | ✓ |
-| 147 | Zhang | 2021 | ch06/6.6#34 | zhang2021unknown | 合并 |
-| 148 | Zhang et al | 2021 | ch05/5.5#159 | zhang2021unknown | 合并 |
+| 146 | Winkler | 2021 | ch07/7A#79 | winkler2021reverse | ✓ |
+| 147 | Zhang | 2021 | ch06/6.6#34 | zhang2021pnp | 合并 |
+| 148 | Zhang et al | 2021 | ch05/5.5#159 | zhang2021pnp | 合并 |
 | 149 | Campbell et al | 2022 | ch14/14.6#14 | campbell2022discrete | ✓ |
 | 150 | Chung et al | 2022 | ch13/13.3#81 | chung2023dps | 合并 |
 | 151 | Ho & Salimans | 2022 | ch13/13.4#138 | ho2022cfg | ✓ |
-| 152 | Holden et al | 2022 | ch09/9.4#212 | holden2022unknown | ✓ |
-| 153 | Holden, Pereyra & Zygalakis | 2022 | ch02/2.4#293 | holden2022langevin | 🗑️已废弃 |
+| 152 | Holden et al | 2022 | ch09/9.4#212 | holden2022datadriven | ✓ |
+| 153 | Holden, Pereyra & Zygalakis | 2022 | ch02/2.4#293 | holden2022datadriven | 合并 |
 | 154 | Karras et al | 2022 | ch07/7.2#89 | karras2022edm | ✓ |
 | 155 | Kawar et al | 2022 | ch07/7B#61 | kawar2022ddrm | ✓ |
 | 156 | Laumont et al | 2022 | ch13/13.3#601 | laumont2023convergence | ✓ |
@@ -183,7 +183,7 @@
 | 158 | Lugmayr et al | 2022 | ch18/18.6#58 | lugmayr2022repaint | ✓ |
 | 159 | Rombach et al | 2022 | ch13/13.3#506 | rombach2022ldm | ✓ |
 | 160 | Tachella et al | 2022 | ch17/17.5#39 | tachella2022moi | ✓ |
-| 161 | Terris et al | 2022 | ch05/5.5#249 | terris2022unknown | ✓ |
+| 161 | Terris et al | 2022 | ch05/5.5#249 | terris2022radio | ✓ |
 | 162 | Zamir et al | 2022 | ch15/15.3#92 | zamir2022restormer | ✓ |
 | 163 | Zhang & Chen | 2022 | ch07/7.7#155 | zhang2022deis | ✓ |
 | 164 | Albergo & Vanden-Eijnden | 2023 | ch14/14.5#312 | albergo2023interpolants | ✓ |
@@ -209,7 +209,7 @@
 | 184 | Esser et al | 2024 | ch14/14.5#3 | esser2024sd3 | ✓ |
 | 185 | Gat et al | 2024 | ch14/14.6#346 | gat2024dfm | ✓ |
 | 186 | He et al | 2024 | ch13/13.3#747 | he2024mpgd | ✓ |
-| 187 | Holderrieth et al | 2024 | ch14/14.6#348 | holderrieth2024unknown | ✓ |
+| 187 | Holderrieth et al | 2024 | ch14/14.6#348 | holderrieth2024genmatch | ✓ |
 | 188 | Li & Pereira | 2024 | ch13/13.5#73 | li2024doc | ✓ |
 | 189 | Liu et al | 2024 | ch14/14.4#313 | liu2024instaflow | ✓ |
 | 190 | Lou et al | 2024 | ch14/14.6#347 | lou2024sedd | ✓ |
@@ -228,19 +228,19 @@
 | 203 | Kim, Kim & Ye | 2025 | ch13/13.3#750 | kim2025flowdps | ✓ |
 | 204 | Kuric et al | 2025 | ch04/4.5#83 | kuric2025glm | 合并 |
 | 205 | Kuric, Zach, Habring, Unser & Pock | 2025 | ch04/4A#129 | kuric2025glm | 合并 |
-| 206 | Monroy, Bacca & Tachella | 2025 | ch17/17.3#145 | monroy2025unknown | ✓ |
-| 207 | Tachella | 2025 | ch16/16.4#40 | tachella2025unknown | ✓ |
+| 206 | Monroy, Bacca & Tachella | 2025 | ch17/17.3#145 | monroy2025gr2r | ✓ |
+| 207 | Tachella | 2025 | ch16/16.4#40 | tachella2025unsure | 合并 |
 | 208 | Tachella et al | 2025 | ch17/17.4#301 | tachella2025unsure | ✓ |
-| 209 | Terris et al | 2025 | ch17/17.5#284 | terris2025unknown | ✓ |
+| 209 | Terris et al | 2025 | ch17/17.5#284 | terris2025ram | ✓ |
 | 210 | Xu et al | 2025 | ch13/13.3#745 | xu2025dmap | ✓ |
 | 211 | Chung et al | 2209.14687 | ch13/13.4#402 | chung2023dps | 合并 |
 
 ## 三、需作者优先坐实的 ⚠ 清单（按影响排序）
 
-> ✅ **第一组 11 个 `*unknown`** 已于 2026-10-20 经作者确认 + OpenAlex 坐实并回填；**第二组 17 个会场/卷页键**已于同日经作者裁决 + 联网核查并回填（含拆分 laumont、废弃 holden2022langevin/chung2025survey、删除占位）。剩余 **0** 键——全部完成！
+> ✅ **第一组 11 个 `*unknown`** 已于 2026-10-20 经作者确认 + OpenAlex 坐实并回填；**第二组 17 个会场/卷页键**已于同日经作者裁决 + 联网核查并回填（含拆分 laumont、废弃 chung2025survey、删除占位；其中 holden2022langevin 已于 2026-10-21 平反——与 holden2022datadriven 为同一篇，正文 #152/#153 两处已合并）。剩余 **0** 键——全部完成！
 
 > ✅ **wu2024smcdiff** 最终确认为正文张冠李戴：13.3#630 "Wu et al. (2024)" 实为 **Trippe et al. (2022)** (arXiv:2206.04119, SMCDiff)。bib 已回填正确作者/篇名，citekey 保留不改。Phase 5 须将正文作者引用也一并修正。
 
-> 多轮联网/正文核实已将 ⚠ 由 80 降至 **0**（全部三组已坐实）；本轮（2026-10-20）坐实第一组 11 + 第二组 14 + 第三组 bubba + wu→Trippe 张冠李戴纠正，废弃 2 键、新增 laumont2023convergence，总键数 197。
+> 多轮联网/正文核实已将 ⚠ 由 80 降至 **0**（全部三组已坐实）；2026-10-20 坐实第一组 11 + 第二组 14 + 第三组 bubba + wu→Trippe 张冠李戴纠正，废弃 2 键、新增 laumont2023convergence；**2026-10-21 复核修订**：holden2022langevin 平反（与 holden2022datadriven 合并）、tachella2025unknown 合并入 tachella2025unsure、14 个 `*unknown` 键规范更名、新增 `book/tools/validate_bib.py` 结构校验（全通过），总键数 **196**。
 
 > 生成时间：Phase 3（2026-10-19）。正文 `Author (Year)` 一字未改，Phase 5 依本表替换为 `\cite{}`。
