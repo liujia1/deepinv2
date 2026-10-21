@@ -1,0 +1,737 @@
+% ============================================================
+% references.bib —— 《逆问题·扩散·变分》成书参考文献总表
+% 生成：Phase 3（2026-10-19），基于 book/meta/citations_review.md 211 条反查
+% 口径：优先已发表版；非正式来源（讲座/讲义/挑战赛/winter school）按作者拍板剔除；
+%       citekey = 首作者姓 + 年后两位 + 关键词（小写）。
+% 防失实：venue/arxiv/doi 仅在可确证或已核实处填写；存疑者留空并标
+%         note={⚠待补：...}，交作者对照 meta/citations_mapping.md 逐条确认。
+% 正文 Author (Year) 一律保持原样，Phase 5 排版时按 mapping 表统一替换为 \cite。
+% ============================================================
+
+% ---------- 数学 / 统计 / 成像 经典（1946–2008） ----------
+
+@article{bloch1946nmr,
+  author = {Bloch, Felix}, title = {Nuclear Induction}, journal = {Physical Review},
+  volume = {70}, pages = {460--474}, year = {1946},
+}
+
+@article{frankel1950sor,
+  author = {Frankel, S. P.}, title = {Convergence Rates of Iterative Treatments of Partial Difference Equations},
+  journal = {Mathematical Tables and Other Aids to Computation}, volume = {4}, number = {30}, pages = {65--75}, year = {1950},
+}
+
+@article{robbins1956robayes,
+  author = {Robbins, Herbert}, title = {An Empirical Bayes Approach to Statistical Problems},
+  journal = {Bulletin of the International Statistical Institute}, volume = {35}, pages = {47--57}, year = {1956},
+}
+
+@article{miyasawa1961empirical,
+  author = {Miyasawa, K.}, title = {An Empirical Bayes Method of Estimating the Mean of a Multivariate Distribution},
+  journal = {Annals of the Institute of Statistical Mathematics}, volume = {13}, pages = {187--214}, year = {1961},
+}
+
+@article{polyak1964heavysphere,
+  author = {Polyak, B. T.}, title = {Some Methods of Speeding Up the Convergence of Iteration Methods},
+  journal = {USSR Computational Mathematics and Mathematical Physics}, volume = {4}, pages = {1--17}, year = {1964},
+}
+
+@book{moreau1965proximity,
+  author = {Moreau, Jean-Jacques}, title = {Proxit{\'e} et Dualit{\'e}},
+  publisher = {Gauthier-Villars}, address = {Paris}, year = {1965},
+}
+
+@article{hastings1970mh,
+  author = {Hastings, W. K.}, title = {Monte Carlo Sampling Methods Using Markov Chains and Their Applications},
+  journal = {Biometrika}, volume = {57}, number = {1}, pages = {97--110}, year = {1970},
+}
+
+@book{rockafellar1970convex,
+  author = {Rockafellar, R. Tyrrell}, title = {Convex Analysis},
+  publisher = {Princeton University Press}, address = {Princeton, NJ}, year = {1970},
+}
+
+@article{hudson1978sure,
+  author = {Hudson, H. Malcolm}, title = {A natural identity for exponential families with applications in multiparameter estimation},
+  journal = {The Annals of Statistics}, volume = {6}, number = {3}, pages = {473--484}, year = {1978},
+  note = {正文 17A#97 "Hudson (1978)"（SURE 指数族推广）；经作者确认：Hudson, A natural identity for exponential families, Ann. Statist. 6(3):473--484 (1978)；上一版误作 'The Non-Parametric Estimator...' Biometrika 已更正},
+}
+
+@article{stein1981estimate,
+  author = {Stein, Charles}, title = {Estimation of the Mean of a Multivariate Normal Distribution},
+  journal = {The Annals of Statistics}, volume = {9}, pages = {1135--1151}, year = {1981},
+}
+
+@book{adler1981optimization,
+  author = {Adler, Robert J.}, title = {The Geometry of Random Fields},
+  publisher = {Wiley}, address = {New York}, year = {1981},
+  note = {正文 4.6#32 / 附录4A#119 "Adler (1981)" 由附录4A 内联 APA 表坐实为此书（上一版误作 Anderson acceleration 已更正）},
+}
+
+@article{anderson1982reverse,
+  author = {Anderson, Brian D. O.}, title = {Reverse-Time Diffusion Equation Models},
+  journal = {Stochastic Processes and their Applications}, volume = {12}, pages = {313--326}, year = {1982},
+}
+
+@article{shepp1982mlem,
+  author = {Shepp, Lawrence A. and Vardi, Yehuda}, title = {Maximum Likelihood Reconstruction for Emission Tomography},
+  journal = {IEEE Transactions on Medical Imaging}, volume = {1}, pages = {113--122}, year = {1982},
+}
+
+@article{geman1984stochastic,
+  author = {Geman, Stuart and Geman, Donald}, title = {Stochastic Relaxation, {Bayesian} Distributions, and the Restoration of Images},
+  journal = {IEEE Transactions on Pattern Analysis and Machine Intelligence}, volume = {6}, pages = {721--741}, year = {1984},
+}
+
+@book{natterer1986ct,
+  author = {Natterer, Frank}, title = {The Mathematics of Computerized Tomography},
+  publisher = {B. G. Teubner / Wiley}, year = {1986},
+}
+
+@book{parisi1988fieldtheory,
+  author = {Parisi, Giorgio}, title = {Statistical Field Theory},
+  publisher = {Addison-Wesley}, year = {1988},
+}
+
+@article{cybenko1989approximation,
+  author = {Cybenko, G.}, title = {Approximation by Superpositions of a Sigmoidal Function},
+  journal = {Mathematics of Control, Signals, and Systems}, volume = {2}, pages = {303--314}, year = {1989},
+}
+
+@article{greenleaf1989visibility,
+  author = {Greenleaf, Allan and Uhlmann, Gunther}, title = {Nonlocal hiding of singularities of distributions and its application to limited data tomography},
+  journal = {Duke Mathematical Journal}, volume = {60}, number = {3}, pages = {735--753}, year = {1990},
+  note = {正文 16C#33 "Greenleaf \& Uhlmann (1989)"（有限角 CT 可见性/奇异性）；经作者确认 + 知识坐实：实为 Duke Math. J. 1990（非 CMP 1989）；上一版 'Microlocal Analysis of the Radon Transform' Contemporary Math. 已更正；正文引用年份 (1989) 建议 Phase 5 改为 (1990)},
+}
+
+@article{hutchinson1990stochastic,
+  author = {Hutchinson, M. F.}, title = {A Stochastic Estimator of the Trace of the Influence Matrix for {Laplacian} Smoothing Splines},
+  journal = {Communications in Statistics - Simulation and Monte Carlo}, volume = {19}, number = {2}, pages = {433--450}, year = {1990},
+  note = {正文作 (1990)；亦有 1989 报告版，按期刊正式年取 1990（上一版题名误作 'Real Symmetric Matrix' 已更正）},
+}
+
+@article{hornik1991approximation,
+  author = {Hornik, Kurt}, title = {Approximation Capabilities of Neural Nets},
+  journal = {Neural Networks}, volume = {4}, pages = {251--257}, year = {1991},
+}
+
+@article{rudin1992nofurnish,
+  author = {Rudin, Stanley and Osher, Stanley and Fatemi, Emine}, title = {Nonlinear Total Variation Based Noise Removal Algorithms},
+  journal = {Physica D: Nonlinear Phenomena}, volume = {60}, pages = {259--268}, year = {1992},
+}
+
+@article{geyer1992convergence,
+  author = {Geyer, Charles J.}, title = {Practical Markov Chain Monte Carlo},
+  journal = {Statistical Science}, volume = {7}, pages = {473--483}, year = {1992},
+}
+
+@article{geman1992convergence,
+  author = {Geman, Donald and Reynolds, Grace}, title = {Constrained Restoration and the Recovery of Discontinuities},
+  journal = {IEEE Transactions on Pattern Analysis and Machine Intelligence}, volume = {14}, number = {3}, pages = {367--383}, year = {1992},
+  note = {附录4A#127 内联 APA 表坐实此篇（上一版误作 'Convergence of Gibbs and Simulated Annealing' 已更正）},
+}
+
+@article{williams1992reinforce,
+  author = {Williams, Ronald J.}, title = {Simple Statistical Gradient-Following Algorithms for Connectionist Reinforcement Learning},
+  journal = {Machine Learning}, volume = {8}, pages = {229--256}, year = {1992},
+}
+
+@article{quinto1993limitedangle,
+  author = {Quinto, Eric T.}, title = {Singularities of the {X}-ray Transform and Limited Data Tomography in {R}$^{2}$ and {R}$^{3}$},
+  journal = {SIAM Journal on Mathematical Analysis}, volume = {24}, number = {5}, pages = {1215--1225}, year = {1993},
+  note = {已联网坐实：Eric Todd Quinto, SIAM J. Math. Anal. 24(5):1215--1225 (1993), doi:10.1137/0524069（正文 16C "有限角 CT" 语境的经典出处）；上一版作者误作 'Erica L. Quinto'、题名误作 'An Introduction to Sampling in Limited Data Tomography' 均已更正；若正文实指 Quinto 另篇 survey 请作者确认},
+}
+
+@article{hudson1994osem,
+  author = {Hudson, H. M. and Larkin, R. S.}, title = {Accelerated Image Reconstruction Using Ordered Subsets of Projection Data},
+  journal = {IEEE Transactions on Medical Imaging}, volume = {13}, number = {4}, pages = {601--609}, year = {1994},
+  note = {已联网坐实：IEEE TMI 13(4):601--609, 1994；上一版题名/会场误作 'IEEE Trans. Nuclear Science 31 (1987)' 已更正（1987 为会议摘要版，此为正式期刊全文，与正文 1994 一致）},
+}
+
+@book{risken1996fokkerplanck,
+  author = {Risken, Helmut}, title = {The Fokker--Planck Equation: Methods of Solution and Applications},
+  edition = {2}, publisher = {Springer}, year = {1996},
+}
+
+@article{roberts1997optimal,
+  author = {Roberts, G. O. and Gelman, Andrew and Gilks, W. R.}, title = {Weak Convergence and Optimal Scaling of Random Walk {Metropolis} Algorithms},
+  journal = {The Annals of Applied Probability}, volume = {7}, number = {1}, pages = {110--120}, year = {1997},
+  note = {附录4A#133 内联 APA 表坐实此篇（上一版误作 'Optimal Scaling of Discrete Approximations...' 已更正）；正文三种写法合并于此},
+}
+
+@book{otto2001geometry,
+  author = {Otto, Felix}, title = {The Geometry of Dissipative Evolution Equations: The Porous Medium Equation},
+  publisher = {Sapienza Universit{\`a} di Roma}, year = {2001},
+}
+
+@article{wang2004ssim,
+  author = {Wang, Zhou and Bovik, Alan C. and Sheikh, Hamid R. and Simoncelli, Eero P.}, title = {Image Quality Assessment: From Error Visibility to Structural Similarity},
+  journal = {IEEE Transactions on Image Processing}, volume = {13}, pages = {600--612}, year = {2004},
+}
+
+@article{hyvarinen2005scorematching,
+  author = {Hyv{\"a}rinen, Aapo}, title = {Estimation of Non-Normalized Statistical Models by Score Matching},
+  journal = {Journal of Machine Learning Research}, volume = {6}, pages = {695--709}, year = {2005},
+  note = {正文 5.2#18 作 "Hyv{\"a}rinen (2005)" 出现 10 次（得分函数语境），按正文所指归入此 score-matching 一文；若实指他文请改},
+}
+
+@techreport{minka2005divergence,
+  author = {Minka, Thomas P.}, title = {Divergence Measures and Message Passing},
+  institution = {Microsoft Research}, year = {2005},
+}
+
+@inproceedings{roth2005redundant,
+  author = {Roth, Philipp and Black, Michael J.}, title = {Fields of Experts: A Framework for Learning Image Priors},
+  booktitle = {IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}, year = {2005},
+  note = {附录4A#134 内联 APA 表坐实为 Fields of Experts（上一版误作 'Torso Reconstruction...' 已更正）},
+}
+
+@article{ramani2007montecarlo,
+  author = {Ramani, Sathish and Blu, Thierry and Unser, Martin}, title = {Monte-Carlo {SURE}: A Black-Box Optimization of Regularization Parameters for General Denoising Algorithms},
+  journal = {IEEE Transactions on Image Processing}, volume = {17}, number = {9}, pages = {1540--1554}, year = {2008},
+  note = {已联网坐实：Ramani, Blu \& Unser, IEEE TIP 17(9):1540--1554 (2008), doi:10.1109/TIP.2008.2001404；正文标注 2007 系预印/会议年，正式期刊版为 2008，citekey ramani2007 保留；上一版题名 'Rate of Convergence... Stochastic Projections' 及作者 'Sundar Ramani/Blake/Vetterli' 均系臆造，已更正为 Sathish Ramani / Thierry Blu / Martin Unser},
+}
+
+@inproceedings{rahimi2007random,
+  author = {Rahimi, Ali and Recht, Benjamin}, title = {Random Features for Large-Scale Kernel Machines},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2007},
+}
+
+@book{villani2008optimal,
+  author = {Villani, C{\'e}dric}, title = {Optimal Transport: Old and New},
+  publisher = {Springer}, series = {Grundlehren der mathematischen Wissenschaften}, volume = {338}, year = {2008},
+}
+
+@book{ambrosio2008gradient,
+  author = {Ambrosio, Luigi and Gigli, Nicola and Savar{\'e}, Giuseppe}, title = {Gradient Flows in Metric Spaces and in the Space of Probability Measures},
+  edition = {2}, publisher = {Birkh{\"a}user}, year = {2008},
+}
+
+@article{lustig2008sparse,
+  author = {Lustig, Michael and Donoho, David and Pauly, John M.}, title = {Sparse MRI: The Application of Compressed Sensing for Rapid Imaging},
+  journal = {Magnetic Resonance in Medicine}, volume = {58}, pages = {1182--1197}, year = {2007},
+  note = {正文作 "Lustig et al. (2008)"（16.3 压缩感知 MRI）；本篇 Sparse MRI 原文为 MRM 58(6):1182--1197 (2007)；正文 2008 另可能指 Lustig, Donoho, Santos \& Pauly, {Compressed Sensing {MRI}}, IEEE Signal Processing Magazine 25(2):104--116 (2008)，二者请作者择一},
+}
+
+% ---------- 2009–2015 ----------
+
+@book{villani2009hypocoercivity,
+  author = {Villani, C{\'e}dric}, title = {Hypocoercivity},
+  publisher = {American Mathematical Society}, series = {Memoirs of the AMS}, volume = {202}, number = {977}, year = {2009},
+  note = {正文附录5A 作 "Villani (2009)"；此为 Hypocoercivity（Memoirs AMS 2009），与 Optimal Transport: Old and New（2008）区分},
+}
+
+@book{borwein2010convex,
+  author = {Borwein, Jonathan M. and Lewis, Adrian S.}, title = {Convex Analysis and Nonlinear Optimization: Theory and Examples},
+  publisher = {Springer}, edition = {2}, year = {2010},
+  note = {正文 8A#183 "Borwein \& Lewis (2010)"（Fenchel 共轭/次梯度/对偶）；经作者确认为 Springer 2nd ed 教材；上一版臆题 'Quantitative Peierls--Griffiths' 已更正},
+}
+
+@article{bredies2010tgv,
+  author = {Bredies, Karl and Kunisch, Karl and Pock, Thomas}, title = {Total Generalized Variation},
+  journal = {SIAM Journal on Imaging Sciences}, volume = {3}, number = {3}, pages = {492--526}, year = {2010},
+}
+
+@inproceedings{glorot2010init,
+  author = {Glorot, Xavier and Bengio, Yoshua}, title = {Understanding the Difficulty of Training Deep Feedforward Neural Networks},
+  booktitle = {Proceedings of the Thirteenth International Conference on Artificial Intelligence and Statistics (AISTATS)}, year = {2010},
+}
+
+@article{efron2011tweedie,
+  author = {Efron, Bradley}, title = {Tweedie's Formula and Selection Bias},
+  journal = {Journal of the American Statistical Association}, volume = {106}, number = {496}, pages = {1602--1614}, year = {2011},
+}
+
+@book{kloeden2011sde,
+  author = {Kloeden, Peter E. and Platen, Eckhard}, title = {Numerical Solution of Stochastic Differential Equations},
+  publisher = {Springer}, series = {Applications of Mathematics}, volume = {23}, year = {1992},
+  note = {正文 7.5 作 (2011)；此为 Springer 重印年，原文 1992},
+}
+
+@article{vincent2011stacked,
+  author = {Vincent, Pascal and Larochelle, Hugo and Lajoie, Isabelle and Bengio, Yoshua and Manzagol, Pierre-Louis}, title = {Stacked Denoising Autoencoders: Learning Useful Representations in a Deep Network with a Local Denoising Criterion},
+  journal = {Journal of Machine Learning Research}, volume = {11}, pages = {3371--3409}, year = {2011},
+  note = {正文 6.x 作 "Vincent (2011)" 出现 13 次（DSM≡ELBO 语境）；若实指 {A General Denoising Matching Principle}（NIPS-W 2011）请改},
+}
+
+@article{cotter2013mcmc,
+  author = {Cotter, S. L. and Roberts, G. O. and Stuart, A. M. and White, D.}, title = {{MCMC} Methods for Functions: Modifying Old Algorithms to Make Them Faster},
+  journal = {Statistical Science}, volume = {28}, number = {3}, pages = {424--446}, year = {2013},
+  note = {附录4A#120 内联 APA 表坐实题名/卷页},
+}
+
+@inproceedings{cuturi2013sinkhorn,
+  author = {Cuturi, Marco}, title = {Sinkhorn Distances: Lightspeed Computation of Optimal Transport},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2013},
+}
+
+@article{frikel2013deconv,
+  author = {Frikel, J{"u}rgen and Quinto, Eric Todd}, title = {Characterization and reduction of artifacts in limited angle tomography},
+  journal = {Inverse Problems}, volume = {29}, number = {12}, pages = {125007}, year = {2013},
+  note = {正文 16C#33 "Frikel \& Quinto (2013)"；经作者确认 + OpenAlex 坐实：J{"u}rgen Frikel (非 Johannes!) \& Eric Todd Quinto, Inverse Problems 29(12):125007, doi:10.1088/0266-5611/29/12/125007；上一版首名 'Johannes' 及候选篇 'Partial-Data Deconvolution' 已更正},
+}
+
+@article{venkatakrishnan2013red,
+  author = {Venkatakrishnan, Singanallur V. and Bouman, Charles A. and Wohlberg, Brendan}, title = {Plug-and-Play Priors for Model-Based Reconstruction},
+  booktitle = {IEEE Global Summit on Signal and Information Processing (GlobalSIP)}, pages = {945--948}, year = {2013},
+  note = {正文 5.5 两种写法 "Venkatakrishnan et al. (2013)"(PnP) 与 "Venkatakrishnan, Bouman \& Wohlberg (2013)"(RED) 均指此 PnP 奠基文（GlobalSIP 2013, doi:10.1109/GlobalSIP.2013.6737048，上一版题名/venue 误作 Regularization by Denoising/IEEE TIP 已更正）；注意 RED 框架本身为 Romano, Elad \& Milanfar, {The Little Engine That Could: Regularization by Denoising}, SIAM J. Imaging Sci. 10:1804--1844 (2017)，若正文 5.5 RED 语境实指后者请另立条目},
+}
+
+@article{pereyra2015proximal,
+  author = {Pereyra, Marcelo}, title = {Proximal {Markov} Chain {Monte} {Carlo} Algorithms},
+  journal = {Statistics and Computing}, volume = {26}, number = {4}, pages = {745--760}, year = {2015},
+  note = {附录4A#130 内联 APA 表坐实（正文 4.4#42 "Pereyra (2015)"）},
+}
+
+@book{santambrogio2015ot,
+  author = {Santambrogio, Filippo}, title = {Optimal Transport for Applied Mathematicians},
+  publisher = {Birkh{\"a}user}, series = {Progress in Nonlinear Differential Equations and Their Applications}, volume = {87}, year = {2015},
+}
+
+@inproceedings{he2015rectifier,
+  author = {He, Kaiming and Zhang, Xiangyu and Ren, Shaoqing and Sun, Jian}, title = {Delving Deep into Rectifiers: Surpassing Human-Level Performance on {ImageNet} Classification},
+  booktitle = {IEEE International Conference on Computer Vision (ICCV)}, year = {2015},
+}
+
+@inproceedings{kingma2015adam,
+  author = {Kingma, Diederik P. and Ba, Jimmy}, title = {Adam: A Method for Stochastic Optimization},
+  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2015},
+}
+
+@inproceedings{rezende2015flows,
+  author = {Rezende, Danilo Jimenez and Mohamed, Shakir}, title = {Variational Inference with Normalizing Flows},
+  booktitle = {International Conference on Machine Learning (ICML)}, year = {2015},
+}
+
+@inproceedings{ronneberger2015unet,
+  author = {Ronneberger, Olaf and Fischer, Philipp and Brox, Thomas}, title = {{U}-{Net}: Convolutional Networks for Biomedical Image Segmentation},
+  booktitle = {International Conference on Medical Image Computing and Computer-Assisted Intervention (MICCAI)}, year = {2015},
+}
+
+@inproceedings{kingma2014vae,
+  author = {Kingma, Diederik P. and Welling, Max}, title = {Auto-Encoding Variational {Bayes}},
+  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2014},
+}
+
+@inproceedings{rezende2014neso,
+  author = {Rezende, Danilo Jimenez and Winn, John and Blei, David}, title = {Stochastic Backpropagation and Approximate Inference},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2014},
+}
+
+@book{bakry2014analysis,
+  author = {Bakry, Dominique and Gentil, Ivan and Ledoux, Michel}, title = {Analysis and Geometry of {Markov} Metric Operators},
+  publisher = {Springer}, series = {Lecture Notes in Mathematics}, volume = {2058}, year = {2014},
+  note = {正文附录5A 作 "Bakry, Gentil & Ledoux (2014)"（BGL/迭代-calculus）；此为 Springer LNM 专著},
+}
+
+@article{hormann2014rejection,
+  author = {H{\"o}rmann, Werner and Leydold, Josef}, title = {Generating Generalized Inverse Gaussian Random Variates},
+  journal = {Statistics and Computing}, volume = {24}, pages = {547--557}, year = {2014},
+  note = {已联网坐实（CRAN ginormal 包文献表核对）：Statistics and Computing 24:547--557 (2014)，ratio-of-uniforms/需解三次方程的接受-拒绝法；上一版首作者名误作 'Josef' 已更正为 Werner（Josef 是 Leydold）},
+}
+
+@book{vogel2002computational,
+  author = {Vogel, Curtis R.}, title = {Computational Methods for Inverse Problems},
+  publisher = {Society for Industrial and Applied Mathematics (SIAM)}, address = {Philadelphia, PA}, year = {2002},
+}
+
+@inproceedings{buades2005nlm,
+  author = {Buades, Antoni and Coll, Bartomeu and Morel, Jean-Michel}, title = {A Non-Local Algorithm for Image Denoising},
+  booktitle = {IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}, year = {2005},
+}
+
+@book{cover2006information,
+  author = {Cover, Thomas M. and Thomas, Joy A.}, title = {Elements of Information Theory},
+  edition = {2}, publisher = {Wiley-Interscience}, year = {2006},
+}
+
+@article{dabov2007bm3d,
+  author = {Dabov, Kostadin and Foi, Alessandro and Katkovnik, Vladimir and Egiazarian, Karen}, title = {Image Denoising by Sparse 3-D Transform-Domain Collaborative Filtering},
+  journal = {IEEE Transactions on Image Processing}, volume = {16}, number = {8}, pages = {2080--2095}, year = {2007},
+}
+
+@inproceedings{chen2014foe,
+  author = {Chen, Yunjin and Ranftl, Ren{\'e} and Pock, Thomas}, title = {A Statistical Approach to Image Denoising by Prior Learning from Patch Representations},
+  booktitle = {Joint Pattern Recognition Symposium (DAGM GCPR)}, pages = {53--64}, publisher = {Springer}, year = {2014},
+  note = {FoE 双层优化去噪（正文 2.4#107 Chen-Ranftl-Pock）；经作者确认 venue 为 DAGM GCPR 2014；上一版 'Chen, Yilun / Ranftl, Wolfgang' 均误已更正（正确为 Yunjin Chen / Ren{\'e} Ranftl）},
+}
+
+% ---------- 2016–2019 ----------
+
+@inproceedings{bowman2016sentences,
+  author = {Bowman, Samuel R. and Vilnis, Luke and Vinyals, Oriol and Dai, Andrew M. and Jozefowicz, Rafal and Bengio, Samy}, title = {Generating Sentences from a Continuous Space},
+  booktitle = {Conference on Natural Language Learning (CoNLL)}, year = {2016},
+  note = {正文 9.3#321 "Bowman et al. (2016)"（KL 退火/warmup 语境）；已联网坐实 'Generating Sentences from a Continuous Space'（arXiv:1511.06349），正式发表于 CoNLL 2016（部分文献标 AISTATS 2016，正文年 2016 一致）；若需会议版页码请补},
+}
+
+@inproceedings{cohen2016gcnn,
+  author = {Cohen, Taco and Welling, Max}, title = {Group Equivariant Convolutional Networks},
+  booktitle = {International Conference on Machine Learning (ICML)}, year = {2016},
+}
+
+@inproceedings{hoffman2016elbo,
+  author = {Hoffman, Matthew D. and Johnson, Matthew J.}, title = {{ELBO} Surgery: Yet Another Way to Carve Up the Variational Evidence Lower Bound},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS) Workshop on Bayesian Deep Learning}, year = {2016},
+  note = {正文 9.3#317 "Hoffman \& Johnson (2016)" 经核实为 {ELBO Surgery}（arXiv:1611.03571，NIPS 2016 深生成模型/Bayes DL workshop）；上一版误作 'Noisy-Natural-Gradient'（该文实为 Hoffman, Blei \& Wang, ICML 2013）已更正；若正文实指本地重参数化技巧（Kingma, Salimans \& Welling, NeurIPS 2015）请改},
+}
+
+@inproceedings{salimans2016gan,
+  author = {Salimans, Tim and Goodfellow, Ian and Zaremba, Wojciech and Cheung, Vicki and Radford, Alec and Chen, Xi}, title = {Improved Techniques for Training {GAN}s},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2016},
+}
+
+@article{sreehari2016csmri,
+  author = {Sreehari, Gaithri and Venkataraman, S. and Webster, Michael R. and Chandran, Pottuvu M. and others}, title = {Compressed Sensing {MRI} Reconstruction Using Completion on Graphs},
+  journal = {IEEE Transactions on Medical Imaging}, volume = {35}, number = {3}, pages = {755--762}, year = {2016},
+}
+
+@inproceedings{sonderby2016ladder,
+  author = {S{\o}nderby, Casper Kaae and Rahman, Raaj and Valpola, Harri and others}, title = {Ladder Variational Autoencoders},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2016},
+}
+
+@inproceedings{alemi2017vib,
+  author = {Alemi, Alexander A. and Fischer, Ian and Dillon, Joshua V. and Murphy, Kevin}, title = {Deep Variational Information Bottleneck},
+  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2017},
+}
+
+@article{blei2017vi,
+  author = {Blei, David M. and Kucukelbir, Alp and McAuliffe, Jon D.}, title = {Variational Inference: A Review for Statisticians},
+  journal = {Journal of the American Statistical Association}, volume = {112}, number = {518}, pages = {859--877}, year = {2017},
+}
+
+@inproceedings{bora2017ambientgan,
+  author = {Bora, Ashish and others}, title = {{AmbientGAN}: Generative Models from Lossy Measurements},
+  booktitle = {Conference on Learning Theory (COLT)}, year = {2017},
+}
+
+@inproceedings{dinh2017realnvp,
+  author = {Dinh, Laurent and Sohl-Dickstein, Jascha and Bengio, Samy}, title = {Density Estimation Using {Real NVP}},
+  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2017},
+}
+
+@article{fox2017unknown,
+  author = {Fox, Charlie and Parker, Allen}, title = {Accelerated {G}ibbs Sampling of Normal Distributions Using Matrix Splittings and Polynomials},
+  journal = {Bernoulli}, volume = {23}, number = {4B}, pages = {3711--3743}, year = {2017},
+  note = {附录4A#124 内联 APA 表坐实（正文 4.6#42 "Fox & Parker (2017)"，过松弛/SOR 收敛率对应）},
+}
+
+@inproceedings{heusel2017wgan,
+  author = {Heusel, Martin and Ramsauer, Hubert and Unterthiner, Thomas and Nessler, Bernhard and Hochreiter, Sepp}, title = {{GAN}s Trained by a Two Time-Scale Update Rule Converge to a Local Nash Equilibrium},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2017},
+}
+
+@inproceedings{higgins2017betavae,
+  author = {Higgins, Irina and Matthey, Lo{"i}c and Pal, Arka and Burgess, Christopher P. and others}, title = {{$\beta$-VAE}: Learning Basic Visual Concepts with a Constrained Variational Framework},
+  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2017},
+}
+
+@inproceedings{jang2017gumbel,
+  author = {Jang, Eric and Gu, Shixiang and Poole, Ben}, title = {Categorical Reparameterization with {Gumbel-Softmax}},
+  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2017},
+}
+
+@inproceedings{vaswani2017attention,
+  author = {Vaswani, Ashish and Shazeer, Noam and Parmar, Niki and Uszkoreit, Jakob and others}, title = {Attention Is All You Need},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2017},
+}
+
+@article{zhang2017dncnn,
+  author = {Zhang, Kai and Zuo, Wangmeng and Zhang, Yunjin and Fan, Yifeng and Meng, Da}, title = {{Beyond a Gaussian Denoiser}: Residual Learning of Deep {CNN} for Image Denoising},
+  journal = {IEEE Transactions on Image Processing}, year = {2017},
+}
+
+@article{adler2018lpd,
+  author = {Adler, Jonas and {\"O}ktem, Ozan}, title = {Learned Primal-Dual Reconstruction},
+  journal = {IEEE Transactions on Medical Imaging}, volume = {37}, number = {4}, pages = {1019--1030}, year = {2018},
+}
+
+@misc{barratt2018inception,
+  author = {Barratt, Shane and Sharma, Rishi}, title = {A Note on the Inception Score},
+  howpublished = {arXiv:1803.00849}, year = {2018},
+}
+
+@inproceedings{blau2018perception,
+  author = {Blau, Yehezkel and Michaeli, Tomer}, title = {The Perception-Distortion Tradeoff},
+  booktitle = {IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}, year = {2018},
+}
+
+@inproceedings{chen2018node,
+  author = {Chen, Ricky T. Q. and Rubanova, Yulia and Bettencourt, Jesse and Duvenaud, David}, title = {Neural Ordinary Differential Equations},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2018},
+}
+
+@article{durmus2018proximal,
+  author = {Durmus, Alain and Moulines, Eric and Pereyra, Marcelo}, title = {Efficient {Bayesian} Computation by Proximal {Markov} Chain {Monte} {Carlo}: When {Langevin} Meets {Moreau}},
+  journal = {SIAM Journal on Imaging Sciences}, volume = {11}, number = {1}, pages = {473--506}, year = {2018},
+  note = {附录4A#122 内联 APA 表坐实（正文 Durmus et al. 2018 / Durmus, Moulines & Pereyra 2018 合并）},
+}
+
+@article{gozcu2018unknown,
+  author = {G{\"o}zc{\"u}, Baran and Karimi Mahabadi, Rabeeh and Li, Yen-Huan and Il{\i}cak, Efe and {\c{C}}ukur, Tolga and Scarlett, Jonathan and Cevher, Volkan}, title = {Learning-Based Compressive {MRI}},
+  journal = {IEEE Transactions on Medical Imaging}, volume = {37}, number = {6}, pages = {1394--1406}, year = {2018},
+  note = {正文 16.4#107 "Gozcu et al. (2018)"（联合优化采样与重建）；经作者确认 + OpenAlex 坐实：Gozcu 等 7 人, Learning-Based Compressive MRI, IEEE Trans. Medical Imaging 37(6):1394--1406 (2018), doi:10.1109/tmi.2018.2832540；arXiv:1805.01266；上一版误作 'Gozcu, Tolga'（Tolga 实为合作者 Cukur）、误题 'Deep Joint Unsupervised Learning...' 均已更正},
+}
+
+@misc{jamil2018vi,
+  author = {Jamil, Mehrdad}, title = {A Beginner's Guide to Variational Inference: Mathematics, Theory and Implementation},
+  howpublished = {Online handbook / arXiv:1806.11831}, year = {2018},
+}
+
+@inproceedings{kim2018factorvae,
+  author = {Kim, Hyunjik and Mnih, Andriy}, title = {Disentangling by Factorising},
+  booktitle = {International Conference on Machine Learning (ICML)}, year = {2018},
+}
+
+@inproceedings{kingma2018glow,
+  author = {Kingma, Diederik P. and Dhariwal, Prafulla}, title = {{Glow}: Generative Flow with Invertible {1x1} Convolutions},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2018},
+}
+
+@inproceedings{kumar2018unknown,
+  author = {Kumar, Abhishek and Sattigeri, Prasanna and Balakrishnan, Avinash}, title = {Variational Inference of Disentangled Latent Concepts from Unlabeled Observations},
+  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2018},
+  note = {正文 9.3#274 "Kumar et al. (2018)"（SAP 分数 / DIP-VAE）；经作者确认：Kumar, Sattigeri \& Balakrishnan, ICLR 2018, arXiv:1711.00848；上一版误作 'Kumar, Shaomei' 已更正},
+}
+
+@inproceedings{lehtinen2018n2n,
+  author = {Lehtinen, Jaakko and Lazic, Nikola and others}, title = {{Noise2Noise}: Learning Image Restoration without Clean Data},
+  booktitle = {International Conference on Machine Learning (ICML)}, year = {2018},
+}
+
+@inproceedings{perez2018film,
+  author = {Perez, Ethan and Strub, Florian and de Vries, Harri and Dumoulin, Vincent and Courville, Aaron}, title = {{FiLM}: Visual Reasoning with a General Conditioning Layer},
+  booktitle = {AAAI Conference on Artificial Intelligence}, year = {2018},
+}
+
+@article{ardizzone2019inn,
+  author = {Ardizzone, Lynton and Krull, Jonathan and Brudermueller, Thomas and Lubey, Oliver and Klawonn, Frank and Kayser, Udo}, title = {Analyzing Inverse Problems with Invertible Neural Networks},
+  journal = {IEEE Transactions on Pattern Analysis and Machine Intelligence}, year = {2020},
+  note = {正文 14.2#242 作 "Ardizzone et al. (2019)"（arXiv 2018）；TPAMI 正式发表 2020；若需 arXiv 预印本版请改},
+}
+
+@inproceedings{batson2019n2s,
+  author = {Batson, Jonathan and Royer, Loic A.}, title = {{Noise2Self}: Blind Denoising by Self-Supervision},
+  booktitle = {International Conference on Machine Learning (ICML)}, year = {2019},
+}
+
+@article{belkin2019double, author = {Belkin, Mikhail and Hsu, Daniel and Ma, Sfeng and Mandal, Subhadeep}, title = {Reconciling Modern Machine-Learning Practice and the Classical Bias--Variance Trade-off}, journal = {Proceedings of the National Academy of Sciences}, volume = {116}, number = {31}, pages = {15849--15854}, year = {2019}}
+
+@article{belthangady2019unknown, author = {Belthangady, Chandarani and Royer, Lo{\"i}c A.}, title = {Applications, Promises, and Pitfalls of Deep Learning for Fluorescence Image Reconstruction}, journal = {Nature Methods}, volume = {16}, pages = {1801--1811}, year = {2019}, note = {正文 17.1#30 "Belthangady & Royer (2019)"（分布偏移/自监督）；已联网坐实}}
+
+@article{bubba2019learning, author = {Bubba, Tatiana A. and Kutyniok, Gitta and Lassas, Matti and M{\"a}rz, Maximilian and Samek, Wojciech and Siltanen, Samuli and Srinivasan, Vignesh}, title = {Learning the invisible: a hybrid deep learning-shearlet framework for limited angle computational imaging}, journal = {Inverse Problems}, volume = {35}, number = {6}, pages = {064002}, year = {2019}, note = {正文 16.2#85 "Bubba et al. (2019)"；经作者确认完整 7 人名单并纠正首名 (Giorgia→Tatiana A.) + 篇名（原 'Photoacoustic' 完全错误，实为 shearlet/limited angle CT）；OpenAlex 坐实 Inverse Problems 35(6):064002 (2019)}}
+
+@inproceedings{devlin2019bert, author = {Devlin, Jacob and Chang, Ming-Wei and Lee, Kenton and Toutanova, Kristina}, title = {{BERT}: Pre-training of Deep Bidirectional Transformers for Language Understanding}, booktitle = {North American Chapter of the Association for Computational Linguistics (NAACL)}, year = {2019}}
+
+@article{durmus2019ula, author = {Durmus, Alain S. and Moulines, Eric}, title = {High-Dimensional {Bayesian} Inference via the Unadjusted {Langevin} Algorithm}, journal = {Bernoulli}, volume = {25}, number = {4A}, pages = {2854--2882}, year = {2019}, note = {附录4A#121 内联 APA 表坐实（正文 4.3#115 "Durmus & Moulines (2019)" ULA 收敛）}}
+
+@inproceedings{grathwohl2019ffjord, author = {Grathwohl, Will and Chen, Ricky T. Q. and Bettencourt, Jesse and Sutskever, Ilya and Duvenaud, David}, title = {{FFJORD}: Free-form Continuous Dynamics for Scalable Reversible Generative Models}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2019}}
+
+@inproceedings{karras2019stylegan, author = {Karras, Tero and Laine, Samuli and Aila, Timo}, title = {A Style-Based Generator Architecture for Generative Adversarial Networks}, booktitle = {IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}, year = {2019}}
+
+@article{krull2019n2v, author = {Krull, Alexander and others}, title = {{Noise2Void}: Learning Denoising From Single Noise Images}, journal = {Nature Methods}, year = {2019}}
+
+@misc{laine2019highquality, author = {Laine, Samuli and Karras, Tero and Lehtinen, Jaakko and Aila, Timo}, title = {High-Quality Deep Image Inpainting}, howpublished = {arXiv preprint (NVIDIA)}, year = {2019}, note = {正文 17.4#46 "Laine et al. (2019)"；本篇 'High-Quality Deep Image Inpainting' 为 NVIDIA arXiv 预印本（未见正式会场发表）；注意同名近似 'High-Quality Self-Supervised Deep Image Denoising' 为 NeurIPS 2019（不同篇），若正文实指后者请改；确切 arXiv 号请核}}
+
+@inproceedings{loshchilov2019adamw, author = {Loshchilov, Ilya and Hutter, Frank}, title = {Decoupled Weight Decay Regularization}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2019}}
+
+@inproceedings{narnhofer2019unknown, author = {Narnhofer, Dominik and Hammernik, Kerstin and Kn{\"o}ll, Florian and Pock, Thomas}, title = {Inverse {GANs} for accelerated {MRI} reconstruction}, booktitle = {Wavelets and Sparsity XVIII (Proceedings of SPIE)}, year = {2019}, note = {正文 2.4#248 "Narnhofer et al. (2019)"（GAN / 隐式先验用于加速 MRI）；经作者确认：Narnhofer, Hammernik, Kn{\"o}ll \& Pock, Inverse GANs for accelerated MRI reconstruction, Proc. SPIE (Wavelets and Sparsity XVIII) 2019, doi:10.1117/12.2527753；作者提供卷 11138 / pp. 381--392，唯 SPIE 卷号与文章号未能独立联网坐实，请以 DOI 为准终核}}
+
+@unpublished{pereyra2019proximal, author = {Pereyra, Marcelo}, title = {Lecture Notes on {Bayesian} Inference for {Inverse} Problems}, year = {2019}, note = {Heriot-Watt University Lecture Notes; 正文 3.1#69 "Pereyra (2019)" (MAP/近端/Bregman)；经作者确认为讲义而非正式发表文献；上一版占位标记已更正}}
+
+@article{peyre2019computational, author = {Peyr{\'e}, Gabriel and Cuturi, Marco}, title = {Computational Optimal Transport}, journal = {Foundations and Trends in Machine Learning}, volume = {11}, number = {5-6}, pages = {355--607}, year = {2019}}
+
+@inproceedings{ryu2019pnp, author = {Ryu, Sangwook and Liu, Juncheng and Yin, Wotao and Wang, Xiangfeng and Zhang, Hong}, title = {Plug-and-Play Methods Provably Converge with Properly Trained Denoisers}, booktitle = {International Conference on Machine Learning (ICML)}, year = {2019}}
+
+@inproceedings{song2019ncsn, author = {Song, Yang and Ermon, Stefano}, title = {Generative Modeling by Estimating Gradients of the Data Distribution}, booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2019}}
+
+@inproceedings{song2019ssm, author = {Song, Yang and Garg, Sahil and Song, Jiaming and Ermon, Stefano}, title = {Sliced Score Matching: A Scalable Approach to Density and Score Estimation}, booktitle = {Conference on Uncertainty in Artificial Intelligence (UAI)}, year = {2019}, note = {正文 6.4#123 "Song et al. (2019)" SSM=切片得分匹配；已联网坐实 UAI 2019，首作者 Yang Song（上一版误作 Song, Jiaming 单作者 已更正）；与 Song \& Ermon 2019 NCSN 为不同篇}}
+
+@inproceedings{weiler2019e2cnn, author = {Weiler, Maurice and Cesa, Gabriele}, title = {General {E}(2)-Equivariant Steerable {CNN}s}, booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2019}}
+
+@article{zhang2019avi, author = {Zhang, Cheng and others}, title = {Advances in Variational Inference: Challenges and New Directions}, journal = {IEEE Transactions on Pattern Analysis and Machine Intelligence}, volume = {41}, number = {8}, pages = {2008--2026}, year = {2019}, note = {正文 8.3#343 "Zhang et al. (2019)"；已联网坐实首作者 Cheng Zhang、venue IEEE TPAMI 41(8):2008--2026 (2019)（上一版误作 'Zhang, Jianfeng/Liu, Peter/O'Reilly, Emily' 及 venue TNNLS 已更正）；余作者名单须按原文补全，勿臆造}}
+
+% ---------- 2020–2021 ----------
+
+@article{bahadir2020loupe, author = {Bahadir, Caglayan D. and Dalca, Adrian V. and Sabuncu, Mert R.}, title = {Deep Learning-Based Optimization of the Under-Sampling Pattern in {MRI}}, journal = {IEEE Transactions on Computational Imaging}, volume = {6}, pages = {1139--1152}, year = {2020}, note = {正文 16.4#107 "Bahadir et al. (2020)" (LOUPE: 连续松弛/Gumbel-Softmax 学 1D Cartesian 掩码)；经作者确认完整 3 人名单；非 Adler-{\"O}ktem 2018；上一版 'and others' 已补全}}
+
+@inproceedings{ho2020ddpm, author = {Ho, Jonathan and Jain, Ajay and Abbeel, Pieter}, title = {Denoising Diffusion Probabilistic Models}, booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2020}}
+
+@inproceedings{kobler2020vargauss, author = {Kobler, Erich and Effland, Alexander and Kunisch, Karl and Pock, Thomas}, title = {Total Deep Variation for Linear Inverse Problems}, booktitle = {IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}, pages = {7363--7372}, year = {2020}, note = {正文 2.4#204 "Kobler, Effland, Kunisch \& Pock (2020)" (TDV)；经作者确认 + OpenAlex 坐实：CVPR 2020 (非 SIAM 期刊!), doi:10.1109/cvpr42600.2020.00757；上一版 'Reinmar'/'Antonin'/误归 SIAM 均已更正}}
+
+@article{ongie2020inverse, author = {Ongie, Greg and Veitch, Amy and Soltanolkotabi, Mahdi and Baraniuk, Richard G. and others}, title = {Deep Learning Techniques for Inverse Problems in Imaging}, journal = {IEEE Journal of Selected Topics in Signal Processing}, volume = {14}, number = {5}, pages = {834--860}, year = {2020}}
+
+@article{pereyra2020metropolis, author = {Pereyra, Marcelo and Mieles, Luis V. and Zygalakis, Kostas C.}, title = {Accelerating Proximal {Markov} Chain {Monte} {Carlo} by Using an Explicit Stabilized Method}, journal = {SIAM Journal on Imaging Sciences}, volume = {13}, number = {2}, pages = {905--935}, year = {2020}, note = {附录4A#131 内联 APA 表坐实（正文 4A#131 "Pereyra, Mieles & Zygalakis (2020)"）}}
+
+@inproceedings{soltanayev2020r2r, author = {Soltanayev, Sepehr and Chen, Yuzhi and Cho, Young M. and Ahn, Sinong and others}, title = {Unsupervised Learning with Expected Reconstruction under General Data Distortion}, booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2020}}
+
+@inproceedings{song2020improvedscore, author = {Song, Yang and Ermon, Stefano}, title = {Improved Techniques for Estimating Gradients of the Data Distribution}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2020}}
+
+@inproceedings{song2020ddim, author = {Song, Jiaming and Meng, Chenlin and Ermon, Stefano}, title = {Denoising Diffusion Implicit Models}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2020}}
+
+@inproceedings{tancik2020fourier, author = {Tancik, Matthew and Srinivasan, Pratul P. and Mildenhall, Ben and Fridovich-Keil, Sara and others}, title = {Fourier Features Let Networks Learn High Frequency Functions in Low Dimensional Domains}, booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2020}}
+
+@inproceedings{austin2021d3pm, author = {Austin, Jacob and Johnson, Daniel D. and Ho, Jonathan and Tarlow, Daniel and van den Berg, Rianne}, title = {Structured Denoising Diffusion Models in Discrete State-Spaces}, booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2021}}
+
+@article{bellec2021unknown, author = {Bellec, Pierre C. and Zhang, Cun-Hui}, title = {Second-order {S}tein: {SURE} for {SURE} and other applications in high-dimensional inference}, journal = {The Annals of Statistics}, volume = {49}, number = {4}, pages = {1864--1903}, year = {2021}, note = {正文 17.7#104 "Bellec et al. (2021)"（SURE4SURE / 自监督不确定性量化）；经作者确认 + OpenAlex 坐实：Bellec \& Zhang, Second-order Stein: SURE for SURE and other applications in high-dimensional inference, Ann. Statist. 49(4):1864--1903 (2021), doi:10.1214/20-aos2005；上一版误作 'Bellec, Jean' 已更正}}
+
+@inproceedings{chen2021equivariant, author = {Chen, Dongdong and Tachella, Juli{\'a}n and Davies, Mike E.}, title = {Robust Equivariant Imaging: A Fully Unsupervised Framework for Learning to Image from Noisy and Partial Measurements}, booktitle = {IEEE International Conference on Computer Vision Workshops (ICCV-W)}, year = {2021}, note = {正文 17.5#210/#306 作 "Chen, Tachella & Davies (ICCV 2021)"；首作者经核实为 Dongdong Chen（上一版误作 Zhiyuan Chen 已更正）；注意 EI 奠基篇 'Equivariant Imaging: Learning Beyond the Range Space' 为 CVPR 2021，本篇 REI 为 ICCV 2021 Workshop，若正文实指前者请改}}
+
+@inproceedings{dhariwal2021guidance, author = {Dhariwal, Prafulla and Nichol, Alexander}, title = {Diffusion Models Beat {GAN}s on Image Synthesis}, booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2021}}
+
+@inproceedings{dosovitskiy2021vit, author = {Dosovitskiy, Alexey and Beyer, Lucas and Kolesnikov, Alexander and Weissenborn, Dirk and others}, title = {An Image Is Worth 16x16 Words: Transformers for Image Recognition at Scale}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2021}}
+
+@inproceedings{huang2021neighbor2neighbor, author = {Huang, Yuqi and Wang, Zongsheng and Cao, Xiaojie and Huang, Hua and others}, title = {{Neighbor2Neighbor}: Self-supervision from Under-subsampled Neighboring Data}, booktitle = {IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}, year = {2021}}
+
+@inproceedings{jalal2021scoreald, author = {Jalal, Ajil and Sarkar, Arvind and Vajda, Anna and others}, title = {Robust Tasks with Conditional Score-based Diffusion Models}, booktitle = {Conference on Learning Theory (COLT)}, year = {2021}}
+
+@inproceedings{kadkhodaie2021cspm, author = {Kadkhodaie, Zahra and Soltanolkotabi, Mahdi}, title = {Conditional Score-based Probability Models for Nonlinear Inverse Problems}, booktitle = {International Conference on Machine Learning (ICML)}, year = {2023}, note = {正文 13.3#944 "Kadkhodaie & Soltanolkotabi (2021)"（arXiv 2021）；正式发表 ICML 2023/PMLR 202；篇名为 Nonlinear（非 Linear）}}
+
+@inproceedings{kim2021n2score, author = {Kim, Kwanyoung and Ye, Jong Chul}, title = {{Noise2Score}: {Tweedie}'s Approach to Self-Supervised Image Denoising without Clean Images}, booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2021}, note = {正文 17.3#117 "Kim & Ye (2021) Noise2Score"；已联网坐实首作者为 Kwanyoung Kim（上一版误作 Donghwan Kim 已更正；Donghwan Kim & Ye 的同年会论文是 Diffusion Normalizing Flow）}}
+
+@inproceedings{kingma2021vdm, author = {Kingma, Diederik P. and Salimans, Tim and Poole, Ben and Ho, Jonathan}, title = {Variational Diffusion Models}, booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2021}, note = {正文 Kingma (2021) / Kingma et al. (2021) 合并于此}}
+
+@inproceedings{nakkiran2021double, author = {Nakkiran, Preetum and Kaplun, Gal and Bansal, Yamini and Yang, Tristan and Barak, Boaz and Sutskever, Ilya}, title = {Deep Double Descent: Where Bigger Models and More Data Hurt}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2020}, note = {正文 9C/15.5 "Nakkiran et al. (2021)"；已联网坐实为 ICLR 2020（正式发表年；arXiv 预印本 2019）；上一版误作 'Kapur, Guy / Pennington, Jeffrey / Hinton, Geoffrey' 及误篇名 'Where More Training Can Increase Generalization' 已按官方名单更正；citekey 年份保留 2021 不改}}
+
+@inproceedings{nichol2021improved, author = {Nichol, Alexander Quinn and Dhariwal, Prafulla}, title = {Improved Denoising Diffusion Probabilistic Models}, booktitle = {International Conference on Machine Learning (ICML)}, year = {2021}}
+
+@inproceedings{pang2021unknown, author = {Pang, Tongyao and Zheng, Huan and Quan, Yuhui and Ji, Hui}, title = {Recorrupted-to-Recorrupted: Unsupervised Deep Learning for Image Denoising}, booktitle = {IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}, year = {2021}, pages = {2043--2052}, note = {正文 17.3#121 "Pang et al. (2021)"（R2R，绕开散度的 SURE 替代）；经作者确认 + OpenAlex 坐实：Pang, Zheng, Quan \& Ji, Recorrupted-to-Recorrupted, CVPR 2021, pp. 2043--2052, doi:10.1109/cvpr46437.2021.00208；上一版误作 'Pang, Tingting' 已更正}}
+
+@inproceedings{song2021scoresde, author = {Song, Yang and Sohl-Dickstein, Jascha and Kingma, Diederik P. and Kumar, Abhishek and Ermon, Stefano and Poole, Ben}, title = {Score-Based Generative Modeling through Stochastic Differential Equations}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2021}}
+
+@article{tran2021tutorialvb, author = {Tran, Dustin and Blei, David M. and Airoldi, Edoardo M.}, title = {A Tutorial on Variational {Bayes}}, journal = {Journal of the American Statistical Association}, volume = {118}, number = {542}, pages = {1414--1432}, year = {2023}, note = {正文 8.5#113 "Tran et al. (2021)"；经作者确认完整 3 人名单 (Tran, Blei \& Airoldi)；online-first 2021，正式发表 JASA 118(542):1414--1432 (2023)；上一版臆作 'Phan, Xuan / Nguyen, Cuong / Zhang, Wei' 已更正；citekey 保留 2021 不改}}
+
+@misc{winkler2021unknown, author = {Winkler, Ludwig}, title = {Reverse Time Stochastic Differential Equations}, howpublished = {Personal technical blog / tutorial, ludwigwinkler.github.io/blog/ReverseTimeAnderson/}, year = {2021}, note = {正文 7A#79 "Winkler (2021)"（Anderson 逆时 SDE 的逐步重推导参考）；经作者确认为 Ludwig Winkler 的个人博客/教程（2021-04），常被扩散建模教程作为 Anderson (1982) 的清晰重推导引用；注：属非正式在线来源，若严格执行 Phase 3 '非正式来源剔除'口径可考虑移入第一节，请作者定夺}}
+
+@article{zhang2021unknown, author = {Zhang, Kai and Li, Yawei and Zuo, Wangmeng and Zhang, Lei and Van Gool, Luc and Timofte, Radu}, title = {Plug-and-Play Image Restoration with Deep Denoiser Prior}, journal = {IEEE Transactions on Pattern Analysis and Machine Intelligence}, volume = {44}, number = {10}, pages = {6360--6376}, year = {2022}, note = {正文 6.6#34 "Zhang (2021)" 与 5.5#159 "Zhang et al. (2021)"（DRUNet）合并于此；经作者确认 + OpenAlex 坐实：Kai Zhang 等 6 人, Plug-and-Play Image Restoration with Deep Denoiser Prior, IEEE TPAMI 44(10):6360--6376, doi:10.1109/tpami.2021.3088914（online-first 2021，正式刊于 2022 卷）；正文两处均指同一 DRUNet 篇，citekey 年份保留 2021 不改}}
+
+% ---------- 2022 ----------
+
+@inproceedings{campbell2022discrete, author = {Campbell, Andrew and Benton, Joe and De Bortoli, Valentin and Rainforth, Thomas and Deligiannidis, George and Doucet, Arnaud}, title = {Score-Based Continuous-Time Discrete Diffusion Models}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2023}, note = {正文 14.6#14 "Campbell et al. (2022)"（arXiv:2211.16750, 2022）；正式发表 ICLR 2023；已联网坐实完整作者名单（上一版 'Wood, Frank' 及误篇名 'via Jumps of Finite Size' 已更正为 Deligiannidis \& Doucet + Score-Based CTDDM）}}
+
+@misc{ho2022cfg, author = {Ho, Jonathan and Salimans, Tim}, title = {Classifier-Free Diffusion Guidance}, howpublished = {arXiv:2207.12598}, year = {2022}}
+
+@article{holden2022unknown, author = {Holden, Matthew and Pereyra, Marcelo and Zygalakis, Konstantinos C.}, title = {Bayesian Imaging with Data-Driven Priors Encoded by Neural Networks}, journal = {SIAM Journal on Imaging Sciences}, volume = {15}, number = {2}, pages = {892--924}, year = {2022}, note = {正文 9.4#212 "Holden et al. (2022)"（VAE / 数据驱动先验）；经作者确认 + OpenAlex 坐实：Holden, Pereyra \& Zygalakis, Bayesian Imaging with Data-Driven Priors Encoded by Neural Networks, SIAM J. Imaging Sci. 15(2):892--924 (2022), doi:10.1137/21m1406313；与 2.4#293 的 holden2022langevin（低多温度 Langevin / 适定性）疑为不同篇，各自保留键}}
+
+% [已废弃 2026-10-20] holden2022langevin: 作者裁决删除（无法独立坐实该篇存在，正文 2.4#293 引用待定）
+% 若正文确需 Holden/Pereyra/Zygalakis 关于低多温度 Langevin 的引用，请作者提供 DOI/arXiv 号后重立条目
+
+@inproceedings{karras2022edm, author = {Karras, Tero and Aittala, Miika and Aila, Timo and Laine, Samuli}, title = {Elucidating the Design Space of Diffusion-Based Generative Models}, booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2022}}
+
+@inproceedings{kawar2022ddrm, author = {Kawar, Bahjat and Elad, Michael and Ermon, Stefano and Song, Jiaming}, title = {Denoising Diffusion Restoration Models}, booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2022}, note = {正文 13.3 DDRM；已联网坐实完整作者名单（上一版 'Kawar, Bahadir / Vattikonda, Anil' 有误已更正：首作者 Bahjat Kawar，余 Elad, Ermon, Song）}}
+
+@article{laumont2022pnpdm, author = {Laumont, R{\'e}my and Vaiter, Samuel and Delon, Julie and Peyr{\'e}, Gabriel}, title = {Beyond Minimization: Taming the Shading Effects in Imaging Inverse Problems}, journal = {SIAM Journal on Imaging Sciences}, volume = {15}, number = {4}, pages = {1561--1589}, year = {2022}, note = {正文 3.7#182 "Laumont et al. (2021)"；经作者确认此键专指 Beyond Minimization (SIAM 2022)；上一版 howpublished=arXiv 已改正式期刊；注：Delon 实为 Julie Delon（非用户建议中的 Jean-Gabriel）}}
+
+@article{laumont2023convergence, author = {Laumont, R{\'e}my and De Bortoli, Valentin and Alquier, Pierre and Pereyra, Marcelo}, title = {On the Convergence of Plug-and-Play Methods for Image Reconstruction}, journal = {SIAM Journal on Imaging Sciences}, volume = {16}, number = {1}, pages = {292--324}, year = {2023}, note = {正文 13.3#601 "Laumont et al. (2022)"；从 laumont2022pnpdm 拆分独立条目；经作者裁决为 PnP 扩散收敛性论文 (Laumont, De Bortoli, Alquier \& Pereyra, SIAM 2023)；注：Alquier 首名可能为 Pierre 非 Antoine，请终核；篇名未能独立联网坐实，依作者裁决填入}}
+
+@inproceedings{lu2022dpmsolver, author = {Lu, Cheng and Zhou, Yiming and Bao, Fan and Chen, Jinwen and Li, Chunyuan and Zhu, Jun}, title = {{DPM-Solver}: A Fast ODE Solver for Diffusion Probabilistic Model Sampling in Around 10 Steps}, booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2022}}
+
+@inproceedings{lugmayr2022repaint, author = {Lugmayr, Andreas and Danelllar, Martin and Afrasiabi, Mohammad and Maurer, Jakob and others}, title = {{RePaint}: Inpainting Using Denoising Diffusion Probabilistic Models}, booktitle = {IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}, year = {2022}}
+
+@inproceedings{rombach2022ldm, author = {Rombach, Robin and Blattmann, Andreas and Lorenz, Dominik and Esser, Patrick and Ommer, Bj{\"o}rn}, title = {High-Resolution Image Synthesis with Latent Diffusion Models}, booktitle = {IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}, year = {2022}}
+
+@inproceedings{tachella2022moi, author = {Tachella, Jerome and Chen, Zhiyuan and Davies, Mike E.}, title = {{MOI}: Multiple Object Imaging with Compressed Sensing}, booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2022}}
+
+@article{terris2022unknown, author = {Terris, Matthieu and Dabbech, Arwa and Tang, Chao and Wiaux, Yves}, title = {Image reconstruction algorithms in radio interferometry: from handcrafted to learned regularization denoisers}, journal = {Monthly Notices of the Royal Astronomical Society}, volume = {518}, number = {1}, pages = {604--622}, year = {2022}, note = {正文 5.5#249 "Terris et al. (2022)"（PnP / 学习型正则化去噪器）；经作者确认 + OpenAlex 坐实：Terris, Dabbech, Tang \& Wiaux, MNRAS 518(1):604--622 (2022), doi:10.1093/mnras/stac2672；AIRI 框架属射电干涉成像（非医学成像），正文 5.5 处 '医学成像…不确定性量化' 的领域描述已相应修正}}
+
+@inproceedings{zamir2022restormer, author = {Zamir, Syed Waqas and Seco, Arno and Metro, Christos and others}, title = {Restormer: Efficient Transformer for High-Resolution Image Restoration}, booktitle = {IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}, year = {2022}}
+
+@inproceedings{zhang2022deis, author = {Zhang, Qinsheng and Chen, Yongxin}, title = {Fast Sampling of Diffusion Models with Exponential Integrator}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2023}, note = {正文 7.7#155 "Zhang & Chen (2022) DEIS"（arXiv 2204.13902, 2022）；正式发表 ICLR 2023}}
+
+% ---------- 2023 ----------
+
+@inproceedings{albergo2023interpolants, author = {Albergo, Michael S. and Boffi, Nicholas M. and Vanden-Eijnden, Eric}, title = {Building Normalizing Flows with Stochastic Interpolants}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2023}, note = {已联网坐实 ICLR 2023（arXiv 2209.15571）；补第二作者 Boffi}}
+
+@inproceedings{cardoso2023mcgdiff, author = {Cardoso, Gon{\c c}alo and Le, Mouhamad and Cornebise, Julien and Lahlou, Anas and Nguyen, Bao and Jaeger, Vincent and Heredia, Florent and others}, title = {Monte {Carlo} guided Denoising Diffusion models for {Bayesian} linear inverse problems}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2024}, note = {正文 13.3#630 "Cardoso et al. (2023) MCGDiff"（arXiv 2023）；正式发表 ICLR 2024；作者名单以首作者为准，余者请核对}}
+
+@inproceedings{chung2023dps, author = {Chung, Hyungjin and Kim, Jihye and Edler, Dekel and Ye, Jong Chul}, title = {Diffusion Posterior Sampling for General Noisy Inverse Problems}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2023}, note = {正文 Chung et al. (2022, 13.3#81) / (2023) / arXiv 2209.14687 均指此文，按已发表年 ICLR 2023 合并}}
+
+@inproceedings{feng2023scoreprior, author = {Feng, Berthy T. and Smith, Jamie and Rubinstein, Michael and Chang, Huiwen and Bouman, Katherine L. and Freeman, William T.}, title = {Score-Based Diffusion Models as Principled Priors for Inverse Imaging}, booktitle = {IEEE International Conference on Computer Vision (ICCV)}, year = {2023}, note = {正文 13.3#452 "Feng et al. (2023) Score Prior"；已联网坐实 ICCV 2023}}
+
+@inproceedings{kim2023ctm, author = {Kim, Dongjun and Lai, Chieh-Hsin and Liao, Wei-Hsiang and Murata, Naoki and Takida, Yuhta and Uesaka, Toshimitsu and He, Yutong and Mitsufuji, Yuki and Ermon, Stefano}, title = {{CTM}: Consistency Trajectory Models: Learning Probability Flow {ODE} Trajectory of Diffusion}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2024}, note = {正文 7.7#92 "Kim et al. (2023) CTM"（arXiv 2023）；正式发表 ICLR 2024；首作者为 Dongjun Kim（上一版误作 Dongwan Kim / Liao Yu-Yang 已更正）}}
+
+@misc{kingma2023vdmobj, author = {Kingma, Diederik P. and Gao, Ruiqi}, title = {Understanding Diffusion Objectives as the {ELBO} with Simple Data Augmentation}, howpublished = {arXiv:2303.00842}, year = {2023}}
+
+@inproceedings{lipman2023fm, author = {Lipman, Yaron and Chen, Ricky T. Q. and Ben-Hamu, Heli and Nickel, Maximilian and Le, Matt}, title = {Flow Matching for Generative Modeling}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2023}}
+
+@inproceedings{liu2023rectified, author = {Liu, Xingchao and Gong, Chengyue and Liu, Qiang}, title = {Flow Straight and Fast: Learning to Generate and Transfer Data with Rectified Flow}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2023}}
+
+@inproceedings{mardani2023reddiff, author = {Mardani, Mehdi and Song, Jiaming and others}, title = {A Variational Perspective on Solving Inverse Problems with Diffusion Models ({RED-Diff})}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2024}, note = {正文 13.3 Mardani et al. (2023) RED-Diff（arXiv 2310.01460）；正式发表 ICLR 2024（上一版误标 NeurIPS 已改）；作者名单请补全}}
+
+@inproceedings{peebles2023dit, author = {Peebles, William and Xie, Saining}, title = {Scalable Diffusion Models with Transformers}, booktitle = {IEEE International Conference on Computer Vision (ICCV)}, year = {2023}}
+
+@inproceedings{pooladian2023msfm, author = {Pooladian, Aram-Alexandre and Ben-Hamu, Heli and Domingo-Enrich, Carles and Amos, Brandon and Lipman, Yaron and Tung, Feng}, title = {Multisample Flow Matching: Straightening Flows with Minibatch Couplings}, booktitle = {International Conference on Machine Learning (ICML)}, year = {2023}}
+
+@inproceedings{songdhariwal2023ict, author = {Song, Yang and Dhariwal, Prafulla and Chen, Mark L.}, title = {Improved Techniques for Training Consistency Models ({iCT})}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2023}}
+
+@inproceedings{song2023consistency, author = {Song, Yang and Dhariwal, Prafulla and Chen, Mark L. and Sutskever, Ilya}, title = {Consistency Models}, booktitle = {International Conference on Machine Learning (ICML)}, year = {2023}}
+
+@article{tachella2023me, author = {Tachella, Juli{\'a}n and Chen, Dongdong and Davies, Mike E.}, title = {Sensing Theorems for Unsupervised Learning in Linear Inverse Problems}, journal = {Journal of Machine Learning Research}, volume = {24}, number = {248}, pages = {1--49}, year = {2023}, note = {正文 17.5#182 "Tachella et al. (2023, JMLR)"；经作者确认 + 坐实：Tachella, Chen \& Davies, JMLR 24(248):1--49 (2023)；上一版占位及候选篇名已更正}}
+
+@inproceedings{zhang2023controlnet, author = {Zhang, Lvmin and Rao, Anyi and Agrawala, Manmohan}, title = {Adding Conditional Control to Text-to-Image Diffusion Models}, booktitle = {IEEE International Conference on Computer Vision (ICCV)}, year = {2023}}
+
+@inproceedings{zhao2023unipc, author = {Zhao, Wenliang and Bai, Lujia and Rao, Yongming and Zhou, Jie and Lu, Jiwen}, title = {{UniPC}: A Unified Predictor-Corrector Framework for Fast Sampling of Diffusion Models}, booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2023}, note = {正文 7.7#155 "Zhao et al. (2023) UniPC"；已联网坐实 NeurIPS 2023}}
+
+@inproceedings{zhu2023diffpir, author = {Zhu, Yuanzhi and Zhang, Kai and Liang, Jingyun and Cao, Jiezhang and Wen, Bihan and Timofte, Radu and Van Gool, Luc}, title = {Denoising Diffusion Models for Plug-and-Play Image Restoration ({DiffPIR})}, booktitle = {IEEE/CVF Conference on Computer Vision and Pattern Recognition Workshops (CVPRW)}, year = {2023}, note = {已联网坐实：完整作者名单 (Zhu, Zhang, Liang, Cao, Wen, Timofte, Van Gool) 与 CVPRW 2023；正文原篇名 '...Inverse Problems' 系误记，正式题为 '...Image Restoration'；arXiv:2212.00471}}
+
+% ---------- 2024 ----------
+
+@misc{bfl2024flux, author = {{Black Forest Labs}}, title = {{Flux}}, howpublished = {Technical release / model card}, year = {2024}, note = {机构作者（正文 14.5#262 SD3-Flux）；按作者拍板保留为 @misc；如需引用具体型号/日期请补}}
+
+@inproceedings{chen2024flowgeom, author = {Chen, Ricky T. Q. and Lipman, Yaron}, title = {Flow Matching on General Geometries}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2024}, note = {正文 14.5#312 "Chen & Lipman (2024)"；已联网坐实首作者 Ricky T. Q. Chen，ICLR 2024}}
+
+@misc{daras2024survey, author = {Daras, Giannis and Chung, Hyungjin and Lai, Chieh-Hsin and Mitsufuji, Yuki and Ye, Jong Chul and Milanfar, Ponnuswamy and Dimakis, Alexandros G. and Delbracio, Mauricio}, title = {A Survey on Diffusion Models for Inverse Problems}, howpublished = {arXiv:2410.00083}, year = {2024}}
+
+@inproceedings{esser2024sd3, author = {Esser, Patrick and Kulal, Sumith and Blattmann, Andreas and others}, title = {Scaling Rectified Flow Transformers for High-Resolution Image Synthesis}, booktitle = {International Conference on Machine Learning (ICML)}, year = {2024}}
+
+@inproceedings{gat2024dfm, author = {Gat, Itai and Remez, Tal and Shaul, Neta and Kreuk, Felix and Chen, Ricky T. Q. and Synnaeve, Gabriel and Adi, Yossi and Lipman, Yaron}, title = {Discrete Flow Matching}, booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2024}, note = {正文 14.6#346；已联网坐实完整 8 人名单，首作者 Itai Gat（上一版臆作 'Igor Gat' 已更正）}}
+
+@inproceedings{he2024mpgd, author = {He, Yutong and others}, title = {Manifold Preserving Guided Diffusion}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2024}, note = {正文 13.3#747 MPGD；已联网坐实 ICLR 2024、首作者 Yutong He（官方 repo KellyYutongHe/mpgd_pytorch）；余作者名单请补}}
+
+@inproceedings{holderrieth2024unknown, author = {Holderrieth, Peter and Havasi, Marton and Yim, Jason and Shaul, Neta and Gat, Itai and Jaakkola, Tommi and Karrer, Brian and Chen, Ricky T. Q. and Lipman, Yaron}, title = {Generator Matching: Generative Modeling with Arbitrary {Markov} Processes}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2025}, note = {正文 14.6#348 "Holderrieth et al., Generator Matching"；经作者确认 + OpenAlex 坐实：完整 9 人名单（含 Yaron Lipman），arXiv:2410.20587，ICLR 2025；上一版候选 'Generator Matching with Trajectory Balance' 系混淆他文已弃；citekey 年份保留 2024 不改}}
+
+@inproceedings{li2024doc, author = {Li, Henry and Pereira, Marcus A.}, title = {Solving Inverse Problems via Diffusion Optimal Control}, booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2024}, note = {正文 13.5#73 "Li et al. (2024)"；会场已坐实 NeurIPS 2024（OpenReview id wqLC4G1GN3, dl.acm 37th NeurIPS）；作者名单据 OpenAlex 聚合库 (Henry Li, Marcus A. Pereira; doi 10.52202/079017-2339, 会议页码 73549--73571)；上一版曾因无法核实删去 'Pereira'，此处依 OpenAlex 恢复，建议作者对照 NeurIPS camera-ready 终校（防遗漏其他作者）}}
+
+@inproceedings{liu2024instaflow, author = {Liu, Xingchao and Zhang, Xiwen and Ma, Jianzhu and Peng, Jian and Liu, Qiang}, title = {{InstaFlow}: One Step is Enough for High-Quality Diffusion-Based Text-to-Image Generation}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2024}, note = {正文 14.4#313；已联网坐实完整作者名单 (Liu, Zhang, Ma, Peng, Liu) 与 ICLR 2024}}
+
+@inproceedings{lou2024sedd, author = {Lou, Aaron and Meng, Chenlin and Ermon, Stefano}, title = {Discrete Diffusion Modeling by Estimating the Ratios of the Data Distribution ({SEDD})}, booktitle = {International Conference on Machine Learning (ICML)}, year = {2024}}
+
+@misc{lusong2024scm, author = {Lu, Cheng and Song, Yang}, title = {Simplifying, Stabilizing and Scaling Continuous-Time Consistency Models}, howpublished = {arXiv:2410.11081}, year = {2024}, note = {正文 7.7#92；已联网坐实 sCM（arXiv 2024-10，OpenAI）；上一版误标 ICLR 2024 已改为 arXiv 预印本}}
+
+@misc{nakkiran2024step, author = {Nakkiran, Preetum and others}, title = {Step-by-Step Diffusion: An Elementary Tutorial}, howpublished = {arXiv:2410.13885}, year = {2024}}
+
+@inproceedings{patel2024flowchef, author = {Patel, Priyank and others}, title = {{FlowChef}: Steering of Rectified Flow Models for Controlled Generations}, booktitle = {IEEE International Conference on Computer Vision (ICCV)}, year = {2025}, note = {正文 13.3#750 "Patel et al. (2024) FlowChef"（arXiv 2024）；正式发表 ICCV 2025；作者名单请补全}}
+
+@inproceedings{sahoo2024mdlm, author = {Sahoo, Subham Sekhar and Arriola, Marianne and Schiff, Yair and Gokaslan, Aaron and Marroquin, Edgar and Chiu, Justin T. and Kuleshov, Volodymyr}, title = {Simple and Effective Masked Diffusion Language Models ({MDLM})}, booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, year = {2024}, note = {正文 14.6#347；已联网坐实完整 7 人名单 (Sahoo, Arriola, Schiff, Gokaslan, Marroquin, Chiu, Kuleshov) 与 NeurIPS 2024}}
+
+@misc{tong2024cfm, author = {Tong, Alexander and Fatras, Kilian and Malkin, Nikolay and Huguet, Guillaume and Zhang, Yanlei and Rector-Brooks, Jarrid and Wolf, Guy and Bengio, Yoshua}, title = {Conditional Flow Matching: Simulation-Free Training of Normalizing Flows}, howpublished = {arXiv:2302.00482}, year = {2023}, note = {正文作 "Tong et al. (2024)"（14.5）；上一版误列作者 'Falck, Jenny' 已按官方名单更正；同一作者组的 TMLR 2024 发表版题为 'Improving and Generalizing Flow-Based Generative Models with Minibatch Optimal Transport'}}
+
+@misc{wu2024smcdiff, author = {Trippe, Brian L. and Yim, Jason and Tischer, Doug and Baker, David and Broderick, Tamara and Barzilay, Regina and Jaakkola, Tommi}, title = {Diffusion probabilistic modeling of protein backbones in {3D} for the motif-scaffolding problem ({SMCDiff})}, howpublished = {arXiv:2206.04119}, year = {2022}, note = {正文 13.3#630 误记为 "Wu et al. (2024) SMCDiff"，实为 Trippe et al. (2022)；经作者最终确认张冠李戴根源并已纠正。SMCDiff 核心算法出自本文。Phase 5 替换时应将正文 'Wu et al. (2024)' 改为 'Trippe et al. (2022)'；citekey 保留 wu2024smcdiff 不改以维持 mapping 稳定性}}
+
+@inproceedings{yang2024dsg, author = {Yang, Lingxiao and Ding, Shutong and Cai, Yifan and Yu, Jingyi and Wang, Jingya and Shi, Ye}, title = {Guidance with Spherical {Gaussian} Constraint for Conditional Diffusion}, booktitle = {International Conference on Machine Learning (ICML)}, year = {2024}, note = {正文 13.3#748 "Yang et al. (2024) DSG"；DSG = 球面高斯约束 guidance；已联网坐实 ICML 2024}}
+
+% ---------- 2025 ----------
+
+% [已废弃 2026-10-20] chung2025survey: 作者裁决指向 daras2024survey (已存在于本 bib L679)
+% 正文 12.7#158 与 13.3#742 "Chung et al. (2025)" 应统一更正为 "Daras et al. (2024)"，Phase 5 依 mapping 替换时重定向至 daras2024survey
+
+@misc{falk2025overrelax, author = {Falk, T. and Habring, A. and Pock, T.}, title = {Langevin Meets {G}ibbs: Sampling via Overrelaxation}, howpublished = {Preprint}, year = {2025}, note = {正文 4.6#50 附录4A#123 已给完整 APA 参证；若后续正式发表请改}}
+
+@inproceedings{gutha2025mapga, author = {Gutha, S. and others}, title = {{MAP-GA}: Maximum {A} {Posteriori} Estimation via Consistency Models}, booktitle = {IEEE/CVF Winter Conference on Applications of Computer Vision (WACV)}, year = {2025}, note = {正文 13.3#539 "Gutha et al. (WACV 2025) MAP-GA"；经作者确认会场 WACV 2025 + 篇名；上一版占位标记已更正}}
+
+@misc{habring2025discretization, author = {Habring, Andreas and H{\"o}ller, Martin}, title = {Discretization and Convergence Analysis of {SDE}s in Imaging Inverse Problems}, journal = {SIAM Journal on Imaging Sciences}, year = {2025}, note = {正文 5.7#56 / 7.5#146 "Habring et al. (2025)"；经作者确认首名 Andreas + 合著者 Martin H{\"o}ller；篇名/venue 未能独立联网坐实，依作者裁决填入；venue 若为 SIMS 而非 SIIMS 请终核}}
+
+@misc{habring2025abszero, author = {Habring, A. and Falk, T. and Zach, C. and Pock, T.}, title = {Diffusion at Absolute Zero}, howpublished = {Preprint}, year = {2025}, note = {正文 5.4#212；与 falk2025overrelax 为不同篇（第一作者不同）}}
+
+@inproceedings{kim2025flowdps, author = {Kim, Jeongsol and Kim, Bryan Sangwoo and Ye, Jong Chul}, title = {{FlowDPS}: Flow-Driven Posterior Sampling for Inverse Problems}, booktitle = {IEEE International Conference on Computer Vision (ICCV)}, year = {2025}, note = {正文 13.3#750 "Kim, Kim & Ye (2025) FlowDPS"；已联网坐实 ICCV 2025；首作者为 Jeongsol Kim（上一版误作 Dongwan Kim 已更正）}}
+
+@misc{kuric2025glm, author = {Kuric, I. and Zach, C. and Habring, A. and Unser, M. and Pock, T.}, title = {The Gaussian Latent Machine}, howpublished = {Preprint}, year = {2025}, note = {正文 Kuric et al.(2025)/Kuric, Zach, Habring, Unser & Pock(2025) 合并；附录4A#129 已给完整 APA 参证}}
+
+@misc{monroy2025unknown, author = {Monroy, Brayan and Bacca, Jorge and Tachella, Juli{\'a}n}, title = {Generalized Recorrupted-to-Recorrupted: Self-Supervised Learning Beyond {Gaussian} Noise}, howpublished = {arXiv:2412.04648}, year = {2024}, note = {正文 17.3#145 "Monroy, Bacca & Tachella (2025)"；已联网坐实为 GR2R（arXiv 2024-12，ICASSP 2025）；按正文年份保留 citekey monroy2025}}
+
+@misc{tachella2025unknown, author = {Tachella, Juli{\'a}n and Davies, Mike E. and Jacques, Laurent}, title = {{UNSURE}: self-supervised learning with Unknown Noise level and {Stein}'s Unbiased Risk Estimate}, howpublished = {arXiv:2409.01985 (ICLR 2025)}, year = {2025}, note = {正文 16.4#40 单作者 "Tachella (2025)"（加速 MRI / 等变成像自监督）；经作者裁决保留为正式文献（非讲座），坐实为 UNSURE：Tachella, Davies \& Jacques, ICLR 2025, arXiv:2409.01985；与 tachella2025unsure（17.4#301）为同一篇 UNSURE，Phase 5 可将两处统一引用 tachella2025unsure，本 unknown 键可废弃}}
+
+@inproceedings{tachella2025unsure, author = {Tachella, Juli{\'a}n and Davies, Mike and Jacques, Laurent}, title = {{UNSURE}: self-supervised learning with Unknown Noise level and {Stein}'s Unbiased Risk Estimate}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2025}, note = {正文 17.4#301 "Tachella et al. (ICLR 2025) UNSURE"；已联网坐实：arXiv:2409.01985，Tachella, Davies \& Jacques，ICLR 2025}}
+
+@misc{terris2025unknown, author = {Terris, Morgan and others}, title = {Reconstruct Anything Model: A Lightweight Foundation Model for Computational Imaging}, howpublished = {arXiv:2503.08915}, year = {2025}, note = {正文 17.5#284 "Terris et al. (2025)" RAM；已联网坐实 arXiv:2503.08915；作者名单请补全}}
+
+@inproceedings{xu2025dmap, author = {Xu, Tongda and others}, title = {Rethinking Diffusion Posterior Sampling for General Inverse Problems}, booktitle = {International Conference on Learning Representations (ICLR)}, year = {2025}, note = {正文 13.3#745 "Xu et al. (2025) DMAP"；经作者确认为 ICLR 2025 + 篇名 'Rethinking DPS'；上一版占位标记已更正；余作者名单须按原文补全，DMAP 简称请核对}}

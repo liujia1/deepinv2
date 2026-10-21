@@ -36,7 +36,7 @@ python book/tools/scan_citations.py
 - [x] Phase 0  书稿区分离与版本管理（2026-10-16）
 - [x] Phase 1  结构审计（2026-10-16，见 `meta/全书缺口报告.md`）
 - [x] Phase 2  技术一致性校对（符号表 → 逐章修正）
-- [ ] Phase 3  参考文献体系（references.bib）——反查已完成（`meta/citations_review.md`，**211 条**；已经独立交叉复核 + 工具升级 v3 对齐），待逐条补全生成 bib
+- [x] Phase 3  参考文献体系（references.bib）——反查 211 条（`meta/citations_review.md`，独立交叉复核+工具 v3）→ 去重合并生成 `meta/references.bib`（**197 键**）+ `meta/citations_mapping.md`（正文↔bib键对照表）；结构自检通过；经多轮联网/正文逐条查证（坐实 DiffPIR/Hörmann/Monte-Carlo SURE/Quinto/DOC 等，并纠正 Ramani/Hörmann/Frikel/Tachella 等作者失实），**遗留 0 键 ⚠**——全部坐实完成（ 2026-10-20 三组清零）
 - [ ] Phase 4  成书组件补写（前言/符号总表/索引/后记）
 - [ ] Phase 5  排版构建管线（待定：Quarto / LaTeX / 出版社流程）
 - [ ] Phase 6  出版流程（定位：学术专著，Springer 式）
