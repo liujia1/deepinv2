@@ -40,6 +40,6 @@ python book/tools/validate_bib.py
 - [x] Phase 1  结构审计（2026-10-16，见 `meta/全书缺口报告.md`）
 - [x] Phase 2  技术一致性校对（符号表 → 逐章修正）
 - [x] Phase 3  参考文献体系（references.bib）——反查 211 条（`meta/citations_review.md`，独立交叉复核+工具 v3）→ 去重合并生成 `meta/references.bib`（**197 键**）+ `meta/citations_mapping.md`（正文↔bib键对照表）；结构自检通过（`book/tools/validate_bib.py`）；经多轮联网/正文逐条查证（坐实 DiffPIR/Hörmann/Monte-Carlo SURE/Quinto/DOC 等，纠正 Ramani/Hörmann/Frikel/Tachella 等作者失实）；wu→Trippe、chung2025→daras 两处正文张冠李戴**已于 2026-10-21 在排版前修正**（写作源+成书树同步），DPPS（Wu et al. 2024, ACM MM）同日坐实，**遗留 0 键 ⚠、0 项待核**——全部完成（2026-10-20 三组清零；2026-10-21 复核修订：holden 平反合并、tachella 合并、14 键规范更名、正文两处误引修正、DPPS 坐实）
-- [ ] Phase 4  成书组件补写（前言/符号总表/索引/后记）
+- [ ] Phase 4  成书组件补写（前言/索引/后记）——**符号总表已交稿**（2026-10-21 `绪论/符号总表.md`，211 行八节，含一符多义消歧表与两套记号体系对照；待作者审阅）
 - [ ] Phase 5  排版构建管线（待定：Quarto / LaTeX / 出版社流程）
 - [ ] Phase 6  出版流程（定位：学术专著，Springer 式）

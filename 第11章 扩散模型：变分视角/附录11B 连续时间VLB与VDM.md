@@ -8,11 +8,11 @@
 
 第10–11章的离散时间 VLB：
 
-$$L_\text{VLB} = \underbrace{D_\text{KL}(q(\mathbf{x}_T|\mathbf{x}_0) \| p(\mathbf{x}_T))}_{L_T} + \sum_{t=2}^T \underbrace{\mathbb{E}_q[D_\text{KL}(q(\mathbf{x}_{t-1}|\mathbf{x}_t, \mathbf{x}_0) \| p_\theta(\mathbf{x}_{t-1}|\mathbf{x}_t))]}_{L_{t-1}} - \underbrace{\mathbb{E}_q[\log p_\theta(\mathbf{x}_0|\mathbf{x}_1)]}_{\text{负}L_0}$$
+$$L_\text{VLB} = \underbrace{D_{\text{KL}}(q(\mathbf{x}_T|\mathbf{x}_0) \| p(\mathbf{x}_T))}_{L_T} + \sum_{t=2}^T \underbrace{\mathbb{E}_q[D_{\text{KL}}(q(\mathbf{x}_{t-1}|\mathbf{x}_t, \mathbf{x}_0) \| p_\theta(\mathbf{x}_{t-1}|\mathbf{x}_t))]}_{L_{t-1}} - \underbrace{\mathbb{E}_q[\log p_\theta(\mathbf{x}_0|\mathbf{x}_1)]}_{\text{负}L_0}$$
 
 当 $T\to\infty$、$\Delta t=1/T\to 0$，求和趋于积分。在连续时间 $t\in[0,1]$ 下：
 
-$$L_\text{VLB}^\text{cont} = \underbrace{D_\text{KL}(q(\mathbf{x}_1|\mathbf{x}_0) \| p(\mathbf{x}_1))}_{L_1} + \int_0^1 \mathbb{E}_q\left[\frac{1}{2}\left\|\frac{\mu_\theta(\mathbf{x}_t,t) - \tilde\mu_t(\mathbf{x}_t,\mathbf{x}_0)}{\sigma_t}\right\|^2\right]dt - \underbrace{\mathbb{E}_q[\log p_\theta(\mathbf{x}_0|x_{\varepsilon})]}_{L_0}$$
+$$L_\text{VLB}^\text{cont} = \underbrace{D_{\text{KL}}(q(\mathbf{x}_1|\mathbf{x}_0) \| p(\mathbf{x}_1))}_{L_1} + \int_0^1 \mathbb{E}_q\left[\frac{1}{2}\left\|\frac{\mu_\theta(\mathbf{x}_t,t) - \tilde\mu_t(\mathbf{x}_t,\mathbf{x}_0)}{\sigma_t}\right\|^2\right]dt - \underbrace{\mathbb{E}_q[\log p_\theta(\mathbf{x}_0|x_{\varepsilon})]}_{L_0}$$
 
 其中 $x_\varepsilon$ 是 $t\to 0^+$ 时的含噪状态。形式没变，只是"求和"换成了"沿时间的积分"。这一转变意味着：离散公式里的每一项、每个符号在连续下都有对应物，因此本章所有化简直觉依然成立，只是求和变成了积分、权重由离散点取均匀变成连续权重。
 

@@ -40,8 +40,10 @@ EXCLUDE_NAMES = {"experiment_cache.pkl", "experiment_cache_S30.pkl",
 # 这些子目录整体跳过
 EXCLUDE_DIR_PARTS = {"data", "__pycache__", "Pretrained_models", "old_assets",
                      "old_linear", "stale_bak", "orig_backup", "old_figs_backup",
-                     ".chinese", "rundir", "opt_out", "smoke_out", "smoke_out2",
+                     "rundir", "opt_out", "smoke_out", "smoke_out2",
                      "pycache_1261", "rerun"}
+# 注：`.chinese/` 不能排除——各实验脚本以 `sys.path.insert(0, '.chinese')`
+# 导入其中的 chinese_font.py（字体 .ttf 不在白名单，不会同步）。
 
 
 def find_chapters():
@@ -54,8 +56,9 @@ def find_chapters():
         if m:
             lab = d / f"第{m.group(1)}章 配套实验"
             if not lab.is_dir():
-                # 兜底：找名字含"配套实验"的子目录
-                cand = [c for c in d.iterdir() if c.is_dir() and "配套实验" in c.name]
+                # 兜底：找名字含"配套实验"/"配套实现"的子目录（第6章用的是后者）
+                cand = [c for c in d.iterdir()
+                        if c.is_dir() and ("配套实验" in c.name or "配套实现" in c.name)]
                 lab = cand[0] if cand else None
             chapters.append((int(m.group(1)), d, lab))
     chapters.sort()

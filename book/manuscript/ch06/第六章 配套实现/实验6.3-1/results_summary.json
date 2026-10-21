@@ -1,0 +1,20 @@
+{
+  "experiment": "实验6.3-1",
+  "config": {
+    "sigma": 1.0,
+    "N_train": 10000,
+    "N_mc": 5000,
+    "epochs": 500,
+    "lr": 0.001,
+    "seed": 42
+  },
+  "step1_final_dsm_loss_no_half_factor": 0.7243118286132812,
+  "step1_loss_floor_theory_2C": 0.7311281888199366,
+  "step2_corr_learned_vs_true_score": 0.9999811344823146,
+  "step3_j_dsm_trained": 0.3632550273175675,
+  "step3_j_esm_trained": 0.0001339636840527953,
+  "step3_c_sigma_mc": 0.3631210636335147,
+  "step3_c_sigma_theory": 0.3655640944099683,
+  "step3_c_sigma_random_init": 0.3635889546417714,
+  "step3_esm_loss_before_mc": 0.12879137221655884
+}

@@ -95,11 +95,26 @@ def rule_hat_eps(seg):          # #4（#1 之后跑）
     return seg
 
 def rule_gauss(seg):            # #5
-    return re.sub(r"(?<![\\A-Za-z_{])N\(", r"\\mathcal{N}(", seg)
+    # 例外（notation.md §八.1）：TDV 的多尺度 CNN 算子 N(Kx) / N(\cdot) 不是高斯分布，
+    # **不得**转成 \mathcal{N}。判据即“自变量是 K· 或 \cdot 而非概率密度”，直接编进负向前查。
+    # （2026-10-21 发现：未加该前查时，干跑会命中 2.4:208 与新写的 符号总表.md，后者是自找破坏。）
+    return re.sub(r"(?<![\\A-Za-z_{])N\((?!\s*(?:K|\\cdot))", r"\\mathcal{N}(", seg)
 
 def rule_kl(seg):               # #6
-    seg = re.sub(r"(?<![A-Za-z_])\\mathrm\{KL\}", r"D_\\text{KL}", seg)
-    seg = re.sub(r"(?<![A-Za-z_\\])D_KL\b", r"D_\\text{KL}", seg)
+    # 先修复历史双重套用缺陷 D_{D_\text{KL}} / D_{D_{\text{KL}}}（否则新条文仍留嵌套）。
+    seg = re.sub(r"D_\{D_\\text\{KL\}\}", r"D_{\\text{KL}}", seg)
+    seg = re.sub(r"D_\{D_\{\\text\{KL\}\}\}", r"D_{\\text{KL}}", seg)
+    # 再归一已在 D_{...} 内部的 \mathrm{KL}；若直接走下一条会把 \mathrm{KL} 换成
+    # D_\text{KL} 而产生 D_{D_\text{KL}} 嵌套缺陷（2026-10-21 于 ch01 附录1A/1.4 发现）。
+    seg = re.sub(r"D_\{\\mathrm\{KL\}\}", r"D_{\\text{KL}}", seg)
+    # lookbehind 须排除 `{` 与 `\`：仅替换独立的 \mathrm{KL}
+    seg = re.sub(r"(?<![A-Za-z_{\\])\\mathrm\{KL\}", r"D_{\\text{KL}}", seg)
+    seg = re.sub(r"(?<![A-Za-z_\\])D_KL\b", r"D_{\\text{KL}}", seg)
+    # 幂等归一：短形态 D_\text{KL} 统一为全书主流的带花括号形态。
+    # 此处**不能**加 (?<!\{) —— `D_\text{KL}` 不可能是 `D_{\text{KL}}` 的子串
+    # （后者 `D_` 之后紧跟 `{`），加负向断言反而会漏掉 `\underbrace{D_\text{KL}...}`
+    # 这类前一个字符恰好是 `{` 的站点（2026-10-21 于 ch11 附录/11.1 发现）。
+    seg = re.sub(r"D_\\text\{KL\}", r"D_{\\text{KL}}", seg)
     return seg
 
 def rule_expect(seg):           # #7（先归一 \mathbb E，再补裸 E[）
@@ -181,7 +196,7 @@ RULESETS = {
     3: ("mathbf 嵌套归一", rule_mathbf_nest),
     4: ("\\hat ε_θ → ε_θ", rule_hat_eps),
     5: ("裸 N( → \\mathcal{N}(", rule_gauss),
-    6: ("KL 记号 → D_\\text{KL}", rule_kl),
+    6: ("KL 记号 → D_{\\text{KL}}", rule_kl),
     7: ("期望 → \\mathbb{E}", rule_expect),
     8: ("Unicode ‖ → \\|", rule_norm),
     9: ("\\( \\) → $ $", rule_inline_dollar),
