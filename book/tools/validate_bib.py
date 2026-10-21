@@ -118,16 +118,21 @@ def main():
     main_rows = [r for r in rows if r[0].isdigit()]
     bibkeys = set(keys)
     bad_keys = []
-    redirect_ok = True
+    open_items = []
     for r in main_rows:
         k = r[4].strip()
         status = r[5].strip()
         if k not in bibkeys:
             if "废弃" in status or "redirect" in status:
                 continue  # 已标注废弃/重定向的行允许键不在 bib
+            if "⚠" in status or "待核" in status:
+                open_items.append(f"#{r[0]} {r[1].strip()} ({r[2].strip()})")
+                continue  # 待核开放项：键尚未建立，计警告不计失败
             bad_keys.append(f"#{r[0]} {k}")
     if bad_keys:
         fails.append("映射表键在 bib 中不存在: " + "; ".join(bad_keys))
+    if open_items:
+        warns.append(f"映射表 ⚠ 待核开放项 ({len(open_items)}): {'; '.join(open_items)}")
     cited = {r[4].strip() for r in main_rows if r[4].strip() in bibkeys}
     uncited = sorted(bibkeys - cited)
     if uncited:
@@ -150,6 +155,11 @@ def main():
 
     # ---------- 汇总 ----------
     print()
+    if warns:
+        print(f"警告 {len(warns)} 项（不阻塞）：")
+        for w in warns:
+            print("  ! " + w)
+        print()
     if fails:
         print(f"*** 校验失败 {len(fails)} 项 ***")
         for f in fails:

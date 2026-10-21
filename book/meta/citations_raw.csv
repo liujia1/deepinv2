@@ -160,43 +160,43 @@ index,author,year,count,first_seen
 159,"Rombach et al",2022,5,ch13\13.3 近似方法分类与DPS深度剖析.md#506
 160,"Tachella et al",2022,1,ch17\17.5 等变成像：从不完整测量中学习.md#39
 161,"Terris et al",2022,1,ch05\5.5 PnP框架：用去噪器替换先验梯度.md#249
-162,"Zamir et al",2022,2,ch15\15.3 从ViT到DiT：Transformer接管扩散模型.md#92
-163,"Zhang & Chen",2022,1,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#155
-164,"Albergo & Vanden-Eijnden",2023,1,ch14\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#312
-165,"Cardoso et al",2023,3,ch13\13.3 近似方法分类与DPS深度剖析.md#630
-166,"Chung et al",2023,10,ch13\13.2 后验得分分解：条件化的理论基础.md#71
-167,"Feng et al",2023,3,ch13\13.3 近似方法分类与DPS深度剖析.md#452
-168,"Kim et al",2023,2,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#92
-169,"Kingma & Gao",2023,1,ch11\附录11B 连续时间VLB与VDM.md#44
-170,"Lipman et al",2023,8,ch14\14.3 Flow Matching.md#68
-171,"Liu et al",2023,5,ch14\14.4 Rectified Flow.md#3
-172,"Mardani et al",2023,3,ch13\13.3 近似方法分类与DPS深度剖析.md#434
-173,"Peebles & Xie",2023,10,ch14\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#199
-174,"Pooladian et al",2023,1,ch14\14.3 Flow Matching.md#719
-175,"Song & Dhariwal",2023,2,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#92
-176,"Song et al",2023,8,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#72
-177,"Tachella et al",2023,2,ch17\17.5 等变成像：从不完整测量中学习.md#182
-178,"Zhang et al",2023,3,ch13\13.4 引导采样：从分类器引导到逆问题引导.md#408
-179,"Zhao et al",2023,1,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#155
-180,"Zhu et al",2023,5,ch13\13.3 近似方法分类与DPS深度剖析.md#516
-181,"Black Forest Labs",2024,3,ch14\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#262
-182,"Chen & Lipman",2024,1,ch14\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#312
-183,"Daras et al",2024,6,ch13\13.3 近似方法分类与DPS深度剖析.md#28
-184,"Esser et al",2024,5,ch14\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#3
-185,"Gat et al",2024,2,ch14\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#346
-186,"He et al",2024,1,ch13\13.3 近似方法分类与DPS深度剖析.md#747
-187,"Holderrieth et al",2024,1,ch14\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#348
-188,"Li & Pereira",2024,8,ch13\13.5 扩散最优控制（进阶）.md#73
-189,"Liu et al",2024,2,ch14\14.4 Rectified Flow.md#313
-190,"Lou et al",2024,1,ch14\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#347
-191,"Lu & Song",2024,2,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#92
-192,"Nakkiran et al",2024,3,ch14\14.3 Flow Matching.md#453
-193,"Patel et al",2024,1,ch13\13.3 近似方法分类与DPS深度剖析.md#750
-194,"Sahoo et al",2024,2,ch14\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#347
-195,"Tong et al",2024,2,ch14\14.3 Flow Matching.md#719
-196,"Wu et al",2024,4,ch13\13.3 近似方法分类与DPS深度剖析.md#630
-197,"Yang et al",2024,1,ch13\13.3 近似方法分类与DPS深度剖析.md#748
-198,"Chung et al",2025,2,ch12\12.7 全书叙事的汇合.md#158
+162,"Trippe et al",2022,3,ch13\13.3 近似方法分类与DPS深度剖析.md#630
+163,"Zamir et al",2022,2,ch15\15.3 从ViT到DiT：Transformer接管扩散模型.md#92
+164,"Zhang & Chen",2022,1,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#155
+165,"Albergo & Vanden-Eijnden",2023,1,ch14\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#312
+166,"Cardoso et al",2023,3,ch13\13.3 近似方法分类与DPS深度剖析.md#630
+167,"Chung et al",2023,10,ch13\13.2 后验得分分解：条件化的理论基础.md#71
+168,"Feng et al",2023,3,ch13\13.3 近似方法分类与DPS深度剖析.md#452
+169,"Kim et al",2023,2,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#92
+170,"Kingma & Gao",2023,1,ch11\附录11B 连续时间VLB与VDM.md#44
+171,"Lipman et al",2023,8,ch14\14.3 Flow Matching.md#68
+172,"Liu et al",2023,5,ch14\14.4 Rectified Flow.md#3
+173,"Mardani et al",2023,3,ch13\13.3 近似方法分类与DPS深度剖析.md#434
+174,"Peebles & Xie",2023,10,ch14\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#199
+175,"Pooladian et al",2023,1,ch14\14.3 Flow Matching.md#719
+176,"Song & Dhariwal",2023,2,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#92
+177,"Song et al",2023,8,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#72
+178,"Tachella et al",2023,2,ch17\17.5 等变成像：从不完整测量中学习.md#182
+179,"Zhang et al",2023,3,ch13\13.4 引导采样：从分类器引导到逆问题引导.md#408
+180,"Zhao et al",2023,1,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#155
+181,"Zhu et al",2023,5,ch13\13.3 近似方法分类与DPS深度剖析.md#516
+182,"Black Forest Labs",2024,3,ch14\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#262
+183,"Chen & Lipman",2024,1,ch14\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#312
+184,"Daras et al",2024,8,ch12\12.7 全书叙事的汇合.md#158
+185,"Esser et al",2024,5,ch14\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#3
+186,"Gat et al",2024,2,ch14\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#346
+187,"He et al",2024,1,ch13\13.3 近似方法分类与DPS深度剖析.md#747
+188,"Holderrieth et al",2024,1,ch14\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#348
+189,"Li & Pereira",2024,8,ch13\13.5 扩散最优控制（进阶）.md#73
+190,"Liu et al",2024,2,ch14\14.4 Rectified Flow.md#313
+191,"Lou et al",2024,1,ch14\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#347
+192,"Lu & Song",2024,2,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#92
+193,"Nakkiran et al",2024,3,ch14\14.3 Flow Matching.md#453
+194,"Patel et al",2024,1,ch13\13.3 近似方法分类与DPS深度剖析.md#750
+195,"Sahoo et al",2024,2,ch14\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#347
+196,"Tong et al",2024,2,ch14\14.3 Flow Matching.md#719
+197,"Wu et al",2024,1,ch13\13.3 近似方法分类与DPS深度剖析.md#746
+198,"Yang et al",2024,1,ch13\13.3 近似方法分类与DPS深度剖析.md#748
 199,"Falk, Habring & Pock",2025,3,ch04\4.6 加速采样方法：过松弛与惯性Langevin算法.md#50
 200,"Gutha et al",2025,1,ch13\13.3 近似方法分类与DPS深度剖析.md#539
 201,"Habring et al",2025,2,ch05\5.7 本章小结：去噪器即隐式先验即得分估计器.md#56
