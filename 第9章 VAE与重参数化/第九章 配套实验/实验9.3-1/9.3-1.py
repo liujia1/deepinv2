@@ -100,6 +100,14 @@ NUM_EPOCHS = 20
 BETA = 4.0  # 强KL正则化: β 决定信息预算(KL总量), 预算越小能被养活的维度越少
 LATENT_DIM = 50  # 冗余隐空间: dz 只决定分母大小(对照显示 β=4 时 dz=20/50 的 KL 总量与 PSNR 几乎相同)
 ACTIVE_THRESHOLD = 0.01  # 活跃维度判据: 该维平均KL > 0.01
+
+# 快速验证模式必须在 checkpoint 加载之前判定：否则 QUICK_TEST 产出的 3 轮成品
+# 会被 is_final 标记为"已完成"，随后的正式运行会静默跳过训练、沿用欠拟合模型。
+QUICK = os.environ.get('QUICK_TEST', '') == '1'
+RUN_EPOCHS = 3 if QUICK else NUM_EPOCHS
+if QUICK:
+    CHECKPOINT_PATH = CHECKPOINT_PATH.replace('.pth', '_quick.pth')
+    print(f"\n[快速验证模式] 仅训练 {RUN_EPOCHS} 轮 -> {os.path.basename(CHECKPOINT_PATH)}")
 # =================================================================================
 
 # ============================================================
@@ -208,13 +216,19 @@ history = {
 
 def _cfg_mismatch(checkpoint):
     """返回与当前配置不符的字段（旧 checkpoint 无这些字段时视为兼容）
-    只校验决定曲线语义的 beta / latent_dim; num_epochs 仅做溯源记录。
+    校验决定曲线语义的 beta / latent_dim，以及 quick / num_epochs：
+    防止 QUICK_TEST 的短轮次成品被正式运行当成完整模型复用。
     """
     bad = []
     for key, cur in (('beta', BETA), ('latent_dim', LATENT_DIM)):
         saved = checkpoint.get(key)
         if saved is not None and abs(saved - cur) > 1e-12:
             bad.append(f'{key}: checkpoint={saved} vs 当前={cur}')
+    if bool(checkpoint.get('quick', False)) != QUICK:
+        bad.append(f'quick: checkpoint={checkpoint.get("quick", False)} vs 当前={QUICK}')
+    saved_epochs = checkpoint.get('num_epochs')
+    if saved_epochs is not None and saved_epochs < RUN_EPOCHS:
+        bad.append(f'num_epochs: checkpoint={saved_epochs} vs 目标={RUN_EPOCHS}')
     return bad
 
 
@@ -275,15 +289,10 @@ if checkpoint is not None:
 
 # 训练循环
 if not is_final:
-    num_epochs = NUM_EPOCHS  # 局部变量，允许被QUICK_TEST模式覆盖
+    num_epochs = RUN_EPOCHS
     beta = BETA
     print(f"\n开始训练 VAE (epochs={num_epochs}, beta={beta}, d_z={LATENT_DIM})...")
-    
-    # 快速验证模式（覆盖num_epochs为3轮，用于调试）
-    if os.environ.get('QUICK_TEST', '') == '1':
-        num_epochs = 3
-        print(f"\n[快速验证模式] 仅训练 {num_epochs} 轮")
-    
+
     # 边界保护
     if start_epoch >= num_epochs:
         print(f"  注意: start_epoch({start_epoch}) >= num_epochs({num_epochs}), 无需继续训练")
@@ -378,6 +387,7 @@ if not is_final:
                 'beta': BETA,
                 'latent_dim': LATENT_DIM,
                 'num_epochs': num_epochs,
+                'quick': QUICK,
                 'is_final': False
             }, CHECKPOINT_PATH)
         
@@ -395,6 +405,7 @@ if not is_final:
                 'beta': BETA,
                 'latent_dim': LATENT_DIM,
                 'num_epochs': num_epochs,
+                'quick': QUICK,
                 'is_final': True
             }, CHECKPOINT_PATH)
             print(f"✓ 训练完成, 模型已保存: {CHECKPOINT_PATH}")

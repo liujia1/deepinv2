@@ -245,6 +245,22 @@ print(f"→ 说明: 匹配λ(t)本就是从w_t反解得到的，比值=2是与�
 print(f"  (换成任意调度仍精确为2)；此处自检的是代码实现与12.4节公式严格一致，")
 print(f"  而非对一条经验规律的验证。严格证明见12.4节(其标准约定下比值为1)。")
 
+# 复核：换成一个随机非均匀调度（排序后单调递增），比值应仍然精确为 2
+# 用局部 generator，避免扰动全局 RNG（后续绘图的可复现性不受影响）
+_gen_rand = torch.Generator().manual_seed(2026)
+betas_rand, _ = torch.sort(torch.rand(T, generator=_gen_rand, dtype=torch.float64) * 0.02 + 1e-4)
+alphas_rand = 1 - betas_rand
+ab_rand = torch.cumprod(alphas_rand, dim=0)
+abp_rand = torch.cat([torch.ones(1, dtype=torch.float64), ab_rand[:-1]])
+pv_rand = betas_rand * (1 - abp_rand) / (1 - ab_rand)
+w_rand = betas_rand**2 / (2 * pv_rand * alphas_rand * (1 - ab_rand))
+lam_rand = betas_rand[1:] * (1 - ab_rand[1:]) / ((1 - abp_rand[1:]) * alphas_rand[1:])
+dsm_rand = lam_rand / (1 - ab_rand[1:])
+ratio_rand = (dsm_rand / w_rand[1:]).numpy()
+ratio_rand_max_dev = float(np.max(np.abs(ratio_rand - 2.0)))
+print(f"随机非均匀调度复核: 比值均值 {ratio_rand.mean():.6f}，"
+      f"与 2 的最大偏差 {ratio_rand_max_dev:.2e}")
+
 # 可视化：同一图上对比
 fig, ax = plt.subplots(1, 1, figsize=(10, 6))
 t_range = np.arange(1, T)
@@ -338,6 +354,8 @@ results_summary = {
         'ratio_mean': ratio_mean,
         'ratio_std': ratio_std,
         'ratio_max_dev_from_2': ratio_max_dev,
+        'random_schedule_ratio_mean': float(ratio_rand.mean()),
+        'random_schedule_max_dev_from_2': ratio_rand_max_dev,
         'note': 'DSM权重 = 2 × VLB权重；匹配公式的代数恒等性自检（与噪声调度无关，任意调度下恒为2）',
     },
     'VLB_weights_sampled': {

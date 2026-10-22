@@ -8,6 +8,8 @@
     "ratio_mean": 2.0,
     "ratio_std": 3.324179968789511e-16,
     "ratio_max_dev_from_2": 1.3322676295501878e-15,
+    "random_schedule_ratio_mean": 2.0,
+    "random_schedule_max_dev_from_2": 8.881784197001252e-16,
     "note": "DSM权重 = 2 × VLB权重；匹配公式的代数恒等性自检（与噪声调度无关，任意调度下恒为2）"
   },
   "VLB_weights_sampled": {

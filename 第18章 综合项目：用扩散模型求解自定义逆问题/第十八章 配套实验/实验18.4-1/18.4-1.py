@@ -19,7 +19,7 @@ Step 5: ★方法对比与决策指南 —— PSNR/SSIM表格、运行时间、�
 运行前提：需GPU（Colab T4即可），需下载预训练模型(DRUNet/DiffUNet)
 """
 
-import os, sys, time, copy
+import os, sys, time, copy, hashlib
 import subprocess  # ★ 用于 pip install 失败时显式退出（与 18_2-1.py 风格统一，避免 os.system 静默失败）
 import numpy as np
 import torch
@@ -107,8 +107,10 @@ cache_file = os.path.join(SAVE_DIR, 'experiment_cache.pkl')  # ★ 缓存文件�
 #       (d) Tikhonov 正则强度比例 0.1→0.01，修复轻度模糊场景正则过强、PSNR 反低于观测；
 #       (e) Pareto 图纵轴改为"相对基线增益ΔPSNR"（跨场景可比），与左图口径声明一致；
 #       (f) 决策指南改为由实测指标动态生成，不再预设"扩散质量最高"等固定结论。
+#   v9: 修复场景的 Inpainting 掩码改为固定 CPU Generator 生成并记录 hash，
+#       避免依赖 deepinv 内部未记录的随机掩码（跨版本/设备不可复现）。
 #   加载时版本不匹配的旧缓存会自动失效，避免复用基于错误代码的旧结果。
-CACHE_VERSION = 8
+CACHE_VERSION = 9
 
 # 安装deepinv
 try:
@@ -276,20 +278,39 @@ except Exception as e:
 
 # 1c. 修复场景
 print("\n构造修复场景...")
+
+
+def _fixed_mask(img_size, keep_ratio, seed):
+    """用固定 CPU Generator 生成三通道一致的 0/1 掩码，避免依赖 deepinv 内部随机源。"""
+    g = torch.Generator(device='cpu').manual_seed(seed)
+    m = (torch.rand((1, img_size[1], img_size[2]), generator=g) < keep_ratio).float()
+    return m.expand(img_size[0], -1, -1).clone()
+
+
+def _mask_hash(m):
+    return hashlib.md5(m.cpu().numpy().tobytes()).hexdigest()[:16]
+
+
 try:
-    inp50 = Inpainting(img_size=(3, 256, 256), mask=0.5, device=device)
+    # ★ 固定掩码：此前直接用 mask=0.5/0.2，由 deepinv 内部生成、脚本未记录；
+    #   这里显式生成并打印 hash，保证跨运行/跨设备可追溯。
+    mask50 = _fixed_mask((3, 256, 256), 0.5, seed=123)
+    mask80 = _fixed_mask((3, 256, 256), 0.2, seed=123)
+    inp50 = Inpainting(img_size=(3, 256, 256), mask=mask50, device=device)
     inp50.set_noise_model(GaussianNoise(sigma=0.01))
 
     # ★ 修复：mask 语义为"保留比例"而非"缺失比例"（见 deepinv.physics.Inpainting 文档）
     #   原代码 mask=0.8 表示保留80%（仅缺失20%），导致80%修复场景比50%还简单、PSNR倒挂。
     #   修正为 mask=0.2，即保留20%（缺失80%）。
-    inp80 = Inpainting(img_size=(3, 256, 256), mask=0.2, device=device)
+    inp80 = Inpainting(img_size=(3, 256, 256), mask=mask80, device=device)
     inp80.set_noise_model(GaussianNoise(sigma=0.01))
 
     y_inp50 = inp50(x_true)
     y_inp80 = inp80(x_true)
     scenarios['50%修复'] = {'physics': inp50, 'y': y_inp50}
     scenarios['80%修复'] = {'physics': inp80, 'y': y_inp80}
+    print(f"  掩码: 50% keep={float(mask50.mean()):.4f} hash={_mask_hash(mask50)}; "
+          f"80% keep={float(mask80.mean()):.4f} hash={_mask_hash(mask80)}")
     print(f"  50%缺失: PSNR={compute_psnr(x_true, y_inp50):.2f} dB")
     print(f"  80%缺失: PSNR={compute_psnr(x_true, y_inp80):.2f} dB")
     has_inp_scenario = True
@@ -1105,11 +1126,13 @@ if has_diffpir and not skip_step4:
             t_diffpir_total = time.perf_counter() - t_start
             t_diffpir = t_diffpir_total / n_diffusion_samples  # ★ 单样本（单张重建）耗时，与其他方法口径一致
 
-            x_diffpir = torch.stack(sample_imgs, dim=0).mean(dim=0).clamp(0, 1)  # 后验均值(MMSE)
-            psnr_diffpir = float(np.mean(sample_psnrs))  # 单次样本PSNR的均值（表头口径）
-            psnr_std_diffpir = float(np.std(sample_psnrs))
-            psnr_mmse_diffpir = compute_psnr(x_true, x_diffpir)  # 后验均值图的PSNR（配图口径）
-            ssim_diffpir = compute_ssim(x_true, x_diffpir)
+            # 口径说明：psnr_diffpir 是单样本 PSNR 的均值；
+            # ssim_diffpir 是 3 样本平均图的 SSIM——两者不是同一张图，报告中必须分别标注。
+            x_diffpir = torch.stack(sample_imgs, dim=0).mean(dim=0).clamp(0, 1)  # 后验均值的蒙特卡洛估计
+            psnr_diffpir = float(np.mean(sample_psnrs))  # 单样本 PSNR 的均值（表头 PSNR 口径）
+            psnr_std_diffpir = float(np.std(sample_psnrs))  # 总体标准差（ddof=0）；n=3 时不要当样本标准差
+            psnr_mmse_diffpir = compute_psnr(x_true, x_diffpir)  # 均值图的 PSNR（与单样本 PSNR 不同图）
+            ssim_diffpir = compute_ssim(x_true, x_diffpir)  # 均值图的 SSIM（与 PSNR 不同图）
             results[scenario_name]['DiffPIR(扩散)'] = {
                 'psnr': psnr_diffpir, 'psnr_std': psnr_std_diffpir,
                 'psnr_mmse': psnr_mmse_diffpir, 'ssim': ssim_diffpir,
