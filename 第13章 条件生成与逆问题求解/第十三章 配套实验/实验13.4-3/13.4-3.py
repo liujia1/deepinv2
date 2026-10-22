@@ -557,7 +557,7 @@ ax2.plot(bc_zeta, bc_psnr, 'g*', markersize=16, zorder=5,
          markeredgecolor='darkgreen', markeredgewidth=0.5)
 ax2.annotate(rf"Chung对照最优 $\zeta'$={bc_zeta:g}" + '\n' + rf'PSNR={bc_psnr:.2f}dB',
              xy=(bc_zeta, bc_psnr),
-             xytext=(0.5, bc_psnr - 7.0),  # 右移到蓝线下方，避免遮挡上升段
+             xytext=(0.65, bc_psnr - 3.75),  # 蓝线上方空档：高于下降段、低于绿星与标题
              fontsize=9, ha='left', va='center',
              arrowprops=dict(arrowstyle='->', color='gray', alpha=0.7),
              bbox=dict(boxstyle='round,pad=0.3', facecolor='#dff9e3', alpha=0.85))

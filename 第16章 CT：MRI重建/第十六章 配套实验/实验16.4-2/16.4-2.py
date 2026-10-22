@@ -31,7 +31,7 @@ from matplotlib import rcParams
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset
 from torch.optim import Adam
 from tqdm import tqdm
 
@@ -461,11 +461,15 @@ def compute_psnr_batch(output, target):
     return np.mean(vals)
 
 
-def train_one_model(model, train_loader, test_loader, device, ckpt_path,
+def train_one_model(model, train_loader, val_loader, device, ckpt_path,
                     model_name='Model', n_epochs=30, lr=1e-3,
                     loss_type='mse', eval_every=5):
     """
     通用训练函数——支持 resume、CPU 跳过、epoch 级 checkpoint、进度条
+
+    ★ val_loader 必须是**独立验证集**（从训练集切分），不能传 test_loader：
+      若用测试集选最佳 epoch，报出的测试 PSNR 就是“在测试集上挑最好一轮”的
+      结果，会带乐观偏置（相当于拿答案选模型）。
 
     Checkpoint 格式：
       - 中间状态: {epoch, model_state, optimizer_state, losses, is_final: False}
@@ -559,7 +563,7 @@ def train_one_model(model, train_loader, test_loader, device, ckpt_path,
             model.eval()
             psnr_vals = []
             with torch.no_grad():
-                for x_in, x_gt in test_loader:
+                for x_in, x_gt in val_loader:
                     x_in, x_gt = x_in.to(device), x_gt.to(device)
                     output = model(x_in)
                     psnr_vals.append(compute_psnr_batch(output, x_gt))
@@ -644,10 +648,23 @@ def main():
 
     train_dataset = CTDataset(train_fbp, train_gt)
     test_dataset  = CTDataset(test_fbp, test_gt)
-    train_loader  = DataLoader(train_dataset, batch_size=BATCH, shuffle=True, num_workers=0)
-    test_loader   = DataLoader(test_dataset,  batch_size=BATCH, shuffle=False, num_workers=0)
 
-    print(f"  训练集: {len(train_dataset)} 样本, 测试集: {len(test_dataset)} 样本")
+    # 独立验证集：从训练集切出 10%（固定种子）。验证集只用于“选最佳 epoch”，
+    # 测试集全程不参与选模——否则报出的测试 PSNR 是“在测试集上挑最好一轮”的
+    # 乐观值，相当于用答案选模型。
+    n_val = max(1, N_TRAIN // 10)
+    _perm = torch.randperm(N_TRAIN, generator=torch.Generator().manual_seed(1234))
+    tr_idx = _perm[n_val:].tolist()
+    val_idx = _perm[:n_val].tolist()
+    train_sub = Subset(train_dataset, tr_idx)
+    val_sub   = Subset(train_dataset, val_idx)
+
+    train_loader = DataLoader(train_sub,   batch_size=BATCH, shuffle=True,  num_workers=0)
+    val_loader   = DataLoader(val_sub,     batch_size=BATCH, shuffle=False, num_workers=0)
+    test_loader  = DataLoader(test_dataset, batch_size=BATCH, shuffle=False, num_workers=0)
+
+    print(f"  训练/验证/测试集: {len(train_sub)} / {len(val_sub)} / {len(test_dataset)} 样本"
+          f"（验证集从训练集切出，测试集不参与选模）")
     print(f"  图像尺寸: {IMG_SIZE}×{IMG_SIZE}, Radon 角度数: {N_ANGLES}, 噪声 sigma: {NOISE_SIG}")
 
     # FBP 基线 PSNR
@@ -664,6 +681,7 @@ def main():
         'config': {
             'img_size': IMG_SIZE, 'n_angles': N_ANGLES, 'noise_sigma': NOISE_SIG,
             'n_train': N_TRAIN, 'n_test': N_TEST, 'batch_size': BATCH,
+            'n_val': n_val, 'val_source': '从训练集切出 10%（seed=1234），测试集不参与选模',
         },
         'baseline': {
             'fbp_psnr_avg': round(float(fbp_psnr_base), 2),
@@ -682,7 +700,7 @@ def main():
 
     ckpt_unet = os.path.join(CKPT_DIR, 'unet_ct_ckpt.pt')
     unet, loss_unet = train_one_model(
-        unet, train_loader, test_loader, device, ckpt_unet,
+        unet, train_loader, val_loader, device, ckpt_unet,
         model_name='UNet(MSE)', n_epochs=N_EPOCHS_UNET, lr=1e-3,
         loss_type='mse', eval_every=5)
 
@@ -697,7 +715,7 @@ def main():
 
     ckpt_vdsr = os.path.join(CKPT_DIR, 'vdsr_ct_ckpt.pt')
     vdsr, loss_vdsr = train_one_model(
-        vdsr, train_loader, test_loader, device, ckpt_vdsr,
+        vdsr, train_loader, val_loader, device, ckpt_vdsr,
         model_name='VDSR(MSE)', n_epochs=N_EPOCHS_VDSR, lr=1e-3,
         loss_type='mse', eval_every=5)
 
@@ -707,9 +725,11 @@ def main():
     print("─" * 40)
 
     unet_mae = CTUNet(in_ch=1, out_ch=1, ch_list=(32, 64, 128))
+    num_params_unet_mae = sum(p.numel() for p in unet_mae.parameters())
+    print(f"  UNet(MAE) 参数量: {num_params_unet_mae:,}（与 UNet(MSE) 同结构，应相等）")
     ckpt_unet_mae = os.path.join(CKPT_DIR, 'unet_ct_mae_ckpt.pt')
     unet_mae, loss_unet_mae = train_one_model(
-        unet_mae, train_loader, test_loader, device, ckpt_unet_mae,
+        unet_mae, train_loader, val_loader, device, ckpt_unet_mae,
         model_name='UNet(MAE)', n_epochs=N_EPOCHS_MAE, lr=1e-3,
         loss_type='mae', eval_every=3)
 
@@ -827,7 +847,7 @@ def main():
         },
         'unet_mae': {
             'psnr_test': psnr_unet_mae, 'psnr_shepp_logan': sl_psnr_unet_mae,
-            'ready': unet_mae_ready,
+            'params': num_params_unet_mae, 'ready': unet_mae_ready,
         },
     }
 
