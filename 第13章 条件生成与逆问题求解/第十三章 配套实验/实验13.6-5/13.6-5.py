@@ -4,7 +4,7 @@
 
 实验内容：
   - 使用同一初始图像 + 不同strength参数
-  - 演示图文一致性与多样性的权衡
+  - 演示 strength 对“初始图保真 vs 重绘自由度”的影响（多样性未实测）
   - strength与DPS的zeta、CFG的s的类比
 
 注意：本实验需要GPU和预训练模型下载。
@@ -62,7 +62,7 @@ except ImportError:
 print("\n" + "=" * 60)
 print("实验13.6-5: img2img strength参数效应")
 print("=" * 60)
-print("知识点: strength参数, 质量-多样性权衡的实践验证")
+print("知识点: strength参数, 初始图保真 vs 重绘自由度（单样本趋势）")
 
 
 import torch
@@ -79,7 +79,7 @@ print(f"\n使用设备: {device}")
 
 
 print("=" * 60)
-print("步骤1：strength参数与质量-多样性权衡")
+print("步骤1：strength参数与保真-自由度趋势")
 print("=" * 60)
 
 print("""
@@ -169,7 +169,7 @@ if HAS_DEPS and device == "cuda":
                 axes[idx + 1].axis('off')
                 axes[idx + 1].set_title(f'strength={strength}', fontsize=12)
 
-            plt.suptitle(f'strength参数效应：初始图一致性与多样性的权衡（13.6节）\nprompt: "{PROMPT}"',
+            plt.suptitle(f'strength参数效应：初始图保真 vs 重绘自由度（13.6节，单样本）\nprompt: "{PROMPT}"',
                          fontsize=13, y=1.05)
             plt.tight_layout()
             strength_path = os.path.join(SAVE_DIR, "strength参数效应.png")
@@ -215,7 +215,7 @@ print("""
    - strength大 -> 加噪起点高 -> 多样性高、与初始图一致性低
    - strength小 -> 加噪起点低 -> 多样性低、保留原图
 
-2. 统一的质量-多样性权衡框架
+2. 统一的保真-自由度框架（“多样性”需每档多种子实测，本实验未测）
    - DPS: zeta控制似然修正强度（约束对象：观测图像y）
    - CFG: s控制条件/无条件混合（约束对象：文本prompt）
    - img2img: strength控制加噪程度（约束对象：初始图像）

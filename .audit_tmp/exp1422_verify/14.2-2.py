@@ -167,7 +167,7 @@ class CINN(torch.nn.Module):
         s1, t1 = self.net1(y)
         u1 = x1                                   # 透传
         u2 = x2 * torch.exp(s1) + t1              # 层1 变换
-        s2, t2 = self.net2(y, u2.detach())        # 条件于 (y, u2)
+        s2, t2 = self.net2(y, u2)                 # 条件于 (y, u2)，不 detach 以保证精确 ML 梯度
         z1 = u1 * torch.exp(s2) + t2              # 层2 变换
         z2 = u2                                   # 透传
         z = torch.cat([z1, z2], dim=1)
@@ -200,25 +200,37 @@ print("  采样   x = f^{-1}(z; y):  z ~ N(0,I) 一次前向得到后验样本�
 # ══════════════════════════════════════════════════════════
 print("\n[步骤 2] 训练 cINN（最大似然）...")
 
+weights_path = os.path.join(SAVE_DIR, 'cinn_weights.pt')
+losses_path = os.path.join(SAVE_DIR, 'losses.npy')
 model = CINN().to(device)
-opt = torch.optim.Adam(model.parameters(), lr=1e-3)
-n_iters = 6000
-batch_size = 256
-losses = []
-t_start = time.time()
-for it in range(n_iters):
-    x = sample_prior(batch_size).to(device)
-    y = forward_obs(x).to(device)
-    z, logdet = model.forward(x, y)
-    # NLL = -mean[ log N(z;0,I) + log|det J| ]
-    nll = (0.5 * (z ** 2).sum(1) - logdet).mean()
-    opt.zero_grad()
-    nll.backward()
-    opt.step()
-    losses.append(nll.item())
-    if (it + 1) % 1000 == 0:
-        print(f"  迭代 {it+1}/{n_iters}: NLL = {nll.item():.4f}")
-print(f"  训练完成，耗时 {time.time()-t_start:.1f} 秒，最终 NLL = {losses[-1]:.4f}")
+if os.path.exists(weights_path) and os.path.exists(losses_path):
+    # 已有权重：跳过训练，直接出图（删除 cinn_weights.pt / losses.npy 可强制重新训练）
+    model.load_state_dict(torch.load(weights_path, map_location=device))
+    model.eval()
+    losses = np.load(losses_path).tolist()
+    print(f"  已加载现成权重 {os.path.basename(weights_path)}，跳过训练（最终 NLL = {losses[-1]:.4f}）")
+else:
+    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+    n_iters = 6000
+    batch_size = 256
+    losses = []
+    t_start = time.time()
+    for it in range(n_iters):
+        x = sample_prior(batch_size).to(device)
+        y = forward_obs(x).to(device)
+        z, logdet = model.forward(x, y)
+        # NLL = -mean[ log N(z;0,I) + log|det J| ]，含归一化常数 D/2·log(2π)
+        nll = (0.5 * (z ** 2).sum(1) + 0.5 * z.shape[1] * np.log(2 * np.pi) - logdet).mean()
+        opt.zero_grad()
+        nll.backward()
+        opt.step()
+        losses.append(nll.item())
+        if (it + 1) % 1000 == 0:
+            print(f"  迭代 {it+1}/{n_iters}: NLL = {nll.item():.4f}")
+    torch.save(model.state_dict(), weights_path)
+    np.save(losses_path, np.asarray(losses, dtype=np.float32))
+    print(f"  训练完成，耗时 {time.time()-t_start:.1f} 秒，最终 NLL = {losses[-1]:.4f}")
+    print(f"  权重已保存: {weights_path}（下次运行自动跳过训练）")
 
 # 损失曲线
 fig, ax = plt.subplots(figsize=(7, 4.5))
@@ -334,17 +346,21 @@ for ax, st, lab in zip(axes, stats_all, test_labels):
     acov = st['analytic_cov']
     sm = st['sample_mean']
     scov = st['sample_cov']
-    # 解析后验 2σ 椭圆
+    # 解析后验 2σ 椭圆（跳过后验权重可忽略的分量：w<1e-3 时 2000 个样本期望出现 <2 个）
     for c in comps:
+        if c['w'] < 1e-3:
+            continue
         eigv, eigvec = np.linalg.eigh(c['cov'])
         theta = np.linspace(0, 2 * np.pi, 100)
-        ell = 2 * np.sqrt(eigv) @ (eigvec @ np.stack([np.cos(theta), np.sin(theta)]))
+        circle = np.stack([np.cos(theta), np.sin(theta)])          # (2,100)
+        ell = eigvec @ (2 * np.sqrt(eigv)[:, None] * circle)       # 先主轴缩放再旋转
         ax.plot(c['mean'][0] + ell[0], c['mean'][1] + ell[1], color='red', lw=1.5,
                 label='解析后验 2σ' if c is comps[0] else None)
     # 样本协方差 2σ 椭圆
     eigv, eigvec = np.linalg.eigh(scov)
     theta = np.linspace(0, 2 * np.pi, 100)
-    ell = 2 * np.sqrt(eigv) @ (eigvec @ np.stack([np.cos(theta), np.sin(theta)]))
+    circle = np.stack([np.cos(theta), np.sin(theta)])
+    ell = eigvec @ (2 * np.sqrt(eigv)[:, None] * circle)
     ax.plot(sm[0] + ell[0], sm[1] + ell[1], color='steelblue', lw=2.0,
             label='cINN 样本 2σ')
     ax.scatter([am[0]], [am[1]], marker='*', s=160, color='red', zorder=5, label='解析均值')

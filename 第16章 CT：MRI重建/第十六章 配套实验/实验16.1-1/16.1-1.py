@@ -149,7 +149,20 @@ print("\n" + "=" * 60)
 print("步骤2：反投影 vs FBP——为什么需要滤波？（16.1.4节）")
 print("=" * 60)
 
-recon_bp = iradon(sinogram_full, theta=theta_full, circle=True, filter_name=None)
+def calibrate_scale(x_hat, x_ref):
+    """最小二乘估计一个全局尺度因子 s：min_s ||s*x_hat - x_ref||^2。
+
+    iradon(filter_name=None) 的输出量级是“线积分”而不是“图像灰度”（本例约 10~40，
+    而 phantom ∈ [0,1]）。直接拿它算 PSNR 会得到 -28 dB 这种无意义的数值——
+    那不是“模糊程度”的度量，只是整体幅度不匹配。这里只校准亮度，不改变任何结构。
+    注意：FBP 分支的 ramp 滤波自带归一化，不需要这一步。
+    """
+    s = float((x_ref * x_hat).sum() / np.sum(x_hat ** 2))
+    return s * x_hat, s
+
+
+recon_bp, scale_bp = calibrate_scale(
+    iradon(sinogram_full, theta=theta_full, circle=True, filter_name=None), phantom)
 recon_fbp = iradon(sinogram_full, theta=theta_full, circle=True, filter_name='ramp')
 
 psnr_bp = psnr(phantom, recon_bp, data_range=1.0)
@@ -176,7 +189,7 @@ plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤2_反投影vs_FBP.png'), dpi=150, bbox_inches='tight')
 plt.show()
 
-print(f"  反投影 PSNR={psnr_bp:.1f}dB, SSIM={ssim_bp:.3f}")
+print(f"  反投影 PSNR={psnr_bp:.1f}dB (尺度 s={scale_bp:.4f}), SSIM={ssim_bp:.3f}")
 print(f"  FBP    PSNR={psnr_fbp:.1f}dB, SSIM={ssim_fbp:.3f}")
 
 
@@ -239,7 +252,8 @@ def _to_native(obj):
 results_summary = {
     "experiment": "实验16.1-1 CT成像基础——Radon变换与FBP重建",
     "步骤2_反投影vs_FBP": {
-        "反投影": {"PSNR_dB": round(psnr_bp, 2), "SSIM": round(ssim_bp, 4)},
+        "反投影": {"PSNR_dB": round(psnr_bp, 2), "SSIM": round(ssim_bp, 4),
+                "scale": round(scale_bp, 5), "说明": "已做全局尺度校准后再算 PSNR"},
         "FBP": {"PSNR_dB": round(psnr_fbp, 2), "SSIM": round(ssim_fbp, 4)},
     },
     "步骤3_滤波器对比_相对噪声水平": f"{noise_frac*100:.0f}%峰值",

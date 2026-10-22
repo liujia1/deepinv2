@@ -23,6 +23,11 @@ import io
 import os
 import numpy as np
 from numpy.polynomial.hermite import hermgauss
+
+# NumPy 2.0 起 np.trapz 更名为 np.trapezoid（旧名已弃用）
+_trapz = getattr(np, "trapezoid", None)
+if _trapz is None:
+    _trapz = np.trapz
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
@@ -133,15 +138,24 @@ print("""
 
 def dps_posterior_sample(y_obs, A_func, A_prime_func, sigma_y, zeta=0.5, N_particles=5000, N_steps=300, T=1.0, seed=42):
     """
-    DPS后验采样（修正版：包含完整的链式法则 + 正确的数值稳定性保护）
+    DPS后验采样（Tweedie 点估计的 δ-似然近似 + 梯度裁剪保护）
 
-    似然梯度完整链式法则：
-    ∇_{x_t} log p(y|x_t) = A'(x0_hat) * (y - A(x0_hat)) / (sigma_y^2 * mean_t)
+    似然梯度（对 x_t 求导，穿过 Tweedie 映射的雅可比）：
+    ∇_{x_t} log p(y|x_t) ≈ mean_t · A'(x0_hat) · (y - A(x0_hat)) / σ_y²
 
-    数值稳定性考虑：
-    - 当t→T时，mean_t很小（如0.006），除以mean_t会导致梯度较大
-    - 解决方案：梯度裁剪（限制幅值上限），而非归一化为符号
-    - 这样能保留A'和mean_t的相对大小关系（核心物理意义）
+    雅可比推导：x0_hat = (x_t + std_t²·s(x_t,t))/mean_t。对单位方差高斯
+    先验（s=1，且 VP-SDE 满足 mean_t²+std_t²=1）有 x0_hat = mean_t·x_t
+    + std_t²·μ，故 ∂x0_hat/∂x_t = mean_t（实验13.4-2 有有限差分验证）。
+    本实验 GM 各分量 s=1，单分量精确；混合后责任度权重随 x_t 变化
+    还附加一项，实际比值约为 mean_t 的 2~3 倍，mean_t 是一阶量级正确的
+    缩放（见实验13.4-2 的讨论）。
+
+    数值稳定性：mean_t→0（t→T）时梯度自然衰减，mean_t→1（t→0）时
+    梯度最强，符合"低噪声步信息最可靠"的直觉。梯度裁剪仅作溢出保护。
+
+    注意（早期实现错误）：曾误用 1/mean_t 作雅可比，方向恰好相反——
+    t→T 时 mean_t≈0.006，1/mean_t≈150 使梯度全程撞上裁剪上限，
+    退化为"常数强度引导"，抹掉了 mean_t 与 A' 的真实衰减结构。
 
     参数:
         y_obs: 观测值
@@ -177,14 +191,12 @@ def dps_posterior_sample(y_obs, A_func, A_prime_func, sigma_y, zeta=0.5, N_parti
         # 计算A的Jacobian（一维情况下即导数）
         A_prime = A_prime_func(x0_hat)
 
-        # 修正：完整链式法则
-        # 原bug1: mean_t * (...)  方向反了，应该是除以mean_t
-        # 原bug2: 缺少A'(x0_hat)，对不同A的影响不同
-        # 原bug3: 梯度归一化变成符号函数，丢失量级信息（本次修复）
-        likelihood_grad_raw = A_prime * (y_obs - Ax0_hat) / (sigma_y**2 * mean_t)
+        # 链式法则：∂x0_hat/∂x_t ≈ mean_t（单位方差高斯先验下精确）
+        # 早期版本误用 1/mean_t，方向相反：t→T 时梯度爆炸并被裁剪成常数，
+        # A' 与 mean_t 的相对衰减结构被抹除。
+        likelihood_grad_raw = mean_t * A_prime * (y_obs - Ax0_hat) / sigma_y**2
 
-        # 数值稳定性保护：梯度裁剪（而非归一化为符号）
-        # 保留A'和mean_t的相对大小关系，避免丢失物理意义
+        # 数值保护：仅作溢出裁剪，正常量级远小于上限
         likelihood_grad = zeta * np.clip(likelihood_grad_raw, -GRAD_CLIP_MAX, GRAD_CLIP_MAX)
 
         posterior_score = prior_score + likelihood_grad
@@ -204,14 +216,14 @@ def exact_posterior_stats(y_obs, A_func, sigma_y, x_lo=-8.0, x_hi=8.0, n_grid=20
     用于核对DPS采样的校准度；图像任务中无此解析基准。"""
     xg = np.linspace(x_lo, x_hi, n_grid)
     q = gm1d_pdf(xg) * np.exp(-0.5 * ((y_obs - A_func(xg)) / sigma_y) ** 2)
-    q /= np.trapz(q, xg)
-    mean = np.trapz(xg * q, xg)
-    std = np.sqrt(np.trapz((xg - mean) ** 2 * q, xg))
+    q /= _trapz(q, xg)
+    mean = _trapz(xg * q, xg)
+    std = np.sqrt(_trapz((xg - mean) ** 2 * q, xg))
     cdf = np.concatenate([[0.0], np.cumsum(0.5 * (q[1:] + q[:-1]) * np.diff(xg))])
     cdf /= cdf[-1]
     ci_lo = xg[np.searchsorted(cdf, 0.025)]
     ci_hi = xg[np.searchsorted(cdf, 0.975)]
-    p_right = np.trapz(q[xg >= 1.0], xg[xg >= 1.0])
+    p_right = _trapz(q[xg >= 1.0], xg[xg >= 1.0])
     return {"均值": mean, "标准差": std, "CI2.5%": ci_lo, "CI97.5%": ci_hi, "P(x>=1)": p_right}
 
 
@@ -219,7 +231,7 @@ def exact_posterior_pdf(x_eval, y_obs, A_func, sigma_y, x_lo=-8.0, x_hi=8.0, n_g
     """在x_eval处给出精确后验密度（归一化常数由细网格积分得到），用于绘图叠加。"""
     xg = np.linspace(x_lo, x_hi, n_grid)
     qg = gm1d_pdf(xg) * np.exp(-0.5 * ((y_obs - A_func(xg)) / sigma_y) ** 2)
-    Z = np.trapz(qg, xg)
+    Z = _trapz(qg, xg)
     return gm1d_pdf(x_eval) * np.exp(-0.5 * ((y_obs - A_func(x_eval)) / sigma_y) ** 2) / Z
 
 
@@ -293,11 +305,11 @@ samples_denoise = dps_posterior_sample(y_denoise, lambda x: x, lambda x: np.ones
                                       sigma_y=0.3, zeta=0.5, seed=42)
 print(f"  后验采样: 均值={np.mean(samples_denoise):.3f}, 标准差={np.std(samples_denoise):.3f}")
 
-# ---- 任务2：去模糊 (A=0.7x) ----
-print("\n任务2：去模糊 (A=0.7x, 下采样比例0.7)")
-print("  前向算子: A(x) = 0.7x")
+# ---- 任务2：线性缩放观测 (A=0.7I) ----
+print("\n任务2：线性缩放观测 (A=0.7x)")
+print("  前向算子: A(x) = 0.7x（信号衰减，非卷积模糊/下采样）")
 print("  导数: A'(x) = 0.7 (常数)")
-print("  原bug影响: 梯度强度多算了约1.43倍（缺少除以0.7）")
+print("  说明: A'=0.7<1 使似然对 x 的约束减弱，后验应比去噪任务更宽")
 print("  zeta=0.5 (数值稳定性推荐值)")
 y_blur = 0.5 * 0.7
 # A=0.7x的导数为常数0.7
@@ -381,15 +393,21 @@ for i in range(n_runs):
 
 all_means = [np.mean(s) for s in denoise_samples_list]
 all_stds = [np.std(s) for s in denoise_samples_list]
+mean_of_means = float(np.mean(all_means))
+std_across_runs = float(np.std(all_means, ddof=1))   # 5次运行均值的跨运行标准差
+sem_of_mean = std_across_runs / np.sqrt(n_runs)      # 均值标准误 SE = std/sqrt(n)
+t_crit = 2.776                                        # t_{0.975,4}，n_runs=5
+mean_ci = (mean_of_means - t_crit * sem_of_mean, mean_of_means + t_crit * sem_of_mean)
 print(f"\n{n_runs}次后验采样的均值: {[round(m, 4) for m in all_means]}")
-print(f"均值: {np.mean(all_means):.3f} ± {np.std(all_means):.3f}")
+print(f"均值: {mean_of_means:.3f}（跨运行标准差 {std_across_runs:.4f}；均值标准误 SE {sem_of_mean:.4f}）")
 print(f"标准差: {np.mean(all_stds):.3f} ± {np.std(all_stds):.3f}")
 pooled = np.concatenate(denoise_samples_list)
 ci_lo, ci_hi = np.percentile(pooled, [2.5, 97.5])
 print(f"\n这里包含两类性质不同的不确定性，务必区分：")
 print(f"  - 后验本身的不确定性（单次采样平均标准差）~ {np.mean(all_stds):.3f}")
 print(f"    95% 后验可信区间（样本分位数）= [{ci_lo:.3f}, {ci_hi:.3f}]")
-print(f"  - 蒙特卡洛估计误差（{n_runs}次运行均值的标准误）~ {np.std(all_means):.3f}")
+print(f"  - 蒙特卡洛估计误差（{n_runs}次运行均值的标准误 SE=跨运行std/√n）~ {sem_of_mean:.4f}")
+print(f"    95% 区间（t分布，t_(0.975,4)=2.776）= [{mean_ci[0]:.4f}, {mean_ci[1]:.4f}]")
 print(f"    它仅来自有限粒子数(每次5000)，粒子越多越小，不是后验置信区间")
 
 # 可视化
@@ -400,7 +418,7 @@ x_hist = np.linspace(-6, 6, 500)
 axes[0].hist(samples_denoise, bins=60, density=True, alpha=0.5, color='blue',
              range=(-6, 6), label='去噪 A=I')
 axes[0].hist(samples_blur, bins=60, density=True, alpha=0.5, color='red',
-             range=(-6, 6), label='去模糊 A=0.7')
+             range=(-6, 6), label='缩放观测 A=0.7x')
 axes[0].hist(samples_nonlinear, bins=60, density=True, alpha=0.5, color='green',
              range=(-6, 6), label='非线性 A=tanh(2x)')
 # 边际化引导（非线性任务）：只描边，便于与绿色DPS柱、绿色精确后验线对照
@@ -458,54 +476,53 @@ print(f"""
    - 这是传统MAP方法所没有的能力
 
 3. 重要修正历史：似然梯度链式法则（代码评审迭代）
-   第一轮评审发现：
-   - 原bug1: mean_t * (...)  方向反了，应该是除以mean_t
-   - 原bug2: 缺少A'(x0_hat)，对不同A的影响不同
+   - 第一轮：补上 A'(x0_hat) 因子（此前缺失，不同算子的约束强度差异被抹平）
+   - 第二轮：把"归一化为符号函数"改为幅度裁剪（符号化会丢失量级信息）
+   - 第三轮（本次）：修正雅可比缩放因子。x0_hat 对 x_t 的导数应为
+     mean_t（单位方差高斯先验下精确），早期误写成 1/mean_t——方向相反，
+     t→T 时 mean_t≈0.006，1/mean_t≈150 使梯度全程撞上裁剪上限，退化为
+     "常数强度引导"，抹掉了 A' 与 mean_t 的真实衰减结构
+     （实验13.4-2 已用有限差分证实 dx0_hat/dx_t≈mean_t）。
 
-   修正公式：
-   ∇log p(y|x_t) = A'(x0_hat)*(y-A(x0_hat))/(σ_y²·mean_t)
-
-   第二轮评审发现：
-   - 原bug3: 梯度归一化变成符号函数，丢失量级信息
-   - 问题: 除以自身绝对值得到sign()，A'和mean_t的相对大小关系被抹除
-   - 影响: tanh饱和区的梯度衰减效果被抵消
-
-   最终修复：
-   - 使用梯度裁剪（clip），而非归一化
-   - 保留A'和mean_t的相对大小关系（核心物理意义）
+   当前公式：
+   ∇log p(y|x_t) ≈ mean_t·A'(x0_hat)·(y-A(x0_hat))/σ_y²
 
    各任务修正效果：
    - 任务1（A=I）：均值{samples_denoise.mean():.3f}接近观测0.5，标准差{samples_denoise.std():.3f}（约束强）
    - 任务2（A=0.7x）：均值{samples_blur.mean():.3f}，标准差{samples_blur.std():.3f}（A'=0.7<1使约束减弱）
    - 任务3（tanh）：DPS均值{samples_nonlinear.mean():.3f}、标准差{samples_nonlinear.std():.3f}
-     ——"后验最宽"的定性趋势正确，但定量偏窄偏左（见第4条）
+     ——"后验最宽"的定性趋势正确，均值与尾概率也定量吻合（见第4条）
 
-4. 与精确后验基准的对照 + δ-似然近似偏差的闭合（1D场景独有）
-   - 任务1/2：vanilla DPS与精确后验高度一致（均值/标准差偏差均<0.05），校准良好
+4. 与精确后验基准的对照：雅可比修正后的校准度（1D场景独有）
+   - 任务1/2：vanilla DPS与精确后验高度一致（均值偏差约0.02，
+     标准差偏差0.02~0.05），校准良好
    - 任务3：精确后验为均值{exact_nonlinear['均值']:.2f}、标准差{exact_nonlinear['标准差']:.2f}、
-     P(x>={1})={exact_nonlinear['P(x>=1)']:.2f}的严重右偏分布（tanh饱和使似然在x>~1
+     P(x>={1})={exact_nonlinear['P(x>=1)']:.2f}的严重右偏宽分布（tanh饱和使似然在x>~1
      形成平坦高原，"哪个x解释y=0.5"变模糊，先验右峰N(1,1)把质量铺到右尾）。
-     DPS(ζ=0.5)给出{samples_nonlinear.mean():.2f}/{samples_nonlinear.std():.2f}/{np.mean(samples_nonlinear>=1):.2f}，
-     右尾被排空——这不是"高原上信号微弱粒子进不去"，而是δ-似然近似
-     p(y|x_t)≈N(y;A(x0_hat),σ²)把x0钉死在Tweedie点估计上，高原上残余的
-     点估计梯度（再被1/mean_t放大）持续把右尾粒子拉回窄区。
-   - 调ζ只能移动偏差、不能消除：ζ=0.25时
+     DPS(ζ=0.5)给出{samples_nonlinear.mean():.2f}/{samples_nonlinear.std():.2f}/{np.mean(samples_nonlinear>=1):.2f}：
+     均值与尾概率几乎精确，标准差仅偏宽约{100*(samples_nonlinear.std()/exact_nonlinear['标准差']-1):.0f}%。
+   - 关键发现（本次修复）：早期实现误用 1/mean_t 作雅可比，t→T 时梯度爆炸
+     并被裁剪成常数引导，曾把任务3的 DPS 压成 0.66/0.59/0.22，制造出
+     "DPS 右尾被排空、严重低估不确定性"的假象。修正为 mean_t 后该假象消失——
+     vanilla DPS 的残余偏差只剩后验宽度略偏大，这是δ-似然把x0钉在
+     Tweedie点估计上、未对p(x0|x_t)边际化的真实代价，量级远小于修复前。
+   - ζ 仍有影响：ζ=0.25 时
      {samples_nonl_z025.mean():.2f}/{samples_nonl_z025.std():.2f}/{np.mean(samples_nonl_z025>=1):.2f}
-     （标准差与尾概率已接近真值{exact_nonlinear['标准差']:.2f}/{exact_nonlinear['P(x>=1)']:.2f}，
-     但均值仍偏），不存在单一ζ同时校准三者；加密步数(1000步)同样无效。
+     （标准差过宽约{100*(samples_nonl_z025.std()/exact_nonlinear['标准差']-1):.0f}%、均值偏低），
+     ζ=0.5 在本设置下更接近精确后验{exact_nonlinear['标准差']:.2f}/{exact_nonlinear['P(x>=1)']:.2f}；
+     不存在"任意任务通用"的ζ标定。
    - 精确边际化引导（对去噪分布p(x0|x_t)积分L(x_t)=E[N(y;A(x0),σ²)|x_t]，
      ζ=1.0）给出{samples_marg_nonlinear.mean():.2f}/{samples_marg_nonlinear.std():.2f}/{np.mean(samples_marg_nonlinear>=1):.2f}，
-     与精确后验{exact_nonlinear['均值']:.2f}/{exact_nonlinear['标准差']:.2f}/{exact_nonlinear['P(x>=1)']:.2f}吻合，右尾恢复；
-     任务1/2同样吻合（{samples_marg_denoise.mean():.2f}/{samples_marg_denoise.std():.2f}、
+     与精确后验{exact_nonlinear['均值']:.2f}/{exact_nonlinear['标准差']:.2f}/{exact_nonlinear['P(x>=1)']:.2f}吻合；
+     边际化把标准差从 {samples_nonlinear.std():.2f} 收紧到 {samples_marg_nonlinear.std():.2f}，
+     闭合了δ-近似的残余宽度偏差。任务1/2同样吻合
+     （{samples_marg_denoise.mean():.2f}/{samples_marg_denoise.std():.2f}、
      {samples_marg_blur.mean():.2f}/{samples_marg_blur.std():.2f}）。
-   - 结论：任务3的偏差不是"扩散后验采样的固有限制"，而是vanilla DPS的
-     δ-似然插件近似偏差，在同一后验得分分解框架内结构性可修
-     （边际化x0|x_t即可）；高维图像无法精确积分，靠ΠGDM（线性算子
-     闭式）/Moment Matching等近似——即13.2/13.3节精度递进链与
-     13.6展望所述"更精确似然近似（超越DPS的delta假设）"；
+   - 结论：修正雅可比后 vanilla DPS 已接近精确后验；δ-似然的残余偏差主要
+     体现在后验宽度，边际化x0|x_t可在同一得分分解框架内闭合。高维图像无法
+     精确积分，靠ΠGDM（线性算子闭式）/Moment Matching等近似——即
+     13.2/13.3节精度递进链与13.6展望所述"更精确似然近似（超越DPS的delta假设）"；
      线性观测下的同类精确对照已在实验13.4-2给出。
-   - 因此任务3是完整的定量演示：vanilla DPS先暴露近似边界，
-     精确边际化引导再在同一框架内闭合它。
 """)
 # ===== 保存数值结果 =====
 import json
@@ -525,10 +542,11 @@ def _to_native(obj):
     return obj
 
 results_summary = {
+    "实验版本": "v3：雅可比缩放修正为mean_t（原误用1/mean_t）+ 任务2更名为缩放观测 + SE统计口径修正",
     "去噪_A=I": {"均值": round(float(np.mean(samples_denoise)), 4), "标准差": round(float(np.std(samples_denoise)), 4),
                  "95%CI(DPS分位数)": [round(float(ci_lo), 4), round(float(ci_hi), 4)],
                  "P(x>=1)": round(float(np.mean(samples_denoise >= 1)), 4)},
-    "去模糊_A=0.7x": {"均值": round(float(np.mean(samples_blur)), 4), "标准差": round(float(np.std(samples_blur)), 4),
+    "缩放观测_A=0.7x": {"均值": round(float(np.mean(samples_blur)), 4), "标准差": round(float(np.std(samples_blur)), 4),
                      "P(x>=1)": round(float(np.mean(samples_blur >= 1)), 4)},
     "非线性_A=tanh2x": {"均值": round(float(np.mean(samples_nonlinear)), 4), "标准差": round(float(np.std(samples_nonlinear)), 4),
                        "P(x>=1)": round(float(np.mean(samples_nonlinear >= 1)), 4)},
@@ -538,16 +556,19 @@ results_summary = {
     "边际化引导_去噪": {"均值": round(float(np.mean(samples_marg_denoise)), 4),
                        "标准差": round(float(np.std(samples_marg_denoise)), 4),
                        "P(x>=1)": round(float(np.mean(samples_marg_denoise >= 1)), 4)},
-    "边际化引导_去模糊": {"均值": round(float(np.mean(samples_marg_blur)), 4),
+    "边际化引导_缩放观测": {"均值": round(float(np.mean(samples_marg_blur)), 4),
                          "标准差": round(float(np.std(samples_marg_blur)), 4),
                          "P(x>=1)": round(float(np.mean(samples_marg_blur >= 1)), 4)},
     "边际化引导_非线性": {"均值": round(float(np.mean(samples_marg_nonlinear)), 4),
                          "标准差": round(float(np.std(samples_marg_nonlinear)), 4),
                          "P(x>=1)": round(float(np.mean(samples_marg_nonlinear >= 1)), 4)},
-    "多次采样_均值统计": {"均值": round(float(np.mean(all_means)), 4), "标准差(蒙特卡洛标准误)": round(float(np.std(all_means)), 4)},
+    "多次采样_均值统计": {"均值": round(mean_of_means, 4),
+                          "跨运行标准差": round(std_across_runs, 4),
+                          "均值标准误SE": round(sem_of_mean, 4),
+                          "均值95CI_t分布": [round(float(mean_ci[0]), 4), round(float(mean_ci[1]), 4)]},
     "多次采样_标准差统计": {"均值": round(float(np.mean(all_stds)), 4), "标准差": round(float(np.std(all_stds)), 4)},
     "精确后验_去噪": {k: round(float(v), 4) for k, v in exact_denoise.items()},
-    "精确后验_去模糊": {k: round(float(v), 4) for k, v in exact_blur.items()},
+    "精确后验_缩放观测": {k: round(float(v), 4) for k, v in exact_blur.items()},
     "精确后验_非线性": {k: round(float(v), 4) for k, v in exact_nonlinear.items()},
 }
 results_summary = _to_native(results_summary)

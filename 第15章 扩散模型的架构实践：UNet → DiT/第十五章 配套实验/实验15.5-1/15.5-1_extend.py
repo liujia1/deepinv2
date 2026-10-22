@@ -256,7 +256,9 @@ sqrt_one_minus_alpha_bars = torch.sqrt(1 - alpha_bars)
 def compute_warmup_cosine_factor(step, warmup_steps, total_steps):
     """Warmup线性0->1, 之后cosine 1->0 (15.5.1节)"""
     if step < warmup_steps:
-        return float(step) / float(max(1, warmup_steps))
+        # 与 15.5-1.py 主脚本一致: LambdaLR 构造时即调用 step=0,
+        # 返回 0 会让第一个 batch 的 lr=0(参数不动), 故用 (step+1)
+        return float(step + 1) / float(max(1, warmup_steps))
     progress = float(step - warmup_steps) / float(max(1, total_steps - warmup_steps))
     return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
 
@@ -592,7 +594,8 @@ def sample_shared_noise(model):
         x0_pred = (x - torch.sqrt(1 - alpha_bar_t) * pred) / torch.sqrt(alpha_bar_t)
         x0_pred = x0_pred.clamp(-1, 1)
         if t_val > 0:
-            sigma_t = torch.sqrt(betas[t_val])
+            # ★ 与 15.5-1.py 主脚本保持同一口径: 严格后验方差 β̃_t
+            sigma_t = torch.sqrt(betas[t_val] * (1 - alpha_bar_prev) / (1 - alpha_bar_t))
             dir_xt = torch.sqrt(torch.clamp(1 - alpha_bar_prev - sigma_t**2, min=0)) * pred
             x = torch.sqrt(alpha_bar_prev) * x0_pred + dir_xt + sigma_t * _noise_shared[t_val]
         else:

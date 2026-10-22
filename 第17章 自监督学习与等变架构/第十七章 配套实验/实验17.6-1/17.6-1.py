@@ -380,10 +380,13 @@ def ei_loss(model, mask, f_y, n_transforms=4):
     伪标签、避免一致性项梯度回传到 x̂ 与 MC 项相互拉扯；若要复现论文默认行为，
     去掉 .detach() 即可（双侧梯度版本通常同样能训练，仅优化动态不同）。
 
-    ★ 固定算子：A 必须是固定算子（固定掩码），而非随机掩码。
-    若用随机掩码，算子在分布意义下关于平移近似等变，EI 无法利用
-    不等变性来约束零空间——与 17.5 节理论矛盾。Step 4 的等变性
-    验证也使用固定掩码，此处须保持一致。
+    ★ 固定算子：A 必须是固定算子（固定掩码），而非每步重抽的随机掩码。
+    注意：理由**不是**"随机掩码近似等变"——恰恰相反，单个随机掩码实例
+    的 AT_g 与 T_g A 相差极远（Step 4 实测相对误差 344.7%），非等变很强。
+    固定 A 的真正理由是 EI 推导的前提：参考重建 x̂=f(y) 与虚拟测量
+    f(AT_g x̂) 必须使用**同一个** A。若掩码每步重抽，f 面对的是算子分布，
+    需要 EI 的随机算子扩展（如 Robust EI），不在本节范围。Step 4 的
+    等变性验证同样使用固定掩码，与此处保持一致。
 
     ★ 虚拟测量未加观测噪声：
     真实观测 y = M ⊙ x + σ·ε·M（保留像素处加噪声），但 EI 虚拟路径
@@ -823,9 +826,10 @@ _err_mri_shift_max = max(rel_results[(f'MRI欠采样({m})', '平移')] for m in 
 _err_mri_rot = [rel_results[(f'MRI欠采样({m})', '旋转')] * 100 for m in sampling_modes]
 
 print("\n  结论:")
-print(f"  - 高斯模糊+平移: 相对误差{_err_blur_shift:.1f}% (约为Inpainting的1/{_err_inpaint_shift/_err_blur_shift:.0f}) → 近似等变 → EI难以利用平移对称性")
-print("    注: 误差全部来自边界处理——conv2d用zero-padding而torch.roll用循环边界,")
-print("        两者不匹配; 若改用circular padding卷积, 相对误差为0(严格等变)")
+print(f"  - 高斯模糊+平移: 相对误差{_err_blur_shift:.1f}% (约为Inpainting的1/{_err_inpaint_shift/_err_blur_shift:.0f}) → 纯边界伪影, 不是'近似等变'")
+print("    注: conv2d用zero-padding、torch.roll是循环平移, 两者边界约定不一致; 误差全部集中在")
+print("        距边界|shift|+核半径的窄带内(内部严格为0)。改用circular padding卷积后相对误差为0:")
+print("        卷积对平移是严格等变的(与MRI同理), EI无法借力; '近似等变'不是一个可用的中间状态")
 print(f"  - Inpainting(固定随机掩码)+平移: 相对误差{_err_inpaint_shift:.1f}% → 非等变 → EI可利用平移对称性")
 print(f"  - Inpainting(固定随机掩码)+旋转: 相对误差{_err_inpaint_rot:.1f}% → 非等变 → EI可利用旋转对称性")
 print(f"  - MRI+平移: 三种采样模式相对误差最高{_err_mri_shift_max:.1e}% → 严格等变(数值误差) → EI无法利用平移对称性")
@@ -850,8 +854,8 @@ print(f"\n  核心结论:")
 print(f"  1. 朴素MC不约束零空间→缺失像素重建差")
 print(f"  2. MC约束值空间(Af(y)≈y)，EI约束零空间(等变性)")
 print(f"  3. MC+EI互补: MC保证观测一致性，EI利用对称性填补缺失")
-print(f"  4. 算子非等变→EI有效: 随机inpainting关于平移/旋转非等变")
-print(f"  5. 算子近似等变→EI效果弱: 高斯模糊关于平移近似等变(无法提供新信息)")
+print(f"  4. 算子非等变→EI有效: 固定随机掩码的inpainting关于平移/旋转非等变")
+print(f"  5. 算子严格等变→EI无法借力: 高斯模糊(循环边界下)与MRI的平移同理(不提供新信息)")
 
 print(f"""
   ╔═══════════════════════════════════════════════════════════════════╗

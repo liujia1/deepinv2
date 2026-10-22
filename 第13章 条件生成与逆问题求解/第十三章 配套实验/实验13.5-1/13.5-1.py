@@ -132,6 +132,7 @@ GM_STDS = [0.5, 0.5]
 # 则 ᾱ_T=e^{-4.6}≈0.01，前向末端边际 p_T≈N(0,1)，与 x_T~N(0,1) 初始分布匹配。
 # 反推每步系数 α_t=ᾱ_t/ᾱ_{t-1}, β_t=1-α_t（β≈0.215/步，属少步大步长设定）。
 T = 20
+U_MAX = 0.5  # 单步控制幅度上限：tanh饱和，防止末步β_0=0时一步投影到y/A
 b_bar_end = 4.6
 beta_bars = torch.linspace(0.0, b_bar_end, T, device=device)
 alpha_bars = torch.exp(-beta_bars)
@@ -281,6 +282,13 @@ class SimpleDOC:
           Adam优化的是"随机轨迹终端代价的期望"，而非评估轨迹的终端代价，
           会系统性偏离最优（早期版本的实测误差约为理论最优的2.6倍）。
 
+        控制饱和（教学修正）：标准DOC的控制u_t无幅度约束，而本实验的离散
+        DDPM调度在末步有β_0=0、α_0=1，此时后验均值就是x_t，无约束控制
+        可一步把x_0设成y/A——"全局轨迹优化"退化为"末步数据一致点投影"，
+        控制序列的其余分量完全不起作用（实测DOC误差与y/A误差在1e-6内相等）。
+        为此对每步控制做 u_t = U_MAX·tanh(raw_u_t) 饱和，使单步权限受限、
+        DOC必须在前面的步中分配控制，真正体现轨迹优化；U_MAX=0.5。
+
         参数：
             control_sequence: 控制序列 [u_T, u_{T-1}, ..., u_0]
             x_T: 初始噪声状态
@@ -306,8 +314,8 @@ class SimpleDOC:
             else:
                 posterior_noise = 0.0
 
-            # 更新
-            x_t = posterior_mean + u_t + posterior_noise
+            # 更新（控制经tanh饱和，限制单步幅度，避免末步一步投影）
+            x_t = posterior_mean + U_MAX * torch.tanh(u_t) + posterior_noise
             trajectory.append(x_t.clone())
 
         return torch.stack(trajectory)
@@ -318,8 +326,8 @@ class SimpleDOC:
         损失函数 = 终端代价 + reg_lambda * Σu_t²
         - 终端代价 = -log p(y|x_0)（高斯似然，即0.5||y-Ax_0||²/σ²）
         - Σu_t²为控制能量项，对应DOC原论文代价函数中的Tikhonov正则，
-          使最优控制问题良态并与后验采样相联系；本场景σ_obs很小、终端代价
-          占绝对主导，该项数值上对结果几乎无影响（消融实测误差差异<1e-3）。
+          使最优控制问题良态并与后验采样相联系。本实验的主要控制约束
+          来自单步tanh饱和（U_MAX=0.5），该项仅作辅助正则。
         优化与最终评估使用同一条确定性rollout，不存在动力学失配。
         """
         # 初始化控制序列
@@ -465,22 +473,34 @@ dps_errors = []
 yA_errors = []        # 参考：数据一致点 y/A 的误差（终端优化的极限之一）
 postmean_errors = []  # 参考：精确后验均值的误差（MMSE点估计下界）
 
-# 支持断点续传（v2文件名：与修复前旧检查点区分，旧档保留不覆盖）
+# 支持断点续传（v3文件名：与修复前旧检查点区分，旧档保留不覆盖）
 checkpoint_file = os.path.join(os.path.dirname(__file__) if '__file__' in dir() else '.',
-                               'experiment_checkpoint_v2.pkl')
+                               'experiment_checkpoint_v3.pkl')
 start_trial = 0
 viz_data = None
 
 if os.path.exists(checkpoint_file):
     with open(checkpoint_file, 'rb') as f:
         checkpoint = pickle.load(f)
-        doc_errors = checkpoint['doc_errors']
-        dps_errors = checkpoint['dps_errors']
-        yA_errors = checkpoint.get('yA_errors', [])
-        postmean_errors = checkpoint.get('postmean_errors', [])
-        start_trial = len(doc_errors)
-        viz_data = checkpoint.get('viz')
-        print(f"\n从检查点恢复，已完成{start_trial}/{n_trials}次试验")
+    doc_errors = checkpoint['doc_errors']
+    dps_errors = checkpoint['dps_errors']
+    yA_errors = checkpoint.get('yA_errors', [])
+    postmean_errors = checkpoint.get('postmean_errors', [])
+    start_trial = len(doc_errors)
+    viz_data = checkpoint.get('viz')
+    _meta = checkpoint.get('meta')
+    if _meta is None:
+        print("\n警告: 检查点无配置元数据（旧格式），仅按已完成次数续传；"
+              "若最近改过 n_trials/先验参数，建议删除该文件后重跑")
+    elif _meta.get('n_trials') != n_trials:
+        raise RuntimeError(
+            f"检查点 n_trials={_meta.get('n_trials')} 与当前脚本 n_trials={n_trials} 不一致；"
+            f"请删除或改名 {os.path.basename(checkpoint_file)} 后重跑")
+    if start_trial > n_trials:
+        raise RuntimeError(
+            f"检查点已完成 {start_trial} 次试验，超过当前 n_trials={n_trials}；"
+            f"请删除或改名 {os.path.basename(checkpoint_file)} 后重跑")
+    print(f"\n从检查点恢复，已完成{start_trial}/{n_trials}次试验")
 
 print(f"\n开始{n_trials}次试验...")
 for trial_idx in range(start_trial, n_trials):
@@ -523,9 +543,13 @@ for trial_idx in range(start_trial, n_trials):
         'doc_history': [np.asarray(th).tolist() for th in doc_history],
     }
 
-    # 每轮保存检查点
+    # 每轮保存检查点（meta 记录配置，避免改参后误续传）
     with open(checkpoint_file, 'wb') as f:
-        pickle.dump({'doc_errors': doc_errors, 'dps_errors': dps_errors,
+        pickle.dump({'meta': {'n_trials': n_trials,
+                              'gm_weights': list(GM_WEIGHTS),
+                              'gm_means': list(GM_MEANS),
+                              'gm_stds': list(GM_STDS)},
+                     'doc_errors': doc_errors, 'dps_errors': dps_errors,
                      'yA_errors': yA_errors, 'postmean_errors': postmean_errors,
                      'viz': viz_data}, f)
 
@@ -554,7 +578,7 @@ print("\n单次试验可视化（用于展示轨迹对比）...")
 # 若从完整检查点恢复（未执行任何试验），从检查点的viz数据重建可视化变量
 if start_trial >= n_trials and doc_errors:
     if viz_data is None:
-        raise RuntimeError("检查点缺少viz数据（旧格式），请删除experiment_checkpoint_v2.pkl后重新完整运行")
+        raise RuntimeError(f"检查点缺少viz数据（旧格式），请删除{os.path.basename(checkpoint_file)}后重新完整运行")
     x0_star = viz_data['x0_star']
     doc_trajectory = torch.tensor(viz_data['doc_traj'], device=device)
     dps_trajectory = torch.tensor(viz_data['dps_traj'], device=device)
@@ -585,7 +609,7 @@ axes[0, 0].legend(fontsize=9)
 axes[0, 0].grid(True, alpha=0.3)
 
 # 子图2：控制输入（索引按逆向顺序：0=最早的高噪声步控制）
-axes[0, 1].plot(range(T), doc_controls.cpu().numpy(), 'o-', label='DOC控制',
+axes[0, 1].plot(range(T), doc_controls.cpu().numpy(), 'o-', label='DOC控制变量 raw_u（实际施加 0.5·tanh(raw_u)）',
                 linewidth=2, markersize=5)
 axes[0, 1].axhline(y=0, color='gray', linewidth=0.8)
 axes[0, 1].set_xlabel('逆向步序号（0=高噪声端，19=末端）')
@@ -658,9 +682,9 @@ print(f"  y/A参考:     {yA_mean_error:.6f}（终端代价最小化的可达点
 print(f"  后验均值参考: {postmean_mean_error:.6f}（MMSE点估计下界）")
 print(f"  DOC相对DPS改进: {(dps_mean_error - doc_mean_error) / dps_mean_error * 100:.2f}%，"
       f"DOC胜出 {doc_win_count}/{n_trials} 次")
-print("  解读：确定性轨迹优化把终端代价压到数据一致性极限(y/A≈后验均值)，")
-print("  贪心DPS经精细调参(ζ=0.02)后接近，但精度略逊且ζ稳定窗很窄；")
-print("  精确得分+线性观测下二者差距不大，DOC更大的优势在弱得分/少步图像问题。")
+print("  解读：本实验的1D线性高斯+精确得分设定对DPS最有利；DOC受单步控制饱和")
+print("  与开环300步优化的限制，MMSE误差未必优于DPS。DOC的优势应在弱得分/")
+print("  非线性/少步图像场景中检验，不能把本实验当作'DOC优于DPS'的证明。")
 
 # ============================================================
 # 6. 计算代价分析
@@ -689,12 +713,12 @@ DOC计算代价（13.5节）：
 
 | 方法            | 单样本代价        | 引导超参 | 少步稳定性 | 理论定位         |
 |-----------------|-------------------|----------|------------|------------------|
-| DOC(本简化版)   | 高(300次BPTT)     | 无引导ζ  | 鲁棒       | 全局轨迹最优     |
+| DOC(本简化版)   | 高(300次BPTT)     | 无引导ζ  | 鲁棒       | 全局轨迹优化(控制饱和) |
 | DOC(论文iLQR)   | 中(数次扫描)      | 无引导ζ  | 鲁棒       | 精确后验(可恢复) |
 | DPS             | 低(单次采样)      | ζ需细调  | 脆性       | 逐步贪心近似     |
 
 4. 教学意义：
-   - 1D下可直接验证"全局轨迹优化能达到数据一致性极限"
+   - 1D下可观察控制饱和/开环优化对DOC终端精度的影响
    - 直观看到DPS引导强度的离散化脆性（ζ窄稳定窗）
    - 理解控制论视角：后验采样是最优控制的特例
 """)
@@ -712,21 +736,21 @@ print(f"""
    - 最优控制问题：最小化 终端代价(-log p(y|x0)) + 控制能量(Tikhonov项)
 
 2. DOC vs DPS对比（本实验n={n_trials}次配对实测）
-   - DOC：{doc_mean_error:.4f}±{doc_std_error:.4f}，
-     达到数据一致性极限 y/A={yA_mean_error:.4f}（与精确后验均值
-     {postmean_mean_error:.4f}几乎重合）——全局轨迹优化确实找到了
-     自身优化问题的最优解，且无引导强度超参
-   - DPS：{dps_mean_error:.4f}±{dps_std_error:.4f}，
-     规范链式梯度+精细标定ζ=0.02后接近最优但仍略逊；
+   - DOC：{doc_mean_error:.4f}±{doc_std_error:.4f}（单步控制饱和 U_MAX=0.5）。
+     注意：若不加饱和，末步β_0=0会让DOC退化为y/A投影，误差与
+     y/A={yA_mean_error:.4f}在1e-6内相等，不能当作全局优化的证据。
+   - DPS：{dps_mean_error:.4f}±{dps_std_error:.4f}，规范链式梯度+标定ζ=0.02；
      ζ≥0.03即出现发散，稳定窗窄，体现"离散化脆性"
-   - DOC相对DPS改进 {(dps_mean_error-doc_mean_error)/dps_mean_error*100:.1f}%
-     （胜出{doc_win_count}/{n_trials}次）
-   - 精确得分+线性高斯观测是对DPS最有利的设定：二者差距不大；
-     DOC更大的增益出现在得分网络近似、非线性算子、少步采样的图像问题
+   - 本设定下DOC相对DPS的MMSE改进 {(dps_mean_error-doc_mean_error)/dps_mean_error*100:.1f}%
+     （胜出{doc_win_count}/{n_trials}次）。1D线性高斯+精确得分对DPS最有利，
+     不能据此断言DOC劣于DPS，也不能断言DOC优于DPS——DOC的优势需在
+     弱得分/非线性/少步图像场景中检验
 
 3. 实现教训（本实验曾踩的坑，已修复）
+   - 末步β_0=0时无约束控制可一步投影到y/A，使"全局轨迹优化"名存实亡；
+     必须限制单步控制幅度（本实验用tanh饱和）或改用连续时间PF-ODE离散化
    - DOC优化rollout与评估rollout必须同动力学：带噪优化+确定性评估的
-     失配曾使DOC误差虚高至理论最优的约2.6倍，并导致"DOC不如DPS"的错误结论
+     失配曾使DOC误差虚高至理论最优的约2.6倍
    - DPS梯度必须穿过Tweedie雅可比对x_t求取；逆向末端步不应再加噪
    - VP调度须使ᾱ_T≈0且x_T与p_T边际匹配，否则逆向链从分布外启动
 
@@ -856,7 +880,7 @@ def _to_native(obj):
 
 results_summary = {
     "试验次数": n_trials,
-    "实验版本": "修复版v2：PF-ODE确定性轨迹优化 + DPS链式梯度 + VP调度修正(末态ᾱ_T≈0.01)",
+    "实验版本": "修复版v3：PF-ODE确定性轨迹优化 + 控制tanh饱和(U_MAX=0.5) + DPS链式梯度 + VP调度修正(末态ᾱ_T≈0.01)",
     "DOC_平均误差": round(float(doc_mean_error), 6),
     "DOC_误差标准差": round(float(doc_std_error), 6),
     "DPS_平均误差": round(float(dps_mean_error), 6),

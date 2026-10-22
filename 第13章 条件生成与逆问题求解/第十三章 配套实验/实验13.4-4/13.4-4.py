@@ -148,30 +148,26 @@ except ImportError:
     compute_ssim = None
 
 try:
+    from PIL import Image
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+    print("\n未检测到 Pillow（图像读写必需）。")
+    print("请手动运行: pip install Pillow 后重试（本脚本不自动安装依赖）")
+    raise SystemExit(1)
+
+try:
     from diffusers import (
         StableDiffusionControlNetPipeline,
         ControlNetModel,
         UniPCMultistepScheduler,
     )
-    from PIL import Image
     HAS_DIFFUSERS = True
 except ImportError:
     HAS_DIFFUSERS = False
-    print("\n检测到 diffusers 相关库未安装，正在自动安装...")
-    try:
-        import subprocess
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "diffusers", "transformers", "accelerate", "Pillow"])
-        print("安装完成，重新导入...")
-        from diffusers import (
-            StableDiffusionControlNetPipeline,
-            ControlNetModel,
-            UniPCMultistepScheduler,
-        )
-        from PIL import Image
-        HAS_DIFFUSERS = True
-    except Exception as e:
-        print(f"安装失败: {e}")
-        print("请手动运行: pip install diffusers transformers accelerate Pillow")
+    print("\n未检测到 diffusers 相关库（本脚本不再自动安装，避免副作用）。")
+    print("请手动运行: pip install diffusers transformers accelerate")
+    print("若只想复现已有面板，可设 DEPINV_REUSE=1 后重跑（仅需 Pillow/numpy/scipy）。")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"\n使用设备: {device}")
@@ -598,7 +594,8 @@ if (HAS_DIFFUSERS and device == "cuda") or _reuse_panels:
         print("\n" + "=" * 60)
         print("ControlNet 与 CFG 的分工（互补，实际叠加使用）")
         print("=" * 60)
-        print("  - controlnet_conditioning_scale 越大，深度边界被遵循得越精确（见R@1/R@2）")
+        print("  - controlnet_conditioning_scale 强化结构遵循，但非单调：R@1 由 cs=0.0 的 0.56")
+        print("    升至 cs=0.8 的 0.98，cs=1.2 又回落至 0.93——存在最优区间，不是越大越好")
         print("  - guidance_scale 只调节文本语义贴合度，不提供逐像素空间约束")
         print("  - cs=0.0 等价于关闭ControlNet，是天然的消融对照（与CFG7.5同种子指标应相等）")
         print("=" * 60)
@@ -912,8 +909,9 @@ print("""
 
 2. 两个旋钮的分工（互补，非对立；实验中已分别扫描）
    - controlnet_conditioning_scale：空间结构条件强度，
-     增大后深度边界召回率实测升高；重点看像素级精度R@1/R@2
-     （R@5较宽松，无条件基线也有约0.8~0.9会饱和）
+     0.0→0.8 深度边界像素级召回实测升高（R@1 0.56→0.98），
+     但 cs=1.2 回落（R@1 0.93）——存在最优区间，不是越大越好；
+     重点看像素级精度R@1/R@2（R@5较宽松，无条件基线也有约0.8~0.9会饱和）
    - guidance_scale（CFG）：文本语义贴合度，不提供逐像素空间约束
    - ControlNet生成时默认仍叠加CFG
    - 消融自洽性：cs=0.0与纯CFG(gs=7.5)同种子，实测指标完全一致
