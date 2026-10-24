@@ -17,6 +17,10 @@ import sys
 import io
 import os
 import numpy as np
+# NumPy 2.0 起 np.trapz 更名为 np.trapezoid；这里兼容 1.x/2.x
+_trapz = getattr(np, "trapezoid", None)
+if _trapz is None:
+    _trapz = np.trapz
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
@@ -311,7 +315,7 @@ for zeta in zeta_values:
 # 做数值积分得到精确的 E|X−y|（避免蒙特卡洛噪声）
 true_diversity = post_std_true
 x_consistency_grid = np.linspace(-10, 10, 100000)
-true_consistency = np.trapezoid(
+true_consistency = _trapz(
     np.abs(x_consistency_grid - y_obs) * post_pdf_true(x_consistency_grid),
     x_consistency_grid,
 )
@@ -343,8 +347,11 @@ results_summary = {
     "真实后验_标准差": round(float(post_std_true), 4),
     "真实后验_一致性": round(float(true_consistency), 4),
     "真实后验_多样性": round(float(true_diversity), 4),
+    # 采样均值：正文表格“采样均值”列的直接来源（旧版只存了均值相对 y 的 E|X-y|，无法反推均值）
+    "DPS采样_均值": [round(float(np.mean(sampling_results[z])), 4) for z in zeta_values],
     "DPS采样_一致性": [round(float(c), 4) for c in consistency_list],
     "DPS采样_多样性": [round(float(d), 4) for d in diversity_list],
+    "字段说明": "DPS采样_均值=样本均值; DPS采样_一致性=E|X-y|（与图表同口径，注意不是 |E[X]-y|）; DPS采样_多样性=样本标准差(std)",
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

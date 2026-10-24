@@ -192,6 +192,8 @@ def flow_ode_sample(model, shape, n_steps=50, z=None):
         # ★ 修正：RF中t_val=0是噪声，DDPM中t_int=T-1是噪声
         # 反转映射使正弦嵌入语义对齐；floor((1-t)*T) 再截断到 T-1，
         # 旧写法 floor((1-t)*(T-1)) 会让采样首步查询的 T-1 在训练中取不到（同 14.5-1）。
+        # 修正后复跑：距离/多样性 8 项指标相对原存档变化均 <1%，排序与结论不变
+        # （固定种子只保证同设备同代码可复现，跨设备仍会有微小差异）。
         t_int = torch.full((shape[0],), min(int((1 - t_val) * T), T - 1), device=device, dtype=torch.long)
         v = model(x, t_int)
         x = x + v * dt

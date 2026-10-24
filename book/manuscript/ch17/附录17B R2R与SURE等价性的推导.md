@@ -1,8 +1,8 @@
 # 附录 17B R2R 与 SURE 等价性的推导
 
-> 定位：17.3.5 节给了 R2R 公式和"渐近等价 SURE"的陈述，这里补全推导。重点看 A 节（为什么两个重加噪副本条件独立）和 C 节（为什么 $\alpha \to 0$ 时 R2R 退化成 SURE）。
+> 定位：17.3.5 节给了 R2R 公式和“与 SURE 只差一个与 $f$ 无关常数”的陈述，这里补全推导。重点看 A 节（为什么两个重加噪副本条件独立）和 C 节（为什么 R2R 与 SURE 的最优解相同、以及那个发散常数从哪来）。
 
-整个推导的枢纽只有一个词：**独立性**。R2R 用"一加一减"的重加噪，把单帧观测拆成两路条件独立的噪声副本——正是独立性，使得两路副本之间的 MSE 期望恰好分解出"信号拟合项 + 散度修正项"的结构，躲开了朴素损失的系统性低估；而 $\alpha \to 0$ 的极限只是让"重排后的观测"退回原始观测，从而与 SURE 会师。
+整个推导的枢纽只有一个词：**独立性**。R2R 用"一加一减"的重加噪，把单帧观测拆成两路条件独立的噪声副本——正是独立性，使得两路副本之间的 MSE 期望恰好分解出"信号拟合项 + 散度修正项"的结构，躲开了朴素损失的系统性低估；而 $\alpha \to 0$ 只是让"重排后的观测"退回原始观测，把 $O(\alpha^2)$ 偏差项压掉（代价是留下一个与 $f$ 无关的 $n\sigma^2/\alpha^2$）。
 
 ## A. $y_a$ 和 $y_b$ 的条件独立性
 
@@ -46,9 +46,13 @@ $$= \mathbb{E}_\omega\left[\|\mathbf{y} - \omega/\alpha\|^2\right] - 2\mathbb{E}
 
 ---
 
-## C. 渐近等价性 $\lim_{\alpha \to 0}\mathcal{L}_{\text{R2R}} = \mathcal{L}_{\text{SURE}}$
+## C. 渐近关系：$\mathcal{L}_{\text{R2R}} = \mathcal{L}_{\text{SURE}} + n\sigma^2/\alpha^2 + O(\alpha^2)$
 
-**定理**：在 $f$ 连续可微等正则性条件下，$\lim_{\alpha \to 0}\mathcal{L}_{\text{R2R}}(\mathbf{y}, f, \alpha) = \mathcal{L}_{\text{SURE}}(\mathbf{y}, f)$。
+**定理**：在 $f$ 连续可微等正则性条件下，
+
+$$\mathcal{L}_{\text{R2R}}(\mathbf{y}, f, \alpha) = \mathcal{L}_{\text{SURE}}(\mathbf{y}, f) + \frac{n\sigma^2}{\alpha^2} + O(\alpha^2)$$
+
+> **注意这个 $n\sigma^2/\alpha^2$ 不是笔误，也不能“消去”**：它来自 $\|y_b\|^2$ 中的 $\|\omega\|^2/\alpha^2$，与 $f$ 无关但随 $\alpha \to 0$ 发散。所以**不能说“$\alpha \to 0$ 时 $\mathcal{L}_{\text{R2R}}$ 趋向 $\mathcal{L}_{\text{SURE}}$”**（前者会爆掉）。R2R 真正用到的是更弱、但足够的一条：两者**只差一个与 $f$ 无关的项**，因此对 $f$ 的**最小化解相同**——损失值不等，但训练出来的网络一样。这也解释了为何 $\alpha$ 不能取太小：$n\sigma^2/\alpha^2$ 会抬高损失尺度、放大数值误差（实验17.4-1 的 $\alpha$ 扫描中 $\alpha=0.01$ 反而最差，23.36dB）。
 
 直觉先行的说法是：$\alpha \to 0$ 时 $y_a$ 几乎就是 $\mathbf{y}$，而 $y_b$ 是叠加在 $\mathbf{y}$ 上、幅度被 $1/\alpha$ 放大的"正交扰动"——扰动被放大，反而把它携带的一阶信息精确地"顶"到了台面上。下面把这句话算出来。
 
@@ -64,9 +68,13 @@ $$y_b^\top f(y_a) \approx (\mathbf{y} - \omega/\alpha)^\top(f(\mathbf{y}) + \alp
 
 $$\mathbb{E}_\omega[y_b^\top f(y_a)] \approx \mathbf{y}^\top f(\mathbf{y}) - \sigma^2\text{tr}(J_f(\mathbf{y}))$$
 
-**第四步**：代回 B 节的展开，消去常数项，得
+**第四步**：把 B 节展开的三项合起来（注意不要丢掉第一项的 $n\sigma^2/\alpha^2$），得
 
-$$\mathcal{L}_{\text{R2R}} \approx \|\mathbf{y} - f(\mathbf{y})\|^2 + 2\sigma^2\text{tr}(J_f(\mathbf{y})) = \mathcal{L}_{\text{SURE}}(\mathbf{y}, f) \qquad \blacksquare$$
+$$\mathcal{L}_{\text{R2R}} = \underbrace{\|\mathbf{y} - f(\mathbf{y})\|^2 + 2\sigma^2\text{tr}(J_f(\mathbf{y}))}_{=\,\mathcal{L}_{\text{SURE}}} + \frac{n\sigma^2}{\alpha^2} + O(\alpha^2) \qquad \blacksquare$$
+
+即：$\mathcal{L}_{\text{R2R}}$ 与 $\mathcal{L}_{\text{SURE}}$ 相差一个**与 $f$ 无关**的项 $n\sigma^2/\alpha^2$。最小化时它对 $f$ 的梯度为零，所以两者的最优解相同——这正是 R2R “不用算散度也能学对”的数学根据。
+
+（对线性 $f(\mathbf{y}) = J\mathbf{y}$，$O(\alpha^2)$ 项可精确算为 $\alpha^2\sigma^2\|J_f\|_F^2$：取 $n=10,\sigma=1,\alpha\in\{0.5,0.2,0.1\}$，蒙特卡洛残差分别为 $1.2248, 0.1955, 0.0480$，与 $\alpha^2\sigma^2\|J\|_F^2 = 1.225, 0.196, 0.049$ 逐项吻合。）
 
 ---
 

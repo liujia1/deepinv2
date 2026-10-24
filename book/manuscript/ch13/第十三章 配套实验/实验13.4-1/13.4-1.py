@@ -150,7 +150,8 @@ else:
   eps_hat_cfg = eps_hat_uncond + s * (eps_hat_cond - eps_hat_uncond)
   其中 s = guidance_scale
 
-  s=0:   纯无条件生成（仅用eps_hat_uncond）
+  s=0:   公式上退化为纯无条件（仅用eps_hat_uncond）；
+         但 diffusers 在 s≤1 时跳过 uncond 分支，实际仍给纯条件，故本实验不跑 s=0
   s=1:   标准条件生成（相当于不使用CFG增强，直接用条件预测eps_hat_cond）
   s∈(1,~5):   温和引导（轻微增强条件性）
   s∈(~5,~15): 常用/较强引导（7.5为经典默认值）
@@ -174,7 +175,8 @@ print("""
 2. CFG（13.4.2节）
    - eps_hat_cfg = eps_hat_uncond + s * (eps_hat_cond - eps_hat_uncond)
    - s控制cond和uncond的混合比例：
-     * s=0：纯无条件生成
+     * s=0：公式上为纯无条件；但 diffusers 在 s≤1 时跳过 uncond，
+       实际仍为纯条件（实现与公式不一致，故本实验不跑 s=0）
      * s=1：标准条件生成（无CFG增强）
      * s∈(1,~5)：温和引导
      * s∈(~5,~15)：常用/较强引导（7.5为经典默认）

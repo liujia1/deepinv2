@@ -4,7 +4,7 @@
 对应知识点：17.1节（数据困境与学习设定谱系）、17.2节（Noise2Noise原理）
 
 实验内容：
-Step 1: 四种学习设定的数据构造与对比 —— 在MNIST上构造四种设定的数据
+Step 1: 各学习设定的数据构造与对比 —— 在MNIST上构造各设定的数据（含正文设定4的"配对噪声观测"子档）
 Step 2: Noise2Noise原理验证 —— 用配对噪声数据训练，对比监督基线
 Step 3: Noise2Noise与朴素自监督损失对比 —— 展示‖y-f(y)‖²的偏差
 Step 4: Neighbor2Neighbor空间配对 —— 利用邻域结构近似配对
@@ -253,25 +253,28 @@ test_iter = iter(test_loader)
 test_imgs, _ = next(test_iter)
 test_imgs = test_imgs[:8].to(device)
 test_noisy = add_noise(test_imgs, SIGMA)  # 第一次噪声观测 y
-test_noisy2 = add_noise(test_imgs, SIGMA)  # ★第二次独立噪声观测 y'（用于设定2的合成配对）
+test_noisy2 = add_noise(test_imgs, SIGMA)  # ★第二次独立噪声观测 y'（用于“配对噪声观测”子档 = 正文设定4的子档）
 
 # ★命名规范说明（避免后续s1/s2术语混淆）：
-# - 本文件Step 1使用s1/s2/s3/s4指代"设定1/设定2/设定3/设定4"（learning setting）
+# - 本文件Step 1使用s1/s2/s3/s4指代四行数据（learning setting）：
+#   s1 = 设定1（监督）；s2 = 设定4的“配对噪声观测”子档（★不是正文的设定2！）；
+#   s3 = 设定3（仅x）；s4 = 设定4（仅y）
+#   正文17.1 的设定2 是“干净x + 已知噪声模型”，其训练方式与设定1同构，本实验未单列。
 # - Step 4起使用sub1/sub2指代"子图1/子图2"（neighbor sub-image）
 # - 两者是不同概念，请按上下文区分
 
 # --- 1a. 数据可视化 ---
 fig, axes = plt.subplots(4, 8, figsize=(16, 8))
-titles = ['设定1: 监督 (x,y)', '设定2: 合成配对 (y,y\')',
+titles = ['设定1: 监督 (x,y)', "设定4子档: 配对噪声 (y,y')",
           '设定3: 无监督-x (仅x)', '设定4: 无监督-y (仅y)']
 for i in range(8):
     # 设定1: 监督学习 - 有配对的干净x和噪声y
     axes[0, i].imshow(test_imgs[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
     axes[0, i].axis('off')
-    # 设定2: 合成配对 - 有两次独立噪声观测y, y'（这里展示y'，y在设定4行展示）
+    # 设定4子档: 配对噪声观测 - 有两次独立噪声观测y, y'（这里展示y'，y在设定4行展示）
     axes[1, i].imshow(test_noisy2[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
     axes[1, i].axis('off')
-    # 设定3: 无监督-x - 仅有干净图像（无噪声配对，无法训练去噪）
+    # 设定3: 无监督-x - 仅有干净图像（本实验框架下无法开工；正文指出得分匹配/扩散正站此档，见第6–7章）
     axes[2, i].imshow(test_imgs[i, 0].cpu(), cmap='gray', vmin=0, vmax=1)
     axes[2, i].axis('off')
     # 设定4: 无监督-y - 仅需要噪声观测（本章核心挑战）
@@ -281,22 +284,23 @@ for i in range(8):
 for r in range(4):
     axes[r, 0].set_ylabel(titles[r], fontsize=9, rotation=0, labelpad=100)
 
-fig.suptitle(f'Step 1a: 四种学习设定的数据对比 ($\\sigma$={SIGMA:.1f})', fontsize=14)
+fig.suptitle(f'Step 1a: 各学习设定的数据对比（含设定4子档） ($\\sigma$={SIGMA:.1f})', fontsize=14)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, 'step1a_four_settings_data.png'), dpi=150, bbox_inches='tight')
 plt.close()
 print("  已保存: step1a_four_settings_data.png")
-print("  说明: 设定1-3需要干净数据x，设定4仅需要噪声观测y——本章的核心挑战")
+print("  说明: 设定1/2/3需要干净数据x；设定4（含其配对噪声子档）只需噪声观测y——本章的核心挑战")
 
-# --- 1b. 四种设定的可行性与性能对比实验 ---
-# 设定3（仅x）无法训练去噪模型，因为去噪需要学习从y到x的映射
-# 这里我们对比设定1、2、4的训练效果
+# --- 1b. 各设定的可行性与性能对比实验 ---
+# 设定3（仅x）在“两两映射式”训练框架下无法开工：既没有 y，也没有噪声模型。
+# 但这不是“不可训练”——正文17.1指出得分匹配/扩散（第6–7章）正是用仅有的 x 学 p(x) 的得分，
+# 再反推去噪器，只是超出本实验范围。故这里只对比设定1、设定4的配对噪声子档、设定4。
 
 # ★说明：Step1的model_s1/model_s2与Step2的model_sup/model_n2n是独立实验，非复用
-# - Step1：快速训练（5 epochs），用于四种设定的定性对比，了解各设定的相对性能
+# - Step1：快速训练（5 epochs），用于各设定的定性对比，了解各设定的相对性能
 # - Step2：完整训练（30 epochs），用于N2N原理的定量验证
 # 虽然loss函数相同，但训练目的不同，Step1侧重"哪种设定可行"，Step2侧重"N2N是否等价于监督"
-print(f"\n  快速训练对比四种设定的性能差异（各训练{QUICK_EPOCHS}个epoch）...")
+print(f"\n  快速训练对比各设定的性能差异（各训练{QUICK_EPOCHS}个epoch）...")
 
 def quick_train(model, loss_fn, n_epochs=QUICK_EPOCHS, tag=""):
     """快速训练用于对比（支持resume，兼容新旧checkpoint格式）"""
@@ -379,11 +383,12 @@ def quick_train(model, loss_fn, n_epochs=QUICK_EPOCHS, tag=""):
 model_s1 = SmallUNet().to(device)
 psnr_s1, ssim_s1 = quick_train(model_s1, lambda p, x, y: nn.MSELoss()(p, x), tag="S1-supervised")
 
-# 设定2: 合成配对 (有两次独立噪声观测)
-# ★语义说明：这里"设定2"描述的是数据可得性层次——有(y, y')两次独立噪声观测。
-# 训练算法本质上就是N2N损失‖y'-f(y)‖²，与Step 2的model_n2n是同一件事。
-# 区别仅在于：Step 1的设定2用5 epoch快速验证可行性，Step 2的N2N用30 epoch完整训练。
-# 不要把"设定2"和"Step 2的N2N"误解为两种不同方法。
+# 设定4 的“配对噪声观测”子档 (有两次独立噪声观测)
+# ★术语更正：正文17.1 的设定2 是“干净x + 已知噪声模型”，与这里的 (y,y') 不是一回事；
+#   只有噪声观测、且有两帧独立噪声，属于正文设定4 里明确提到的“特殊子档”。
+# 训练算法本质就是N2N损失‖y'-f(y)‖²，与Step 2的model_n2n是同一件事；
+# 区别仅在于：这里用 QUICK_EPOCHS 快速验证可行性，Step 2 用 N_EPOCHS 完整训练。
+# 变量名 s2 / 文件名 S2-synthetic-pair 沿用旧名，请按本注释理解。
 def train_synthetic_pair(model, n_epochs=QUICK_EPOCHS):
     optimizer = optim.Adam(model.parameters(), lr=LR)
     ckpt_path = os.path.join(SAVE_DIR, f'ckpt_quick_S2-synthetic-pair_{CKPT_VER}.pt')
@@ -398,7 +403,7 @@ def train_synthetic_pair(model, n_epochs=QUICK_EPOCHS):
         train_losses = checkpoint.get('train_losses', checkpoint.get('losses', []))
 
         if checkpoint.get('is_final', False):
-            print(f"  [设定2-合成配对] ✓ 检测到最终权重，直接加载，跳过训练过程")
+            print(f"  [设定4子档-配对噪声] ✓ 检测到最终权重，直接加载，跳过训练过程")
             print(f"  训练轮数: {checkpoint['epoch']+1}")
             model.load_state_dict(model_state)
             if optimizer_state:
@@ -406,14 +411,14 @@ def train_synthetic_pair(model, n_epochs=QUICK_EPOCHS):
             start_epoch = checkpoint['epoch'] + 1
             is_final = True
         else:
-            print(f"  [设定2-合成配对] 检测到未完成的训练，从第 {checkpoint['epoch']+1} 轮继续")
+            print(f"  [设定4子档-配对噪声] 检测到未完成的训练，从第 {checkpoint['epoch']+1} 轮继续")
             model.load_state_dict(model_state)
             if optimizer_state:
                 optimizer.load_state_dict(optimizer_state)
             start_epoch = checkpoint['epoch'] + 1
 
     if is_final or start_epoch >= n_epochs:
-        print(f"  [设定2-合成配对] 模型已训练完毕，跳过。")
+        print(f"  [设定4子档-配对噪声] 模型已训练完毕，跳过。")
         psnr_val, ssim_val = evaluate_psnr(model, test_loader)
         return psnr_val, ssim_val
 
@@ -421,7 +426,7 @@ def train_synthetic_pair(model, n_epochs=QUICK_EPOCHS):
     for epoch in range(start_epoch, n_epochs):
         epoch_loss = 0.0
         n_batch = 0
-        pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{n_epochs} [设定2-合成配对]', leave=False, unit='batch')
+        pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{n_epochs} [设定4子档-配对噪声]', leave=False, unit='batch')
         for batch_x, _ in pbar:
             batch_x = batch_x.to(device)
             y1 = add_noise(batch_x, SIGMA)
@@ -461,20 +466,21 @@ def train_synthetic_pair(model, n_epochs=QUICK_EPOCHS):
 model_s2 = SmallUNet().to(device)
 psnr_s2, ssim_s2 = train_synthetic_pair(model_s2)
 
-# 设定3: 无监督-x (仅干净图像) - 无法训练去噪
-# 解释：去噪需要学习f: y→x，但没有y，无法训练
-psnr_s3 = None  # 未使用，仅为占位说明设定3不可行
-ssim_s3 = None  # 未使用，仅为占位说明设定3不可行
+# 设定3: 无监督-x (仅干净图像) - 本实验不训练
+# 解释：本实验的所有训练路径都要求“输入是带噪观测 y”，设定3 连 y 都没有；
+#       正文17.1 指出该档应改用得分匹配/扩散（第6–7章），超出本实验范围。
+psnr_s3 = None  # 占位：设定3 不在本实验的训练范围内
+ssim_s3 = None  # 占位：同上
 
 # 设定4: 无监督-y (仅噪声观测) - 朴素方法
 model_s4 = SmallUNet().to(device)
 psnr_s4, ssim_s4 = quick_train(model_s4, lambda p, x, y: nn.MSELoss()(p, y), tag="S4-naive")
 
-print(f"\n  四种设定的快速训练结果（5 epochs）:")
-print(f"    设定1 (监督):     PSNR = {psnr_s1:.2f} dB, SSIM = {ssim_s1:.4f}")
-print(f"    设定2 (合成配对): PSNR = {psnr_s2:.2f} dB, SSIM = {ssim_s2:.4f}")
-print(f"    设定3 (仅x):      不可行 - 缺少噪声输入，无法训练去噪模型")
-print(f"    设定4 (仅y-朴素): PSNR = {psnr_s4:.2f} dB, SSIM = {ssim_s4:.4f}")
+print(f"\n  各设定（含设定4子档）的快速训练结果（{QUICK_EPOCHS} epochs）:")
+print(f"    设定1 (监督):        PSNR = {psnr_s1:.2f} dB, SSIM = {ssim_s1:.4f}")
+print(f"    设定4子档 (配对噪声): PSNR = {psnr_s2:.2f} dB, SSIM = {ssim_s2:.4f}")
+print(f"    设定3 (仅x):         本实验不训练（需得分匹配/扩散，见第6–7章）")
+print(f"    设定4 (仅y-朴素):    PSNR = {psnr_s4:.2f} dB, SSIM = {ssim_s4:.4f}")
 
 # 可视化对比
 fig, axes = plt.subplots(1, 4, figsize=(14, 3))
@@ -488,17 +494,17 @@ with torch.no_grad():
 
 methods = [
     (f'设定1: 监督\n{psnr_s1:.1f}dB', pred_s1[0,0], '#2196F3'),
-    (f'设定2: 合成配对\n{psnr_s2:.1f}dB', pred_s2[0,0], '#4CAF50'),
-    (f'设定3: 仅x\n不可行', vis_img[0,0].cpu(), '#9E9E9E'),
+    (f'设定4子档: 配对噪声\n{psnr_s2:.1f}dB', pred_s2[0,0], '#4CAF50'),
+    (f'设定3: 仅x\n本实验不训练', vis_img[0,0].cpu(), '#9E9E9E'),
     (f'设定4: 仅y-朴素\n{psnr_s4:.1f}dB', pred_s4[0,0], '#FF9800'),
 ]
 
 for ax, (title, img, color) in zip(axes, methods):
     ax.imshow(img, cmap='gray', vmin=0, vmax=1)
-    ax.set_title(title, fontsize=10, color=color if '不可行' not in title else 'gray')
+    ax.set_title(title, fontsize=10, color=color if '本实验不训练' not in title else 'gray')
     ax.axis('off')
 
-fig.suptitle(f'Step 1b: 四种学习设定的性能对比 ($\\sigma$={SIGMA:.1f}, {QUICK_EPOCHS} epochs)', fontsize=13)
+fig.suptitle(f'Step 1b: 各学习设定的性能对比 ($\\sigma$={SIGMA:.1f}, {QUICK_EPOCHS} epochs)', fontsize=13)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, 'step1b_four_settings_comparison.png'), dpi=150, bbox_inches='tight')
 plt.close()
@@ -751,7 +757,7 @@ print("="*70)
 
 # --- 3a. 训练朴素自监督：loss = ‖y - f(y)‖² ---
 # ★说明：此处为独立训练，非复用Step1的model_s4
-# - Step1的model_s4：仅5 epochs，用于四种设定的快速对比
+# - Step1的model_s4：仅5 epochs，用于各设定的快速对比
 # - Step3的model_naive：30 epochs，用于详细分析偏差来源和训练曲线
 # 两者loss函数相同（‖y-f(y)‖²），但训练目的不同
 print("\n  训练朴素自监督 (Naive: ‖y-f(y)‖²)...")
@@ -1173,9 +1179,11 @@ print(f"  Neighbor2Neighbor PSNR = {psnr_n2nb:.2f} dB, SSIM = {ssim_n2nb:.4f}")
 # --- Step 4a2: 半分辨率监督对照（★用于实际拆分 N2B 与 N2N 的差距来源）---
 # ★动机：N2B降采样与N2N的差距里，有两个本来纠缠在一起的因素：
 #   (i)  表示/分辨率：N2B在半分辨率(32→16)的2通道子图上训练与推理；
-#   (ii) 目标端噪声：N2B用互补位置的"带噪"y₂作目标，而N2N用独立的噪声实现y′作目标。
+#   (ii) 目标位置错位：N2B的目标 y₂ 取自**相邻位置**，最优解是 E[x₂|y₁] 而非 x₁。
+#        （注意：目标"带噪"本身不引入偏差——噪声独立零均值，E[y₂|y₁]=E[x₂|y₁]；
+#          偏差全部来自 x₂≠x₁，即相邻像素信号不同，信号相关性只决定偏差有多大。）
 # 本对照与N2B降采样**共用完全相同的输入表示、网络架构、优化器、轮数与推理/还原方式**，
-# 唯一差别是把训练目标换成分辨率表示下的**干净**像素（即同位置的有监督去噪）。于是可实测拆分为：
+# 唯一差别是把训练目标换成同位置的**干净**像素（即同位置的有监督去噪）。于是可实测拆分为：
 #   表示/分辨率代价 = PSNR(N2N) − PSNR(本对照)
 #   伪配对目标代价   = PSNR(本对照) − PSNR(N2B降采样)
 print("\n  训练半分辨率监督对照（同表示、同架构，仅把目标换成干净像素）...")
@@ -1717,14 +1725,18 @@ else:
     if gap_repr > gap_target + 0.5:
         main_cause = "半分辨率表示(i)"
     elif gap_target > gap_repr + 0.5:
-        main_cause = "伪配对目标自带独立噪声(ii)"
+        main_cause = "伪配对目标位置错位(ii)：目标取相邻像素而非同位置干净像素"
     else:
         main_cause = "(i)与(ii)相当"
     print(f"     → 主导因素：{main_cause}")
     print(f'     注：该拆分是"先表示、后目标"的单路径可加分解，两项之和恒等于总差距，')
     print(f"         但未分离二者的交互项（例如分辨率代价在目标带噪时可能略有不同）。")
-    print(f"     注：噪声为i.i.d.时 E[y₂|y₁]=E[x|y₁]，伪配对目标对x无偏，")
-    print(f"         '相邻像素的信号相关性'不是成因（该说法仅在噪声相关时成立）。")
+    print(f"     注（伪配对目标为何有偏）：噪声独立零均值只给出 E[y₂|y₁]=E[x₂|y₁]，")
+    print(f"         而该位置本应给出 x₁，且 E[x₂|y₁]≠x₁——所以伪配对目标对 x **有偏**。")
+    print(f"         相邻像素的信号相关性正是该偏差的控制因素（线性近似下 E[x₂|y₁] 相当于")
+    print(f"         把 E[x₁|y₁] 按相关系数ρ收缩）：ρ↑→偏差↓；ρ→0 时网络无法从 y₁ 推断 x₂，")
+    print(f"         只能输出局部统计均值。（本实验数据实测相邻ρ≈0.87，偏差受控，N2B 才可用；")
+    print(f"         这也是它仍不及同位置 N2N 的根因。）")
 
 print(f"\n  ★ N2B两种实现对比（简表）：")
 print(f"  ┌───────────────┬──────────────────────┬──────────────────────┐")
@@ -1829,7 +1841,7 @@ results_summary = {
     '实验': '17.2-1 Noise2Noise与Noise2Blind',
     '不同训练设定的性能': {
         '设定1(监督)': {'PSNR': psnr_s1, 'SSIM': ssim_s1},
-        '设定2(合成配对)': {'PSNR': psnr_s2, 'SSIM': ssim_s2},
+        '设定4子档(配对噪声观测)': {'PSNR': psnr_s2, 'SSIM': ssim_s2},
         '设定4(朴素自监督)': {'PSNR': psnr_s4, 'SSIM': ssim_s4},
     },
     '完整训练结果': {
@@ -1851,9 +1863,13 @@ results_summary = {
         '监督散度': div_sup,
         '偏差项': bias_term,
     },
-    'N2B盲点性验证': {
+    'N2B泄漏诊断(保持分辨率负例)': {
+        '说明': '★以下两项均由 model_n2b_fullres（泄漏负例）计算，不是降采样N2B；'
+                'corr≈1 且 MSE≪σ² 正是它在抄目标像素 y[sub2] 的证据，不是“盲点性好”的证据；'
+                '正常去噪模型对单帧噪声目标的 MSE 基线应≈σ²',
         '相关系数(f[sub1] vs 目标y[sub2])': correlation,
         'MSE(f[sub1] vs 目标y[sub2])': mse_to_target,
+        'σ^2(基线参考)': SIGMA ** 2,
     },
     '实验参数': {
         '噪声水平': SIGMA,

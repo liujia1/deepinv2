@@ -80,6 +80,15 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed(42)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# ★可复现性（关键）：固定 seed 只锁定初始化与噪声序列，GPU 上的卷积/梯度累加本身
+# 是非确定算子——实测同一 seed 下仅 60 个 batch，StrictBlindSpotUNet 第一层权重就出现
+# 1e-3 级分叉；训练 30 epoch 后盲点卷积核形状可以完全不同（step4_blindspot_kernels.png 跨
+# 运行不可比）。因此这里显式开启确定性算子：代价是少量速度损失，换来"同 seed 同结果"。
+torch.backends.cudnn.benchmark = False
+torch.backends.cudnn.deterministic = True
+torch.use_deterministic_algorithms(True, warn_only=True)
+
 print(f"使用设备: {device}")
 
 
@@ -516,6 +525,34 @@ GAUSSIAN_MODEL_EPOCHS = 15
 # ========================================================================
 # Checkpoint 辅助函数（消除 8+ 处重复的 save/load 模板）
 # ========================================================================
+def get_rng_state():
+    """采集全部随机源状态（torch / cuda / numpy / random）
+
+    单个 torch.manual_seed 无法在 checkpoint 之间“接力”：pipeline 里各 Step 的
+    训练与采样共用同一条随机数流，漏存任何一路都会让续跑后的序列整体错位。
+    """
+    state = {
+        'torch': torch.get_rng_state(),
+        'numpy': np.random.get_state(),
+        'random': random.getstate(),
+    }
+    if torch.cuda.is_available():
+        state['cuda'] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def set_rng_state(state):
+    """恢复 get_rng_state() 采集的随机源状态（缺项则跳过，兼容旧 checkpoint）"""
+    if state.get('torch') is not None:
+        torch.set_rng_state(state['torch'])
+    if state.get('numpy') is not None:
+        np.random.set_state(state['numpy'])
+    if state.get('random') is not None:
+        random.setstate(state['random'])
+    if state.get('cuda') is not None and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(state['cuda'])
+
+
 def load_checkpoint(save_path, model, optimizer=None, device=None):
     """加载训练 checkpoint（自动识别 final / intermediate）
 
@@ -544,6 +581,14 @@ def load_checkpoint(save_path, model, optimizer=None, device=None):
     train_losses = checkpoint.get('train_losses', checkpoint.get('losses', []))
     start_epoch = checkpoint['epoch'] + 1
     is_final = checkpoint.get('is_final', False)
+
+    # ★续训可复现：checkpoint 若不含 RNG 状态，“中断续跑”与“一次跑完”就会进入不同的
+    # 随机数流（之后每个 batch 的噪声全变），跨运行的指标与图因此不可比。
+    # 旧格式 checkpoint 没有该字段，此时保持当前随机流。
+    rng_state = checkpoint.get('rng_state')
+    if rng_state is not None:
+        set_rng_state(rng_state)
+
     return start_epoch, train_losses, is_final
 
 
@@ -553,12 +598,15 @@ def save_checkpoint(save_path, model, optimizer, epoch, train_losses, is_final,
 
     中间 checkpoint（is_final=False）保留 optimizer_state_dict 用于续训；
     最终 checkpoint（is_final=True）仅含 model_state_dict，减小文件体积。
+    两者都额外保存 RNG 状态（体积可忽略），这样即使某次运行因 ckpt 已 final 而
+    跳过训练，后续 Step 的随机数流仍与该 Step 训练结束时一致。
     """
     ckpt = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'train_losses': train_losses,
         'is_final': is_final,
+        'rng_state': get_rng_state(),
     }
     if not is_final:
         ckpt['optimizer_state_dict'] = optimizer.state_dict()
@@ -641,9 +689,19 @@ print("""
   偏差分析：E[L_naive] = R(f) + nσ² - 2σ²·div f(y)
 
   偏差由两部分组成（★感谢评审意见补全）：
-  · +nσ² ：常数项（噪声方差累积，与 f 无关）
-  · -2σ²·div f(y)：散度项（f 的 Jacobian 散度；div f 较小时主导，
-                    使 L_naive 相对 R(f) 看起来"低估"，低估量约 2σ²·div f(y)）
+  · +nσ² ：常数项（噪声方差累积，与 f 无关），总是把 L_naive 拉高
+  · -2σ²·div f(y)：散度项（f 的 Jacobian 散度），对常见去噪器 div f ≥ 0，
+                    总是把 L_naive 拉低
+
+  净偏差 = nσ² - 2σ²·div f，方向取决于 div f 与 n/2 的大小关系：
+  · div f > n/2 → 净偏差 < 0，L_naive 低估 R(f)，低估量 = 2σ²·div f - nσ²
+  · div f < n/2 → 净偏差 > 0，L_naive 高估 R(f)，高估量 = nσ² - 2σ²·div f
+  · div f = n/2 → 恰好无偏
+  （实例：实验17.2-1 中 σ=0.3、n=1024、实测 div_naive≈1023.0，
+    净偏差 = 92.16 - 184.15 = -91.99，即低估约 92。）
+
+  直觉：网络越“灵活”（div f 越大），越能把残差压小，也就越容易把风险估低；
+  但“灵活”本身是要计价钱的——这正是 2σ²·div f 要做的事。
 
 SURE的核心思想：把这两项都"加回去"（更准确是从 L_naive 中减去负偏差）！
 
@@ -1080,14 +1138,16 @@ print("\n" + "="*70)
 print("Step 3: R2R——避免散度计算的SURE替代")
 print("="*70)
 
-def r2r_loss(model, y, sigma, alpha=0.1):
+def r2r_loss(model, y, sigma, alpha=0.5):
     """R2R (Recorrupted-to-Recorrupted) 损失
     对应17.3.5节：Pang et al. (2021)
 
     y_a = y + ασ·ω, y_b = y - (σ/α)·ω  (ω ~ N(0,1))
     关键性质: y_a 和 y_b 给定 x 时条件独立
 
-    当 α→0 时, L_R2R → L_SURE (渐近等价)
+    与SURE的关系: L_R2R = L_SURE + nσ²/α² + O(α²)
+    即两者只差一个“与 f 无关”的常数，因此对 f 的**最小化解相同**；
+    注意不是“α→0 时损失值收敛到 L_SURE”——nσ²/α² 会随 α→0 发散。
 
     ★ 关于α约定的说明：
     ─────────────────────────────────────────
@@ -1143,7 +1203,9 @@ if not is_final_r2r and start_epoch_r2r < N_EPOCHS:
             batch_x = batch_x.to(device)
             y = add_noise(batch_x, SIGMA)
             optimizer_r2r.zero_grad()
-            loss = r2r_loss(model_r2r, y, SIGMA, alpha=0.1)
+            # ★ α=0.5：取 Step 3b α敏感性扫描的最优值（0.01/0.05/0.1/0.5/1.0 中 0.5 最高，
+            #   见 results_summary.json 的 R2R_alpha扫描）；早期版本用 0.1，会低估 R2R 约 0.9 dB
+            loss = r2r_loss(model_r2r, y, SIGMA, alpha=0.5)
             loss.backward()
             optimizer_r2r.step()
             epoch_loss += loss.item()
@@ -1283,6 +1345,15 @@ CHECKPOINT_BS = os.path.join(SAVE_DIR, 'ckpt_StrictBlindSpot.pt')
 start_epoch_bs, train_losses_bs, is_final_bs = load_checkpoint(
     CHECKPOINT_BS, model_bs, optimizer_bs, device)
 
+# ★图与权重绑定：ckpt 已 final 时本次不训练，下面 step4 的核图直接反映 ckpt 中的权重。
+# 把来源打出来，避免把不同运行训练出的权重画的图混在一起比较
+if is_final_bs:
+    print("  权重来源: ckpt_StrictBlindSpot.pt（已 final，本次跳过训练）")
+elif start_epoch_bs > 0:
+    print(f"  权重来源: ckpt_StrictBlindSpot.pt 续训（从 epoch {start_epoch_bs + 1} 开始）")
+else:
+    print("  权重来源: 本次从头训练")
+
 if not is_final_bs and start_epoch_bs < N_EPOCHS:
     for epoch in range(start_epoch_bs, N_EPOCHS):
         model_bs.train()
@@ -1410,27 +1481,39 @@ print(f"\n  严格盲点网络散度 div f(y) ≈ {div_bs.item():.2f} (应接近
 print(f"  标准UNet散度 div f(y) ≈ {div_mc_vals[1]:.2f} (非零)")
 
 # 可视化盲点卷积核
-fig, axes = plt.subplots(2, 4, figsize=(12, 6))
+# ★色标自适应（关键）：原实现把 vmin/vmax 硬编码为 ±0.3，一旦某次训练的第一层权重量级
+# 变化（训练不可能逐位复现），整张图会集体发白或过饱和——看起来像"结果变了"，实际只是
+# 色标没跟着数据走。这里改为按实测最大幅值对称标定，并在标题里写出真实数值，
+# 让图传达的是核的形状（中心=0 的架构性质），而不是某一次训练的具体量级。
+kernels_bs, kernels_std = [], []
 for i in range(4):
     w_raw = model_bs.enc1.conv[0].conv.weight[i, 0].detach().cpu().numpy()
     center_mask = model_bs.enc1.conv[0].center_mask[i, 0].detach().cpu().numpy()
-    w = w_raw * center_mask
-    axes[0, i].imshow(w, cmap='RdBu_r', vmin=-0.3, vmax=0.3)
-    axes[0, i].set_title(f'盲点核 [{i}]', fontsize=10)
+    kernels_bs.append(w_raw * center_mask)   # 乘 mask 后中心严格为 0
+    kernels_std.append(model_sure.enc1.conv[0].weight[i, 0].detach().cpu().numpy())
+
+vmax = max(float(np.abs(np.stack(kernels_bs + kernels_std)).max()), 1e-6)
+
+fig, axes = plt.subplots(2, 4, figsize=(12.6, 6.4), layout='constrained')
+for i in range(4):
+    im = axes[0, i].imshow(kernels_bs[i], cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+    axes[0, i].set_title(f'盲点核 [{i}]  最大|w|={np.abs(kernels_bs[i]).max():.3f}', fontsize=9)
     axes[0, i].axis('off')
     axes[0, i].plot(1, 1, 'rx', markersize=10, markeredgewidth=2)
 
-    w_std = model_sure.enc1.conv[0].weight[i, 0].detach().cpu().numpy()
-    axes[1, i].imshow(w_std, cmap='RdBu_r', vmin=-0.3, vmax=0.3)
-    axes[1, i].set_title(f'标准核 [{i}]', fontsize=10)
+    axes[1, i].imshow(kernels_std[i], cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+    axes[1, i].set_title(f'标准核 [{i}]  最大|w|={np.abs(kernels_std[i]).max():.3f}', fontsize=9)
     axes[1, i].axis('off')
 
 axes[0, 0].set_ylabel('盲点卷积(中心=0)', fontsize=11)
 axes[1, 0].set_ylabel('标准卷积', fontsize=11)
 fig.suptitle(r'Step 4: 盲点卷积核可视化 ($\times$标记中心已置零)', fontsize=13)
-plt.tight_layout()
+cbar = fig.colorbar(im, ax=axes, fraction=0.03, pad=0.02, shrink=0.9)
+cbar.set_label(f'权重 (对称色标 ±{vmax:.3f})', fontsize=9)
+# layout='constrained' 已接管布局，不再调用 tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, 'step4_blindspot_kernels.png'), dpi=150, bbox_inches='tight')
 plt.close()
+print(f"  盲点核中心值 = {[f'{k[1, 1]:.1e}' for k in kernels_bs]} (掩码后应严格为 0)")
 print("  已保存: step4_blindspot_kernels.png")
 
 
@@ -1736,43 +1819,35 @@ test_imgs, _ = next(iter(test_loader))
 test_imgs = test_imgs[:8].to(device)
 tweedie_results = verify_tweedie(model_sure, test_imgs, SIGMA, n_mc_div=5)
 
-print(f"\n  Tweedie闭环验证 (修复版):")
-print(f"  方法1 - Score匹配度:")
-print(f"    Score差异: {tweedie_results['score_diff']:.4f} (越小越好)")
-print(f"    Score相关系数: {tweedie_results['score_corr']:.4f} (越接近1越好)")
-print(f"  方法2 - Stein恒等式散度:")
-print(f"    散度误差: {tweedie_results['div_error']:.6f} (越小越好)")
-print(f"  方法3 - 去噪器稳定性:")
+print(f"\n  Tweedie闭环验证 (修复版)——三个方法验证的对象不同，分开报告:")
+
+# 方法1 验证的是在人工高斯分布上单独训练的 gaussian_model（公式/实现自检）
+# 方法2 验证的是本实验 SURE 训练的去噪器 model_sure（真正要验证的对象）
+# 方法3 只是 model_sure 的稳定性辅助指标，不参与判定
+score_diff_thr = 0.1
+score_corr_thr = 0.9
+div_err_thr = 0.5
+m2_pass = tweedie_results['div_error'] < div_err_thr
+
+print(f"  方法1（对照 gaussian_model，人工高斯分布；作用=检验 Tweedie 公式与代码实现）:")
+print(f"    Score差异: {tweedie_results['score_diff']:.4f} (阈值<{score_diff_thr})")
+print(f"    Score相关系数: {tweedie_results['score_corr']:.4f} (阈值>{score_corr_thr})")
+print(f"  方法2（主证据 model_sure，Stein恒等式；作用=直接验证 SURE 训练的去噪器）:")
+print(f"    散度误差: {tweedie_results['div_error']:.6f} (<{div_err_thr} ? {'通过' if m2_pass else '未通过'})")
+print(f"  方法3（辅助 model_sure 稳定性，不参与判定）:")
 print(f"    多次去噪输出标准差: {tweedie_results['mc_std']:.4f} (越小说明越稳定)")
 print(f"  ⚠️ 说明：方法2散度验证基于batch_size=8样本的Stein恒等式经验形式，")
 print(f"          存在统计波动，div_error阈值0.5仅供参考。")
 
-# 动态结论：综合 score_diff、score_corr、div_error 判断 Tweedie 公式是否成立
-# 阈值依据：
-#   score_diff < 0.1 表示 score 向量差异小（方法1）
-#   score_corr > 0.9 表示强线性相关
-#   div_error < 0.5 为每像素容差（方法2）
-score_diff_thr = 0.1
-score_corr_thr = 0.9
-div_err_thr = 0.5
-n_methods_pass = sum([
-    tweedie_results['score_diff'] < score_diff_thr,
-    tweedie_results['score_corr'] > score_corr_thr,
-    tweedie_results['div_error'] < div_err_thr
-])
-
-if n_methods_pass >= 2:
-    print(f"  结论: SURE训练的去噪器满足Tweedie公式 ✓")
+if m2_pass:
+    print(f"  结论: SURE训练的去噪器满足Tweedie公式 ✓（主证据=方法2：div_error={tweedie_results['div_error']:.4f}）")
     print(f"        f*(y) = y + σ²∇log p_y(y)")
-    print(f"        (方法1: score_diff={tweedie_results['score_diff']:.4f}, score_corr={tweedie_results['score_corr']:.3f})")
-    print(f"        (方法2: div_error={tweedie_results['div_error']:.4f})")
-elif tweedie_results['score_corr'] > 0.7:
-    print(f"  结论: Tweedie公式近似成立（score_corr={tweedie_results['score_corr']:.3f}），可能有训练不足")
-    print(f"        建议：增加 train_gaussian_denoiser 的 epochs 或调整学习率")
+    print(f"        方法1（验证对象是gaussian_model，不是SURE去噪器）：score_corr={tweedie_results['score_corr']:.3f} 说明形状匹配；")
+    print(f"        score_diff={tweedie_results['score_diff']:.4f} 偏大提示存在整体尺度偏置，不影响方法2的判定")
 else:
-    print(f"  结论: 当前训练结果与Tweedie公式存在偏差")
-    print(f"        (score_diff={tweedie_results['score_diff']:.4f}, score_corr={tweedie_results['score_corr']:.3f}, div_error={tweedie_results['div_error']:.4f})")
-    print(f"        可能原因：gaussian_model训练不充分（当前仅{GAUSSIAN_MODEL_EPOCHS} epochs），建议延长训练")
+    print(f"  结论: SURE训练的去噪器的Tweedie散度检验未通过（方法2前提不成立）")
+    print(f"        (div_error={tweedie_results['div_error']:.4f} ≥ {div_err_thr})")
+    print(f"        → 先检查 SURE 去噪器的收敛性（延长训练或增大 n_mc 降低散度方差）")
 
 # 增强的Tweedie验证可视化
 print("  \n生成增强的Tweedie验证可视化...")
@@ -1953,7 +2028,7 @@ gap_r2r_sure = psnr_r2r - psnr_sure
 if abs(gap_r2r_sure) < approx_thr:
     concl2 = f"R2R ≈ SURE（差距{abs(gap_r2r_sure):.2f}dB < {approx_thr}dB）→ 避免散度计算，但α选择影响精度 ✓"
 elif gap_r2r_sure > 0:
-    concl2 = f"R2R({psnr_r2r:.2f}dB) > SURE({psnr_sure:.2f}dB)（差距+{gap_r2r_sure:.2f}dB）→ R2R略优（α=0.1在该数据集上恰好合适）"
+    concl2 = f"R2R({psnr_r2r:.2f}dB) > SURE({psnr_sure:.2f}dB)（差距+{gap_r2r_sure:.2f}dB）→ R2R略优（α=0.5，取Step 3b敏感性扫描的最优值）"
 else:
     concl2 = f"R2R({psnr_r2r:.2f}dB) < SURE({psnr_sure:.2f}dB)（差距{abs(gap_r2r_sure):.2f}dB）→ R2R略低，α可能需调优（详见Step 3b α扫描）"
 
@@ -1976,22 +2051,17 @@ else:
     else:
         concl3 += f"；N2V输入masking仅提升{gain_bsmask:+.2f}dB，需进一步排查训练充分性或增大mask比例"
 
-# 4. SURE → Tweedie（复用 Step 5 的判定逻辑）
-score_diff_thr = 0.1
-score_corr_thr = 0.9
+# 4. SURE → Tweedie：只以方法2（model_sure 的 Stein 散度）为主证据；
+#    方法1 验证的是 gaussian_model（人工高斯对照），不能与 model_sure 的证据合并投票
 div_err_thr = 0.5
-n_methods_pass = sum([
-    tweedie_results['score_diff'] < score_diff_thr,
-    tweedie_results['score_corr'] > score_corr_thr,
-    tweedie_results['div_error'] < div_err_thr
-])
-if n_methods_pass >= 2:
-    concl4 = f"SURE→Tweedie 成立（{n_methods_pass}/3 指标通过）→ f*(y) = y + σ²∇log p_y(y) ✓"
-    concl4 += f" (score_diff={tweedie_results['score_diff']:.4f}, score_corr={tweedie_results['score_corr']:.3f}, div_error={tweedie_results['div_error']:.4f})"
-elif tweedie_results['score_corr'] > 0.7:
-    concl4 = f"SURE→Tweedie 近似成立（score_corr={tweedie_results['score_corr']:.3f}）→ 理论关系基本验证，gaussian_model可延长训练"
+if tweedie_results['div_error'] < div_err_thr:
+    concl4 = (f"SURE→Tweedie 成立（主证据=方法2：model_sure 的 div_error="
+              f"{tweedie_results['div_error']:.4f} < {div_err_thr}）→ f*(y) = y + σ²∇log p_y(y) ✓")
+    concl4 += (f" [方法1仅为实现自检：gaussian_model 的 score_corr="
+               f"{tweedie_results['score_corr']:.3f}, score_diff={tweedie_results['score_diff']:.4f}]")
 else:
-    concl4 = f"SURE→Tweedie 验证不充分（仅{n_methods_pass}/3 指标通过）→ gaussian_model需更长训练或检查SURE收敛性"
+    concl4 = (f"SURE→Tweedie 未通过（方法2：div_error={tweedie_results['div_error']:.4f} ≥ "
+              f"{div_err_thr}）→ 需检查 SURE 收敛性或增大 n_mc")
 
 # 5. 理论闭环（理论陈述，不直接基于数值）
 concl5 = "从噪声数据→SURE→去噪器→得分→扩散采样：理论闭环成立（结合上面4条动态结论）"

@@ -347,8 +347,11 @@ results_summary = {
     "真实后验_标准差": round(float(post_std_true), 4),
     "真实后验_一致性": round(float(true_consistency), 4),
     "真实后验_多样性": round(float(true_diversity), 4),
+    # 采样均值：正文表格“采样均值”列的直接来源（旧版只存了均值相对 y 的 E|X-y|，无法反推均值）
+    "DPS采样_均值": [round(float(np.mean(sampling_results[z])), 4) for z in zeta_values],
     "DPS采样_一致性": [round(float(c), 4) for c in consistency_list],
     "DPS采样_多样性": [round(float(d), 4) for d in diversity_list],
+    "字段说明": "DPS采样_均值=样本均值; DPS采样_一致性=E|X-y|（与图表同口径，注意不是 |E[X]-y|）; DPS采样_多样性=样本标准差(std)",
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

@@ -202,6 +202,9 @@ def flow_ode_sample(model, shape, n_steps=50):
         # 注：t_int仅用作位置编码信号，不要求与实际噪声方差精确对应
         # 与训练端同一映射：floor((1-t)*T) 再截断到 T-1。旧写法 floor((1-t)*(T-1))
         # 会让采样首步查询的索引 T-1 在训练中取不到（同 14.5-1 的修正）。
+        # 修正后复跑：RF 最终 loss 0.091055（原存档 0.091016），采样质量/多样性
+        # 指标量级与结论均不变（ddpm 分支不经过此映射）。
+        # 注：原存档产自 CPU 环境，CPU 与 CUDA 的随机数序列不同，跨设备不可逐位对齐。
         t_int = torch.full((shape[0],), min(int((1 - t_val) * T), T - 1), device=device, dtype=torch.long)
         v = model(x, t_int)
         x = x + v * dt

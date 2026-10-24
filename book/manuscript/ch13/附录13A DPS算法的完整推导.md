@@ -123,7 +123,7 @@ $$\nabla_{\mathbf{x}_t}\log p(\mathbf{y}|\mathbf{x}_t) \approx \nabla_{\mathbf{x
 
 因 `x̂_{0|t}` 是 `x_t` 函数（经 Tweedie 等式），由链式法则：
 
-$$\boxed{\nabla_{\mathbf{x}_t}\log p(\mathbf{y}|\hat{x}_{0|t}) = \left(\nabla_{\mathbf{x}_0}\log p(\mathbf{y}|\mathbf{x}_0)\Big|_{\mathbf{x}_0 = \hat{x}_{0|t}}\right)^\top \cdot \nabla_{\mathbf{x}_t}\hat{x}_{0|t}}$$
+$$\boxed{\nabla_{\mathbf{x}_t}\log p(\mathbf{y}|\hat{x}_{0|t}) = \left(\nabla_{\mathbf{x}_t}\hat{x}_{0|t}\right)^\top \cdot \nabla_{\mathbf{x}_0}\log p(\mathbf{y}|\mathbf{x}_0)\Big|_{\mathbf{x}_0 = \hat{x}_{0|t}}}$$
 
 `∇_{x_t}x̂_{0|t} ∈ R^{n×n}` 是 Tweedie 估计关于含噪状态的 Jacobian 矩阵。这个式子把"关于 `x_0` 的似然梯度"经 Jacobian 回传到"关于 `x_t` 的梯度"——问题也从"算测量空间的梯度"变成"算含噪状态空间的梯度"。
 
@@ -139,7 +139,7 @@ $$\nabla_{\mathbf{x}_0}\log p(\mathbf{y}|\mathbf{x}_0) = \frac{A^\top(\mathbf{y}
 
 代入链式法则：
 
-$$\nabla_{\mathbf{x}_t}\log p(\mathbf{y}|\hat{x}_{0|t}) = \frac{1}{\sigma_y^2}\left(A^\top(\mathbf{y} - A\hat{x}_{0|t})\right)^\top \cdot \nabla_{\mathbf{x}_t}\hat{x}_{0|t}$$
+$$\nabla_{\mathbf{x}_t}\log p(\mathbf{y}|\hat{x}_{0|t}) = \frac{1}{\sigma_y^2}\left(\nabla_{\mathbf{x}_t}\hat{x}_{0|t}\right)^\top A^\top(\mathbf{y} - A\hat{x}_{0|t})$$
 
 展开内积：
 
@@ -164,7 +164,34 @@ $$\boxed{\nabla_{\mathbf{x}_t}\log p(\mathbf{y}|\mathbf{x}_t) \approx \zeta \cdo
 2. **方向保持**：许多情况 `∇_{x_t}x̂_{0|t}` 不显著改变梯度方向——主要影响大小。故省略 Jacobian 保留梯度方向，用 `ζ` 调大小，是合理折中。
 3. **实践经验**：Chung et al. (2023) 实验表明，选适当 `ζ` 后，省略 Jacobian 的 DPS 在多种逆问题上性能与完整算 Jacobian 版本相当——说明 `ζ` 能有效补偿 Jacobian 省略影响。
 
-**`ζ` 选择**：`ζ` 是超参数，通常 `ζ ∈ [0.1, 1.0]`（13.4.3节详讨 `ζ` 策略）。`ζ` 过大过拟合测量噪声，`ζ` 过小测量一致性不足——扮演与经典正则化参数 `λ` 相同角色。
+**`ζ` 选择**：`ζ` 是超参数，通常 `ζ ∈ [0.1, 1.0]`（13.4.3节详讨 `ζ` 策略）。`ζ` 过大过拟合测量噪声，`ζ` 过小测量一致性不足——扮演与经典正则化参数 `λ` 相同角色。这里要强调：`ζ` 之所以远小于理论值 `1/(2σ_y²)`，一部分原因是 §4.4 讨论的标量缩放被一并吸收进了 `ζ`，两件事要分开看。
+
+### 4.4 中间那一档：把 Jacobian 标量化，缩放因子该取谁
+
+16.3 的正文用的是“左乘转置”形式，这里保持同一记法。完整 Jacobian 可以拆成两个角色不同的部分：
+
+$$\nabla_{\mathbf{x}_t}\hat{x}_{0|t} = \frac{1}{\sqrt{\bar\alpha_t}}\Big[I + (1-\bar\alpha_t)\nabla_{\mathbf{x}_t}s_\theta(\mathbf{x}_t,t)\Big]$$
+
+- 方括号里的 `I`：**各向同性的标量放大**，把 `x_0` 空间的长度单位换成 `x_t` 空间；
+- 方括号里的 `(1-\bar\alpha_t)\nabla_{x_t}s_\theta`：**方向形状**，得分网络的矩阵 Jacobian，负责把不同像素方向混合。
+
+§4.3 把整个 Jacobian 换成常数 1，跳过了中间一档：**把 Jacobian 当成标量 `c_t I`，只丢方向形状**。`c_t` 取什么决定了一切：
+
+| `c_t` | 似然得分近似 | 相对精确值（单位方差高斯先验） | 后果 |
+|---|---|---|---|
+| `√ᾱ_t`（即 `mean_t`） | `mean_t·A^⊤(y-Ax̂_{0\|t})/σ_y²` | `1`（**恰好精确**） | 公平简化，实验 13.1-1 采用 |
+| `1`（§4.3 的写法） | `A^⊤(y-Ax̂_{0\|t})/σ_y²` | `1/√ᾱ_t`，高噪段约高估 10 倍 | 引导虚高、轨迹过冲，靠小 `ζ` 压回 |
+| `1/√ᾱ_t`（把方向写反） | `A^⊤(y-Ax̂_{0\|t})/(√ᾱ_t\,σ_y²)` | `1/ᾱ_t`，`t→T` 时约 150 倍 | 梯度全程撞裁剪上限，退化为“常数强度引导” |
+
+**为什么 `mean_t` 是精确的**：设先验 `N(μ, v)`。VP 缩放下 `x_t` 的边缘方差是 `ᾱ_t v + (1-\bar\alpha_t)`，故 `∇_{x_t}s_θ = -I/(\bar\alpha_t v+1-\bar\alpha_t)`，代回上式：
+
+$$\nabla_{\mathbf{x}_t}\hat{x}_{0|t} = \frac{1}{\sqrt{\bar\alpha_t}}\left[1-\frac{1-\bar\alpha_t}{\bar\alpha_t v+1-\bar\alpha_t}\right]I = \frac{\sqrt{\bar\alpha_t}\,v}{\bar\alpha_t v+(1-\bar\alpha_t)}\,I$$
+
+`v=1` 时分母 `ᾱ_t + 1 - ᾱ_t = 1`，结果恰为 `√ᾱ_t = mean_t`；一般 `v` 下它是 `(0, √ᾱ_t]` 上的正标量，量级不变。特别注意：**这个 `√ᾱ_t` 来自两项的相消**——`1/√ᾱ_t` 乘以 `ᾱ_t` 才得到它。单取方括号里的 `I`（即只留第一项）得到的是 `1/√ᾱ_t`，方向刚好相反；这里很容易写错一次。
+
+**三档在实验里的落点**：实验 13.5-1、13.6-2、13.4-2 用自动微分穿过 Tweedie 映射，等价于保留完整 Jacobian；实验 13.1-1 显式乘 `mean_t`，对应上表第一行；13.2-2 同时给出“含 Jacobian”与“保留 `mean_t`”两个变体并逐点比对（见 13.2 正文：`t=0.95` 时含 J 误差 8.55、保留 `mean_t` 仅 2.32，而旧版连 `mean_t` 一起丢掉时误差达 309）。
+
+> **`ζ` 不可跨实验横向比较**：三档缺失倍数不同，引导项又分别乘在 `β_t`（13.5-1）、ε 预测（13.6-2）、得分（13.1-1）上，`ζ` 的数值只在同一套参数化内部有意义。拿一个实验的 `ζ=0.02` 去反驳另一个实验的 `ζ=50`，是没有意义的对比。
 
 ---
 
@@ -220,9 +247,9 @@ $$g_t = \zeta \cdot \frac{A^\top(\mathbf{y} - A\hat{x}_{0|t})}{\sigma_y^2}$$
 
 **Step 3**：执行条件逆向 SDE 一步（以 DDPM 离散化为例）
 
-$$\mathbf{x}_{t-1} = \frac{1}{\sqrt{1-\beta_t}}\left(\mathbf{x}_t - \frac{\beta_t}{\sqrt{1-\bar\alpha_t}}\varepsilon_t\right) - \beta_t\,g_t + \sigma_t\,\varepsilon, \quad \varepsilon \sim \mathcal{N}(0, I)$$
+$$\mathbf{x}_{t-1} = \frac{1}{\sqrt{1-\beta_t}}\left(\mathbf{x}_t - \frac{\beta_t}{\sqrt{1-\bar\alpha_t}}\varepsilon_t\right) + \beta_t\,g_t + \sigma_t\,\varepsilon, \quad \varepsilon \sim \mathcal{N}(0, I)$$
 
-`σ_t` 是 DDPM 随机性参数。
+`σ_t` 是 DDPM 随机性参数。注意 `g_t` 前的符号是 `+`：逆向 SDE 中条件得分整体为 `s_θ + g_t`，统一进入 `+β_t(·)` 项；无条件的 `−β_t ε_t/√(1−ᾱ_t)` 已经体现在括号内（因为 `s_θ = −ε_t/√(1−ᾱ_t)`）。VE 版本（式 6.3）同理为 `+σ_t² g_t`，两者符号一致。
 
 **关键观察**：DPS 额外计算量仅一次前向传播 `A(x̂_{0|t})` 和一次反传 `A^⊤(y - A(x̂_{0|t}))`——对线性算子 `A` 通常轻量（如 CT 重建 `A` 是 Radon 变换，`A^⊤` 是反 Radon 变换）。这使 DPS 计算效率远高于需完整 Jacobian 的方法。
 
@@ -291,7 +318,11 @@ $$\mathbf{x}_{t-1} = \mathbf{x}_t + \left(\sigma_t^2\,s_t + \sigma_t^2\,g_t\righ
 
 DPS 算法完整推导路径可总结为关键步骤：
 
-$$\underbrace{\nabla\log p(\mathbf{x}_t|\mathbf{y}) = \nabla\log p(\mathbf{x}_t) + \nabla\log p(\mathbf{y}|\mathbf{x}_t)}_{\text{后验得分分解}} \xrightarrow{p(\mathbf{y}|\mathbf{x}_t) \approx p(\mathbf{y}|\hat{x}_{0|t})} \underbrace{\nabla\log p(\mathbf{x}_t|\mathbf{y}) \approx s_\theta + \zeta \cdot \frac{A^\top(\mathbf{y} - A\hat{x}_0)}{\sigma_y^2}}_{\text{DPS近似}}$$
+$$\underbrace{
+\nabla\log p(\mathbf{x}_t|\mathbf{y}) = 
+\nabla\log p(\mathbf{x}_t) + 
+\nabla\log p(\mathbf{y}|\mathbf{x}_t)}_{\text{后验得分分解}} \xrightarrow{p(\mathbf{y}|\mathbf{x}_t) \approx p(\mathbf{y}|\hat{x}_{0|t})} \underbrace{
+\nabla\log p(\mathbf{x}_t|\mathbf{y}) \approx s_\theta + \zeta \cdot \frac{A^\top(\mathbf{y} - A\hat{x}_0)}{\sigma_y^2}}_{\text{DPS近似}}$$
 
 每步引入近似及后果：
 

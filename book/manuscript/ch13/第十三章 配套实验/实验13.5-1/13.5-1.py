@@ -117,7 +117,7 @@ print("""
      逆问题上实用化；本实验的开环Adam打靶仅为教学简化
 """)
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device(os.environ.get('DEEPINV_DEVICE', 'cuda' if torch.cuda.is_available() else 'cpu'))
 print(f"\n使用设备: {device}")
 
 # ============================================================
@@ -127,11 +127,27 @@ GM_WEIGHTS = [0.5, 0.5]
 GM_MEANS = [-2.0, 2.0]
 GM_STDS = [0.5, 0.5]
 
-# VP-SDE参数（T=20步少步采样）
+# VP-SDE参数（默认 T=20 步少步采样）
 # 连续VP-SDE(β(t)恒定)的离散化：令累积噪声 bbar(t)=-log ᾱ_t 从0线性增到4.6，
 # 则 ᾱ_T=e^{-4.6}≈0.01，前向末端边际 p_T≈N(0,1)，与 x_T~N(0,1) 初始分布匹配。
-# 反推每步系数 α_t=ᾱ_t/ᾱ_{t-1}, β_t=1-α_t（β≈0.215/步，属少步大步长设定）。
-T = 20
+# 反推每步系数 α_t=ᾱ_t/ᾱ_{t-1}, β_t=1-α_t（T=20 时 β≈0.215/步，属少步大步长设定）。
+#
+# ★ T 可由环境变量 DEEPINV_DOC_T 覆盖，用于"步数 T 对 DOC/DPS 对比的影响"补充对照：
+#   T=20  主实验（少步大步长，离散化脆性最突出）；
+#   T=200 补充对照（细步长；DPS 引导项 u_t=ζ·β_t·∇log p 中 β_t 随 T 等比缩小，
+#         故稳定窗的 ζ 需同比放大；DOC 的控制变量由 20 维增至 200 维，而迭代次数
+#         固定 300，属于对 200 维序列欠收敛，正文据此讨论"增大 T 未必利好 DOC"）。
+#   补充对照不改主结果、不覆盖主图与主 JSON 字段。
+T = int(os.environ.get('DEEPINV_DOC_T', '20'))
+IS_MAIN_T = (T == 20)
+U_MAX = 0.5  # 单步控制幅度上限：tanh饱和，防止末步β_0=0时一步投影到y/A
+
+# DPS 引导系数配置
+# T=20 主实验用实测标定值 0.02（稳定窗约 0.01~0.025，ζ≥0.03 即出现发散）；
+# 补充对照（T≠20）不预设"最优 ζ"，而是扫描一组 ζ 并逐一记录，避免把单点选择
+# 当成结论——离散化脆性本身就表现为"换 T 就得重新标定 ζ"。
+DPS_ZETA_MAIN = 0.02 if IS_MAIN_T else float(os.environ.get('DEEPINV_DOC_ZETA', '0.3'))
+DPS_ZETA_SWEEP = [DPS_ZETA_MAIN] if IS_MAIN_T else [0.1, 0.15, 0.2, 0.3, 0.5]
 b_bar_end = 4.6
 beta_bars = torch.linspace(0.0, b_bar_end, T, device=device)
 alpha_bars = torch.exp(-beta_bars)
@@ -281,6 +297,13 @@ class SimpleDOC:
           Adam优化的是"随机轨迹终端代价的期望"，而非评估轨迹的终端代价，
           会系统性偏离最优（早期版本的实测误差约为理论最优的2.6倍）。
 
+        控制饱和（教学修正）：标准DOC的控制u_t无幅度约束，而本实验的离散
+        DDPM调度在末步有β_0=0、α_0=1，此时后验均值就是x_t，无约束控制
+        可一步把x_0设成y/A——"全局轨迹优化"退化为"末步数据一致点投影"，
+        控制序列的其余分量完全不起作用（实测DOC误差与y/A误差在1e-6内相等）。
+        为此对每步控制做 u_t = U_MAX·tanh(raw_u_t) 饱和，使单步权限受限、
+        DOC必须在前面的步中分配控制，真正体现轨迹优化；U_MAX=0.5。
+
         参数：
             control_sequence: 控制序列 [u_T, u_{T-1}, ..., u_0]
             x_T: 初始噪声状态
@@ -306,8 +329,8 @@ class SimpleDOC:
             else:
                 posterior_noise = 0.0
 
-            # 更新
-            x_t = posterior_mean + u_t + posterior_noise
+            # 更新（控制经tanh饱和，限制单步幅度，避免末步一步投影）
+            x_t = posterior_mean + U_MAX * torch.tanh(u_t) + posterior_noise
             trajectory.append(x_t.clone())
 
         return torch.stack(trajectory)
@@ -318,8 +341,8 @@ class SimpleDOC:
         损失函数 = 终端代价 + reg_lambda * Σu_t²
         - 终端代价 = -log p(y|x_0)（高斯似然，即0.5||y-Ax_0||²/σ²）
         - Σu_t²为控制能量项，对应DOC原论文代价函数中的Tikhonov正则，
-          使最优控制问题良态并与后验采样相联系；本场景σ_obs很小、终端代价
-          占绝对主导，该项数值上对结果几乎无影响（消融实测误差差异<1e-3）。
+          使最优控制问题良态并与后验采样相联系。本实验的主要控制约束
+          来自单步tanh饱和（U_MAX=0.5），该项仅作辅助正则。
         优化与最终评估使用同一条确定性rollout，不存在动力学失配。
         """
         # 初始化控制序列
@@ -459,30 +482,55 @@ def gaussian_posterior_mean(y_obs, A_obs, sigma_obs):
     return float(np.sum(post_weights / post_weights.sum() * np.array(post_means)))
 
 # 多次试验取平均（配对设计：DOC与DPS共享同一x*、y、x_T）
-n_trials = 50
+n_trials = int(os.environ.get('DEEPINV_DOC_NTRIALS', '50'))
 doc_errors = []
 dps_errors = []
 yA_errors = []        # 参考：数据一致点 y/A 的误差（终端优化的极限之一）
 postmean_errors = []  # 参考：精确后验均值的误差（MMSE点估计下界）
 
-# 支持断点续传（v2文件名：与修复前旧检查点区分，旧档保留不覆盖）
+# 各 ζ 的终端误差分桶记录（T=20 时只有一个桶，即主实验的 DPS_平均误差）
+dps_errors_by_zeta = {_z: [] for _z in DPS_ZETA_SWEEP}
+
+# 支持断点续传（v3文件名：与修复前旧检查点区分，旧档保留不覆盖）
+# 补充对照（T≠20）用带 T 后缀的独立检查点，不干扰主实验续传
+_ckpt_name = 'experiment_checkpoint_v3.pkl' if IS_MAIN_T else f'experiment_checkpoint_T{T}.pkl'
 checkpoint_file = os.path.join(os.path.dirname(__file__) if '__file__' in dir() else '.',
-                               'experiment_checkpoint_v2.pkl')
+                               _ckpt_name)
 start_trial = 0
 viz_data = None
 
 if os.path.exists(checkpoint_file):
     with open(checkpoint_file, 'rb') as f:
         checkpoint = pickle.load(f)
-        doc_errors = checkpoint['doc_errors']
-        dps_errors = checkpoint['dps_errors']
-        yA_errors = checkpoint.get('yA_errors', [])
-        postmean_errors = checkpoint.get('postmean_errors', [])
-        start_trial = len(doc_errors)
-        viz_data = checkpoint.get('viz')
-        print(f"\n从检查点恢复，已完成{start_trial}/{n_trials}次试验")
+    doc_errors = checkpoint['doc_errors']
+    dps_errors = checkpoint['dps_errors']
+    yA_errors = checkpoint.get('yA_errors', [])
+    postmean_errors = checkpoint.get('postmean_errors', [])
+    start_trial = len(doc_errors)
+    viz_data = checkpoint.get('viz')
+    _dps_by = checkpoint.get('dps_by_zeta')
+    if _dps_by:
+        for _k, _v in _dps_by.items():
+            if float(_k) in dps_errors_by_zeta:
+                dps_errors_by_zeta[float(_k)] = list(_v)
+    # 旧检查点（无 dps_by_zeta 字段）的兼容：主 ζ 桶直接复用已存的 dps_errors
+    if not dps_errors_by_zeta[DPS_ZETA_MAIN] and dps_errors:
+        dps_errors_by_zeta[DPS_ZETA_MAIN] = list(dps_errors)
+    _meta = checkpoint.get('meta')
+    if _meta is None:
+        print("\n警告: 检查点无配置元数据（旧格式），仅按已完成次数续传；"
+              "若最近改过 n_trials/先验参数，建议删除该文件后重跑")
+    elif _meta.get('n_trials') != n_trials:
+        raise RuntimeError(
+            f"检查点 n_trials={_meta.get('n_trials')} 与当前脚本 n_trials={n_trials} 不一致；"
+            f"请删除或改名 {os.path.basename(checkpoint_file)} 后重跑")
+    if start_trial > n_trials:
+        raise RuntimeError(
+            f"检查点已完成 {start_trial} 次试验，超过当前 n_trials={n_trials}；"
+            f"请删除或改名 {os.path.basename(checkpoint_file)} 后重跑")
+    print(f"\n从检查点恢复，已完成{start_trial}/{n_trials}次试验")
 
-print(f"\n开始{n_trials}次试验...")
+print(f"\n开始{n_trials}次试验（T={T}，DPS扫描ζ={DPS_ZETA_SWEEP}，主报ζ={DPS_ZETA_MAIN}）...")
 for trial_idx in range(start_trial, n_trials):
     # 生成真实信号和观测
     x0_star = sample_from_prior(1)[0]
@@ -498,9 +546,15 @@ for trial_idx in range(start_trial, n_trials):
     doc_trajectory, doc_controls, doc_history, doc_costs = doc_sampler.optimize_control(x_T, n_iters=300, lr=0.01, trial_idx=trial_idx)
 
     # DPS采样（随机逆向SDE；与DOC共享x_T，配对设计）
-    dps_trajectory = dps_sampling(torch.tensor(y_obs, device=device),
-                                  torch.tensor(A_obs, device=device),
-                                  sigma_obs, x_T.clone())
+    # 逐个 ζ 各跑一条链（T=20 时仅一个 ζ；同一条 x_T 保证配对可比）
+    dps_trajectory = None
+    for _zeta in DPS_ZETA_SWEEP:
+        _traj = dps_sampling(torch.tensor(y_obs, device=device),
+                             torch.tensor(A_obs, device=device),
+                             sigma_obs, x_T.clone(), zeta=_zeta)
+        dps_errors_by_zeta[_zeta].append(abs(_traj[-1].item() - x0_star))
+        if _zeta == DPS_ZETA_MAIN:
+            dps_trajectory = _traj
 
     # 计算终端误差
     doc_x0 = doc_trajectory[-1].item()
@@ -523,10 +577,15 @@ for trial_idx in range(start_trial, n_trials):
         'doc_history': [np.asarray(th).tolist() for th in doc_history],
     }
 
-    # 每轮保存检查点
+    # 每轮保存检查点（meta 记录配置，避免改参后误续传）
     with open(checkpoint_file, 'wb') as f:
-        pickle.dump({'doc_errors': doc_errors, 'dps_errors': dps_errors,
+        pickle.dump({'meta': {'n_trials': n_trials,
+                              'gm_weights': list(GM_WEIGHTS),
+                              'gm_means': list(GM_MEANS),
+                              'gm_stds': list(GM_STDS)},
+                     'doc_errors': doc_errors, 'dps_errors': dps_errors,
                      'yA_errors': yA_errors, 'postmean_errors': postmean_errors,
+                     'dps_by_zeta': {str(_k): _v for _k, _v in dps_errors_by_zeta.items()},
                      'viz': viz_data}, f)
 
 # 统计结果
@@ -554,7 +613,7 @@ print("\n单次试验可视化（用于展示轨迹对比）...")
 # 若从完整检查点恢复（未执行任何试验），从检查点的viz数据重建可视化变量
 if start_trial >= n_trials and doc_errors:
     if viz_data is None:
-        raise RuntimeError("检查点缺少viz数据（旧格式），请删除experiment_checkpoint_v2.pkl后重新完整运行")
+        raise RuntimeError(f"检查点缺少viz数据（旧格式），请删除{os.path.basename(checkpoint_file)}后重新完整运行")
     x0_star = viz_data['x0_star']
     doc_trajectory = torch.tensor(viz_data['doc_traj'], device=device)
     dps_trajectory = torch.tensor(viz_data['dps_traj'], device=device)
@@ -578,17 +637,17 @@ axes[0, 0].axhline(y=yA_x0, color='purple', linestyle=':', linewidth=2,
                    label=f'数据一致点 $y/A$={yA_x0:.3f}')
 axes[0, 0].axhline(y=pm_x0, color='brown', linestyle='-.', linewidth=1.5, alpha=0.8,
                    label=f'精确后验均值={pm_x0:.3f}')
-axes[0, 0].set_xlabel('逆向步数（0=纯噪声 $x_T$，20=终端 $x_0$）')
+axes[0, 0].set_xlabel(f'逆向步数（0=纯噪声 $x_T$，{T}=终端 $x_0$）')
 axes[0, 0].set_ylabel('信号值 $x_t$')
 axes[0, 0].set_title('轨迹对比：DOC vs DPS（最后一次试验示例）')
 axes[0, 0].legend(fontsize=9)
 axes[0, 0].grid(True, alpha=0.3)
 
 # 子图2：控制输入（索引按逆向顺序：0=最早的高噪声步控制）
-axes[0, 1].plot(range(T), doc_controls.cpu().numpy(), 'o-', label='DOC控制',
+axes[0, 1].plot(range(T), doc_controls.cpu().numpy(), 'o-', label='DOC控制变量 raw_u（实际施加 0.5·tanh(raw_u)）',
                 linewidth=2, markersize=5)
 axes[0, 1].axhline(y=0, color='gray', linewidth=0.8)
-axes[0, 1].set_xlabel('逆向步序号（0=高噪声端，19=末端）')
+axes[0, 1].set_xlabel(f'逆向步序号（0=高噪声端，{T-1}=末端）')
 axes[0, 1].set_ylabel('控制输入 $u_t$')
 axes[0, 1].set_title('DOC控制输入（全轨迹协调，PF-ODE）')
 axes[0, 1].legend()
@@ -646,7 +705,8 @@ plt.suptitle(f'DOC vs DPS：全局轨迹优化(PF-ODE) vs 逐步贪心引导\n'
              f'（n={n_trials}次配对试验；参考线：y/A数据一致点、精确后验均值）',
              fontsize=14, y=0.98)
 plt.tight_layout()
-compare_path = os.path.join(SAVE_DIR, "DOC vs DPS对比.png")
+compare_path = os.path.join(SAVE_DIR, "DOC vs DPS对比.png" if IS_MAIN_T
+                            else f"DOC vs DPS对比_T{T}.png")
 plt.savefig(compare_path, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"对比结果已保存: {compare_path}")
@@ -658,9 +718,9 @@ print(f"  y/A参考:     {yA_mean_error:.6f}（终端代价最小化的可达点
 print(f"  后验均值参考: {postmean_mean_error:.6f}（MMSE点估计下界）")
 print(f"  DOC相对DPS改进: {(dps_mean_error - doc_mean_error) / dps_mean_error * 100:.2f}%，"
       f"DOC胜出 {doc_win_count}/{n_trials} 次")
-print("  解读：确定性轨迹优化把终端代价压到数据一致性极限(y/A≈后验均值)，")
-print("  贪心DPS经精细调参(ζ=0.02)后接近，但精度略逊且ζ稳定窗很窄；")
-print("  精确得分+线性观测下二者差距不大，DOC更大的优势在弱得分/少步图像问题。")
+print("  解读：本实验的1D线性高斯+精确得分设定对DPS最有利；DOC受单步控制饱和")
+print("  与开环300步优化的限制，MMSE误差未必优于DPS。DOC的优势应在弱得分/")
+print("  非线性/少步图像场景中检验，不能把本实验当作'DOC优于DPS'的证明。")
 
 # ============================================================
 # 6. 计算代价分析
@@ -689,12 +749,12 @@ DOC计算代价（13.5节）：
 
 | 方法            | 单样本代价        | 引导超参 | 少步稳定性 | 理论定位         |
 |-----------------|-------------------|----------|------------|------------------|
-| DOC(本简化版)   | 高(300次BPTT)     | 无引导ζ  | 鲁棒       | 全局轨迹最优     |
+| DOC(本简化版)   | 高(300次BPTT)     | 无引导ζ  | 鲁棒       | 全局轨迹优化(控制饱和) |
 | DOC(论文iLQR)   | 中(数次扫描)      | 无引导ζ  | 鲁棒       | 精确后验(可恢复) |
 | DPS             | 低(单次采样)      | ζ需细调  | 脆性       | 逐步贪心近似     |
 
 4. 教学意义：
-   - 1D下可直接验证"全局轨迹优化能达到数据一致性极限"
+   - 1D下可观察控制饱和/开环优化对DOC终端精度的影响
    - 直观看到DPS引导强度的离散化脆性（ζ窄稳定窗）
    - 理解控制论视角：后验采样是最优控制的特例
 """)
@@ -712,21 +772,21 @@ print(f"""
    - 最优控制问题：最小化 终端代价(-log p(y|x0)) + 控制能量(Tikhonov项)
 
 2. DOC vs DPS对比（本实验n={n_trials}次配对实测）
-   - DOC：{doc_mean_error:.4f}±{doc_std_error:.4f}，
-     达到数据一致性极限 y/A={yA_mean_error:.4f}（与精确后验均值
-     {postmean_mean_error:.4f}几乎重合）——全局轨迹优化确实找到了
-     自身优化问题的最优解，且无引导强度超参
-   - DPS：{dps_mean_error:.4f}±{dps_std_error:.4f}，
-     规范链式梯度+精细标定ζ=0.02后接近最优但仍略逊；
+   - DOC：{doc_mean_error:.4f}±{doc_std_error:.4f}（单步控制饱和 U_MAX=0.5）。
+     注意：若不加饱和，末步β_0=0会让DOC退化为y/A投影，误差与
+     y/A={yA_mean_error:.4f}在1e-6内相等，不能当作全局优化的证据。
+   - DPS：{dps_mean_error:.4f}±{dps_std_error:.4f}，规范链式梯度+标定ζ=0.02；
      ζ≥0.03即出现发散，稳定窗窄，体现"离散化脆性"
-   - DOC相对DPS改进 {(dps_mean_error-doc_mean_error)/dps_mean_error*100:.1f}%
-     （胜出{doc_win_count}/{n_trials}次）
-   - 精确得分+线性高斯观测是对DPS最有利的设定：二者差距不大；
-     DOC更大的增益出现在得分网络近似、非线性算子、少步采样的图像问题
+   - 本设定下DOC相对DPS的MMSE改进 {(dps_mean_error-doc_mean_error)/dps_mean_error*100:.1f}%
+     （胜出{doc_win_count}/{n_trials}次）。1D线性高斯+精确得分对DPS最有利，
+     不能据此断言DOC劣于DPS，也不能断言DOC优于DPS——DOC的优势需在
+     弱得分/非线性/少步图像场景中检验
 
 3. 实现教训（本实验曾踩的坑，已修复）
+   - 末步β_0=0时无约束控制可一步投影到y/A，使"全局轨迹优化"名存实亡；
+     必须限制单步控制幅度（本实验用tanh饱和）或改用连续时间PF-ODE离散化
    - DOC优化rollout与评估rollout必须同动力学：带噪优化+确定性评估的
-     失配曾使DOC误差虚高至理论最优的约2.6倍，并导致"DOC不如DPS"的错误结论
+     失配曾使DOC误差虚高至理论最优的约2.6倍
    - DPS梯度必须穿过Tweedie雅可比对x_t求取；逆向末端步不应再加噪
    - VP调度须使ᾱ_T≈0且x_T与p_T边际匹配，否则逆向链从分布外启动
 
@@ -795,6 +855,10 @@ torch.manual_seed(20261004)  # 诊断专用固定种子，保证结果可复现
 # 必须报告批次间波动——ζ=0.02附近单批次方差比在0.1~1之间跳变，
 # 只跑一批会因随机种子得到互相矛盾的"结论"，波动本身正是脆性的证据。
 _cal_M, _cal_K, _cal_zetas, _cal_ys = 3000, 5, (0.01, 0.02, 0.025, 0.03), (4.0, -4.0)
+if not IS_MAIN_T:
+    # 补充对照只求量级（主实验的完整校准诊断不重复），否则 T 步数会把耗时放大 T/20 倍
+    _cal_M, _cal_K = 200, 2
+    _cal_zetas = tuple(DPS_ZETA_SWEEP)
 _ratios02 = []                       # 汇总 ζ=0.02 在所有(y,批次)上的方差比
 print(f"每个设定独立重复{_cal_K}批×{_cal_M}条链，报告批次均值±标准差\n")
 for _y in _cal_ys:
@@ -813,16 +877,16 @@ for _y in _cal_ys:
             _bias.append(float(_xx.mean()) - _th_mean)
             _tail.append(float(((_xx - _th_mean).abs() > 3.0 * _th_sd).float().mean()))
         _rs, _bias, _tail, _div = map(np.asarray, (_rs, _bias, _tail, _div))
-        if abs(_zeta - 0.02) < 1e-12:
+        if abs(_zeta - DPS_ZETA_MAIN) < 1e-12:
             _ratios02.extend(_rs.tolist())
         print(f"  ζ={_zeta:<5} 方差比={_rs.mean():5.2f}±{_rs.std(ddof=1):4.2f} "
               f"(范围{_rs.min():.2f}~{_rs.max():.2f})  均值偏差={_bias.mean():+.4f}  "
               f"尾部逃逸(>3σ)={_tail.mean():5.1%}  非有限={_div.mean():.1%}")
     print()
 
-_r02 = np.asarray(_ratios02)
-calib_ratio_002 = float(_r02.mean())
-calib_ratio_002_cv = float(_r02.std(ddof=1) / _r02.mean())
+_r02 = np.asarray(_ratios02, dtype=float)
+calib_ratio_002 = float(_r02.mean()) if _r02.size else float('nan')
+calib_ratio_002_cv = float(_r02.std(ddof=1) / _r02.mean()) if _r02.size > 1 else float('nan')
 print(f"诊断结论（ζ=0.02，主实验取值，{len(_r02)}个批次、每批{_cal_M}条链汇总）：")
 print(f"  主体批次方差比 = {calib_ratio_002:.2f} ± {_r02.std(ddof=1):.2f}"
       f"（CV={calib_ratio_002_cv:.0%}，范围{_r02.min():.2f}~{_r02.max():.2f}；理想=1）")
@@ -854,22 +918,58 @@ def _to_native(obj):
     except: pass
     return obj
 
-results_summary = {
+def _r(x, nd=6):
+    """round 的 NaN 安全版（NaN 在 JSON 中非法，统一写 None）"""
+    x = float(x)
+    return round(x, nd) if np.isfinite(x) else None
+
+# 每个 T 的补充条目（主实验 T=20 也写一份，便于两块结果同结构对比）
+_sweep_entry = {
     "试验次数": n_trials,
-    "实验版本": "修复版v2：PF-ODE确定性轨迹优化 + DPS链式梯度 + VP调度修正(末态ᾱ_T≈0.01)",
-    "DOC_平均误差": round(float(doc_mean_error), 6),
-    "DOC_误差标准差": round(float(doc_std_error), 6),
-    "DPS_平均误差": round(float(dps_mean_error), 6),
-    "DPS_误差标准差": round(float(dps_std_error), 6),
-    "参考_yA数据一致点_平均误差": round(float(yA_mean_error), 6),
-    "参考_精确后验均值_平均误差": round(float(postmean_mean_error), 6),
-    "DOC相对改进百分比": round(float((dps_mean_error - doc_mean_error) / dps_mean_error * 100), 2),
+    "T": T,
+    "DPS_主报zeta": DPS_ZETA_MAIN,
+    "DOC_平均误差": _r(doc_mean_error),
+    "DOC_误差标准差": _r(doc_std_error),
+    "DPS_平均误差": _r(dps_mean_error),
+    "DPS_误差标准差": _r(dps_std_error),
+    "参考_yA数据一致点_平均误差": _r(yA_mean_error),
+    "参考_精确后验均值_平均误差": _r(postmean_mean_error),
+    "DOC相对改进百分比": _r((dps_mean_error - doc_mean_error) / dps_mean_error * 100, 2),
     "DOC胜出次数": doc_win_count,
-    "DPS引导系数zeta": 0.02,
-    "DPS后验校准_末端方差比_zeta0.02_理想为1": round(float(calib_ratio_002), 3),
-    "DPS后验校准_方差比批次间变异系数CV": round(float(calib_ratio_002_cv), 3),
+    "DPS_各zeta平均误差": {str(_k): _r(np.mean(_v)) for _k, _v in dps_errors_by_zeta.items() if len(_v)},
+    "DPS_各zeta误差标准差": {str(_k): _r(np.std(_v)) for _k, _v in dps_errors_by_zeta.items() if len(_v)},
 }
+
+_json_path = os.path.join(SAVE_DIR, 'results_summary.json')
+
+if IS_MAIN_T:
+    results_summary = {
+        "试验次数": n_trials,
+        "实验版本": "修复版v3：PF-ODE确定性轨迹优化 + 控制tanh饱和(U_MAX=0.5) + DPS链式梯度 + VP调度修正(末态ᾱ_T≈0.01)",
+        "DOC_平均误差": round(float(doc_mean_error), 6),
+        "DOC_误差标准差": round(float(doc_std_error), 6),
+        "DPS_平均误差": round(float(dps_mean_error), 6),
+        "DPS_误差标准差": round(float(dps_std_error), 6),
+        "参考_yA数据一致点_平均误差": round(float(yA_mean_error), 6),
+        "参考_精确后验均值_平均误差": round(float(postmean_mean_error), 6),
+        "DOC相对改进百分比": round(float((dps_mean_error - doc_mean_error) / dps_mean_error * 100), 2),
+        "DOC胜出次数": doc_win_count,
+        "DPS引导系数zeta": DPS_ZETA_MAIN,
+        "DPS后验校准_末端方差比_zeta0.02_理想为1": _r(calib_ratio_002, 3),
+        "DPS后验校准_方差比批次间变异系数CV": _r(calib_ratio_002_cv, 3),
+        "T扫描补充": {"20": _sweep_entry},
+    }
+else:
+    # 补充对照：只并入 T扫描补充，不动主实验字段、不覆盖主图
+    results_summary = {}
+    if os.path.exists(_json_path):
+        with open(_json_path, encoding='utf-8') as f:
+            results_summary = json.load(f)
+    _sweep = dict(results_summary.get("T扫描补充", {}))
+    _sweep[str(T)] = _sweep_entry
+    results_summary["T扫描补充"] = _sweep
+
 results_summary = _to_native(results_summary)
-with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+with open(_json_path, 'w', encoding='utf-8') as f:
     json.dump(results_summary, f, ensure_ascii=False, indent=2)
-print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
+print(f"数值结果已保存: {_json_path}")

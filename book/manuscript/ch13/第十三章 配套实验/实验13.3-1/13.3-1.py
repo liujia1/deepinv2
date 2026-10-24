@@ -5,7 +5,7 @@
 实验内容：
   - 训练UNet扩散模型（MNIST, epsilon-prediction）
   - DPS算法求解图像去噪逆问题
-  - 展示"质量-多样性权衡"——同一观测y，不同zeta的采样结果
+  - 展示不同 zeta 下的重建质量趋势（单轨迹扫描；多样性需多种子统计，本实验未测）
 
 注意：本实验使用MNIST训练DDPM并执行多次DPS采样。
 """
@@ -72,7 +72,7 @@ print(f'使用设备: {device}')
 print("\n" + "=" * 60)
 print("实验13.3-1: DPS图像去噪端到端")
 print("=" * 60)
-print("知识点: DPS算法流程, autograd自动Jacobian, 质量-多样性权衡")
+print("知识点: DPS算法流程, autograd自动Jacobian, ζ 扫描（单轨迹）")
 
 
 # ============================================================
@@ -201,8 +201,6 @@ def dps_sample(model, y, forward_op, shape, zeta=1.0, n_steps=None):
         t = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
         sqrt_ab_t = sqrt_alpha_bars[t_idx]
         sqrt_1mab_t = sqrt_one_minus_alpha_bars[t_idx]
-        with torch.no_grad():
-            eps_pred = model(x, t)
         x = x.detach().requires_grad_(True)
         eps_pred_grad = model(x, t)
         x0_hat = (x - sqrt_1mab_t * eps_pred_grad) / sqrt_ab_t
@@ -212,7 +210,7 @@ def dps_sample(model, y, forward_op, shape, zeta=1.0, n_steps=None):
         # 保留似然梯度的原始幅度(不做归一化)：归一化会把修正强制压成单位方向,
         # 与 DDPM 步进系数失配,导致 DPS 严重欠修正(退化为近无条件采样)。
         x = x.detach()
-        eps_pred = eps_pred.detach()
+        eps_pred = eps_pred_grad.detach()  # 单次前向：梯度前向的截断值即 eps 预测
         # 后验得分分解: ∇log p(x_t|y) = ∇log p(x_t) + ∇log p(y|x_t)
         # 网络预测 eps_pred ≈ -σ_t * ∇log p(x_t),σ_t = sqrt(1-ᾱ_t)
         # 似然(高斯): ∇log p(y|x_t) = -∇||y-Ax̂||²/(σ_y²) <-- 关键负号!
@@ -371,10 +369,10 @@ model = train_model(CHECKPOINT_PATH, num_epochs=num_epochs)
 
 
 # ============================================================
-# DPS求解图像去噪逆问题（方案A：质量-多样性权衡）
+# DPS求解图像去噪逆问题（方案A：ζ 扫描单轨迹）
 # ============================================================
 print(f"\n{'='*60}")
-print("步骤2：DPS求解图像去噪逆问题（质量-多样性权衡）")
+print("步骤2：DPS求解图像去噪逆问题（ζ 扫描，单轨迹）")
 print("=" * 60)
 
 print("""
@@ -386,12 +384,13 @@ DPS算法: 在逆向DDPM采样中注入似然梯度
   注：保留似然梯度的幅度信息——不归一化,否则与 DDPM 步进系数 β/σ 失配
       导致修正对 x 的更新几乎为零(DPS 完全失效)
 
-质量-多样性权衡（对应13.4.3节）：
-  zeta小 → 后验分布宽 → 高多样性（采样结果各异）
-  zeta大 → 后验分布窄 → 高一致性（采样结果趋近观测）
+ζ 扫描（单轨迹，仅看重建质量）：
+  zeta小 → 引导弱 → 图像自由但可能残留噪声/偏离观测
+  zeta大 → 强拉向观测 → PSNR 升高，但过大会过拟合观测噪声
+  注：每档只跑 1 条采样轨迹，本实验不测跨种子多样性
 """)
 
-# zeta值对比：展示"质量-多样性权衡"的核心特性
+# zeta值对比：扫描引导强度对重建质量的影响（单轨迹，不测多样性）
 # 增大ζ值测试修正效果
 zeta_values = [1.0, 3.0, 5.0]
 print(f"DPS引导权重对比: zeta = {zeta_values}")
@@ -426,11 +425,11 @@ psnr_noisy = compute_psnr(y_denoise, test_images)
 print(f"  含噪观测PSNR: {psnr_noisy:.2f} dB")
 
 # ============================================================
-# 可视化：质量-多样性权衡
+# 可视化：不同 zeta 的单轨迹去噪结果
 # ============================================================
 # 数据在 [-1,1] 空间,imshow 之前统一转换到 [0,1]
 
-# 图: DPS去噪 - 质量-多样性权衡（观测y + 不同zeta的采样）
+# 图: DPS去噪 - 不同 zeta 的单轨迹对比（观测y + 各 zeta 的采样）
 n_rows = len(zeta_values) + 1
 fig, axes = plt.subplots(n_rows, 4, figsize=(16, 4*n_rows))
 for i in range(4):
@@ -447,7 +446,7 @@ for i in range(4):
             axes[row_idx+1, i].set_ylabel(f'ζ={zeta_val}\nPSNR={psnr_denoise_list[row_idx]:.1f}dB', 
                                            fontsize=10, rotation=0, labelpad=50)
 
-plt.suptitle('DPS图像去噪：质量-多样性权衡（端到端）', fontsize=14, y=1.02)
+plt.suptitle('DPS图像去噪：不同 ζ 的单轨迹对比（不测多样性）', fontsize=14, y=1.02)
 plt.tight_layout()
 fig_path = os.path.join(SAVE_DIR, 'DPS图像去噪端到端.png')
 plt.savefig(fig_path, dpi=150, bbox_inches='tight')
@@ -464,10 +463,12 @@ print("""
    - 端到端流程：训练扩散模型 -> DPS求解逆问题
    - autograd自动处理任意正向算子A的Jacobian
 
-2. 质量-多样性权衡（对应13.4.3节）
-   - ζ小: 采样结果多样化, 与观测一致性较弱（高多样性, 低一致性）
-   - ζ大: 采样结果趋近观测, PSNR 更高但多样性降低（低多样性, 高一致性）
-   - 本实验 ζ∈{1,3,5} 均远超含噪观测, 呈现清晰的单调权衡趋势
+2. ζ 扫描（单轨迹，不测多样性）
+   - ζ∈{1,3,5} 的重建 PSNR 均远高于含噪观测（16.47 dB）
+   - PSNR 非单调：ζ=1 → 23.90、ζ=3 → 26.64（峰值）、ζ=5 → 26.34
+   - 峰值后回落说明 ζ 过大开始过拟合观测噪声（对应 13.4.3 权衡的下降段）
+   - 注意：每档仅 1 条采样轨迹、4 张图，未测跨种子多样性；
+     “多样性随 ζ 降低”在本实验中是理论预期而非实测结论
 
 3. 实践要点
    - 保留似然梯度原始幅度（不归一化）才能与 DDPM 步进系数匹配, 保证修正有效
@@ -491,6 +492,7 @@ def _to_native(obj):
     return obj
 
 results_summary = {
+    "说明": "每个 ζ 仅 1 条采样轨迹（4 张图），未测跨种子多样性；PSNR 为单次固定种子的结果，非多次重复均值。",
     "zeta_values": zeta_values,
     "sigma_y_denoise": round(float(sigma_y_denoise), 4),
     "PSNR_各zeta": {f"zeta={z}": round(float(p), 2) for z, p in zip(zeta_values, psnr_denoise_list)},

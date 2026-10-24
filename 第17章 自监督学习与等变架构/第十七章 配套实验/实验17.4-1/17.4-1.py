@@ -80,6 +80,15 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed(42)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# ★可复现性（关键）：固定 seed 只锁定初始化与噪声序列，GPU 上的卷积/梯度累加本身
+# 是非确定算子——实测同一 seed 下仅 60 个 batch，StrictBlindSpotUNet 第一层权重就出现
+# 1e-3 级分叉；训练 30 epoch 后盲点卷积核形状可以完全不同（step4_blindspot_kernels.png 跨
+# 运行不可比）。因此这里显式开启确定性算子：代价是少量速度损失，换来"同 seed 同结果"。
+torch.backends.cudnn.benchmark = False
+torch.backends.cudnn.deterministic = True
+torch.use_deterministic_algorithms(True, warn_only=True)
+
 print(f"使用设备: {device}")
 
 
@@ -516,6 +525,34 @@ GAUSSIAN_MODEL_EPOCHS = 15
 # ========================================================================
 # Checkpoint 辅助函数（消除 8+ 处重复的 save/load 模板）
 # ========================================================================
+def get_rng_state():
+    """采集全部随机源状态（torch / cuda / numpy / random）
+
+    单个 torch.manual_seed 无法在 checkpoint 之间“接力”：pipeline 里各 Step 的
+    训练与采样共用同一条随机数流，漏存任何一路都会让续跑后的序列整体错位。
+    """
+    state = {
+        'torch': torch.get_rng_state(),
+        'numpy': np.random.get_state(),
+        'random': random.getstate(),
+    }
+    if torch.cuda.is_available():
+        state['cuda'] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def set_rng_state(state):
+    """恢复 get_rng_state() 采集的随机源状态（缺项则跳过，兼容旧 checkpoint）"""
+    if state.get('torch') is not None:
+        torch.set_rng_state(state['torch'])
+    if state.get('numpy') is not None:
+        np.random.set_state(state['numpy'])
+    if state.get('random') is not None:
+        random.setstate(state['random'])
+    if state.get('cuda') is not None and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(state['cuda'])
+
+
 def load_checkpoint(save_path, model, optimizer=None, device=None):
     """加载训练 checkpoint（自动识别 final / intermediate）
 
@@ -544,6 +581,14 @@ def load_checkpoint(save_path, model, optimizer=None, device=None):
     train_losses = checkpoint.get('train_losses', checkpoint.get('losses', []))
     start_epoch = checkpoint['epoch'] + 1
     is_final = checkpoint.get('is_final', False)
+
+    # ★续训可复现：checkpoint 若不含 RNG 状态，“中断续跑”与“一次跑完”就会进入不同的
+    # 随机数流（之后每个 batch 的噪声全变），跨运行的指标与图因此不可比。
+    # 旧格式 checkpoint 没有该字段，此时保持当前随机流。
+    rng_state = checkpoint.get('rng_state')
+    if rng_state is not None:
+        set_rng_state(rng_state)
+
     return start_epoch, train_losses, is_final
 
 
@@ -553,12 +598,15 @@ def save_checkpoint(save_path, model, optimizer, epoch, train_losses, is_final,
 
     中间 checkpoint（is_final=False）保留 optimizer_state_dict 用于续训；
     最终 checkpoint（is_final=True）仅含 model_state_dict，减小文件体积。
+    两者都额外保存 RNG 状态（体积可忽略），这样即使某次运行因 ckpt 已 final 而
+    跳过训练，后续 Step 的随机数流仍与该 Step 训练结束时一致。
     """
     ckpt = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'train_losses': train_losses,
         'is_final': is_final,
+        'rng_state': get_rng_state(),
     }
     if not is_final:
         ckpt['optimizer_state_dict'] = optimizer.state_dict()
@@ -1297,6 +1345,15 @@ CHECKPOINT_BS = os.path.join(SAVE_DIR, 'ckpt_StrictBlindSpot.pt')
 start_epoch_bs, train_losses_bs, is_final_bs = load_checkpoint(
     CHECKPOINT_BS, model_bs, optimizer_bs, device)
 
+# ★图与权重绑定：ckpt 已 final 时本次不训练，下面 step4 的核图直接反映 ckpt 中的权重。
+# 把来源打出来，避免把不同运行训练出的权重画的图混在一起比较
+if is_final_bs:
+    print("  权重来源: ckpt_StrictBlindSpot.pt（已 final，本次跳过训练）")
+elif start_epoch_bs > 0:
+    print(f"  权重来源: ckpt_StrictBlindSpot.pt 续训（从 epoch {start_epoch_bs + 1} 开始）")
+else:
+    print("  权重来源: 本次从头训练")
+
 if not is_final_bs and start_epoch_bs < N_EPOCHS:
     for epoch in range(start_epoch_bs, N_EPOCHS):
         model_bs.train()
@@ -1424,27 +1481,39 @@ print(f"\n  严格盲点网络散度 div f(y) ≈ {div_bs.item():.2f} (应接近
 print(f"  标准UNet散度 div f(y) ≈ {div_mc_vals[1]:.2f} (非零)")
 
 # 可视化盲点卷积核
-fig, axes = plt.subplots(2, 4, figsize=(12, 6))
+# ★色标自适应（关键）：原实现把 vmin/vmax 硬编码为 ±0.3，一旦某次训练的第一层权重量级
+# 变化（训练不可能逐位复现），整张图会集体发白或过饱和——看起来像"结果变了"，实际只是
+# 色标没跟着数据走。这里改为按实测最大幅值对称标定，并在标题里写出真实数值，
+# 让图传达的是核的形状（中心=0 的架构性质），而不是某一次训练的具体量级。
+kernels_bs, kernels_std = [], []
 for i in range(4):
     w_raw = model_bs.enc1.conv[0].conv.weight[i, 0].detach().cpu().numpy()
     center_mask = model_bs.enc1.conv[0].center_mask[i, 0].detach().cpu().numpy()
-    w = w_raw * center_mask
-    axes[0, i].imshow(w, cmap='RdBu_r', vmin=-0.3, vmax=0.3)
-    axes[0, i].set_title(f'盲点核 [{i}]', fontsize=10)
+    kernels_bs.append(w_raw * center_mask)   # 乘 mask 后中心严格为 0
+    kernels_std.append(model_sure.enc1.conv[0].weight[i, 0].detach().cpu().numpy())
+
+vmax = max(float(np.abs(np.stack(kernels_bs + kernels_std)).max()), 1e-6)
+
+fig, axes = plt.subplots(2, 4, figsize=(12.6, 6.4), layout='constrained')
+for i in range(4):
+    im = axes[0, i].imshow(kernels_bs[i], cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+    axes[0, i].set_title(f'盲点核 [{i}]  最大|w|={np.abs(kernels_bs[i]).max():.3f}', fontsize=9)
     axes[0, i].axis('off')
     axes[0, i].plot(1, 1, 'rx', markersize=10, markeredgewidth=2)
 
-    w_std = model_sure.enc1.conv[0].weight[i, 0].detach().cpu().numpy()
-    axes[1, i].imshow(w_std, cmap='RdBu_r', vmin=-0.3, vmax=0.3)
-    axes[1, i].set_title(f'标准核 [{i}]', fontsize=10)
+    axes[1, i].imshow(kernels_std[i], cmap='RdBu_r', vmin=-vmax, vmax=vmax)
+    axes[1, i].set_title(f'标准核 [{i}]  最大|w|={np.abs(kernels_std[i]).max():.3f}', fontsize=9)
     axes[1, i].axis('off')
 
 axes[0, 0].set_ylabel('盲点卷积(中心=0)', fontsize=11)
 axes[1, 0].set_ylabel('标准卷积', fontsize=11)
 fig.suptitle(r'Step 4: 盲点卷积核可视化 ($\times$标记中心已置零)', fontsize=13)
-plt.tight_layout()
+cbar = fig.colorbar(im, ax=axes, fraction=0.03, pad=0.02, shrink=0.9)
+cbar.set_label(f'权重 (对称色标 ±{vmax:.3f})', fontsize=9)
+# layout='constrained' 已接管布局，不再调用 tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, 'step4_blindspot_kernels.png'), dpi=150, bbox_inches='tight')
 plt.close()
+print(f"  盲点核中心值 = {[f'{k[1, 1]:.1e}' for k in kernels_bs]} (掩码后应严格为 0)")
 print("  已保存: step4_blindspot_kernels.png")
 
 

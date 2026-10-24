@@ -52,7 +52,7 @@ $$= \mathbb{E}_\omega\left[\|\mathbf{y} - \omega/\alpha\|^2\right] - 2\mathbb{E}
 
 $$\mathcal{L}_{\text{R2R}}(\mathbf{y}, f, \alpha) = \mathcal{L}_{\text{SURE}}(\mathbf{y}, f) + \frac{n\sigma^2}{\alpha^2} + O(\alpha^2)$$
 
-> **注意这个 $n\sigma^2/\alpha^2$ 不是笔误，也不能“消去”**：它来自 $\|y_b\|^2$ 中的 $\|\omega\|^2/\alpha^2$，与 $f$ 无关但随 $\alpha \to 0$ 发散。所以**不能说“$\alpha \to 0$ 时 $\mathcal{L}_{\text{R2R}}$ 趋向 $\mathcal{L}_{\text{SURE}}$”**（前者会爆掉）。R2R 真正用到的是更弱、但足够的一条：两者**只差一个与 $f$ 无关的项**，因此对 $f$ 的**最小化解相同**——损失值不等，但训练出来的网络一样。这也解释了为何 $\alpha$ 不能取太小：$n\sigma^2/\alpha^2$ 会抬高损失尺度、放大数值误差（实验17.4-1 的 $\alpha$ 扫描中 $\alpha=0.01$ 反而最差，23.82dB）。
+> **注意这个 $n\sigma^2/\alpha^2$ 不是笔误，也不能“消去”**：它来自 $\|y_b\|^2$ 中的 $\|\omega\|^2/\alpha^2$，与 $f$ 无关但随 $\alpha \to 0$ 发散。所以**不能说“$\alpha \to 0$ 时 $\mathcal{L}_{\text{R2R}}$ 趋向 $\mathcal{L}_{\text{SURE}}$”**（前者会爆掉）。R2R 真正用到的是更弱、但足够的一条：两者**只差一个与 $f$ 无关的项**，因此对 $f$ 的**最小化解相同**——损失值不等，但训练出来的网络一样。这也解释了为何 $\alpha$ 不能取太小：$n\sigma^2/\alpha^2$ 会抬高损失尺度、放大数值误差（实验17.4-1 的 $\alpha$ 扫描中 $\alpha=0.01$ 反而最差，23.36dB）。
 
 直觉先行的说法是：$\alpha \to 0$ 时 $y_a$ 几乎就是 $\mathbf{y}$，而 $y_b$ 是叠加在 $\mathbf{y}$ 上、幅度被 $1/\alpha$ 放大的"正交扰动"——扰动被放大，反而把它携带的一阶信息精确地"顶"到了台面上。下面把这句话算出来。
 

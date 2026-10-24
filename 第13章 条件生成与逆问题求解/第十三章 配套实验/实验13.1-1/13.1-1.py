@@ -140,7 +140,12 @@ def posterior_score_vp(x, t, y_obs, sigma_obs, zeta=1.0):
     在逆向SDE的每一步，用Tweedie估计的x_hat_0计算似然梯度
 
     参数:
-        zeta: 似然项的权重系数（简化起见取1.0，完整DPS会根据梯度范数自适应调节）
+        zeta: 似然项的权重系数（简化起见取1.0）。完整 DPS 与这里的差别**不在于“按梯度范数自适应”**，
+              而在于两件事：①梯度是否按 Tweedie 映射 x_hat_0=(x_t+(1-abar_t)s)/sqrt(abar_t) 的
+              Jacobian 回传（漏掉它、系数直取 1，会在高噪段高估引导约 1/mean_t 倍并导致过冲，
+              见 13.2/13.3 与附录13A §4.4）；②标量缩放因子取谁：本实验取 mean_t=sqrt(abar_t)——
+              单位方差高斯先验下 dxhat_0/dx_t 恰为 mean_t，所以这是“只丢 Jacobian 方向形状”的
+              公平简化；把方向写反成 1/mean_t 会让 t→T 时系数爆到约 150 倍、梯度撞上裁剪上限
 
     注意: DPS的插件近似（用p(y|x_hat_0)代替p(y|x_t)）会系统性低估后验方差、
     使分布过度收缩向观测y（本例解析真后验均值0.176/方差0.233，采样得到
@@ -260,7 +265,9 @@ print("""
 1. 1D逆问题原理（13.1节）
    - 扩散后验采样 = 逆向SDE + 似然梯度
    - nabla log p(x_t|y) = nabla log p(x_t) + zeta * nabla log p(y|x_hat_{0|t})
-   - 本实验取 zeta=1.0（简化起见），完整DPS会根据梯度范数自适应调节
+   - 本实验取 zeta=1.0（简化起见），且似然梯度乘 mean_t=sqrt(abar_t)（附录13A §4.4 的“标量化”
+     一档：单位方差高斯先验下 dxhat_0/dx_t 恰为 mean_t）；完整 DPS 的差别在于让梯度真正穿过
+     Tweedie 映射的 Jacobian，而非“根据梯度范数自适应调节”
    - 似然梯度将无条件采样推向观测一致区域
 
 2. 条件 vs 无条件采样
