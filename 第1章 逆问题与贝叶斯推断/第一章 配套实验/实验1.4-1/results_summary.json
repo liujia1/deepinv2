@@ -8,6 +8,242 @@
     "theory_gaussian_sigma": 0.1,
     "theory_poisson_std": "sqrt(gain * signal)"
   },
+  "signal_dependence_stats": {
+    "ramp_gaussian": [
+      {
+        "bin_mean_signal": 0.0235,
+        "bin_std": 0.1
+      },
+      {
+        "bin_mean_signal": 0.0745,
+        "bin_std": 0.1
+      },
+      {
+        "bin_mean_signal": 0.1255,
+        "bin_std": 0.0999
+      },
+      {
+        "bin_mean_signal": 0.1745,
+        "bin_std": 0.1001
+      },
+      {
+        "bin_mean_signal": 0.2235,
+        "bin_std": 0.1001
+      },
+      {
+        "bin_mean_signal": 0.2745,
+        "bin_std": 0.0999
+      },
+      {
+        "bin_mean_signal": 0.3255,
+        "bin_std": 0.0997
+      },
+      {
+        "bin_mean_signal": 0.3745,
+        "bin_std": 0.0999
+      },
+      {
+        "bin_mean_signal": 0.4235,
+        "bin_std": 0.0999
+      },
+      {
+        "bin_mean_signal": 0.4745,
+        "bin_std": 0.0998
+      },
+      {
+        "bin_mean_signal": 0.5255,
+        "bin_std": 0.0996
+      },
+      {
+        "bin_mean_signal": 0.5765,
+        "bin_std": 0.1001
+      },
+      {
+        "bin_mean_signal": 0.6255,
+        "bin_std": 0.1002
+      },
+      {
+        "bin_mean_signal": 0.6745,
+        "bin_std": 0.0997
+      },
+      {
+        "bin_mean_signal": 0.7255,
+        "bin_std": 0.1
+      },
+      {
+        "bin_mean_signal": 0.7745,
+        "bin_std": 0.1002
+      },
+      {
+        "bin_mean_signal": 0.8235,
+        "bin_std": 0.1
+      },
+      {
+        "bin_mean_signal": 0.8745,
+        "bin_std": 0.0999
+      },
+      {
+        "bin_mean_signal": 0.9255,
+        "bin_std": 0.0998
+      },
+      {
+        "bin_mean_signal": 0.9765,
+        "bin_std": 0.0999
+      }
+    ],
+    "ramp_poisson": [
+      {
+        "bin_mean_signal": 0.0235,
+        "bin_std": 0.0435
+      },
+      {
+        "bin_mean_signal": 0.0745,
+        "bin_std": 0.0769
+      },
+      {
+        "bin_mean_signal": 0.1255,
+        "bin_std": 0.0999
+      },
+      {
+        "bin_mean_signal": 0.1745,
+        "bin_std": 0.1181
+      },
+      {
+        "bin_mean_signal": 0.2235,
+        "bin_std": 0.1334
+      },
+      {
+        "bin_mean_signal": 0.2745,
+        "bin_std": 0.1487
+      },
+      {
+        "bin_mean_signal": 0.3255,
+        "bin_std": 0.1616
+      },
+      {
+        "bin_mean_signal": 0.3745,
+        "bin_std": 0.1726
+      },
+      {
+        "bin_mean_signal": 0.4235,
+        "bin_std": 0.1841
+      },
+      {
+        "bin_mean_signal": 0.4745,
+        "bin_std": 0.1951
+      },
+      {
+        "bin_mean_signal": 0.5255,
+        "bin_std": 0.2048
+      },
+      {
+        "bin_mean_signal": 0.5765,
+        "bin_std": 0.2145
+      },
+      {
+        "bin_mean_signal": 0.6255,
+        "bin_std": 0.2239
+      },
+      {
+        "bin_mean_signal": 0.6745,
+        "bin_std": 0.2319
+      },
+      {
+        "bin_mean_signal": 0.7255,
+        "bin_std": 0.2415
+      },
+      {
+        "bin_mean_signal": 0.7745,
+        "bin_std": 0.2491
+      },
+      {
+        "bin_mean_signal": 0.8235,
+        "bin_std": 0.257
+      },
+      {
+        "bin_mean_signal": 0.8745,
+        "bin_std": 0.2637
+      },
+      {
+        "bin_mean_signal": 0.9255,
+        "bin_std": 0.2722
+      },
+      {
+        "bin_mean_signal": 0.9765,
+        "bin_std": 0.2789
+      }
+    ],
+    "phantom_gaussian_nonempty": [
+      {
+        "gray_level": 0.0,
+        "bin_std": 0.1,
+        "n_pixels": 38042
+      },
+      {
+        "gray_level": 0.098,
+        "bin_std": 0.1001,
+        "n_pixels": 95
+      },
+      {
+        "gray_level": 0.2,
+        "bin_std": 0.1,
+        "n_pixels": 21641
+      },
+      {
+        "gray_level": 0.298,
+        "bin_std": 0.1003,
+        "n_pixels": 2850
+      },
+      {
+        "gray_level": 0.4,
+        "bin_std": 0.1009,
+        "n_pixels": 52
+      },
+      {
+        "gray_level": 1.0,
+        "bin_std": 0.1002,
+        "n_pixels": 2856
+      }
+    ],
+    "phantom_poisson_nonempty": [
+      {
+        "gray_level": 0.0,
+        "bin_std": 0.0,
+        "n_pixels": 38042
+      },
+      {
+        "gray_level": 0.098,
+        "bin_std": 0.089,
+        "n_pixels": 95
+      },
+      {
+        "gray_level": 0.2,
+        "bin_std": 0.1266,
+        "n_pixels": 21641
+      },
+      {
+        "gray_level": 0.298,
+        "bin_std": 0.155,
+        "n_pixels": 2850
+      },
+      {
+        "gray_level": 0.4,
+        "bin_std": 0.1812,
+        "n_pixels": 52
+      },
+      {
+        "gray_level": 1.0,
+        "bin_std": 0.2833,
+        "n_pixels": 2856
+      }
+    ]
+  },
+  "background_ssim_win7": {
+    "background_definition": "x < 0.01（SSIM 逐像素图在该掩码上取均值）",
+    "background_pixel_fraction": 0.5805,
+    "gaussian": 0.1204,
+    "poisson": 0.9879
+  },
   "gaussian_noise": {
     "sigma": 0.1,
     "psnr_dB": 19.98,

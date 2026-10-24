@@ -833,7 +833,14 @@ axes[1].bar(x_pos + width, equiv_diffs, width, label='ESM-ISM diff', color='gree
 axes[1].set_xticks(x_pos)
 axes[1].set_xticklabels([c[0] for c in configs], fontsize=9)
 axes[1].set_ylabel('Loss / RMSE（均匀网格 [-6,6]）')
-axes[1].set_title('ESM与ISM等价性证据链（实测：差异随容量非单调，ISM更敏感）')
+# 标题必须由实测数据决定，禁止写死结论（换 seed / 换数据后标题会说谎）
+if _diff_monotone and _diff_w_monotone:
+    _trend_txt = '差异随容量单调减小（两种口径一致）'
+elif _diff_monotone or _diff_w_monotone:
+    _trend_txt = '差异随容量非单调（仅一种口径单调）'
+else:
+    _trend_txt = '差异随容量非单调（两种口径一致）'
+axes[1].set_title(f'ESM与ISM等价性证据链（实测：{_trend_txt}）')
 axes[1].legend(fontsize=9)
 axes[1].grid(alpha=0.3, axis='y')
 axes[1].set_yscale('log')

@@ -66,6 +66,21 @@ print("="*60)
 # ---- 3. FBP 重建 ----
 # 保留 FBP 的原始输出（含振铃导致的负值/越界），指标在原始输出上计算，
 # 这样误差反映算法本身；物理范围截断仅用于显示，截断后指标另作参考。
+def fbp_metrics(reference, sino, theta_use):
+    """对给定正弦图做 ramp-FBP，返回未截断/截断两种口径的指标与重建图。"""
+    rec_raw = iradon(sino, theta=theta_use, filter_name='ramp', circle=True)
+    rec_clip = np.clip(rec_raw, 0, 1)
+    r_raw = float(np.sqrt(np.mean((reference - rec_raw) ** 2)))
+    r_clip = float(np.sqrt(np.mean((reference - rec_clip) ** 2)))
+    return {
+        'rmse_raw': float(round(r_raw, 6)),
+        'psnr_raw_dB': float(round(20 * np.log10(1.0 / (r_raw + 1e-10)), 2)),
+        'rmse_clipped': float(round(r_clip, 6)),
+        'psnr_clipped_dB': float(round(20 * np.log10(1.0 / (r_clip + 1e-10)), 2)),
+        'negative_pixel_fraction_raw': float(round(np.mean(rec_raw < 0), 4)),
+    }, rec_raw, rec_clip
+
+
 reconstruction_fbp_raw = iradon(sinogram, theta=theta, filter_name='ramp', circle=True)
 reconstruction_fbp = np.clip(reconstruction_fbp_raw, 0, 1)  # 仅用于可视化
 
@@ -84,8 +99,32 @@ print(f"[截断到[0,1]]  RMSE: {rmse_fbp_clipped:.4f}, PSNR: {psnr_fbp_clipped:
 print(f"原始输出负值像素占比: {neg_fraction*100:.1f}%（ramp 滤波 Gibbs 振铃的固有现象）")
 print("="*60)
 
+# ---- 3b. 三组对照：稀疏角度 / 加密角度 / 阶梯离散化 ----
+# 这三组对照分别回答：角度不足损失多少、角度加密能否挽回、阶梯离散化是否是主因。
+theta_sparse = np.linspace(0, 180, 30, endpoint=False)
+sinogram_sparse = radon(phantom, theta=theta_sparse, circle=True)
+sparse_metrics, _, sparse_rec_clip = fbp_metrics(phantom, sinogram_sparse, theta_sparse)
+
+theta_180 = np.linspace(0, 180, 180, endpoint=False)
+sinogram_180 = radon(phantom, theta=theta_180, circle=True)
+metrics_180, _, _ = fbp_metrics(phantom, sinogram_180, theta_180)
+
+# 最近邻 + 不抗混叠的阶梯离散化 phantom（对照主结果的 order=1 双线性）
+phantom_nn = resize(shepp_logan_phantom(), (n, n), order=0,
+                    preserve_range=True, anti_aliasing=False)
+phantom_nn = phantom_nn / phantom_nn.max()
+sinogram_nn = radon(phantom_nn, theta=theta, circle=True)
+metrics_nn, _, _ = fbp_metrics(phantom_nn, sinogram_nn, theta)
+
+print("\n对照实验（同一 ramp-FBP 实现）")
+print("="*60)
+print(f"30° 稀疏角度:     RMSE={sparse_metrics['rmse_raw']:.4f}, PSNR={sparse_metrics['psnr_raw_dB']:.2f} dB（未截断）")
+print(f"180° 加密角度:    RMSE={metrics_180['rmse_raw']:.4f}, PSNR={metrics_180['psnr_raw_dB']:.2f} dB（未截断）")
+print(f"最近邻阶梯离散化: RMSE={metrics_nn['rmse_raw']:.4f}, PSNR={metrics_nn['psnr_raw_dB']:.2f} dB（未截断）")
+print("="*60)
+
 # ---- 4. 可视化 ----
-fig, axes = plt.subplots(2, 3, figsize=(16, 10))
+fig, axes = plt.subplots(2, 4, figsize=(20, 10))
 
 axes[0, 0].imshow(phantom, cmap='gray')
 axes[0, 0].set_title('原始截面图像 x\n（衰减系数分布）')
@@ -121,16 +160,34 @@ axes[1, 1].set_title(f'误差热力图（对应截断后重建）\n|x - clip(x_F
 axes[1, 1].axis('off')
 plt.colorbar(im2, ax=axes[1, 1], fraction=0.046, pad=0.04)
 
-# 第 6 格：稀疏角度下的正弦图——直观展示"投影角度不足时正向信息大量缺失"，
+# 稀疏角度正弦图：直观展示"投影角度不足时正向信息大量缺失"，
 # 为 1.3 节不适定性（角度不足→信息不可逆丢失）埋下伏笔
-theta_sparse = np.linspace(0, 180, 30, endpoint=False)
-sinogram_sparse = radon(phantom, theta=theta_sparse, circle=True)
-im3 = axes[1, 2].imshow(sinogram_sparse, cmap='gray', aspect='auto',
+im3 = axes[0, 3].imshow(sinogram_sparse, cmap='gray', aspect='auto',
                         extent=[theta_sparse.min(), theta_sparse.max(), sinogram_sparse.shape[0], 0])
-axes[1, 2].set_title(f'稀疏角度正弦图 (仅 {len(theta_sparse)} 个角度)\n采样不足 → 正向信息缺失', fontsize=11)
-axes[1, 2].set_xlabel('投影角度 θ (°)')
-axes[1, 2].set_ylabel('探测器位置 t')
-plt.colorbar(im3, ax=axes[1, 2], fraction=0.046, pad=0.04)
+axes[0, 3].set_title(f'稀疏角度正弦图 (仅 {len(theta_sparse)} 个角度)\n采样不足 → 正向信息缺失', fontsize=11)
+axes[0, 3].set_xlabel('投影角度 θ (°)')
+axes[0, 3].set_ylabel('探测器位置 t')
+plt.colorbar(im3, ax=axes[0, 3], fraction=0.046, pad=0.04)
+
+# 稀疏角度 FBP 重建：同一算法在信息缺失数据上的实际退化
+axes[1, 2].imshow(sparse_rec_clip, cmap='gray', vmin=0, vmax=1)
+axes[1, 2].set_title(f'稀疏角度 FBP 重建（{len(theta_sparse)} 个角度）\n'
+                     f'PSNR={sparse_metrics["psnr_raw_dB"]:.2f} dB（未截断）', fontsize=11)
+axes[1, 2].axis('off')
+
+# 四组配置的 PSNR 汇总（未截断口径）
+config_labels = ['90° 双线性\n（主结果）', '90° 最近邻\n（阶梯）', '180° 双线性', '30° 稀疏']
+config_psnr = [psnr_fbp, metrics_nn['psnr_raw_dB'], metrics_180['psnr_raw_dB'],
+               sparse_metrics['psnr_raw_dB']]
+axes[1, 3].bar(range(len(config_labels)), config_psnr,
+               color=['tab:blue', 'tab:gray', 'tab:green', 'tab:red'])
+axes[1, 3].set_xticks(range(len(config_labels)))
+axes[1, 3].set_xticklabels(config_labels, fontsize=9)
+axes[1, 3].set_ylabel('PSNR (dB，未截断口径)')
+axes[1, 3].set_title('四组配置的 FBP 重建质量', fontsize=11)
+axes[1, 3].grid(True, axis='y', alpha=0.3)
+for i, v in enumerate(config_psnr):
+    axes[1, 3].annotate(f'{v:.2f}', (i, v), ha='center', va='bottom', fontsize=9)
 
 plt.suptitle('Radon 变换与 FBP 重建\n（CT 成像的正向模型 $y = Ax$ 与逆问题求解）', fontsize=14, y=1.02)
 plt.tight_layout()
@@ -162,7 +219,11 @@ results_summary = {
     'rmse_fbp_clipped': float(round(rmse_fbp_clipped, 6)),
     'psnr_fbp_clipped_dB': float(round(psnr_fbp_clipped, 2)),
     'negative_pixel_fraction_raw': float(round(neg_fraction, 4)),
-    'metric_note': 'rmse_fbp/psnr_fbp_dB 基于 iradon 原始输出（含振铃负值）；_clipped 为截断[0,1]后的显示口径',
+    'sparse_fbp_30angles': sparse_metrics,
+    'fbp_180angles': metrics_180,
+    'nearest_phantom_fbp_90angles': metrics_nn,
+    'metric_note': 'rmse_fbp/psnr_fbp_dB 基于 iradon 原始输出（含振铃负值）；_clipped 为截断[0,1]后的显示口径；'
+                   '三组对照均在同一 ramp-FBP 实现上计算，psnr_raw_dB 为未截断口径',
 }
 
 def _to_native(obj):

@@ -73,14 +73,18 @@ def dyp(u):
     return np.roll(u, -1, axis=0) - u
 
 def dxm_ad(p):
-    """水平差分的伴随:
+    """水平差分的伴随: <dxp(u), p> = <u, dxm_ad(p)>
     翻译自 dxm_ad.m: dx = [u(:,1:end-1) zeros(M,1)] - [zeros(M,1) u(:,1:end-1)]
+    注: Matlab 原版用零填充配对 dxp.m 的复制填充边界；此处与 dxp/dyp 一样
+        统一改为周期边界（np.roll），使 dxm_ad 严格是 dxp 的伴随算子，
+        且与 H1 的 FFT 闭式解所用的谱一致。phantom 边界处近似为 0，影响可忽略。
     """
     return p - np.roll(p, 1, axis=1)
 
 def dym_ad(p):
-    """垂直差分的伴随:
+    """垂直差分的伴随: <dyp(u), p> = <u, dym_ad(p)>
     翻译自 dym_ad.m: dy = [u(1:end-1,:);zeros(1,N)] - [zeros(1,N);u(1:end-1,:)]
+    注: 同 dxm_ad——边界由 Matlab 的零填充统一改为周期边界（np.roll）。
     """
     return p - np.roll(p, 1, axis=0)
 
@@ -88,20 +92,26 @@ def dym_ad(p):
 # 2. Chambolle-Pock算法（TV去噪）
 # ══════════════════════════════════════════════════════════
 
-def chambolle_pock_tv_denoise(y, lam, maxiter=500):
+def chambolle_pock_tv_denoise(y, lam, maxiter=500, step_scale=1.0):
     """
     Chambolle-Pock求解ROF模型:
         min_x 0.5||x - y||^2 + lambda * ||Dx||_{2,1}
+
+    本实现用的是【各向同性】TV：||Dx||_{2,1} = sum_像素 ||(D_h x)_像素, (D_v x)_像素||_2
+    （每个像素先把水平/垂直梯度合成一个向量再取 ℓ2 范数，最后对像素求和），
+    其共轭 g*(p) = iota_{||p||_{2,infty} <= lambda}（逐像素的 ℓ2 球约束）。
+    注意：各向异性 TV（||Dx||_{1,2}，逐分量绝对值求和）对应的对偶约束才是
+    ℓ_∞ 球（逐分量裁剪）——本实现不是那一种。
 
     翻译自 tomo_tv.m (Kristian Bredies, 2012; modified by Samuli Siltanen)
     原代码用于CT重建 (min 0.5||Ax - m||^2 + lambda * ||Dx||_1)
     此处简化 A = I（去噪），保留算法核心结构
 
     鞍点形式:
-        min_x max_p <Dx, p> + 0.5||x - y||^2 - iota_{||p||_infty <= lambda}(p)
+        min_x max_p <Dx, p> + 0.5||x - y||^2 - iota_{||p||_{2,infty} <= lambda}(p)
 
     三步迭代:
-        (1) 对偶步: 梯度上升 + 投影到 L∞ 球 (prox of 指示函数)
+        (1) 对偶步: 梯度上升 + 投影到逐像素 ℓ2 球 (prox of 指示函数)
         (2) 原始步: 近端梯度下降 (prox of 0.5||·-y||^2)
         (3) 外推步: x_bar = 2x_{k+1} - x_k (类似FISTA动量)
     """
@@ -112,8 +122,11 @@ def chambolle_pock_tv_denoise(y, lam, maxiter=500):
     py = np.zeros((n1, n2))
 
     L2 = 8.0
-    sigma = 1.0 / np.sqrt(L2)
-    tau = 1.0 / np.sqrt(L2)
+    # 步长条件 τσ‖K‖² < 1（严格小于）。本实现取 τ=σ=1/√8，
+    # 而周期差分算子的谱范数恰为 ‖K‖²=8，故 τσ‖K‖²=1 正好落在边界上。
+    # step_scale<1 用来留出安全裕度（τσ‖K‖² = step_scale²）。
+    sigma = step_scale / np.sqrt(L2)
+    tau = step_scale / np.sqrt(L2)
 
     for k in range(maxiter):
         # ---- 对偶步: 梯度上升 + 投影到 L∞ 球 ----
@@ -211,6 +224,23 @@ print(f"  H1-Tikhonov 正则化参数: λ_tikh = {lam_tikh:.2f}（PSNR 扫描择
 print(f"  Chambolle-Pock 最大迭代: 500")
 print(f"  步长: L2 = 8.0, σ = τ = 1/√(L2) ≈ {1.0/np.sqrt(8.0):.3f}")
 
+# ---- 步长条件自检：实算 ‖K‖² 与 τσ‖K‖² ----
+# K = D（水平+垂直周期前向差分堆叠），D^T D 在 DFT 域对角化，
+# |1-e^{-iω}|² = 2-2cos(ω)，故最大特征值 = 2·(2-2cos(π)) = 8。
+_k = np.arange(n)
+_h = 2 - 2 * np.cos(2 * np.pi * _k / n)
+_DX, _DY = np.meshgrid(_h, _h)
+normK2 = float((_DX + _DY).max())          # = ‖K‖²
+step_tau = 1.0 / np.sqrt(8.0)
+step_sigma = 1.0 / np.sqrt(8.0)
+tau_sigma_normK2 = step_tau * step_sigma * normK2
+print(f"\n[步长条件自检]")
+print(f"  ‖K‖² (DFT 精确谱范数) = {normK2:.6f}")
+print(f"  τσ‖K‖² = {step_tau:.6f}×{step_sigma:.6f}×{normK2:.6f} = {tau_sigma_normK2:.6f}"
+      f"  → 恰在收敛条件 τσ‖K‖²<1 的边界上（=1）")
+print(f"  留 10% 裕度的对照步长 τ=σ=0.9/√8: τσ‖K‖² = "
+      f"{(0.9/np.sqrt(8.0))**2*normK2:.6f}（严格 <1）")
+
 # ---- TV去噪 ----
 print(f"\n[运行 Chambolle-Pock TV去噪...]")
 x_tv = chambolle_pock_tv_denoise(y, lam_tv, maxiter=500)
@@ -219,6 +249,13 @@ x_tv_ref = chambolle_pock_tv_denoise(y, lam_tv, maxiter=2000)
 tv_rel_change = float(np.linalg.norm(x_tv - x_tv_ref)
                      / max(np.linalg.norm(x_tv_ref), 1e-12))
 print(f"  完成（500 步 vs 2000 步参考解: 相对变化 {tv_rel_change:.2e}）")
+
+# ---- 步长敏感性对照：边界步长 vs 留裕度步长（解应基本一致）----
+x_tv_margin = chambolle_pock_tv_denoise(y, lam_tv, maxiter=500, step_scale=0.9)
+margin_rel_diff = float(np.linalg.norm(x_tv_margin - x_tv)
+                        / max(np.linalg.norm(x_tv), 1e-12))
+print(f"  步长敏感性: 边界步长(τσ‖K‖²=1) vs 裕度步长(0.81) 解的相对差异 = "
+      f"{margin_rel_diff:.2e}")
 
 # ---- H1-Tikhonov去噪（DFT域） ----
 print(f"\n[运行 H1-Tikhonov去噪 (DFT域闭式解)...]")
@@ -241,6 +278,13 @@ _diff_map = np.abs(x_tv - x_tikh)
 diff_edge = float(_diff_map[_edge_mask].mean())
 diff_flat = float(_diff_map[_flat_mask].mean())
 diff_edge_to_flat_ratio = diff_edge / diff_flat
+
+# 差异图的"边缘集中度"：差异最大的 10% 像素里有多少落在边缘带。
+# 若差异完全由边缘引起，该比例应接近 100%；若与随机位置无异，则应等于边缘带自身占全图的比例。
+_diff_thr10 = np.quantile(_diff_map, 0.90)
+_top10_mask = _diff_map >= _diff_thr10
+diff_top10_in_edge_pct = float(_edge_mask[_top10_mask].mean() * 100)
+edge_band_pixel_pct = float(_edge_mask.mean() * 100)
 
 # ══════════════════════════════════════════════════════════
 # 5. 可视化
@@ -294,9 +338,10 @@ print(f"    └ 2000步参考解: {psnr_tv_ref:.2f} dB，500步差距 {psnr_tv -
       f"相对解变化 {tv_rel_change:.1e}（500 步已充分收敛）")
 
 print(f"\n[算法机制]")
-print(f"  Chambolle-Pock 三步迭代:")
+print(f"  Chambolle-Pock 三步迭代（解各向同性 TV: min 0.5||x-y||^2 + λ||Dx||_(2,1)）:")
 print(f"    (1) 对偶步: p^{{k+1}} = prox_{{σ g^*}}(p^k + σ D x_bar^k)")
-print(f"        g^* = ι_{{‖·‖_∞ ≤ λ}} → 投影到 L∞ 球")
+print(f"        g^* = ι_{{‖·‖_(2,∞) ≤ λ}} → 投影到逐像素 ℓ2 球（各向同性 TV 的共轭；"
+      f"各向异性 TV 才对应 ℓ∞ 球）")
 print(f"    (2) 原始步: x^{{k+1}} = prox_{{τ f}}(x^k - τ D^T p^{{k+1}})")
 print(f"        f = 0.5‖x-y‖² → x^{{k+1}} = (x^k + τ D^T p^{{k+1}} + τ y)/(1+τ)")
 print(f"    (3) 外推步: x_bar^{{k+1}} = 2x^{{k+1}} - x^k")
@@ -312,16 +357,20 @@ print(f"    - 特点: 保边缘，分段光滑（允许跳变）")
 print(f"    - 求解: Chambolle-Pock 迭代（O(n) 每步）")
 print(f"  差异图定量: 边缘带 mean|diff| = {diff_edge:.4f}, 平坦区 mean|diff| = {diff_flat:.4f}, "
       f"比值 = {diff_edge_to_flat_ratio:.2f}x")
+print(f"  边缘集中度: 差异最大的10%像素中 {diff_top10_in_edge_pct:.1f}% 落在边缘带"
+      f"（边缘带本身只占全图 {edge_band_pixel_pct:.1f}%，随机基线）")
 print(f"  最强差异出现在边缘处，但平坦区差异并不为零（H1 保留平滑噪声纹理、TV 呈分段常数），")
 print(f"  验证 TV 保边性的同时说明差异图并非完全'集中'于边缘")
 
 print(f"\n[核心发现]")
-print(f"  1. TV正则化 (‖Dx‖₁) 的保边性: 允许边缘处有不连续的跳变")
+print(f"  1. TV正则化 (‖Dx‖_(2,1)) 的保边性: 允许边缘处有不连续的跳变")
 print(f"     — 只惩罚梯度的总幅度，不惩罚梯度的平方")
-print(f"  2. 当近端算子无闭式解时 (TV = ‖D·‖₁)，Fenchel对偶打开新路径:")
-print(f"     g(x) = ‖Dx‖₁ → g*(y) = ι_{{‖y‖_∞ ≤ λ}} (简单投影!)")
+print(f"  2. 当近端算子无闭式解时 (TV = ‖D·‖_(2,1))，Fenchel对偶打开新路径:")
+print(f"     g(x) = λ‖Dx‖_(2,1) → g*(y) = ι_{{‖y‖_(2,∞) ≤ λ}} (逐像素 ℓ2 球，简单投影!)")
 print(f"  3. Chambolle-Pock 在鞍点结构上交替更新原始/对偶变量")
-print(f"     — 每步代价 O(n)，步长条件 τσ‖K‖² ≤ 1 保证收敛")
+print(f"     — 每步代价 O(n)，步长条件 τσ‖K‖² < 1 保证收敛")
+print(f"     — 本例 τ=σ=1/√8 且 ‖K‖²=8，故 τσ‖K‖²=1 恰在条件边界；")
+print(f"       实测边界步长与留裕度步长(0.81)的解相对差异仅 {margin_rel_diff:.1e}，结论不受影响")
 print(f"  4. TV vs H1-Tikhonov: 保边 vs 平滑 — 同一问题的不同正则化哲学")
 print(f"     — TV更适合分段光滑图像 (如 phantom)，H1更适合平滑图像")
 
@@ -350,9 +399,16 @@ results_summary = {
     'psnr_tv_500_iter': float(round(psnr_tv, 2)),
     'psnr_tv_2000_iter': float(round(psnr_tv_ref, 2)),
     'tv_rel_change_500_vs_2000': float(round(tv_rel_change, 6)),
+    'cp_norm_K_squared': float(round(normK2, 6)),
+    'cp_tau_sigma_normK2': float(round(tau_sigma_normK2, 6)),
+    'cp_step_on_convergence_boundary': True,
+    'cp_margin_step_tau_sigma_normK2': float(round((0.9/np.sqrt(8.0))**2*normK2, 6)),
+    'cp_margin_vs_boundary_rel_diff': float(round(margin_rel_diff, 8)),
     'diff_edge_mean': float(round(diff_edge, 4)),
     'diff_flat_mean': float(round(diff_flat, 4)),
     'diff_edge_to_flat_ratio': float(round(diff_edge_to_flat_ratio, 2)),
+    'diff_top10pct_pixels_in_edge_band_pct': float(round(diff_top10_in_edge_pct, 1)),
+    'edge_band_pixel_pct_of_image': float(round(edge_band_pixel_pct, 2)),
 }
 
 def _to_native(obj):

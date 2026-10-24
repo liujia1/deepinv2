@@ -134,7 +134,7 @@ print_gate(src_status, src_warnings, '下游置信区间/覆盖率结论有效')
 # "全链 Welford 均值/方差作为演示可用"。故正态法主区间一律用全链 Welford 量。
 post_var_full = np.asarray(post_var).copy()
 
-# 抽稀诊断量：94 个抽稀样本（抽稀间隔100 < 全链IAT≥1101，ESS 上界仅8.6）。
+# 抽稀诊断量：94 个抽稀样本（抽稀间隔100 < 全链IAT≈1063，ESS 仅8.9）。
 # 它们同样无偏但逐像素估计噪声大，仅用于：(a) 抽稀口径的正态区间【对照】；
 # (b) 非参数分位数（npz 未保存全链逐像素分位数，分位数只能由这批样本估计）；
 # (c) 步骤5的抽稀保真度检验。注意：不得像旧版那样把它当作主区间的方差来源。
@@ -178,7 +178,7 @@ q_high = post_mean + z_95 * post_std
 ci_width = q_high - q_low  # 置信区间宽度
 
 # 方法1（抽稀对照）：中心仍为全链 MMSE，仅把 σ 换成94个抽稀样本的重算标准差，
-# 使两版差异纯粹来自"方差估计口径"，直接展示使用高噪声（ESS≤8.6）方差的后果
+# 使两版差异纯粹来自"方差估计口径"，直接展示使用高噪声（ESS≈8.9）方差的后果
 q_low_thin = post_mean - z_95 * post_std_thin
 q_high_thin = post_mean + z_95 * post_std_thin
 ci_width_thin = q_high_thin - q_low_thin
@@ -195,7 +195,7 @@ print(f"\n正态近似置信区间宽度统计（主口径：全链 Welford σ�
 print(f"  平均宽度: {np.mean(ci_width):.4f}")
 print(f"  最大宽度: {np.max(ci_width):.4f}")
 print(f"  最小宽度: {np.min(ci_width):.4f}")
-print(f"\n正态近似置信区间宽度统计（对照：94抽稀样本 σ, ESS≤8.6）:")
+print(f"\n正态近似置信区间宽度统计（对照：94抽稀样本 σ, ESS≈8.9）:")
 print(f"  平均宽度: {np.mean(ci_width_thin):.4f}")
 print(f"  最大宽度: {np.max(ci_width_thin):.4f}")
 print(f"  最小宽度: {np.min(ci_width_thin):.4f}")
@@ -376,7 +376,7 @@ for _k, (_r, _c) in enumerate(zip(top_rows, top_cols)):
 print("\n观察要点:")
 print("  - 红色叠加+黄色等值线=样本间分歧最大的像素，集中在高频弱信息区，平滑背景几乎无高亮")
 print("  - 该空间格局应与步骤3 CI宽度图、步骤5 sample_std 热图一致（三者同源互证）")
-print("  - 注：背景仍有低幅逐像素抖动（抽稀间隔100<全链IAT≥1101），非真实空间多样性")
+print("  - 注：背景仍有低幅逐像素抖动（抽稀间隔100<全链IAT≈1063），非真实空间多样性")
 
 
 # ============================================================
@@ -566,7 +566,7 @@ results_summary = {
             },
             "经验覆盖率": round(coverage_norm_thin, 6),
             "注记": (
-                "σ由94个强自相关抽稀样本重算（ESS上界≤8.6、抽稀间隔100<全链IAT≥1101），"
+                "σ由94个强自相关抽稀样本重算（ESS≈8.9、抽稀间隔100<全链IAT≈1063），"
                 "无偏但逐像素估计噪声大；与主版中心相同、仅σ口径不同，用于对照而非主结论"),
         },
         "样本分位数_抽稀94样本": {

@@ -3,10 +3,25 @@
   "n_test": 10000,
   "seed": 42,
   "non_expansiveness": {
-    "ℓ₂² 收缩": 0.5,
-    "ℓ₁ 软阈值": 0.391706,
-    "ℓ₀ 硬阈值": 0.760203,
-    "投影": 0.58598
+    "single_pair_ratio": {
+      "ℓ₂² 收缩": 0.5,
+      "ℓ₁ 软阈值": 0.391706,
+      "ℓ₀ 硬阈值": 0.760203,
+      "投影": 0.58598
+    },
+    "worst_case_lipschitz_supremum": {
+      "ℓ₂² 收缩": 0.5,
+      "ℓ₁ 软阈值": 1.0,
+      "投影": 1.0,
+      "ℓ₀ 硬阈值": null
+    },
+    "random_multipair_max_ratio": {
+      "ℓ₂² 收缩": 0.5,
+      "ℓ₁ 软阈值": 0.463113,
+      "ℓ₀ 硬阈值": 0.863039,
+      "投影": 0.690801
+    },
+    "note": "single_pair_ratio 为单对随机高斯向量(seed=42)的经验比值，只是抽样；非扩张性是全称命题，算子的真实界是 worst_case_lipschitz_supremum：ℓ₁ 软阈值与投影的界紧（恰为 1），ℓ₂² 收缩恒为 1/(1+λ)=0.5，ℓ₀ 硬阈值上确界为 ∞（None）；random_multipair_max_ratio 为 2000 对随机抽样的最大值"
   },
   "hard_threshold_nonexpansive": false,
   "hard_threshold_counterexample": {

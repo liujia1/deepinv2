@@ -22,7 +22,7 @@
     "use_pnp": true,
     "algorithm": "PnP-ULA",
     "markov_kernel": "simple_unprojected（官方lab2简化核，无box投影/无λ尾项）",
-    "step_size_note": "PnP 简化核 δ=0.99/(L_net/ε+L_y)，位于均方稳定域 δ<2/L_total；严格未投影 PnP-ULA 理论上界为 4.103e-07（约为现取值的 1/15），本例靠后验质量远离[0,1]边界而实测稳定（与投影核仅差0.022 dB）",
+    "step_size_note": "PnP 简化核 δ=0.99/(L_net/ε+L_y)，位于均方稳定域 δ<2/L_total；严格未投影 PnP-ULA 理论上界为 4.103e-07（约为现取值的 1/15），本例靠后验质量远离[0,1]边界而实测稳定（与投影核仅差0.022 dB）；稳定性由实测背书而非该严格上界背书",
     "chain_length_note": "10000步为2026-10复核修订值（旧版500步仅到官方burn-in边界，PSNR≈28dB；万步链≈33.1dB，官方参考33.22dB）"
   },
   "results": {
@@ -38,7 +38,10 @@
     "ess_slow": 2.77,
     "ess_med": 68.38,
     "ess_fast": 87.46,
-    "chain_length": 1899
+    "chain_length": 1899,
+    "n_chains": 1,
+    "rhat": null,
+    "rhat_note": "本实验为单链（单起点、单一种子），Gelman-Rubin R̂ 依赖链间方差，单链不可计算，故未给出；诊断仅含轨迹/PSNR 平台 + ACF + ESS 分层"
   },
   "regional_std_audit": {
     "mask_definition": "按真值梯度幅值(np.roll环绕差)：平坦<=40%分位，边缘>=80%分位",

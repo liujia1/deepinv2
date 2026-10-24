@@ -381,6 +381,8 @@ if len(MC_X) > 10:
         print(f"  最慢分量: {ess_slow:.2f} / {len(MC_X)} ({ess_slow/len(MC_X)*100:.1f}%)")
         print(f"  中速分量: {ess_med:.2f} / {len(MC_X)} ({ess_med/len(MC_X)*100:.1f}%)")
         print(f"  最快分量: {ess_fast:.2f} / {len(MC_X)} ({ess_fast/len(MC_X)*100:.1f}%)")
+        print("  注: 本实验为单链（单起点、单一种子），Gelman-Rubin R̂ 依赖链间方差、"
+              "单链不可计算，故此处只给单链版诊断（轨迹/ACF/ESS）。")
         
         fig, axes = plt.subplots(1, 3, figsize=(15, 4))
         
@@ -568,7 +570,8 @@ def _to_native(obj):
 
 results_summary = {
     'experiment': '4.7-1',
-    'title': 'PnP-ULA后验采样与收敛诊断',
+    'title': ('PnP-ULA后验采样与收敛诊断' if _use_pnp
+              else 'ULA+盲箱约束先验（MYULA）后验采样与收敛诊断（降级路径）'),
     'setup': {
         'image_size': [int(im.shape[0]), int(im.shape[1])],
         'BSNR': BSNRdb,
@@ -588,7 +591,8 @@ results_summary = {
         'step_size_note': (
             'PnP 简化核 δ=0.99/(L_net/ε+L_y)，位于均方稳定域 δ<2/L_total；'
             f'严格未投影 PnP-ULA 理论上界为 {float(delta_strict):.3e}（约为现取值的 1/15），'
-            '本例靠后验质量远离[0,1]边界而实测稳定（与投影核仅差0.022 dB）'
+            '本例靠后验质量远离[0,1]边界而实测稳定（与投影核仅差0.022 dB）；'
+            '稳定性由实测背书而非该严格上界背书'
         ) if _use_pnp else (
             'MYULA 严格上界 δ<(1/3)/(L_y+1/λ)，λ=1/(2L_y)（2026-10 复核修正，旧版误用1/L_y）'
         ),
@@ -613,6 +617,10 @@ if _HAS_STATS and len(MC_X) > 10:
         'ess_med': float(round(ess_med, 2)),
         'ess_fast': float(round(ess_fast, 2)),
         'chain_length': len(MC_X),
+        'n_chains': 1,
+        'rhat': None,
+        'rhat_note': '本实验为单链（单起点、单一种子），Gelman-Rubin R̂ 依赖链间方差，'
+                     '单链不可计算，故未给出；诊断仅含轨迹/PSNR 平台 + ACF + ESS 分层',
     }
 
 # 分区 std 审计（2026-10 复核新增）：掩膜按【真值】梯度幅值定义，
@@ -629,6 +637,14 @@ results_summary['regional_std_audit'] = {
             'grain 随 ESS 增大而减小，可用于区分固有 std 与短链估计颗粒',
 }
 
-with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
+# 降级路径（盲箱约束 MYULA）不得覆盖 PnP-ULA 的归档结果：
+# 有模型/GPU 时写 results_summary.json，否则写 results_summary_fallback.json。
+_json_name = 'results_summary.json' if _use_pnp else 'results_summary_fallback.json'
+_json_path = os.path.join(SAVE_DIR, _json_name)
+with open(_json_path, 'w', encoding='utf-8') as f:
     json.dump(_to_native(results_summary), f, ensure_ascii=False, indent=2)
-print(f"数值结果已保存: {os.path.join(SAVE_DIR, 'results_summary.json')}")
+print(f"数值结果已保存: {_json_path}")
+if not _use_pnp:
+    print(f"  注意: 本次运行的是降级路径（盲箱约束 MYULA），结果写入 {_json_name}，")
+    print("        不会覆盖 PnP-ULA 的归档 results_summary.json。")
+

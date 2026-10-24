@@ -215,6 +215,36 @@ plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '实验1_4_1_噪声信号依赖性.png'), dpi=150, bbox_inches='tight')
 plt.show()
 
+# ---- 5b. 背景区 SSIM：检验"暗部几乎无损"这一说法 ----
+# full=True 返回逐像素 SSIM 图，在纯黑背景掩码（x < 0.01）上取均值。
+_, ssim_map_g = structural_similarity(x, y_gauss, data_range=1.0, win_size=7, full=True)
+_, ssim_map_p = structural_similarity(x, y_poisson, data_range=1.0, win_size=7, full=True)
+_bg_mask = x < 0.01
+bg_ssim_gauss = float(ssim_map_g[_bg_mask].mean())
+bg_ssim_poisson = float(ssim_map_p[_bg_mask].mean())
+print(f"\n纯黑背景区（x<0.01，占 {_bg_mask.mean():.1%}）平均 SSIM："
+      f"高斯 {bg_ssim_gauss:.4f}，Poisson {bg_ssim_poisson:.4f}")
+
+# 图省事的口径统一：把渐变图 20 桶的 (信号均值, 噪声标准差) 全量写入 JSON，
+# 不剔桶、不截断，供正文直接引用（避免正文手算/复述子集造成数值脱节）。
+def _binned_pairs(mean_sig, std):
+    return [{'bin_mean_signal': None if not np.isfinite(m) else round(float(m), 4),
+             'bin_std': None if not np.isfinite(s) else round(float(s), 4)}
+            for m, s in zip(mean_sig, std)]
+
+signal_dependence_stats = {
+    'ramp_gaussian': _binned_pairs(sig_ramp_g, std_ramp_g),
+    'ramp_poisson': _binned_pairs(sig_ramp_p, std_ramp_p),
+    'phantom_gaussian_nonempty': [
+        {'gray_level': round(float(m), 4), 'bin_std': round(float(s), 4),
+         'n_pixels': int(round(c / K))}
+        for m, s, c in zip(sig_phan_g, std_phan_g, cnt_phan_g) if c > 0],
+    'phantom_poisson_nonempty': [
+        {'gray_level': round(float(m), 4), 'bin_std': round(float(s), 4),
+         'n_pixels': int(round(c / K))}
+        for m, s, c in zip(sig_phan_p, std_phan_p, cnt_phan_p) if c > 0],
+}
+
 print(f"{'噪声类型':>12s}  {'PSNR(dB)':>10s}  {'SSIM':>8s}")
 print("-" * 36)
 for name, psnr_val, ssim_val in zip(names, psnrs, ssims):
@@ -242,6 +272,13 @@ results_summary = {
         'repeats_per_pixel': K,
         'theory_gaussian_sigma': float(sigma_gauss),
         'theory_poisson_std': 'sqrt(gain * signal)',
+    },
+    'signal_dependence_stats': signal_dependence_stats,
+    'background_ssim_win7': {
+        'background_definition': 'x < 0.01（SSIM 逐像素图在该掩码上取均值）',
+        'background_pixel_fraction': round(float(_bg_mask.mean()), 4),
+        'gaussian': round(bg_ssim_gauss, 4),
+        'poisson': round(bg_ssim_poisson, 4),
     },
     'gaussian_noise': {
         'sigma': float(sigma_gauss),

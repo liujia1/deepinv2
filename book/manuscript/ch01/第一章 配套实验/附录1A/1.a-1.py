@@ -41,9 +41,11 @@ for sigma in noise_levels:
     print(f"  σ={sigma:.2f} → 噪声占信号幅度的 {sigma*100:.0f}%")
 
 noisy_images = []
+noisy_images_raw = []
 for sigma in noise_levels:
-    y = x + sigma * np.random.randn(*x.shape)
-    y = np.clip(y, 0, 1)
+    y_raw = x + sigma * np.random.randn(*x.shape)
+    noisy_images_raw.append(y_raw)          # 未裁剪，用于补充口径对照
+    y = np.clip(y_raw, 0, 1)
     noisy_images.append(y)
 
 def safe_normalize(arr):
@@ -61,6 +63,20 @@ for y in noisy_images:
     # 显式声明 data_range：图像值域为 [0,1]，峰值 MAX=1（与教材 PSNR 定义一致，避免依赖库按 dtype 推断）
     psnr_vals.append(peak_signal_noise_ratio(x, y, data_range=1.0))
     ssim_vals.append(structural_similarity(x, y, data_range=1.0, win_size=7))
+
+# ---- 3b. 补充对照口径（主表仍用 clip + win7）----
+# 1) 未裁剪口径：纯加性高斯噪声下的真实退化，用于说明 clip 会"美化"指标；
+# 2) win_size=11（原文标准）：用于说明窗口参数对 SSIM 的影响；
+# 3) 反相图 x→1-x 的 SSIM：验证 SSIM 可以取负值。
+mse_raw_vals, psnr_raw_vals, ssim_win11_vals, frac_clipped_vals = [], [], [], []
+for y_raw, y in zip(noisy_images_raw, noisy_images):
+    mse_raw_vals.append(mean_squared_error(x, y_raw))
+    psnr_raw_vals.append(peak_signal_noise_ratio(x, y_raw, data_range=1.0))
+    ssim_win11_vals.append(structural_similarity(x, y, data_range=1.0, win_size=11))
+    frac_clipped_vals.append(float(np.mean((y_raw < 0) | (y_raw > 1))))
+
+ssim_inverted_win7 = structural_similarity(x, 1.0 - x, data_range=1.0, win_size=7)
+ssim_inverted_win11 = structural_similarity(x, 1.0 - x, data_range=1.0, win_size=11)
 
 # ---- 4. 可视化 ----
 fig, axes = plt.subplots(2, 4, figsize=(16, 8))
@@ -132,6 +148,21 @@ results_summary = {
         'psnr_dB': float(round(psnr_vals[i], 2)),
         'ssim': float(round(ssim_vals[i], 4)),
     } for i, sigma in enumerate(noise_levels)},
+    'supplementary': {
+        'note': '主表口径为 clip 到 [0,1] + SSIM win_size=7；本块给出对照口径',
+        'uncropped_by_noise': {f'sigma_{sigma:.2f}': {
+            'mse_raw': float(round(mse_raw_vals[i], 6)),
+            'psnr_raw_dB': float(round(psnr_raw_vals[i], 2)),
+            'frac_pixels_clipped': float(round(frac_clipped_vals[i], 4)),
+        } for i, sigma in enumerate(noise_levels)},
+        'ssim_win11_by_noise': {f'sigma_{sigma:.2f}': float(round(ssim_win11_vals[i], 4))
+                                for i, sigma in enumerate(noise_levels)},
+        'inverted_image_ssim': {
+            'definition': 'SSIM(1-x, x)，data_range=1.0，用于验证 SSIM 可取负值',
+            'win_size_7': float(round(ssim_inverted_win7, 4)),
+            'win_size_11': float(round(ssim_inverted_win11, 4)),
+        },
+    },
 }
 
 def _to_native(obj):

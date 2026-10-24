@@ -158,7 +158,7 @@ if lam_best <= lambdas[0] * 1.1 or lam_best >= lambdas[-1] / 1.1:
 else:
     print(f"  ✅ 最优lambda ({lam_best:.4f}) 在扫描范围内")
 print(f"  最优lambda (clip口径 PSNR): lam_best = {lam_best:.4f}, PSNR = {psnr_best:.2f} dB")
-print(f"  最优lambda (raw口径 PSNR) : lam_best_raw = {lam_best_raw:.4f}  (理论 lambda 最小化未clip的MSE)")
+print(f"  最优lambda (raw口径 PSNR) : lam_best_raw = {lam_best_raw:.4f}, PSNR = {float(_raw_curve.max()):.2f} dB  (理论 lambda 最小化未clip的MSE)")
 print(f"  贝叶斯lambda (oracle): lam_bayes = sigma^2/sigma_x^2 = {lam_bayes:.4f}")
 print(f"  贝叶斯lambda对应PSNR: {psnr_bayes:.2f} dB")
 print(f"  贝叶斯lambda (含噪估计, 减噪声方差): lam_bayes_noisy = sigma^2/sigma_x_est^2 = {lam_bayes_noisy:.4f}")
@@ -184,6 +184,41 @@ print(f"             用含噪y估计时需要减去噪声方差：")
 print(f"             sigma_x_est^2 = sigma_y^2 - sigma_noise^2")
 print(f"             含噪估计: lam_bayes_noisy = {lam_bayes_noisy:.4f}，")
 print(f"             PSNR 从 {psnr_bayes:.2f} dB 降至 {psnr_bayes_noisy:.2f} dB")
+
+# ══════════════════════════════════════════════════════════
+# 3b. 对照实验：收缩中心若误取 mu=0 会怎样
+# ══════════════════════════════════════════════════════════
+# 【教学要点】先验均值必须取 mu ≈ mean(x)，而非 0：
+#   收缩向 0 会把亮图整体压暗、引入系统偏差；经验最优 lambda 随之落到
+#   约 sigma^2/E[x^2]（关于原点 0 的二阶矩 = sigma_x^2 + mu^2），
+#   与 sigma^2/sigma_x^2 相差约 4 倍（raw 口径）。
+#   此处把该对照显式算出来，供正文引用。
+lam_theory_mu0 = sigma_noise ** 2 / float(np.mean(x ** 2))   # 收缩向 0 时的理论 lambda
+
+psnr_mu0_at_bayes = peak_signal_noise_ratio(
+    x, np.clip(y / (1 + lam_bayes), 0, 1), data_range=DATA_RANGE)          # clip 口径
+psnr_mu0_at_bayes_raw = peak_signal_noise_ratio(
+    x, y / (1 + lam_bayes), data_range=DATA_RANGE)                         # raw 口径
+
+_psnr_mu0 = np.array([
+    peak_signal_noise_ratio(x, np.clip(y / (1 + l), 0, 1), data_range=DATA_RANGE)
+    for l in lambdas])
+lam_best_mu0 = float(lambdas[int(np.argmax(_psnr_mu0))])
+psnr_best_mu0 = float(_psnr_mu0.max())
+
+_raw_curve_mu0 = np.array([
+    peak_signal_noise_ratio(x, y / (1 + l), data_range=DATA_RANGE)
+    for l in _raw_grid])
+lam_best_mu0_raw = float(_raw_grid[int(np.argmax(_raw_curve_mu0))])
+psnr_best_mu0_raw = float(_raw_curve_mu0.max())
+
+print(f"\n[对照: 收缩中心误取 mu=0 的后果]")
+print(f"  理论 lambda = sigma^2/E[x^2] = {lam_theory_mu0:.4f}（E[x^2]={np.mean(x**2):.4f} 关于原点 0）")
+print(f"  经验最优 lambda：clip 口径 {lam_best_mu0:.4f}（PSNR {psnr_best_mu0:.2f} dB），"
+      f"raw 口径 {lam_best_mu0_raw:.4f}（PSNR {psnr_best_mu0_raw:.2f} dB）")
+print(f"  与 lam_bayes={lam_bayes:.4f} 相差 {lam_bayes / lam_best_mu0_raw:.1f} 倍（raw 口径）")
+print(f"  若仍套用 lam_bayes={lam_bayes:.4f} 收缩向 0：PSNR 跌到 {psnr_mu0_at_bayes:.2f} dB（clip）"
+      f"/ {psnr_mu0_at_bayes_raw:.2f} dB（raw），低于含噪观测 {psnr_noisy:.2f} dB")
 
 # ══════════════════════════════════════════════════════════
 # 4. 可视化
@@ -297,8 +332,10 @@ print("5. PSNR-lambda曲线呈单峰形，最优lambda在峰值处")
 print("6. oracle贝叶斯lambda=sigma^2/Var(x)是未clip的MSE最优解（raw口径下与理论公式精确吻合）；")
 print("   clip口径的PSNR最优lambda因截断收益系统性偏小约20%，但峰值平台平坦，PSNR差<0.05dB")
 print("7. 实际中用含噪y估计sigma_x时需减去噪声方差，否则lambda系统性偏小")
-print("8. 先验均值必须取 mu≈mean(x)（亮图约0.5）而非0，否则收缩向0引入系统偏差，")
-print("   会使lambda偏大约4倍、PSNR反低于含噪观测（本实验初版即踩此坑）")
+print("8. 先验均值必须取 mu≈mean(x)（亮图约0.5）而非0，否则收缩向0引入系统偏差：")
+print(f"   经验最优lambda落到 sigma^2/E[x^2]={lam_theory_mu0:.4f} 附近，与 lam_bayes={lam_bayes:.4f} "
+      f"相差 {lam_bayes/lam_best_mu0_raw:.1f} 倍；")
+print(f"   此时若仍套用 lam_bayes，PSNR 跌到 {psnr_mu0_at_bayes:.2f} dB，反低于含噪观测 {psnr_noisy:.2f} dB")
 
 print("\n" + "=" * 60)
 print("实验完成。结果已保存至:", SAVE_DIR)
@@ -319,6 +356,23 @@ results_summary = {
     'psnr_bayes': float(round(psnr_bayes, 3)),
     'psnr_bayes_noisy': float(round(psnr_bayes_noisy, 3)),
     'psnr_best': float(round(psnr_best, 3)),
+    # raw 口径（未 clip）下理论 lambda 才是 MSE 最优解，该口径最优 lambda 与 lam_bayes 吻合到 <1%
+    'psnr_best_raw': float(round(float(_raw_curve.max()), 3)),
+    'rel_dev_raw_lam_best_vs_bayes': float(round(_rel_raw, 4)),
+    'psnr_gap_clip_bayes_vs_peak': float(round(psnr_gap_clip, 4)),
+    # 对照：收缩中心误取 mu=0（见正文"为何收缩中心必须是 mu 而非 0"）
+    'mu0_control': {
+        'lam_theory_mu0_sigma2_over_Ex2': float(round(lam_theory_mu0, 4)),
+        'lam_best_mu0_clip': float(round(lam_best_mu0, 4)),
+        'psnr_best_mu0_clip': float(round(psnr_best_mu0, 3)),
+        'lam_best_mu0_raw': float(round(lam_best_mu0_raw, 4)),
+        'psnr_best_mu0_raw': float(round(psnr_best_mu0_raw, 3)),
+        'psnr_at_lam_bayes_mu0_clip': float(round(psnr_mu0_at_bayes, 3)),
+        'psnr_at_lam_bayes_mu0_raw': float(round(psnr_mu0_at_bayes_raw, 3)),
+        'ratio_lam_bayes_over_lam_best_mu0_raw': float(round(lam_bayes / lam_best_mu0_raw, 3)),
+        'note': '收缩中心取 mu=0 时经验最优 lambda 落到 sigma^2/E[x^2] 附近，'
+                '与 lam_bayes 相差约4.2倍；此时若仍套用 lam_bayes，PSNR 反低于含噪观测',
+    },
 }
 
 def _to_native(obj):

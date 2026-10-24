@@ -29,11 +29,13 @@
     "downsampling_factor2": 2.0203872612804297e-07,
     "multiview_manual_mean": 0.005113837464525357,
     "multiview_manual_std": 0.003938050819300627,
-    "multiview_manual_adjointness_test_raw": 1.6325225830078125,
     "multiview_autograd": 6.187148749074862e-08,
     "blur": 8.353174641371825e-08,
     "composite_blur_downsample": 4.3988576767791784e-07,
     "mri": 2.093729296156315e-07
+  },
+  "adjointness_test_raw_inner_product_diff": {
+    "multiview_manual": 1.6325225830078125
   },
   "noise_mae": {
     "gaussian": 0.040080610662698746,

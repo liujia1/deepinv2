@@ -3,13 +3,19 @@
 对应章节：4.3 ULA——Langevin采样的Euler离散
 知识点：ULA稳定性条件（delta<2）；偏差与收敛的权衡；
         不变分布（平稳）方差公式 Var_pi = 2/(2-delta) 的步长依赖
-        （注意：这是ULA不变分布 pi_delta 自身的方差，衡量离散偏差；
-         不是MCMC估计量CLT中的长程/渐近方差，后者还含自相关因子）
+        （术语辨析详见实验4.3-1：2/(2-delta) 是ULA不变分布自身的边际方差，
+         衡量离散偏差；MCMC估计量CLT中的长程/渐近方差为 2/delta，衡量混合效率，
+         两者不可混用——本实验不再重复该辨析，只做步长谱系与发散边界的实证）
 
 修改说明：
   从原参考实验4.2.py迁移，聚焦4.3节步长选择与收敛性。
   核心修正：ULA的发散条件是 delta>=2（AR(1)稳定性 |1-delta|<1），
   而非 delta>1/L（后者是连续时间Langevin的步长上界，对应梯度下降收敛条件）。
+
+职责分工（避免与实验4.3-1重复）：
+  - 实验4.3-1 负责“不变分布口径”：平稳方差公式验证 + 长程方差/ESS 术语辨析；
+  - 本实验负责“步长谱系”：从小偏差到极端偏差的全谱系 + delta=2 发散边界的实证。
+    故步骤2 只保留“偏差 vs 步长”单图（偏差 = 平稳方差 - 1，与方差曲线互为线性变换）。
 """
 
 import numpy as np
@@ -82,6 +88,8 @@ def ULA_gauss(niter, delta, x0=0, burn_in=1000, return_traj=False):
         发散标记，使步骤1的"发散"面板能被真正触发，演示稳定性边界。
         注意：须用严格 >2 的步长（如 2.2）；delta=2 为临界随机游走，
         方差仅按 O(n) 线性增长，短链内不会越过 1e10 阈值。
+        （本函数是本实验的本地实现，与实验4.3-1 的 ULA_gauss 刻意不同：
+         后者对 delta>=2 直接抛 ValueError，本实验则需保留发散轨迹作图。）
     """
     X = x0
     traj = [x0]
@@ -228,91 +236,57 @@ plt.savefig(os.path.join(SAVE_DIR, 'step1_stepsize_effect.png'), dpi=150, bbox_i
 plt.close()
 
 # ══════════════════════════════════════════════════════════
-# 3. 步骤2：方差与偏差随步长的变化
+# 3. 步骤2：偏差随步长的变化
 # ══════════════════════════════════════════════════════════
 # 理论曲线一直画到 delta=1.9：它会沿纵轴顶部冲出画面，
-# 直观展示 delta->2 时方差/偏差的爆炸式增长（超出量程的部分被裁掉）。
+# 直观展示 delta->2 时偏差的爆炸式增长（超出量程的部分被裁掉）。
+# 职责分工：平稳（边际）方差 2/(2-delta) 的公式验证与 ESS 面板见实验4.3-1 步骤2；
+# 本实验只保留“偏差 vs 步长”单图——偏差 = 平稳方差 - 1，与方差曲线互为线性变换，
+# 重复绘制无信息增益，单独保留偏差口径更能突出随步长爆炸至 delta=2 的谱系。
 delta_fine = np.linspace(0.001, 1.9, 500)
-var_theo_fine = np.where(delta_fine < 2, 2 / (2 - delta_fine), np.nan)
 bias_fine = np.where(delta_fine < 2, delta_fine / (2 - delta_fine), np.nan)
 
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+fig, ax = plt.subplots(figsize=(8, 5))
 
-# 左图：平稳（不变分布）方差 vs 步长
-axes[0].plot(delta_fine, var_theo_fine, 'b-', linewidth=2,
-             label=r'理论值 $\frac{2}{2-\delta}$')
-axes[0].axhline(y=1, color='r', linestyle='--', linewidth=1.5,
-                label=r'真实方差 $\sigma^2=1$')
-# 标注发散边界（delta=2）而非"稳定性边界"
-axes[0].axvline(x=2, color='purple', linestyle=':', linewidth=1.5,
-                label=r'发散边界 $\delta=2$')
-
-# 绘制散点（delta <= 1.5 在 ylim 范围内可见）
-for r in results:
-    if r[4] == 'converged' and r[0] <= 1.5:
-        axes[0].scatter(r[0], r[1], color='green', s=60, zorder=5, label='经验值' if r[0] == 0.01 else '')
-        axes[0].scatter(r[0], r[2], color='orange', marker='x', s=60, zorder=5, label='理论值（离散点）' if r[0] == 0.01 else '')
-
-# delta=1.9 的点（方差=2/(2-1.9)=20）远在纵轴范围之外。
-# 曲线延伸到 delta=1.9 后，会在 delta=1.5（此处 y=4=纵轴顶）穿出画面；
-# 在出界点放一个朝上的绿色箭头示意"继续飙升出顶"，文字框用引线指向该出界点。
-# 注意：若修改 delta_list 或 ylim，需同步更新出界点坐标。
-axes[0].annotate('', xy=(1.5, 4.16), xytext=(1.5, 3.95),
-                 arrowprops=dict(arrowstyle='-|>', color='darkgreen', lw=1.6),
-                 annotation_clip=False)
-axes[0].annotate(r'$\delta=1.9$: 方差$\approx 20$，超出纵轴上限',
-                 xy=(1.5, 4.0), xytext=(0.82, 3.35),
-                 fontsize=9, color='darkgreen',
-                 arrowprops=dict(arrowstyle='->', color='darkgreen', lw=1),
-                 bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow', alpha=0.8))
-
-axes[0].set_xlabel(r'步长 $\delta$', fontsize=12)
-axes[0].set_ylabel(r'平稳方差 $\sigma^2_{\pi_\delta}=\frac{2}{2-\delta}$（不变分布边际方差）', fontsize=11)
-axes[0].set_title(r'步骤2: 方差 vs 步长', fontsize=12)
-axes[0].legend(fontsize=9)
-axes[0].set_ylim(0.9, 4)
-axes[0].set_xlim(0, 2.2)
-axes[0].grid(True, alpha=0.3)
-
-# 右图：偏差 vs 步长
-axes[1].plot(delta_fine, bias_fine, 'b-', linewidth=2,
-             label=r'偏差 $\frac{\delta}{2-\delta}$')
-axes[1].axhline(y=0, color='r', linestyle='--', linewidth=1.5,
-                label='零偏差')
-axes[1].axvline(x=2, color='purple', linestyle=':', linewidth=1.5,
-                label=r'发散边界 $\delta=2$')
+# 偏差 vs 步长
+ax.plot(delta_fine, bias_fine, 'b-', linewidth=2,
+        label=r'偏差 $\frac{\delta}{2-\delta}$')
+ax.axhline(y=0, color='r', linestyle='--', linewidth=1.5,
+        label='零偏差')
+ax.axvline(x=2, color='purple', linestyle=':', linewidth=1.5,
+        label=r'发散边界 $\delta=2$')
 
 # 绘制经验偏差散点（delta <= 1.5 在 ylim 范围内可见）
 for r in results:
     if r[4] == 'converged' and r[0] <= 1.5:
         emp_bias = r[1] - 1  # 经验偏差 = 经验方差 - 1
         theo_bias = r[2] - 1  # 理论偏差 = 理论方差 - 1
-        axes[1].scatter(r[0], emp_bias, color='green', s=60, zorder=5, label='经验偏差' if r[0] == 0.01 else '')
-        axes[1].scatter(r[0], theo_bias, color='orange', marker='x', s=60, zorder=5, label='理论偏差（离散点）' if r[0] == 0.01 else '')
+        ax.scatter(r[0], emp_bias, color='green', s=60, zorder=5, label='经验偏差' if r[0] == 0.01 else '')
+        ax.scatter(r[0], theo_bias, color='orange', marker='x', s=60, zorder=5, label='理论偏差（离散点）' if r[0] == 0.01 else '')
 
 # delta=1.9 的点（偏差=1.9/(2-1.9)=19）远在纵轴范围之外。
 # 曲线延伸到 delta=1.9 后，会在 delta=1.6（此处 y=4=纵轴顶）穿出画面；
 # 在出界点放一个朝上的绿色箭头示意"继续飙升出顶"，文字框用引线指向该出界点。
 # 注意：若修改 delta_list 或 ylim，需同步更新出界点坐标。
-axes[1].annotate('', xy=(1.6, 4.16), xytext=(1.6, 3.95),
-                 arrowprops=dict(arrowstyle='-|>', color='darkgreen', lw=1.6),
-                 annotation_clip=False)
-axes[1].annotate(r'$\delta=1.9$: 偏差$\approx 19$，超出纵轴上限',
-                 xy=(1.6, 4.0), xytext=(0.82, 3.35),
-                 fontsize=9, color='darkgreen',
-                 arrowprops=dict(arrowstyle='->', color='darkgreen', lw=1),
-                 bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow', alpha=0.8))
+ax.annotate('', xy=(1.6, 4.16), xytext=(1.6, 3.95),
+            arrowprops=dict(arrowstyle='-|>', color='darkgreen', lw=1.6),
+            annotation_clip=False)
+ax.annotate(r'$\delta=1.9$: 偏差$\approx 19$，超出纵轴上限',
+            xy=(1.6, 4.0), xytext=(0.82, 3.35),
+            fontsize=9, color='darkgreen',
+            arrowprops=dict(arrowstyle='->', color='darkgreen', lw=1),
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow', alpha=0.8))
 
-axes[1].set_xlabel(r'步长 $\delta$', fontsize=12)
-axes[1].set_ylabel(r'方差偏差 $\sigma^2_{\pi_\delta} - 1$', fontsize=12)
-axes[1].set_title(r'步骤2: 偏差 vs 步长', fontsize=12)
-axes[1].legend(fontsize=9)
-axes[1].set_ylim(-0.1, 4)
-axes[1].set_xlim(0, 2.2)
-axes[1].grid(True, alpha=0.3)
+ax.set_xlabel(r'步长 $\delta$', fontsize=12)
+ax.set_ylabel(r'方差偏差 $\sigma^2_{\pi_\delta} - 1$', fontsize=12)
+ax.set_title(r'步骤2: 偏差 vs 步长', fontsize=12)
+ax.legend(fontsize=9)
+ax.set_ylim(-0.1, 4)
+ax.set_xlim(0, 2.2)
+ax.grid(True, alpha=0.3)
 
 plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, 'step2_variance_bias_vs_delta.png'), dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, 'step2_bias_vs_delta.png'), dpi=150, bbox_inches='tight')
 plt.close()
 
 # ══════════════════════════════════════════════════════════
@@ -331,7 +305,7 @@ for r in results:
     status_cn = '收敛' if status == 'converged' else '发散'
     print(f"  {d:>8.2f} {status_cn:>10} {ve_str:>12} {vt_str:>12} {me_str:>10}")
 
-print(f"\n[步骤2] 方差与偏差随步长变化曲线已保存")
+print(f"\n[步骤2] 偏差随步长变化曲线已保存")
 
 print("\n" + "=" * 60)
 print("【核心结论】")
@@ -342,8 +316,8 @@ print(r"   - 1 < delta < 2: 负相关游走，方差膨胀更严重")
 print(r"   - delta >= 2: 发散，|X_m| -> inf")
 print(r"")
 print(r"2. 不变分布（平稳）方差: Var_pi = 2/(2-delta)")
-print(r"   注: 该方差是ULA不变分布 pi_delta 自身的方差，衡量Euler离散偏差；")
-print(r"   不是MCMC估计量CLT中的长程（渐近）方差，后者还需乘以自相关因子。")
+print(r"   注: 该方差是ULA不变分布 pi_delta 自身的方差（衡量Euler离散偏差），")
+print(r"   与长程（渐近）方差 2/delta 的术语辨析详见实验4.3-1。")
 print(r"   delta越小链混合越慢，单链经验值的蒙特卡洛抖动越大")
 print(r"   （如delta=0.01时经验点与理论值的视觉间隙即慢混合所致，属正常）。")
 print(r"   - delta=0.01: 方差≈1.005（偏差0.5%）")

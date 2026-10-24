@@ -109,8 +109,10 @@ physics.set_noise_model(dinv.physics.GaussianNoise(sigma=0.1))
 ### Blur —— 卷积模糊
 
 ```python
-# 高斯模糊
-kernel = dinv.physics.blur.gaussian_blur(sigma=(3.0, 3.0))   # 4D: (1, 1, H, W)
+# 高斯模糊（0.4.1 起正式路径为 deepinv.physics.functional.blur；
+#           deepinv.physics.blur.gaussian_blur 为已弃用的别名）
+from deepinv.physics.functional.blur import gaussian_blur
+kernel = gaussian_blur(sigma=(3.0, 3.0))   # 4D: (1, 1, H, W)
 physics = dinv.physics.Blur(filter=kernel, padding='reflect')   # 保持输入尺寸
 
 # 运动模糊：deepinv 未内置 motion_blur 生成器，需自构卷积核后交给 Blur

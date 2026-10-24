@@ -182,32 +182,70 @@ def cost(x):
     return fidelity(x) + lam * float(np.sum(np.abs(x)))
 
 
+def dual_certificate(x):
+    """参考解的最优性证书——原始-对偶间隙（严格上界）
+
+    原始问题：min_x 0.5*||Ax-y||^2 + lam*||x||_1
+    对偶问题：max_p  -0.5*||p||^2 - p'y   s.t.  ||A^T p||_inf <= lam
+    本问题的 A 是实对称循环卷积（高斯核关于原点对称），故 A^T = A，
+    最优处取 p* = r* = A*x* - y 即可同时满足对偶可行与强对偶。
+    若当前 x 使 ||A^T r||_inf 略超 lam，先把 p 沿 r 缩放到可行：
+        p = (lam / max|A^T r|) * r
+    缩放后 p 仍对偶可行，且 D(p) 仍是对偶下界，
+    于是 gap = P(x) - D(p) 是 x 的次优性的【严格上界】。
+    """
+    r = forward(x) - y
+    at_r = adjoint(r)                      # A^T r
+    mx = float(np.max(np.abs(at_r)))
+    alpha = 1.0 if mx <= lam else lam / mx   # 缩放到对偶可行域
+    p = r * alpha
+    D = -0.5 * float(np.sum(p ** 2)) - float(p @ y)
+    P = cost(x)
+    return P, D, P - D, mx - lam
+
+
+def kkt_residual(x):
+    """KKT 残差（越小越接近最优解）：
+       活跃集上   |A^T r + lam*sign(x)|   （应 ≈ 0）
+       非活跃集上 max|A^T r| - lam          （应 ≤ 0）
+    """
+    g = adjoint(forward(x) - y)
+    act = np.abs(x) > 0
+    res_act = float(np.max(np.abs(g[act] + lam * np.sign(x[act])))) if np.any(act) else 0.0
+    res_inact = float(np.max(np.abs(g[~act])) - lam) if np.any(~act) else -lam
+    return res_act, res_inact
+
+
 # ══════════════════════════════════════════════════════════
 # 3. ISTA 与 FISTA（记录完整目标值曲线，判停次数事后统计）
 # ══════════════════════════════════════════════════════════
 
 
-def run_ista(max_iter):
+def run_ista(max_iter, y_obs=None):
     """ISTA：先梯度步，再近端步
         x_{k+1} = prox_{gamma*g}( x_k - gamma*grad f(x_k) )
                 = S_{gamma*lambda}( x_k - gamma*A^T(Ax_k - y) )
     近端算子作用于 gamma*g，故软阈值参数是 gamma*lambda 而非 lambda
+    y_obs 仅在多种子稳健性检验时替换观测；默认用主流程的 y
     """
+    y_obs = y if y_obs is None else y_obs
     xk = np.zeros(n)
     curve = np.zeros(max_iter)
     for k in range(max_iter):
-        z = xk - gamma * grad_f(xk)            # 梯度步：沿光滑数据项下降
-        xk = soft_threshold(z, gamma * lam)    # 近端步：施加稀疏性
-        curve[k] = cost(xk)
+        z = xk - gamma * adjoint(forward(xk) - y_obs)    # 梯度步：沿光滑数据项下降
+        xk = soft_threshold(z, gamma * lam)              # 近端步：施加稀疏性
+        curve[k] = 0.5 * float(np.sum((forward(xk) - y_obs) ** 2)) \
+            + lam * float(np.sum(np.abs(xk)))
     return xk, curve
 
 
-def run_fista(max_iter):
+def run_fista(max_iter, y_obs=None):
     """FISTA：ISTA + Nesterov 外推动量
         t_{k+1} = (1+sqrt(1+4*t_k^2))/2
         y_k = x_k + (t_{k-1}-1)/t_k * (x_k - x_{k-1})    # 外推点
         x_{k+1} = S_{gamma*lambda}( y_k - gamma*grad f(y_k) )
     """
+    y_obs = y if y_obs is None else y_obs
     xk = np.zeros(n)
     x_old = np.zeros(n)
     t_old = 1.0
@@ -215,9 +253,10 @@ def run_fista(max_iter):
     for k in range(max_iter):
         t_k = 0.5 * (1.0 + math.sqrt(1.0 + 4.0 * t_old ** 2))
         y_k = xk + (t_old - 1.0) / t_k * (xk - x_old)   # 外推步：借前一步的势头
-        z = y_k - gamma * grad_f(y_k)                    # 梯度步（在外推点处）
+        z = y_k - gamma * adjoint(forward(y_k) - y_obs)   # 梯度步（在外推点处）
         x_new = soft_threshold(z, gamma * lam)           # 近端步
-        curve[k] = cost(x_new)
+        curve[k] = 0.5 * float(np.sum((forward(x_new) - y_obs) ** 2)) \
+            + lam * float(np.sum(np.abs(x_new)))
         t_old = t_k
         x_old = xk
         xk = x_new
@@ -240,6 +279,15 @@ print(f"  FISTA 完成，耗时 {t_fista:.2f} 秒")
 ref_iter = 20000
 x_ref, curve_ref = run_fista(ref_iter)
 F_star = float(curve_ref[-1])
+
+# 参考解的最优性证书：对偶间隙（次优性的严格上界）+ KKT 残差
+# 不依赖任何第二求解器即可判定参考解是否够好
+P_ref, D_ref, gap_ref, dual_slack_ref = dual_certificate(x_ref)
+kkt_act_ref, kkt_inact_ref = kkt_residual(x_ref)
+print(f"  参考解最优性证书：对偶间隙 gap = P - D = {gap_ref:.3e}"
+      f"（次优性的严格上界）")
+print(f"    活跃集 KKT 残差 {kkt_act_ref:.3e}，非活跃集越界 {kkt_inact_ref:.3e}"
+      f"（≤0 即满足 KKT）")
 
 gap_ista = np.maximum(curve_ista - F_star, 1e-15)   # 数值下限保护
 gap_fista = np.maximum(curve_fista - F_star, 1e-15)
@@ -309,6 +357,51 @@ err_fista = np.linalg.norm(x_fista - x_ref) / np.linalg.norm(x_ref)
 print(f"\n[与最优解的偏差] ||x_k - x_ref||/||x_ref||（x_ref 为 FISTA {ref_iter} 次解）")
 print(f"  ISTA  ({max_iter} 次): {err_ista:.4f}")
 print(f"  FISTA ({max_iter} 次): {err_fista:.4f}")
+
+# ══════════════════════════════════════════════════════════
+# 3.6 稳健性检验：换 6 个噪声种子重复，结论是否依赖单一种子
+# ══════════════════════════════════════════════════════════
+print(f"\n[稳健性检验] 换 6 个噪声种子重复（主种子 {42} 之外）...")
+multi_seed_seeds = [1, 2, 3, 4, 5, 6]
+multi_seed_rows = []
+for sd in multi_seed_seeds:
+    # 用独立 RandomState，不触碰全局随机状态，主流程数值不受影响
+    rng_sd = np.random.RandomState(sd)
+    y_sd = forward(x_true) + sigma_noise * rng_sd.randn(n)
+    _, c_ista_sd = run_ista(max_iter, y_sd)
+    _, c_fista_sd = run_fista(max_iter, y_sd)
+    _, c_ref_sd = run_fista(ref_iter, y_sd)
+    F_star_sd = float(c_ref_sd[-1])
+    gap_i_sd = np.maximum(c_ista_sd - F_star_sd, 1e-15)
+    gap_f_sd = np.maximum(c_fista_sd - F_star_sd, 1e-15)
+    tol_abs_sd = tol_rel * float(c_ista_sd[0] - F_star_sd)   # 同一基准：首步后 gap
+    k_i_sd = first_reach(gap_i_sd, tol_abs_sd)
+    k_f_sd = first_reach(gap_f_sd, tol_abs_sd)
+    s_i_sd, _ = fit_loglog_slope(gap_i_sd, *fit_rng_ista)
+    s_f_sd, _ = fit_loglog_slope(gap_f_sd, *fit_rng_fista)
+    multi_seed_rows.append({
+        'seed': sd,
+        'k_ista_to_tol': k_i_sd,
+        'k_fista_to_tol': k_f_sd,
+        'speedup_ratio': float(k_i_sd / k_f_sd),
+        'measured_slope_ista': float(s_i_sd),
+        'measured_slope_fista': float(s_f_sd),
+    })
+    print(f"  seed={sd}: k_ista={k_i_sd:5d} k_fista={k_f_sd:4d} "
+          f"加速比={k_i_sd / k_f_sd:6.2f}x  斜率 ISTA {s_i_sd:.3f} / FISTA {s_f_sd:.3f}")
+
+sp_ms = [row['speedup_ratio'] for row in multi_seed_rows]
+sl_f_ms = [row['measured_slope_fista'] for row in multi_seed_rows]
+sl_i_ms = [row['measured_slope_ista'] for row in multi_seed_rows]
+sp_all = [float(speedup)] + sp_ms
+sl_f_all = [float(slope_fista)] + sl_f_ms
+sl_i_all = [float(slope_ista)] + sl_i_ms
+print(f"  → 加速比：附加 6 种子 {min(sp_ms):.2f}~{max(sp_ms):.2f}x，"
+      f"含主种子共 7 次 {min(sp_all):.2f}~{max(sp_all):.2f}x")
+print(f"  → FISTA 窗口斜率：附加 6 种子 {min(sl_f_ms):.3f}~{max(sl_f_ms):.3f}，"
+      f"含主种子 {min(sl_f_all):.3f}~{max(sl_f_all):.3f}（均不慢于理论最坏阶 -2）")
+print(f"  → ISTA 窗口斜率：附加 6 种子 {min(sl_i_ms):.3f}~{max(sl_i_ms):.3f}，"
+      f"含主种子 {min(sl_i_all):.3f}~{max(sl_i_all):.3f}（贴近理论阶 -1）")
 
 # ══════════════════════════════════════════════════════════
 # 4. 步骤1 可视化：收敛曲线 + 1D 重建对比
@@ -621,6 +714,33 @@ results = {
         'note': 'L1先验与稠密分段常值真信号失配：MAP解含高频振荡、TV远大于真信号，'
                 '但观测空间残差仅约2σ；属先验失配而非算法失败（见3.5节TV先验）',
     },
+    'optimality_certificate': {
+        'primal_obj_ref': float(P_ref),
+        'dual_obj_ref': float(D_ref),
+        'dual_gap_ref': float(gap_ref),
+        'dual_slack_max_At_r_minus_lambda': float(dual_slack_ref),
+        'kkt_residual_active_ref': float(kkt_act_ref),
+        'kkt_slack_inactive_ref': float(kkt_inact_ref),
+        'tol_abs_for_comparison': float(tol_abs),
+        'note': '参考解 F* 由 FISTA 20000 次估计；最优性用原始-对偶间隙独立验证：'
+                '对偶 D(p)=-0.5||p||^2-p\'y, s.t. ||A^T p||_inf<=lam（p 沿残差缩放到可行），'
+                'gap=P-D 是次优性的严格上界；KKT 残差为活跃集 |A^T r+lam*sign(x)| 与'
+                '非活跃集 max|A^T r|-lam。两者均远小于判停容差 tol_abs',
+    },
+    'multi_seed': {
+        'main_seed': 42,
+        'extra_seeds': multi_seed_seeds,
+        'rows': multi_seed_rows,
+        'speedup_ratio_extra_range': [float(min(sp_ms)), float(max(sp_ms))],
+        'speedup_ratio_all_range': [float(min(sp_all)), float(max(sp_all))],
+        'slope_fista_extra_range': [float(min(sl_f_ms)), float(max(sl_f_ms))],
+        'slope_fista_all_range': [float(min(sl_f_all)), float(max(sl_f_all))],
+        'slope_ista_extra_range': [float(min(sl_i_ms)), float(max(sl_i_ms))],
+        'slope_ista_all_range': [float(min(sl_i_all)), float(max(sl_i_all))],
+        'note': '每个种子独立生成观测（RandomState(seed)），'
+                '用同一停机准则（首步后 gap 的 2%）与同一斜率拟合窗口重跑；'
+                '结论不依赖单一种子',
+    },
     'output_files': [out_path1, out_path2],
 }
 
@@ -642,6 +762,13 @@ print(f"5. 2000 次迭代后与最优解的偏差：ISTA {err_ista:.4f}，FISTA 
       f"（解同一问题最优解相同，FISTA 快得多）")
 print(f"6. 但 LASSO 解与真信号偏差 {err_ref_true:.2f}、TV {tv_true:.1f}→{tv_ref:.1f}："
       f"L1 与稠密分段常值信号失配，振荡伪影是 MAP 解的真实形态（动机见 3.5 节 TV）")
+print(f"7. 参考解 F* 的最优性由对偶证书独立验证：原始-对偶间隙 gap = {gap_ref:.3e}"
+      f"（次优性的严格上界），活跃集 KKT 残差 {kkt_act_ref:.3e}，"
+      f"均远小于判停容差 {tol_abs:.3e}")
+print(f"8. 换 6 个噪声种子重复：加速比 {min(sp_ms):.2f}~{max(sp_ms):.2f}x"
+      f"（含主种子共 7 次 {min(sp_all):.2f}~{max(sp_all):.2f}x），"
+      f"FISTA 窗口斜率 {min(sl_f_ms):.3f}~{max(sl_f_ms):.3f}、"
+      f"ISTA 窗口斜率 {min(sl_i_ms):.3f}~{max(sl_i_ms):.3f}，结论不依赖单一种子")
 print(f"\n实验完成。结果已保存至: {SAVE_DIR}")
 print("  - 步骤1_ISTA_vs_FISTA收敛对比.png")
 print("  - 步骤2_梯度步近端步迭代轨迹.png")

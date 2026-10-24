@@ -44,8 +44,104 @@
     "residual_rms_over_sigma": 2.1669318328225624,
     "note": "L1先验与稠密分段常值真信号失配：MAP解含高频振荡、TV远大于真信号，但观测空间残差仅约2σ；属先验失配而非算法失败（见3.5节TV先验）"
   },
+  "optimality_certificate": {
+    "primal_obj_ref": 14.266143568618881,
+    "dual_obj_ref": 14.266138069774854,
+    "dual_gap_ref": 5.498844027229666e-06,
+    "dual_slack_max_At_r_minus_lambda": 4.121200555817772e-08,
+    "kkt_residual_active_ref": 4.121200555817772e-08,
+    "kkt_slack_inactive_ref": -3.839496638402551e-07,
+    "tol_abs_for_comparison": 0.009596113711904514,
+    "note": "参考解 F* 由 FISTA 20000 次估计；最优性用原始-对偶间隙独立验证：对偶 D(p)=-0.5||p||^2-p'y, s.t. ||A^T p||_inf<=lam（p 沿残差缩放到可行），gap=P-D 是次优性的严格上界；KKT 残差为活跃集 |A^T r+lam*sign(x)| 与非活跃集 max|A^T r|-lam。两者均远小于判停容差 tol_abs"
+  },
+  "multi_seed": {
+    "main_seed": 42,
+    "extra_seeds": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "rows": [
+      {
+        "seed": 1,
+        "k_ista_to_tol": 1150,
+        "k_fista_to_tol": 89,
+        "speedup_ratio": 12.92134831460674,
+        "measured_slope_ista": -1.0465704423955562,
+        "measured_slope_fista": -2.135219706341588
+      },
+      {
+        "seed": 2,
+        "k_ista_to_tol": 959,
+        "k_fista_to_tol": 82,
+        "speedup_ratio": 11.695121951219512,
+        "measured_slope_ista": -1.001898901964765,
+        "measured_slope_fista": -2.0519689272601203
+      },
+      {
+        "seed": 3,
+        "k_ista_to_tol": 996,
+        "k_fista_to_tol": 84,
+        "speedup_ratio": 11.857142857142858,
+        "measured_slope_ista": -0.9266692699925558,
+        "measured_slope_fista": -1.8269744427913488
+      },
+      {
+        "seed": 4,
+        "k_ista_to_tol": 1045,
+        "k_fista_to_tol": 85,
+        "speedup_ratio": 12.294117647058824,
+        "measured_slope_ista": -0.9618733607662968,
+        "measured_slope_fista": -1.8498325554765573
+      },
+      {
+        "seed": 5,
+        "k_ista_to_tol": 948,
+        "k_fista_to_tol": 82,
+        "speedup_ratio": 11.560975609756097,
+        "measured_slope_ista": -0.899496449553882,
+        "measured_slope_fista": -1.9454794607816024
+      },
+      {
+        "seed": 6,
+        "k_ista_to_tol": 1178,
+        "k_fista_to_tol": 91,
+        "speedup_ratio": 12.945054945054945,
+        "measured_slope_ista": -1.101868727546118,
+        "measured_slope_fista": -2.3148050975074486
+      }
+    ],
+    "speedup_ratio_extra_range": [
+      11.560975609756097,
+      12.945054945054945
+    ],
+    "speedup_ratio_all_range": [
+      11.560975609756097,
+      13.085106382978724
+    ],
+    "slope_fista_extra_range": [
+      -2.3148050975074486,
+      -1.8269744427913488
+    ],
+    "slope_fista_all_range": [
+      -2.3148050975074486,
+      -1.8269744427913488
+    ],
+    "slope_ista_extra_range": [
+      -1.101868727546118,
+      -0.899496449553882
+    ],
+    "slope_ista_all_range": [
+      -1.101868727546118,
+      -0.899496449553882
+    ],
+    "note": "每个种子独立生成观测（RandomState(seed)），用同一停机准则（首步后 gap 的 2%）与同一斜率拟合窗口重跑；结论不依赖单一种子"
+  },
   "output_files": [
-    "D:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.4-2\\步骤1_ISTA_vs_FISTA收敛对比.png",
-    "D:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.4-2\\步骤2_梯度步近端步迭代轨迹.png"
+    "H:\\deepinv\\deepinv2\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.4-2\\步骤1_ISTA_vs_FISTA收敛对比.png",
+    "H:\\deepinv\\deepinv2\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.4-2\\步骤2_梯度步近端步迭代轨迹.png"
   ]
 }

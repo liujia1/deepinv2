@@ -361,13 +361,15 @@ for kk in k_modes:
 informative = [int(kk) for kk in k_modes if blur_g[kk] >= 0.01]   # 可辨识模态
 mode_rel_err = {str(kk): float(mc_mode_e[kk] / mu_mode_e[kk])
                 for kk in informative if mu_mode_e[kk] > 1e-12}
-# 积分自相关时间（IACT）估计：样本均值误差 / iid 理论下限 tr(C_post)/N
+# 积分自相关时间（IACT）估计：逐坐标样本均值误差 / 逐坐标 iid 理论下限。
+# 注：mse_pcn_vs_analytic 由 np.mean 得到、已是 d 个坐标的平均，故 iid 下限
+#     必须写成 tr(C_post)/(d*N)；若只除 tr(C_post)/N，IACT 会被低估 d 倍。
 tr_cpost = float(np.sum(1.0 / (blur_g ** 2 / SIGMA_NOISE ** 2 + lam)))
-iact_est = float(mse_pcn_vs_analytic / (tr_cpost / N4))
+iact_est = float(mse_pcn_vs_analytic / (tr_cpost / (d * N4)))
 print("  可辨识模态（g_k>=0.01）上 pCN 均值相对误差："
       + ", ".join(f"|k|={k}: {mode_rel_err[str(k)]:.2e}" for k in informative))
-print(f"  IACT 估计（实测MC误差/iid下限 tr(Cpost)/N={tr_cpost/N4:.2e}）"
-      f"≈ {iact_est:.2f}（≈1 表示样本接近独立）")
+print(f"  IACT 估计（实测逐坐标MC误差/iid下限 tr(Cpost)/(d*N)={tr_cpost/(d*N4):.2e}）"
+      f"≈ {iact_est:.1f}，ESS≈{N4/iact_est:.1f}（IACT≈1 表示样本接近独立）")
 
 fig, ax = plt.subplots(1, 4, figsize=(18.5, 4.2))
 t = np.arange(d)

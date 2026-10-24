@@ -669,6 +669,7 @@ phantom_metrics = {
     'psnr_tv_best_dB': float(round(_ph_psnr(ph_best_tv_img), 2)),
     'psnr_tgv_dB': float(round(_ph_psnr(ph_tgv), 2)),
     'ssim_tv_matched': float(round(_ph_ssim(ph_tv), 4)),
+    'ssim_tv_best': float(round(_ph_ssim(ph_best_tv_img), 4)),
     'ssim_tgv': float(round(_ph_ssim(ph_tgv), 4)),
     'ramp_curvature': {'noisy': round(ramp_curvature(phantom_noisy), 4),
                        'tv_matched': round(ramp_curvature(ph_tv), 4),

@@ -14,7 +14,7 @@ $$dx = f(\mathbf{x},t)\,dt + g(t)\,dw, \quad t \in [0, T]$$
 
 其中 $f: \mathbb{R}^d \times [0,T] \to \mathbb{R}^d$ 是漂移系数，$g: [0,T] \to \mathbb{R}_+$ 是扩散系数，$w$ 是标准布朗运动。则逆向时间过程 $\mathbf{y}(s) = \mathbf{x}(T-s)$ 满足
 
-$$dy = \left[f(\mathbf{y}, T-s) - g(T-s)^2\,\nabla_y\log p_{T-s}(\mathbf{y})\right]\,ds + g(T-s)\,d\bar{w}$$
+$$dy = \left[-f(\mathbf{y}, T-s) + g(T-s)^2\,\nabla_y\log p_{T-s}(\mathbf{y})\right]\,ds + g(T-s)\,d\bar{w}$$
 
 其中 $p_t(\mathbf{y})$ 是 $\mathbf{x}(t)$ 在时刻 $t$ 的边际密度，$\bar{w}$ 是另一标准布朗运动。
 
@@ -38,21 +38,23 @@ $$\frac{\partial q_s}{\partial s} = \nabla\cdot\left[f(\mathbf{y},T-s)\,q_s - \f
 
 $$= -\nabla\cdot\left[\left(-f(\mathbf{y},T-s) + \frac{1}{2}g(T-s)^2\,\nabla\log q_s\right)q_s\right]$$
 
+$$= -\nabla\cdot\left[\left(-f(\mathbf{y},T-s) + g(T-s)^2\,\nabla\log q_s\right)q_s\right] + \frac{1}{2}\nabla\cdot\left[g(T-s)^2\,\nabla q_s\right]$$
+
 ### 第三步：识别SDE的漂移项
 
 密度演化方程 $\frac{\partial q_s}{\partial s} = -\nabla\cdot[b(\mathbf{y},s)\,q_s] + \frac{1}{2}\nabla\cdot[\sigma^2(s)\nabla q_s]$ 对应 SDE $dy = b(\mathbf{y},s)\,ds + \sigma(s)\,d\bar{w}$。把第二步结果对照，识别：
 
-$$b(\mathbf{y},s) = f(\mathbf{y},T-s) - g(T-s)^2\,\nabla\log q_s(\mathbf{y}) = f(\mathbf{y},T-s) - g(T-s)^2\,\nabla\log p_{T-s}(\mathbf{y})$$
+$$b(\mathbf{y},s) = -f(\mathbf{y},T-s) + g(T-s)^2\,\nabla\log q_s(\mathbf{y}) = -f(\mathbf{y},T-s) + g(T-s)^2\,\nabla\log p_{T-s}(\mathbf{y})$$
 
 $$\sigma(s) = g(T-s)$$
 
 因此逆向SDE为：
 
-$$dy = \left[f(\mathbf{y},T-s) - g(T-s)^2\,\nabla\log p_{T-s}(\mathbf{y})\right]\,ds + g(T-s)\,d\bar{w}$$
+$$dy = \left[-f(\mathbf{y},T-s) + g(T-s)^2\,\nabla\log p_{T-s}(\mathbf{y})\right]\,ds + g(T-s)\,d\bar{w}$$
 
 ### 第四步：变回原始时间变量
 
-令 $t = T-s$，$\mathbf{x}(t) = \mathbf{y}(T-t) = \mathbf{x}(t)$，$d\bar{w}$ 为逆向布朗运动，得：
+令 $t = T-s$（即 $s=T-t$），$\mathbf{x}(t) = \mathbf{y}(T-t)$，$d\bar{w}$ 为逆向布朗运动。注意 $ds=-dt$，漂移项从 $s$ 约定换回 $t$ 约定时再变一次号，得：
 
 $$dx = \left[f(\mathbf{x},t) - g(t)^2\,\nabla\log p_t(\mathbf{x})\right]\,dt + g(t)\,d\bar{w} \quad \checkmark$$
 

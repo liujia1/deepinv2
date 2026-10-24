@@ -28,7 +28,7 @@ $$\nabla_y \log p_\varepsilon(\mathbf{y}) = \frac{D_\varepsilon^*(\mathbf{y}) - 
 
 $Y$ 的边际密度是 $X$ 和 $Z$ 联合密度的边际化：
 
-$$p_\varepsilon(\mathbf{y}) = \int p(\mathbf{x})\,p(\mathbf{z})\,dz = \int p(\mathbf{x})\,\mathcal{N}(\mathbf{y}|\mathbf{x}, \varepsilon I)\,dx$$
+$$p_\varepsilon(\mathbf{y}) = \int p(\mathbf{x})\,\mathcal{N}(\mathbf{y}\mid\mathbf{x}, \varepsilon I)\,dx = \int\!\!\int p(\mathbf{x})\,\mathcal{N}(\mathbf{z};0,I)\,\delta(\mathbf{y}-\mathbf{x}-\sqrt{\varepsilon}\,\mathbf{z})\,d\mathbf{x}\,d\mathbf{z}$$
 
 展开高斯密度：
 
@@ -104,23 +104,29 @@ $$\frac{\nabla_y p_\varepsilon(\mathbf{y})}{p_\varepsilon(\mathbf{y})} = \nabla_
 
 ### 一维指数族形式
 
-设 $Y|X\sim e^{XY-\psi(X)}$（自然参数 $X$ 的指数族），$X\sim p(X)$。边际：
+设 $Y|\theta\sim h(y)\,e^{\theta y-\psi(\theta)}$（$\theta$ 为自然参数，$h$ 为基测度），$\theta\sim p(\theta)$。边际：
 
-$$p(\mathbf{y}) = \int e^{xy - \psi(\mathbf{x})}\,p(\mathbf{x})\,dx$$
+$$p(y) = \int h(y)\,e^{\theta y - \psi(\theta)}\,p(\theta)\,d\theta \equiv h(y)\,Z(y)$$
 
 **标量 Tweedie 等式**：
 
-$$\mathbb{E}[X|Y = \mathbf{y}] = \frac{d}{dy}\log p(\mathbf{y}) + \psi''(\mathbb{E}[X|Y = \mathbf{y}])$$
+$$\mathbb{E}[\theta|Y = y] = \frac{d}{dy}\log p(y) - \frac{d}{dy}\log h(y)$$
+
+（推导一句话：$Z'(y)/Z(y)=\mathbb{E}[\theta|Y=y]$，而 $\log p=\log h+\log Z$，移项即得。）
 
 ### 高斯情形的特殊化
 
-对高斯噪声 $Y|X\sim\mathcal{N}(X,\varepsilon)$：自然参数 $X/\varepsilon$，$\psi(\mathbf{x})=\mathbf{x}^2/(2\varepsilon)$，$\psi''(\mathbf{x})=1/\varepsilon$。代入：
+对高斯噪声 $Y|X\sim\mathcal{N}(X,\varepsilon)$：自然参数 $\theta=X/\varepsilon$，$\psi(\theta)=\varepsilon\theta^2/2$，基测度 $h(y)=e^{-y^2/(2\varepsilon)}/\sqrt{2\pi\varepsilon}$，故 $\frac{d}{dy}\log h(y)=-y/\varepsilon$。代入：
 
-$$\mathbb{E}[X|Y = \mathbf{y}] = \frac{d}{dy}\log p_\varepsilon(\mathbf{y}) + \mathbf{y}$$
+$$\mathbb{E}[\theta|Y = y] = \frac{d}{dy}\log p_\varepsilon(y) + \frac{y}{\varepsilon}$$
 
-整理得 $\frac{d}{dy}\log p_\varepsilon(\mathbf{y}) = \frac{\mathbb{E}[X|Y=\mathbf{y}]-\mathbf{y}}{\varepsilon}$，与向量形式一致——标量形式是一维特例。
+两边乘 $\varepsilon$，并注意 $\mathbb{E}[\theta|Y=y]=\mathbb{E}[X|Y=y]/\varepsilon$：
 
-这里从高斯情形推广到一般指数族，说明 Tweedie 等式的高斯版本并不是孤例，而是一条更一般规律的特例：只要似然属于自然参数指数族，后验均值与边际密度梯度之间就有同构的联系。高斯噪声只是其中 $\psi''(\mathbf{x})=1/\varepsilon$ 为常数的干净一员。
+$$\mathbb{E}[X|Y = y] = y + \varepsilon\,\frac{d}{dy}\log p_\varepsilon(y)$$
+
+整理得 $\frac{d}{dy}\log p_\varepsilon(y) = \frac{\mathbb{E}[X|Y=y]-y}{\varepsilon}$，与向量形式一致——标量形式是一维特例。
+
+反过来看，高斯情形只是一般指数族 Tweedie 等式的一个特例，这说明该等式并非高斯噪声的孤例：只要似然属于自然参数指数族，后验均值与边际密度梯度之间就有同构的联系，高斯噪声只是其中基测度导数 $\frac{d}{dy}\log h(y)=-y/\varepsilon$ 为线性、形式最干净的一员。
 
 ### 与经验贝叶斯的联系
 

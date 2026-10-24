@@ -200,6 +200,8 @@ print(f"  关键差异: 软阈值对非零值收缩 λ（有偏），硬阈值�
 
 print(f"\n[非扩张性验证]  ||prox(v1) - prox(v2)|| ≤ ||v1 - v2||")
 print(f"  对凸 g 这是 ISTA/FISTA 收敛性的关键性质: 近端算子是 1-Lipschitz 的")
+print(f"  注意: 下面是【单对随机向量】的经验比值, 只是抽样, 不能当作算子的收缩常数——")
+print(f"        非扩张性是全称命题(要对所有向量对成立), 故下一段另测最坏情形 Lipschitz 常数")
 
 n_test = 10000
 v1 = np.random.randn(n_test)
@@ -227,6 +229,40 @@ for name, fn in prox_fns:
         mark = "✅" if passed else "❌"
         verdict = "≤ 1.0" if passed else "> 1.0"
     print(f"  {mark} {name}: ratio = {ratio:.6f}  {verdict}")
+
+# ---- 最坏情形 Lipschitz 常数：非扩张性是全称命题，单对抽样不足以证明 ----
+# 构造"最坏见证对"：两点同号、且都落在算子的有效区（|v|>λ）内，
+# 此时输出间距 = 输入间距，比值达到上确界（对 l1/投影即 1；l2 收缩恒为 1/(1+λ)）。
+_a, _b = np.array([2.0]), np.array([3.0])
+worst_case = {}
+worst_case["ℓ₂² 收缩"] = float(
+    np.linalg.norm(shrinkage(_b, lam) - shrinkage(_a, lam)) / np.linalg.norm(_b - _a))
+worst_case["ℓ₁ 软阈值"] = float(
+    np.linalg.norm(soft_threshold(_b, lam) - soft_threshold(_a, lam)) / np.linalg.norm(_b - _a))
+worst_case["投影"] = float(
+    np.linalg.norm(projection_nonneg(_b) - projection_nonneg(_a)) / np.linalg.norm(_b - _a))
+worst_case["ℓ₀ 硬阈值"] = None      # None = 上确界为 ∞（阈值处不连续，见下方反例）
+
+print(f"\n[最坏情形 Lipschitz 常数]  上确界 sup ||prox(v1)-prox(v2)|| / ||v1-v2||")
+print(f"  构造最坏见证对 v1=2.0, v2=3.0（同号且都在有效区 |v|>λ 内）:")
+for _nm in ("ℓ₂² 收缩", "ℓ₁ 软阈值", "ℓ₀ 硬阈值", "投影"):
+    _v = worst_case[_nm]
+    print(f"  {_nm}: {'∞（阈值处不连续）' if _v is None else f'{_v:.6f}'}")
+print(f"  → ℓ₁ 软阈值与非负投影的界【紧】: 最坏比值恰为 1（即非扩张但非严格收缩），")
+print(f"    随机抽样得到的 0.392 / 0.586 只是这一次抽样的运气，不能当作收缩常数。")
+
+# 随机多对抽样，确认没有比见证对更大的比值（凸算子最坏界已被见证对取到）
+_rng_wc = np.random.default_rng(12345)
+print(f"\n[随机多对抽样的最大比值]  （2000 对，确认见证对已达上界）")
+_wc_max = {}
+for _nm, _fn in prox_fns:
+    _rr = []
+    for _ in range(2000):
+        _a2 = _rng_wc.standard_normal(200)
+        _b2 = _rng_wc.standard_normal(200)
+        _rr.append(np.linalg.norm(_fn(_a2) - _fn(_b2)) / np.linalg.norm(_a2 - _b2))
+    _wc_max[_nm] = float(np.max(_rr))
+    print(f"  {_nm}: max ratio = {_wc_max[_nm]:.6f}")
 
 # ---- 硬阈值非扩张反例：阈值两侧各取一点，比值随 ε→0 发散 ----
 print(f"\n[硬阈值非扩张反例]  v1=τ-ε, v2=τ+ε（τ=√(2λ)={np.sqrt(2*lam):.4f}）")
@@ -306,7 +342,15 @@ results_summary = {
     'lam': float(round(lam, 2)),
     'n_test': n_test,
     'seed': 42,
-    'non_expansiveness': non_expansiveness,
+    'non_expansiveness': {
+        'single_pair_ratio': non_expansiveness,
+        'worst_case_lipschitz_supremum': {k: v for k, v in worst_case.items()},
+        'random_multipair_max_ratio': {k: float(round(v, 6)) for k, v in _wc_max.items()},
+        'note': 'single_pair_ratio 为单对随机高斯向量(seed=42)的经验比值，只是抽样；'
+                '非扩张性是全称命题，算子的真实界是 worst_case_lipschitz_supremum：'
+                'ℓ₁ 软阈值与投影的界紧（恰为 1），ℓ₂² 收缩恒为 1/(1+λ)=0.5，'
+                'ℓ₀ 硬阈值上确界为 ∞（None）；random_multipair_max_ratio 为 2000 对随机抽样的最大值'
+    },
     'hard_threshold_nonexpansive': False,
     'hard_threshold_counterexample': {
         'setup': 'v1=sqrt(2*lam)-eps, v2=sqrt(2*lam)+eps（标量，多维同理）',

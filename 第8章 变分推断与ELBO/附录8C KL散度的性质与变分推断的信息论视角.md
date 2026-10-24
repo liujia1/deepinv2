@@ -61,7 +61,7 @@ $$\text{KL}(q \| p) = \int q(\mathbf{x}) \log \frac{q(\mathbf{x})}{p(\mathbf{x})
 
 $$\text{ELBO} = \mathbb{E}_{q(\mathbf{z})}[\log p(\mathbf{x}|\mathbf{z})] - \text{KL}(q(\mathbf{z}) \| p(\mathbf{z}))$$
 
-- **重建项** $-\mathbb{E}_q[\log p(\mathbf{x}|\mathbf{z})]$：给定 $\mathbf{z}$ 后用最优编码描述 $\mathbf{x}$ 所需比特数（"从 $\mathbf{z}$ 重建 $\mathbf{x}$ 还差多少信息"）；
+- **重建代价** $=-\mathbb{E}_q[\log p(\mathbf{x}|\mathbf{z})]$：给定 $\mathbf{z}$ 后用最优编码描述 $\mathbf{x}$ 所需比特数（"从 $\mathbf{z}$ 重建 $\mathbf{x}$ 还差多少信息"）；
 - **KL 项** $\text{KL}(q\|p)$：以先验 $p(\mathbf{z})$ 为参考，描述 $q(\mathbf{z})$ 相对先验的额外比特数（"编码 $\mathbf{z}$ 比先验多花多少"）。
 
 所以**最大化 ELBO = 最小化总编码长度**——和**最小描述长度（MDL）**原则一致：最好的模型是最能压缩数据的模型。这一转变意味着，"用最简洁的编码把数据说清楚"正是全章"信念刻画从采样转向优化"的落点之一——优化不再只是数值手段，而成了让隐变量表示达到信息效率的自然语言。
@@ -70,9 +70,9 @@ $$\text{ELBO} = \mathbb{E}_{q(\mathbf{z})}[\log p(\mathbf{x}|\mathbf{z})] - \tex
 
 | ELBO | 率失真理论 |
 |---|---|
-| 重建项 $-\mathbb{E}_q[\log p(\mathbf{x}\|\mathbf{z})]$ | 失真 $D$（重建误差） |
+| 重建代价 $-\mathbb{E}_q[\log p(\mathbf{x}|\mathbf{z})]$ | 失真 $D$（重建误差） |
 | KL 项 $\text{KL}(q\|p)$ | 码率 $R$（编码代价） |
-| 最大化 ELBO | 率失真优化 $R+\lambda D$ |
+| 最大化 ELBO（等价于最小化 $-\text{ELBO}=R+D$） | 率失真优化 $\min(R+\lambda D)$，$\lambda=1$ |
 
 $\beta$-VAE（Higgins et al., 2017）把目标写成 $\mathbb{E}_q[\log p(\mathbf{x}|\mathbf{z})] - \beta\cdot\text{KL}(q\|p)$，$\beta>1$ 加大对码率的惩罚，逼 $\mathbf{z}$ 学更紧凑表示——正是率失真里"加重码率权重"的做法。
 
@@ -80,8 +80,16 @@ $\beta$-VAE（Higgins et al., 2017）把目标写成 $\mathbb{E}_q[\log p(\mathb
 
 重建项还能连到互信息：
 
-$$\mathbb{E}_{q(\mathbf{z})}[\log p(\mathbf{x}|\mathbf{z})] = \mathbb{E}_{q(\mathbf{z},\mathbf{x})}[\log p(\mathbf{x}|\mathbf{z})] \geq I_q(X;Z) - H(X)$$
+设 $q(\mathbf{z}|\mathbf{x})$ 为编码器、$q(\mathbf{z})=\int p(\mathbf{x})q(\mathbf{z}|\mathbf{x})\,d\mathbf{x}$，并用 $I_q(X;Z)=\mathbb{E}_{q(\mathbf{x},\mathbf{z})}[\log\frac{q(\mathbf{z}|\mathbf{x})}{q(\mathbf{z})}]$ 记编码器诱导的互信息。以真后验作编码器时是恒等式
 
-最大化重建项间接最大化了 $X,Z$ 的互信息——即 $\mathbf{z}$ 应尽量多携带 $\mathbf{x}$ 的信息。这和第 9 章 VAE"编码器要保留信息"的直觉一致。
+$$\mathbb{E}_{p(\mathbf{x})p(\mathbf{z}|\mathbf{x})}[\log p(\mathbf{x}|\mathbf{z})] = I(X;Z) - H(X)$$
+
+对一般的近似编码器，上式两边之差等于 $\text{KL}(q(\mathbf{z})\|p(\mathbf{z})) - \mathbb{E}_{p(\mathbf{x})}\text{KL}(q(\mathbf{z}|\mathbf{x})\|p(\mathbf{z}|\mathbf{x}))$，由 KL 的联合凸性不超过零，所以只剩单向不等式
+
+$$\mathbb{E}_{q(\mathbf{x},\mathbf{z})}[\log p(\mathbf{x}|\mathbf{z})] \;\leq\; I_q(X;Z) - H(X)$$
+
+等号当且仅当 $q(\mathbf{z}|\mathbf{x})=p(\mathbf{z}|\mathbf{x})$。
+
+最大化重建项等价于抬高互信息的下界——即 $\mathbf{z}$ 应尽量多携带 $\mathbf{x}$ 的信息。这和第 9 章 VAE"编码器要保留信息"的直觉一致。
 
 **来源**：Cover & Thomas (2006) Elements of Information Theory; Minka (2005) Divergence measures and message passing; Higgins et al. (2017) $\beta$-VAE; Alemi et al. (2017) Fixing a Broken ELBO

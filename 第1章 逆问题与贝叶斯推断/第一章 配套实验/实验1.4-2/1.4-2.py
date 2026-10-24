@@ -2,7 +2,8 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from PIL import Image
+from skimage.data import shepp_logan_phantom
+from skimage.transform import resize
 import os
 import sys
 
@@ -26,38 +27,40 @@ from chinese_font import setup_chinese_font
 setup_chinese_font(save_dir=_chinese_path)
 # ========================================================
 
-# ---- 1. 加载数据 ----
-# 检查必要文件是否存在
-required_files = ['transform_A.npy', 'maomi_grayscale.png', 'maomi_mohu.png', 'random_gray.png']
-missing_files = [f for f in required_files if not os.path.exists(os.path.join(SAVE_DIR, f))]
+# ---- 1. 自包含合成数据：合成图像 + 程序化构造的病态算子 ----
+# 不再依赖任何外部图片或 .npy 文件：图像用 Shepp-Logan 幻影缩放到 32×32，
+# 病态算子由 SVD 谱直接构造（U、V 为随机正交阵，稠密且含负元素，非严格卷积核）。
+n_side = 32
+N = n_side * n_side
 
-if missing_files:
-    print("=" * 60)
-    print("缺少以下数据文件:")
-    for f in missing_files:
-        print(f"  - {f}")
-    print("\n请在 Google Colab 中运行以下命令下载数据:")
-    print("  !mkdir -p /content/drive/MyDrive/实验1.4-2")
-    print("  !wget -O /content/drive/MyDrive/实验1.4-2/transform_A.npy <下载链接>")
-    print("  !wget -O /content/drive/MyDrive/实验1.4-2/maomi_grayscale.png <下载链接>")
-    print("  !wget -O /content/drive/MyDrive/实验1.4-2/maomi_mohu.png <下载链接>")
-    print("  !wget -O /content/drive/MyDrive/实验1.4-2/random_gray.png <下载链接>")
-    print("=" * 60)
-    raise FileNotFoundError(f"缺少数据文件: {missing_files}")
+# 奇异值谱：前 1000 个从 1（相对值）平缓衰减到 1e-2，末尾 24 个继续衰减到 1/κ。
+# 这样 σ < 1%·σ_max 的方向恰好 24 个，κ = 4.8e4（轻度病态）。
+N_NEAR_NULL = 24
+KAPPA = 4.8e4
+s = np.concatenate([
+    np.logspace(0, -2, N - N_NEAR_NULL),
+    np.logspace(-2.1, -np.log10(KAPPA), N_NEAR_NULL),
+])
 
-# 加载变换矩阵 A 
-# A 是 1024×1024 矩阵，用于对 32×32 图像的向量化形式（1024 维）进行线性变换
-A = np.load(os.path.join(SAVE_DIR, 'transform_A.npy'))
+
+def _random_orthogonal(rng, n):
+    q, r = np.linalg.qr(rng.standard_normal((n, n)))
+    return q * np.sign(np.diag(r))
+
+
+_rng_build = np.random.default_rng(2024)
+U = _random_orthogonal(_rng_build, N)
+V = _random_orthogonal(_rng_build, N)
+A = (U * s) @ V.T          # A = U diag(s) Vᵀ
+Vt = V.T
+condition_number = float(s[0] / s[-1])
 print(f"变换矩阵 A 的形状: {A.shape}")
-
-# 计算 A 的条件数（使用 SVD）
-U, s, Vt = np.linalg.svd(A)
-condition_number = s[0] / s[-1]
 print(f"\nA 的奇异值分析：")
 print(f"  最大奇异值 σ_max: {s[0]:.4e}")
 print(f"  最小奇异值 σ_min: {s[-1]:.4e}")
 print(f"  条件数 κ(A) = σ_max/σ_min: {condition_number:.4e}")
 print(f"  log₁₀(κ): {np.log10(condition_number):.2f}")
+print(f"  σ < 1%·σ_max 的方向数: {int(np.sum(s < 0.01 * s[0]))}")
 
 if condition_number > 1e10:
     print(f"\n⚠️ A 是高度病态矩阵（条件数 > 10¹⁰）")
@@ -71,17 +74,25 @@ elif condition_number > 1e3:
 else:
     print(f"\nℹ️ A 的条件数较小，不适定性不明显")
 
-# 加载图像
-maomi_gray = np.array(Image.open(os.path.join(SAVE_DIR, 'maomi_grayscale.png')).convert('L')) / 255.0
-maomi_mohu = np.array(Image.open(os.path.join(SAVE_DIR, 'maomi_mohu.png')).convert('L')) / 255.0
-random_gray = np.array(Image.open(os.path.join(SAVE_DIR, 'random_gray.png')).convert('L')) / 255.0
+# 合成图像：Shepp-Logan 幻影缩放到 32×32，归一化到 [0,1]
+x_true_img = resize(shepp_logan_phantom(), (n_side, n_side), order=1,
+                    preserve_range=True, anti_aliasing=True)
+x_true_img = x_true_img / x_true_img.max()
+x_true = x_true_img.ravel()
 
-print(f"图像形状: {maomi_gray.shape}")
+# 观测：y = A x_true + ε，ε 取 8-bit 量化噪声（远小于信号，与正文一致）
+y_clean = A @ x_true
+y_obs = np.round(y_clean * 255.0) / 255.0
 
-# ---- 2. 向量化图像 ----
-x_true = maomi_gray.ravel()
-y_obs = maomi_mohu.ravel()
-x_random = random_gray.ravel()
+# 对照图像：x_random = x_true + d，d 完全落在 A 的 24 维近零空间内。
+# 用像素级 RMS=0.15 标定 d 的幅度，使其"看起来像噪声"。
+_g_null = _rng_build.standard_normal(N_NEAR_NULL)
+_d_raw = V[:, -N_NEAR_NULL:] @ _g_null
+d = _d_raw / np.sqrt(np.mean(_d_raw ** 2)) * 0.15
+x_random = x_true + d
+
+print(f"图像形状: {x_true_img.shape}")
+print(f"量化噪声 ||ε||_2 = {np.linalg.norm(y_obs - y_clean):.6f}")
 n_pix = x_true.size
 
 # ---- 3. 计算似然（数据拟合误差）----
@@ -163,20 +174,20 @@ print(f"   - 局限的根源是 A 的近零空间（不适定性），而非随�
 fig, axes = plt.subplots(3, 3, figsize=(14, 13.5))
 
 # 第一行：原始图像
-axes[0, 0].imshow(maomi_gray, cmap='gray', vmin=0, vmax=1)
-axes[0, 0].set_title('真实图像 $x_{true}$\n（有意义的猫咪图像）')
+axes[0, 0].imshow(x_true_img, cmap='gray', vmin=0, vmax=1)
+axes[0, 0].set_title('真实图像 $x_{true}$\n（Shepp-Logan 合成幻影，32×32）')
 axes[0, 0].axis('off')
 
-axes[0, 1].imshow(maomi_mohu, cmap='gray', vmin=0, vmax=1)
-axes[0, 1].set_title('观测数据 $y$\n（模糊的猫咪图像）')
+axes[0, 1].imshow(y_obs.reshape(n_side, n_side), cmap='gray', vmin=0, vmax=1)
+axes[0, 1].set_title('观测数据 $y = Ax_{true}+\\varepsilon$\n（8-bit 量化观测）')
 axes[0, 1].axis('off')
 
-axes[0, 2].imshow(random_gray, cmap='gray', vmin=0, vmax=1)
+axes[0, 2].imshow(np.clip(x_random.reshape(n_side, n_side), 0, 1), cmap='gray', vmin=0, vmax=1)
 axes[0, 2].set_title('对照图像 $x_{random}$\n（像素级似噪声，实为构造样本）')
 axes[0, 2].axis('off')
 
 # 第二行：变换结果和矩阵A可视化
-axes[1, 0].imshow(Ax_true.reshape(32, 32), cmap='gray')
+axes[1, 0].imshow(Ax_true.reshape(n_side, n_side), cmap='gray')
 axes[1, 0].set_title(f'$A \\cdot x_{{true}}$\n$||Ax - y||_2 = {error_true:.4f}$')
 axes[1, 0].axis('off')
 
@@ -191,7 +202,7 @@ axes[1, 1].axis('off')
 cbar = plt.colorbar(im, ax=axes[1, 1], fraction=0.046, pad=0.04)
 cbar.set_label('矩阵元素值', fontsize=8)
 
-axes[1, 2].imshow(Ax_random.reshape(32, 32), cmap='gray')
+axes[1, 2].imshow(Ax_random.reshape(n_side, n_side), cmap='gray')
 axes[1, 2].set_title(f'$A \\cdot x_{{random}}$\n$||Ax - y||_2 = {error_random:.4f}$（与 $A x_{{true}}$ 几乎不可分辨）')
 axes[1, 2].axis('off')
 
@@ -206,9 +217,11 @@ axes[2, 0].set_yscale('log')
 axes[2, 0].set_xlabel('$||A x - y||_2$')
 axes[2, 0].set_ylabel('频数（对数轴）')
 axes[2, 0].set_title(f'诊断一：{N_MC} 张全新随机噪声图的拟合误差（seed=2026）\n'
-                     f'最小也达 {E_mc.min():.2f}，无一小于真值误差（0/{N_MC}）')
+                     f'最小也达 {E_mc.min():.2f}，小于真值误差的比例 {frac_beat:.0%}')
 axes[2, 0].legend(fontsize=9, loc='upper right')
-axes[2, 0].annotate('两虚线在左端 ≈ 0.04，\n比新抽噪声小约 100 倍\n（构造样本才能做到）',
+axes[2, 0].annotate(f'两虚线在左端 ≈ {max(error_true, error_random):.3f}，\n'
+                    f'比新抽噪声（中位数 {np.median(E_mc):.2f}）小约 '
+                    f'{np.median(E_mc) / max(error_random, 1e-12):.0f} 倍\n（构造样本才能做到）',
                     xy=(0.35, 0.32), xycoords='axes fraction', fontsize=9)
 
 # (b) 差值 d = x_random - x_true 的能量在奇异方向上的分布
@@ -221,7 +234,7 @@ axes[2, 1].set_title('诊断二：差值能量谱\n'
                      f'红色（{n_small} 个近零方向）占能量 {energy_frac_small:.2%}')
 
 # (c) 最小二乘解：完美拟合但远离真值
-axes[2, 2].imshow(x_ls.reshape(32, 32), cmap='gray')
+axes[2, 2].imshow(x_ls.reshape(n_side, n_side), cmap='gray')
 axes[2, 2].set_title('诊断三：最小二乘解 $x_{ls}$（无裁剪显示）\n'
                      f'$||Ax_{{ls}}-y|| = {ls_fit_error:.0e}$，而 $||x_{{ls}}-x_{{true}}|| = {ls_x_error:.1f}$')
 axes[2, 2].axis('off')
@@ -239,7 +252,7 @@ print("结论")
 print("="*60)
 print("似然函数 p(y|x) 只衡量'数据拟合程度'，即 ||Ax - y||_2 的大小。")
 print("它无法区分：")
-print("  - 与数据拟合好的'有意义'图像（真实猫咪）")
+print("  - 与数据拟合好的'有意义'图像（真实合成幻影）")
 print("  - 与数据拟合好的'无意义'图像（如本实验中构造的噪声样本）")
 print("\n这正是不适定性的后果：")
 print(f"  算子 A 存在近零空间（{n_pix} 个方向中 {n_small} 个衰减到 1% 以下）")
@@ -256,6 +269,17 @@ print("  后验 = 似然 × 先验，同时考虑数据拟合和图像合理性"
 # ===== 保存数值结果 =====
 import json
 results_summary = {
+    'data_source': '完全自包含合成数据（Shepp-Logan 缩放到 32×32 + 程序化 SVD 谱构造 A）',
+    'synthetic_data': {
+        'seed': 2024,
+        'image': 'shepp_logan_phantom → 32×32 双线性缩放，归一化到 [0,1]',
+        'spectrum': '前 1000 个 logspace(0,-2)，末尾 24 个 logspace(-2.1,-log10(4.8e4))',
+        'n_near_null': N_NEAR_NULL,
+        'target_kappa': KAPPA,
+        'observation_noise': 'y = round(A x_true·255)/255（8-bit 量化）',
+        'quantization_noise_norm': float(np.linalg.norm(y_obs - y_clean)),
+        'd_rms_per_pixel': 0.15,
+    },
     'transform_matrix_shape': list(A.shape),
     'condition_number': float(condition_number),
     'max_singular_value': float(s[0]),

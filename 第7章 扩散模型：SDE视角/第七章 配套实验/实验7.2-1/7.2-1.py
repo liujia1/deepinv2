@@ -114,7 +114,7 @@ for t in t_values:
     print(f"  t={t:.1f}: mean_t={mean_t:.4f}, std_t={std_t:.4f}, Var(x_t)={var_x:.4f}")
 
 print(f"\nVP-SDE关键性质：Var(x_t) 有界且终态→N(0,1)（方差受控，对比VE-SDE的无界爆炸）")
-print(f"  注：严格的 Var≡1 仅在 Var(x_0)=1 时成立；本例 Var(x_0)≈2.89，终态仍趋于1")
+print(f"  注：严格的 Var≡1 仅在 Var(x_0)=1 时成立；本例 Var(x_0)≈2.86，终态仍趋于1")
 
 
 # ============================================================
@@ -184,11 +184,17 @@ print(f"{'Var(x_t)':<15s} | {'→∞ (爆炸)':<25s} | {'有界，终态→1':<2
 print(f"{'signal scale':<15s} | {'no scaling':<25s} | {'√ᾱ_t decay':<25s}")
 print(f"{'terminal':<15s} | {'large-var Gaussian':<25s} | {'N(0,I)':<25s}")
 
+# 右图方差曲线的归一化口径（避免与步骤1/2的实测方差混淆）
+print()
+print(f"注：步骤3右图的方差曲线按 Var(x_0)=1 归一化——VP 因此恒为 1（Var=ᾱ_t·1+(1-ᾱ_t)），")
+print(f"    VE 为 1+σ(t)²；实际数据 Var(x_0)≈2.86 时 VP 曲线会从 2.86 单调衰减到 1（见步骤1表）。")
+
 # Karras et al. (2022) 统一框架
 print(f"\nKarras et al. (2022) 统一框架（7.2节）：")
 print(f"  两种SDE可通过信号缩放s(t)统一")
 print(f"  VE-SDE: s(t)=1, σ(t)从σ_min增长到σ_max")
 print(f"  VP-SDE: s(t)=√ᾱ_t, σ(t)=√((1-ᾱ_t)/ᾱ_t)")
+
 
 
 # ============================================================
@@ -236,12 +242,15 @@ axes3[0].set_title('VP-SDE SNR随时间变化'); axes3[0].legend(); axes3[0].gri
 axes3[1].set_xlabel('t'); axes3[1].set_ylabel('SNR')
 axes3[1].set_title('VE-SDE SNR随时间变化'); axes3[1].legend(); axes3[1].grid(alpha=0.3)
 
-# 方差对比
+# 方差对比（两条曲线均按 Var(x_0)=1 归一化：VP 恒为 1，VE 为 1+σ(t)²）
 axes3[2].plot(t_grid, vp_vars, 'b-', lw=2, label='VP-SDE Var(x_t)')
 axes3[2].plot(t_grid, ve_vars, 'r-', lw=2, label='VE-SDE Var(x_t)')
 axes3[2].axhline(y=1, color='k', linestyle='--', alpha=0.3)
+axes3[2].annotate('解析曲线取 Var(x0)=1 → VP 的 Var(x_t) ≡ 1.0',
+                  xy=(0.03, 0.55), xycoords='axes fraction', fontsize=10, color='tab:blue')
 axes3[2].set_xlabel('t'); axes3[2].set_ylabel('Var(x_t)')
-axes3[2].set_title('方差演化：保持 vs 爆炸'); axes3[2].legend(); axes3[2].grid(alpha=0.3)
+axes3[2].set_title('方差演化：保持 vs 爆炸（Var(x0)=1 归一化）')
+axes3[2].legend(loc='upper left'); axes3[2].grid(alpha=0.3)
 
 fig3.tight_layout()
 fig3.savefig(os.path.join(SAVE_DIR, '步骤3_VE_vs_VP对比.png'), dpi=150, bbox_inches='tight')

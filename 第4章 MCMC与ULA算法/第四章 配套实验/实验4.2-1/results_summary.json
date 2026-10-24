@@ -57,7 +57,20 @@
         "mean_error_all_pairs": 0.1092,
         "truncated_fraction": 0.004078
       }
-    ]
+    ],
+    "theoretical_matrix_check": {
+      "n_bins": 20,
+      "x_range": [
+        -3.0,
+        3.0
+      ],
+      "sigma": 1.0,
+      "max_abs_residual": 1.734723475976807e-18,
+      "relative_imbalance": 1.2417875473899416e-17,
+      "row_sum_error": 2.220446049250313e-16,
+      "negative_control_max_abs_residual": 0.004802028196581411,
+      "negative_control_relative_imbalance": 0.2616007791092824
+    }
   },
   "step3_normalization_constant": {
     "constants": [

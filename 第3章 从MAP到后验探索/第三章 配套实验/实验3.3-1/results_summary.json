@@ -9,5 +9,19 @@
   "psnr_noisy": 20.122,
   "psnr_bayes": 20.326,
   "psnr_bayes_noisy": 20.317,
-  "psnr_best": 20.344
+  "psnr_best": 20.344,
+  "psnr_best_raw": 20.225,
+  "rel_dev_raw_lam_best_vs_bayes": 0.0081,
+  "psnr_gap_clip_bayes_vs_peak": 0.0186,
+  "mu0_control": {
+    "lam_theory_mu0_sigma2_over_Ex2": 0.0298,
+    "lam_best_mu0_clip": 0.0244,
+    "psnr_best_mu0_clip": 20.21,
+    "lam_best_mu0_raw": 0.0301,
+    "psnr_best_mu0_raw": 19.837,
+    "psnr_at_lam_bayes_mu0_clip": 19.129,
+    "psnr_at_lam_bayes_mu0_raw": 18.895,
+    "ratio_lam_bayes_over_lam_best_mu0_raw": 4.189,
+    "note": "收缩中心取 mu=0 时经验最优 lambda 落到 sigma^2/E[x^2] 附近，与 lam_bayes 相差约4.2倍；此时若仍套用 lam_bayes，PSNR 反低于含噪观测"
+  }
 }

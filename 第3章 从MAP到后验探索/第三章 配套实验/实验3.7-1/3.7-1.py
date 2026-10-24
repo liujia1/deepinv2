@@ -103,9 +103,12 @@ for d in dimensions:
 print(f" 完成，耗时 {time.time() - t_start:.2f} 秒")
 
 # 范数统计
-print(f"\n  维度   众数范数   典型范数(中位)  经验均值  理论典型 sqrt(n)")
+print(f"\n  维度   众数范数*  典型范数(中位)  经验均值  理论典型 sqrt(n)")
 print(f"  {'-' * 60}")
-mode_norm = {}  # 众数 = 0
+# 众数范数是【解析值】而非采样统计量：联合密度 p(x)=(2π)^{-n/2}e^{-‖x‖²/2} 的
+# 众数在 x=0，范数恒为 0，与 n、样本数无关；因此不能由 500 个样本估计出来
+# （有限样本的"经验众数"只是最近邻样本点，与理论众数无关）。
+mode_norm = {}  # 解析值：联合密度众数范数 ≡ 0
 typical_norm = {}  # 典型范数（用中位数）
 mean_norm = {}  # 经验平均范数
 for d in dimensions:
@@ -114,6 +117,8 @@ for d in dimensions:
     typical_norm[d] = np.median(norms)
     mean_norm[d] = np.mean(norms)
     print(f"  n={d:<5} {mode_norm[d]:<10.4f} {typical_norm[d]:<16.4f} {mean_norm[d]:<10.4f} {np.sqrt(d):.4f}")
+print(f"  * 众数范数为解析值（联合密度众数在 x=0），非采样统计量；"
+      f"其余三列均来自 seed=42 的 500 样本实测。")
 
 # 众数≠典型的核心观察
 print(f"\n  核心观察:")
@@ -393,7 +398,12 @@ results = {
     'scene_a_typical_set': {
         'dimensions': dimensions,
         'n_samples': n_samples,
-        'mode_norm': {str(d): float(mode_norm[d]) for d in dimensions},
+        # 解析值：联合密度 p(x)=(2π)^(-n/2)exp(-‖x‖²/2) 的众数在 x=0，范数恒为 0。
+        # 这不是采样统计量，无法由 500 个样本估计，故单独标注以免与下方实测列混淆。
+        'mode_norm_analytic': {str(d): float(mode_norm[d]) for d in dimensions},
+        'mode_norm_note': ('解析值：联合密度众数 x*=0 的范数，与 n 和样本数无关；'
+                           '非由采样估计得到（有限样本的经验众数只是最近邻样本点）'),
+        # 以下两项为 seed=42、每维 500 样本的实测统计量
         'typical_norm_median': {str(d): float(typical_norm[d]) for d in dimensions},
         'mean_norm': {str(d): float(mean_norm[d]) for d in dimensions},
         'theoretical_typical_sqrt_n': {str(d): float(np.sqrt(d)) for d in dimensions},

@@ -38,5 +38,53 @@
       "psnr_dB": 10.34,
       "ssim": 0.089
     }
+  },
+  "supplementary": {
+    "note": "主表口径为 clip 到 [0,1] + SSIM win_size=7；本块给出对照口径",
+    "uncropped_by_noise": {
+      "sigma_0.01": {
+        "mse_raw": 0.0001,
+        "psnr_raw_dB": 40.0,
+        "frac_pixels_clipped": 0.0651
+      },
+      "sigma_0.03": {
+        "mse_raw": 0.000902,
+        "psnr_raw_dB": 30.45,
+        "frac_pixels_clipped": 0.0766
+      },
+      "sigma_0.05": {
+        "mse_raw": 0.002499,
+        "psnr_raw_dB": 26.02,
+        "frac_pixels_clipped": 0.0847
+      },
+      "sigma_0.10": {
+        "mse_raw": 0.010011,
+        "psnr_raw_dB": 20.0,
+        "frac_pixels_clipped": 0.1108
+      },
+      "sigma_0.20": {
+        "mse_raw": 0.040205,
+        "psnr_raw_dB": 13.96,
+        "frac_pixels_clipped": 0.1765
+      },
+      "sigma_0.40": {
+        "mse_raw": 0.160473,
+        "psnr_raw_dB": 7.95,
+        "frac_pixels_clipped": 0.3254
+      }
+    },
+    "ssim_win11_by_noise": {
+      "sigma_0.01": 0.9586,
+      "sigma_0.03": 0.7783,
+      "sigma_0.05": 0.6361,
+      "sigma_0.10": 0.4393,
+      "sigma_0.20": 0.2598,
+      "sigma_0.40": 0.1269
+    },
+    "inverted_image_ssim": {
+      "definition": "SSIM(1-x, x)，data_range=1.0，用于验证 SSIM 可取负值",
+      "win_size_7": -0.1905,
+      "win_size_11": -0.3069
+    }
   }
 }

@@ -93,10 +93,10 @@ var_spread = (post_var.max() - post_var.min()) / post_var.mean()
 # 注意：λ* = σ²/σ_x² 最小化的是"对先验 x~N(0,σ_x²I) 取期望"的期望 MSE，
 # 而非对本实验这个具体 phantom 最优。phantom 不是先验样本
 # （均值≈0.173 非零、E[x²]≈0.073 ≠ σ_x²=0.25），因此峰值偏移是系统性的：
-# 30 个独立噪声种子的扫描显示 argmax λ 全部落在 [0.020, 0.036]、
-# 0% ≤ 0.01，并非单次噪声实现的运气；对该 phantom 的频率派期望 MSE
-# 最优 λ（下方特征分解计算）≈ 0.027，与多种子 argmax 的中位数一致。
-# 好在峰顶平坦，λ* 处 PSNR 仅比峰值低约 0.4 dB，"附近最优"的结论仍成立。
+# 30 个独立噪声种子的扫描（见下方 6b 段，实测值写入 JSON）给出 argmax λ 的
+# 分布，可检验"偏移是否只是单次噪声实现的运气"；对该 phantom 的频率派期望
+# MSE 最优 λ（下方特征分解计算）与多种子 argmax 的集中区间对照。
+# 好在峰顶平坦，"λ* 附近最优"的结论不依赖峰位精确对齐。
 # 扫描时直接算 MSE（不 clip），避免 clip 掩盖负值导致的误差低估
 # 注：λ<1e-4 时系统极度病态，PSNR 下降同时包含数值误差的贡献
 lambdas_sweep = np.logspace(-5, 1, 50)  # 峰值在 λ≈0.01，1e1 已足够
@@ -120,6 +120,38 @@ for l in np.logspace(-4, 0.5, 1000):
             + sigma_noise**2 * np.sum(evals_AtA / (evals_AtA + l)**2)) / N
     if emse < best_emse:
         best_emse, best_l_freq = emse, l
+
+# ---- 6b. 30 个独立噪声种子的 argmax λ 扫描（特征基下 O(N) 评估）----
+# 在 A^T A 的特征基下 μ(λ)=V (c/(e+λ))、c=V^T A^T y；给定种子后每个 λ 只需 O(N)，
+# 故 30 种子 × 全部 λ 可在秒级完成，且与主扫描共用同一 λ 网格（可比）。
+mc_rng = np.random.default_rng(20240601)
+mc_seeds = [int(s) for s in mc_rng.choice(100000, size=30, replace=False)]
+mc_argmax_lambda, mc_argmax_psnr = [], []
+for _sd in mc_seeds:
+    y_sd = A @ x_vec + sigma_noise * np.random.default_rng(_sd).standard_normal(N)
+    c_sd = V_AtA.T @ (A.T @ y_sd)
+    _best_ps, _best_l = -np.inf, None
+    for l in lambdas_sweep:
+        mu_sd = V_AtA @ (c_sd / (evals_AtA + l))
+        _mse = np.mean((x_vec - mu_sd) ** 2)
+        _ps = 10 * np.log10(1.0 / _mse) if _mse > 1e-12 else float('-inf')
+        if _ps > _best_ps:
+            _best_ps, _best_l = _ps, float(l)
+    mc_argmax_lambda.append(_best_l)
+    mc_argmax_psnr.append(float(_best_ps))
+mc_argmax_lambda = np.asarray(mc_argmax_lambda)
+mc_30seed_stats = {
+    'n_seeds': int(len(mc_seeds)),
+    'lambda_grid': 'logspace(-5, 1, 50)（与主扫描一致）',
+    'argmax_lambda_min': float(round(mc_argmax_lambda.min(), 6)),
+    'argmax_lambda_max': float(round(mc_argmax_lambda.max(), 6)),
+    'argmax_lambda_median': float(round(np.median(mc_argmax_lambda), 6)),
+    'fraction_argmax_le_0.01': float(round(np.mean(mc_argmax_lambda <= 0.01), 4)),
+    'argmax_psnr_min_dB': float(round(min(mc_argmax_psnr), 2)),
+    'argmax_psnr_max_dB': float(round(max(mc_argmax_psnr), 2)),
+    'argmax_psnr_median_dB': float(round(float(np.median(mc_argmax_psnr)), 2)),
+    'note': '每个种子独立重抽噪声后在全 λ 网格上取真值 PSNR 峰（oracle），检验偏移是否系统性',
+}
 
 # 选取三个代表性 λ 进行可视化对比
 lambdas_demo = [1e-4, lam, 10.0]
@@ -198,7 +230,9 @@ print(f"贝叶斯最优 λ = σ²/σ_x² = {sigma_noise**2:.4f}/{sigma_prior**2:
 print(f"λ 扫描中 PSNR 最大值: {max(psnrs):.2f} dB")
 print(f"对应 λ: {lambdas_sweep[np.argmax(psnrs)]:.4f} (贝叶斯最优 {lam:.4f}，该 phantom 频率派最优 {best_l_freq:.4f})")
 print(f"注：λ*={lam:.4f}=σ²/σ_x² 仅对『先验分布下』的期望 MSE 最优；phantom 非先验样本，")
-print(f"    30 种子扫描显示峰值偏移是系统性的（argmax λ≈0.02~0.04，非噪声运气），但峰顶平坦：λ* 距峰值仅 ~0.4 dB")
+print(f"    30 种子独立重抽噪声后 argmax λ ∈ [{mc_30seed_stats['argmax_lambda_min']:.4g}, "
+      f"{mc_30seed_stats['argmax_lambda_max']:.4g}]，中位数 {mc_30seed_stats['argmax_lambda_median']:.4g}，"
+      f"λ≤0.01 的比例 {mc_30seed_stats['fraction_argmax_le_0.01']:.0%}")
 print(f"后验方差：所有像素恒为 {post_var.mean():.4e}（相对 spread {var_spread:.1e}），源于循环矩阵结构")
 print("\n结论：λ*=σ²/σ_x² 使 PSNR 接近峰值，验证了贝叶斯-正则化等价性（先验意义下的期望最优性）。")
 
@@ -216,6 +250,12 @@ results_summary = {
     'posterior_var_mean': float(round(post_var.mean(), 6)),
     'posterior_var_rel_spread': float(var_spread),
     'frequentist_opt_lambda_fixed_phantom': float(round(best_l_freq, 5)),
+    'phantom_stats': {
+        'phantom_mean': float(round(float(x.mean()), 4)),
+        'phantom_mean_square': float(round(float(np.mean(x ** 2)), 4)),
+        'note': '用于说明 phantom 并非先验 x~N(0, 0.5²) 的样本（均值非零、E[x²]≠0.25）',
+    },
+    'mc_30seed_argmax_lambda': mc_30seed_stats,
     'lambda_demo_psnr': {f'lambda_{l:.4g}': float(round(10 * np.log10(1.0 / np.mean((x - recons_demo[l])**2)), 2)) if np.mean((x - recons_demo[l])**2) > 1e-12 else float('-inf') for l in lambdas_demo},
 }
 

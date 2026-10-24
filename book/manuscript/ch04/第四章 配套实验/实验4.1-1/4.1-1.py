@@ -22,6 +22,15 @@
      混进方差误差
   R6 步骤3 增加维数扫描与噪声扫描，把"高维导致失败"从断言变成实测，并用
      D₂(后验‖先验)（可靠估计需 M ~ exp(D₂)）与"后验附近提议"的对照组划清固有属性的边界
+  R7 步骤3 改为"固定数据实例 + 多种子误差棒"：旧版 headline、维数扫描、噪声扫描
+     各自随机生成问题实例，同一配置（d=50, σ=0.1）竟出现三个不同的解析值与 D₂
+     （-46.63/97.05、-45.46/98.05、97.68），读者无从对照；且两个扫描面板
+     每点只有单个实例、无误差棒，实例噪声被误读成"维数效应"
+     （旧版 d=2 偏差 0.084 > d=5 偏差 0.062，与"随维数急剧恶化"的叙事相悖）。
+     现改为：基准实例（seed=456，d=50, σ=0.1）贯穿 headline、维数扫描 d=50、
+     噪声扫描 σ=0.1 与对照组；噪声扫描整族共享同一 x_true/A/ε 只改 σ；
+     维数扫描每点取 3 个固定种子的独立实例，报告均值 ± 实例间标准差，
+     噪声扫描实例固定，误差棒取 MC 试验间标准差
 """
 
 import numpy as np
@@ -69,10 +78,29 @@ except ImportError:
 # ========================================================
 
 # 每个步骤使用独立的、显式种子的 RNG：步骤之间互不消耗随机流，可单独复现
+# SEED3 对应步骤3 的基准问题实例（rng3 先抽 x_true/A/eps，再抽 MC 样本）
 SEED1, SEED2, SEED3 = 11, 22, 456
 rng1 = np.random.default_rng(SEED1)
 rng2 = np.random.default_rng(SEED2)
 rng3 = np.random.default_rng(SEED3)
+
+
+def build_problem(d, sigma, seed):
+    """构造一个由种子完全决定的问题实例（"固定数据实例"）
+
+    x_true ~ N(0, I)，A ~ N(0, I/d)（每行除以 sqrt(d)），y = A x_true + sigma * eps
+    其中 eps ~ N(0, I)。
+
+    关键性质：同一个 seed 永远给出同一个 (x_true, A, eps)。因此"只改 sigma"的
+    一族扫描共享同一个 x_true 与 A，只改变噪声水平——这正是固定数据实例的含义；
+    而"改维数"的扫描必须换 A，其随机性只能靠多种子实例平均来控制（见 R7）。
+    """
+    rng = np.random.default_rng(seed)
+    x_true = rng.standard_normal(d)
+    A = rng.standard_normal((d, d)) / np.sqrt(d)
+    eps = rng.standard_normal(d)
+    y = A @ x_true + sigma * eps
+    return x_true, A, y, eps
 
 # ══════════════════════════════════════════════════════════
 # 辅助函数
@@ -404,9 +432,16 @@ d_demo = 50
 sigma = 0.1
 sigma_x = 1.0
 
+# 基准问题实例（种子固定）：步骤3 的 headline、维数扫描的 d=demo 点、
+# 噪声扫描的 σ=0.1 点与"后验附近提议"对照组全部使用这同一个实例，
+# 保证全文数字自洽（见修订 R7）。
+# 抽样顺序 x_true → A → eps 与 build_problem(d, σ, SEED3) 完全一致，
+# 因此本实例与 build_problem(d_demo, sigma, SEED3) 等价，而 rng3 仍处在
+# 抽完 eps 之后的状态（headline 的 MC 样本继续从该流抽取）。
 x_true = rng3.standard_normal(d_demo)
 A = rng3.standard_normal((d_demo, d_demo)) / np.sqrt(d_demo)
-y = A @ x_true + sigma * rng3.standard_normal(d_demo)
+eps_demo = rng3.standard_normal(d_demo)
+y = A @ x_true + sigma * eps_demo
 
 
 def log_likelihood(x, y, A, sigma):
@@ -529,32 +564,62 @@ for M in M_range:
           f"偏差={abs(ests.mean() - log_py_exact):.2f}")
 
 # --- 面板(b)：固定 σ=0.1，扫描维数 d ---
+# 维数一变 A 必须重抽，"同一实例"无从谈起，故每个 d 取 n_inst_b 个固定种子的
+# 独立实例取均值，并用实例间标准差作误差棒（修订 R7）；
+# d=demo 时第一个实例就是基准实例（SEED3），与 headline/对照组/噪声扫描 σ=0.1 同源。
 d_scan = [1, 2, 5, 10, 20, 50, 100]
 M_scan, n_trials_b = 20000, 5
-d_errors, d_kl, d_exact, d_est = [], [], [], []
+n_inst_b = 3
+d_errors, d_err_stds = [], []
+d_kl, d_kl_stds = [], []
+d_exact, d_est = [], []
+d_inst_seeds = {}
 for dd in d_scan:
-    ests, Am, yy = estimate_log_evidence_prior(dd, sigma, M_scan, n_trials_b,
-                                               np.random.default_rng(4000 + dd))
-    ex = analytic_log_py(Am, yy, sigma, sigma_x)
-    d_errors.append(abs(ests.mean() - ex))
-    d_kl.append(renyi2_post_prior(Am, yy, sigma, sigma_x))
-    d_exact.append(ex)
-    d_est.append(ests.mean())
-    print(f"  d={dd:4d}: 解析={ex:9.2f}, 估计={ests.mean():9.2f}, "
-          f"偏差={abs(ests.mean() - ex):9.2f}, D2={d_kl[-1]:7.2f}")
+    seeds = [SEED3] if dd == d_demo else []
+    seeds += [4000 + 100 * dd + k for k in range(n_inst_b - len(seeds))]
+    d_inst_seeds[dd] = seeds
+    inst_bias, inst_d2, inst_ex, inst_est = [], [], [], []
+    for k, sd in enumerate(seeds):
+        _, Am, yy, _ = build_problem(dd, sigma, sd)
+        ex = analytic_log_py(Am, yy, sigma, sigma_x)
+        ests, _, _ = estimate_log_evidence_prior(dd, sigma, M_scan, n_trials_b,
+                                                 np.random.default_rng(6000 + 100 * dd + k),
+                                                 problem=(Am, yy))
+        inst_ex.append(ex)
+        inst_est.append(ests.mean())
+        inst_bias.append(abs(ests.mean() - ex))
+        inst_d2.append(renyi2_post_prior(Am, yy, sigma, sigma_x))
+    d_errors.append(float(np.mean(inst_bias)))
+    d_err_stds.append(float(np.std(inst_bias, ddof=1)))
+    d_kl.append(float(np.mean(inst_d2)))
+    d_kl_stds.append(float(np.std(inst_d2, ddof=1)))
+    d_exact.append(float(np.mean(inst_ex)))
+    d_est.append(float(np.mean(inst_est)))
+    print(f"  d={dd:4d}: 解析={np.mean(inst_ex):9.2f}, 估计={np.mean(inst_est):9.2f}, "
+          f"偏差={np.mean(inst_bias):9.2f}±{np.std(inst_bias, ddof=1):.2f}, "
+          f"D2={np.mean(inst_d2):7.2f}±{np.std(inst_d2, ddof=1):.2f} "
+          f"({n_inst_b} 个实例, seeds={seeds})")
 
-# --- 面板(c)：固定 d=50，扫描噪声 σ（每维信息量的作用）---
+# --- 面板(c)：固定 d=demo，扫描噪声 σ（每维信息量的作用）---
+# 固定数据实例：整族共享基准实例的同一 x_true 与 A，只改噪声水平 σ，
+# 因此曲线反映的是"同一问题、逐级加大噪声"的效应，不混入实例噪声；
+# 误差棒取 MC 试验间标准差（该面板每点 5 次独立 MC 重复）。
 sigma_scan = [0.05, 0.1, 0.2, 0.5, 1.0, 2.0]
 M_sig, n_trials_c = 50000, 5
-s_errors, s_kl = [], []
+s_errors, s_err_stds, s_kl, s_exact, s_est = [], [], [], [], []
 for sg in sigma_scan:
-    ests, Am, yy = estimate_log_evidence_prior(d_demo, sg, M_sig, n_trials_c,
-                                               np.random.default_rng(5000 + int(100 * sg)))
+    _, Am, yy, _ = build_problem(d_demo, sg, SEED3)
     ex = analytic_log_py(Am, yy, sg, sigma_x)
-    s_errors.append(abs(ests.mean() - ex))
-    s_kl.append(renyi2_post_prior(Am, yy, sg, sigma_x))
+    ests, _, _ = estimate_log_evidence_prior(d_demo, sg, M_sig, n_trials_c,
+                                             np.random.default_rng(7000 + int(100 * sg)),
+                                             problem=(Am, yy))
+    s_errors.append(float(abs(ests.mean() - ex)))
+    s_err_stds.append(float(ests.std(ddof=1)))
+    s_kl.append(float(renyi2_post_prior(Am, yy, sg, sigma_x)))
+    s_exact.append(float(ex))
+    s_est.append(float(ests.mean()))
     print(f"  σ={sg:4.2f}: 解析={ex:9.2f}, 估计={ests.mean():9.2f}, "
-          f"偏差={abs(ests.mean() - ex):9.2f}, D2={s_kl[-1]:7.2f}")
+          f"偏差={abs(ests.mean() - ex):9.2f}±{ests.std(ddof=1):.2f}, D2={s_kl[-1]:7.2f}")
 
 # --- 对照组：改用"后验附近"的高斯提议 N(post_mean, alpha*post_cov) 做重要性采样 ---
 # 目的：划清固有属性的边界——失效到底是"先验提议 + 高 D₂"造成的，还是 MC 本身造成的
@@ -609,21 +674,28 @@ axes[0].legend(fontsize=9)
 axes[0].grid(True, alpha=0.3)
 
 axb = axes[1]
-axb.semilogy(d_scan, d_errors, 'bs-', linewidth=2, markersize=7,
-             label=f'实测偏差 ($M={M_scan}$)')
+# 误差棒 = 3 个固定种子实例之间的标准差；对数纵轴下把下界压到均值的 90%，
+# 避免标准差大于均值时下界为负而无法显示
+d_err_lo = np.minimum(d_err_stds, 0.9 * np.array(d_errors))
+axb.errorbar(d_scan, d_errors, yerr=[d_err_lo, d_err_stds], fmt='bs-',
+             capsize=4, capthick=2, linewidth=2, markersize=7,
+             label=f'实测偏差 ($M={M_scan}$, {n_inst_b} 个实例均值)')
 axb.set_xlabel(r'维数 $d$', fontsize=12)
 axb.set_ylabel(r'偏差（对数轴）', fontsize=12)
 axb.set_title(rf'步骤3(b): 固定 $M$ 下偏差随维数急剧恶化 ($\sigma={sigma}$)', fontsize=12)
 axb.grid(True, alpha=0.3, which='both')
 axb2 = axb.twinx()
-axb2.plot(d_scan, d_kl, 'r^--', linewidth=2, markersize=7, label='D2(后验 || 先验) 右轴')
+axb2.errorbar(d_scan, d_kl, yerr=d_kl_stds, fmt='r^--', linewidth=2, markersize=7,
+              capsize=3, label='D2(后验 || 先验) 右轴')
 axb2.set_ylabel(r'D2(后验 || 先验)', fontsize=12)
 lines1, labels1 = axb.get_legend_handles_labels()
 lines2, labels2 = axb2.get_legend_handles_labels()
 axb.legend(lines1 + lines2, labels1 + labels2, fontsize=9, loc='upper left')
 
-axes[2].semilogy(sigma_scan, s_errors, 'mo-', linewidth=2, markersize=7,
-                 label=f'实测偏差 ($d={d_demo}$)')
+s_err_lo = np.minimum(s_err_stds, 0.9 * np.array(s_errors))
+axes[2].errorbar(sigma_scan, s_errors, yerr=[s_err_lo, s_err_stds], fmt='mo-',
+                 capsize=4, capthick=2, linewidth=2, markersize=7,
+                 label=f'实测偏差 ($d={d_demo}$, 固定实例)')
 axes[2].set_xscale('log')
 axes[2].set_xlabel(r'噪声水平 $\sigma$', fontsize=12)
 axes[2].set_ylabel(r'偏差（对数轴）', fontsize=12)
@@ -713,6 +785,11 @@ results_summary = {
         'sigma': sigma,
         'sigma_x': sigma_x,
         'M_test': M_test,
+        'instance_policy': ('基准实例 seed=456（d=50, σ=0.1）贯穿 headline、维数扫描 d=50、'
+                            '噪声扫描 σ=0.1 与对照组；噪声扫描整族共享同一 x_true/A/ε 只改 σ；'
+                            '维数扫描每 d 取 n_inst_b 个固定种子实例取均值，误差棒为实例间标准差；'
+                            '噪声扫描实例固定，误差棒为 MC 试验间标准差'),
+        'base_instance_seed': SEED3,
         'log_py_estimate': float(round(log_py_estimate, 4)),
         'log_py_exact': float(round(log_py_exact, 4)),
         'mc_error': float(round(abs(log_py_estimate - log_py_exact), 4)),
@@ -723,11 +800,22 @@ results_summary = {
         'stds': [float(round(s, 4)) for s in stds],
         'trials_per_M': n_trials_a,
         'd_scan': d_scan,
+        'd_scan_instances': n_inst_b,
+        'd_scan_instance_seeds': {str(d): list(s) for d, s in d_inst_seeds.items()},
         'd_scan_errors': [_sig(e) for e in d_errors],
+        'd_scan_errors_std': [_sig(e) for e in d_err_stds],
         'd_scan_d2': [float(round(k, 4)) for k in d_kl],
+        'd_scan_d2_std': [float(round(k, 4)) for k in d_kl_stds],
+        'd_scan_exact_log_py': [float(round(e, 4)) for e in d_exact],
+        'd_scan_estimates': [float(round(e, 4)) for e in d_est],
         'sigma_scan': sigma_scan,
-        'sigma_scan_errors': [float(round(e, 4)) for e in s_errors],
+        'sigma_scan_shared_instance_seed': SEED3,
+        'sigma_scan_errors': [_sig(e) for e in s_errors],
+        'sigma_scan_errors_std': [_sig(e) for e in s_err_stds],
         'sigma_scan_d2': [float(round(k, 4)) for k in s_kl],
+        'sigma_scan_exact_log_py': [float(round(e, 4)) for e in s_exact],
+        'sigma_scan_estimates': [float(round(e, 4)) for e in s_est],
+        'sigma_scan_trials_per_point': n_trials_c,
         'control_posterior_proposal': [
             {'alpha': a, 'log_py': round(e, 4), 'abs_error': round(err, 6), 'ESS': ess}
             for a, e, err, ess in ctl_results],

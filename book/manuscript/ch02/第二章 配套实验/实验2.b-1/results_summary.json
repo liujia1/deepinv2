@@ -65,11 +65,11 @@
         "ssim": 0.76339
       }
     ],
-    "time_seconds": 0.003
+    "time_seconds": 0.002
   },
   "tgv_main": {
     "n_iter": 2800,
-    "time_seconds": 6.37
+    "time_seconds": 2.21
   },
   "alpha0": 0.3,
   "alpha1": 0.15,
@@ -110,6 +110,7 @@
     "psnr_tv_best_dB": 43.44,
     "psnr_tgv_dB": 50.39,
     "ssim_tv_matched": 0.948,
+    "ssim_tv_best": 0.98,
     "ssim_tgv": 0.9988,
     "ramp_curvature": {
       "noisy": 6.282,

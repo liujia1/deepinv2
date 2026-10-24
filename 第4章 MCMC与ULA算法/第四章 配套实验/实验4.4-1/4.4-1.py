@@ -191,6 +191,7 @@ print(f"\nRunning MYULA...")
 X = y.clone().detach()
 welford_stats = None  # burn-in 结束后再初始化，避免初始值 y 计入统计
 mmse_errors = []
+probe_series = []  # burn-in 之后每步记录一个标量探针（全图均值），用于自相关/ESS诊断
 
 for i in range(n_iter):
     grad_likelihood = grad_f(X)
@@ -200,6 +201,8 @@ for i in range(n_iter):
     X = X - gamma * (grad_likelihood + grad_prior) + math.sqrt(2 * gamma) * Z
 
     if i >= n_burn_in:
+        # 标量探针（只读，不影响链的随机数流）
+        probe_series.append(X.mean().item())
         # burn-in 结束后，用第一个样本初始化 welford
         # 假设 welford(X) 构造时已将 X 计入统计（n=1）
         # 若 sampling_tools 的实现不同，需改为先 welford(shape) 再 update(X)
@@ -232,6 +235,56 @@ def psnr(x_ref, x_est, max_val=255.0):
 psnr_obs = psnr(x_true, y)
 psnr_mean = psnr(x_true, X_mean)
 psnr_last = psnr(x_true, X_last)
+
+# ══════════════════════════════════════════════════════════
+# 6.5 链诊断：自相关时间/ESS 与近端算子内迭代收敛
+# ══════════════════════════════════════════════════════════
+# (a) 用 burn-in 后的标量探针序列估计自相关时间与有效样本量(ESS)
+def ess_from_series(series):
+    """Geyer 初始正序列估计：返回 lag-1 自相关、积分自相关时间 IACT、ESS"""
+    s = np.asarray(series, dtype=np.float64)
+    n = s.size
+    s = s - s.mean()
+    var = np.dot(s, s) / n
+    if var <= 0 or n < 4:
+        return float('nan'), float('nan'), float('nan')
+    f = np.fft.rfft(s, n=2 * n)
+    acf = np.fft.irfft(f * np.conj(f))[:n]
+    acf = acf / acf[0]
+    tau = 1.0
+    for lag in range(1, n // 2):
+        pair = acf[2 * lag - 1] + acf[2 * lag]
+        if pair <= 0:
+            break
+        tau += 2.0 * pair
+    tau = max(tau, 1.0)
+    return float(acf[1]), float(tau), float(n / tau)
+
+rho1_probe, iact_probe, ess_probe = ess_from_series(probe_series)
+n_post = len(probe_series)
+ess_ratio = ess_probe / n_post if n_post > 0 else float('nan')
+
+# RMSE 轨迹前后半段对比：判断后验均值是否仍在漂移（未收敛的迹象）
+mid = len(mmse_errors) // 2
+rmse_first_half = float(np.mean(mmse_errors[:mid]))
+rmse_second_half = float(np.mean(mmse_errors[mid:]))
+
+# (b) 近端算子内迭代收敛：对比不同 MaxIter 下 prox 输出与参考解(MaxIter=50)的相对差
+#     说明主循环采用的 MaxIter=10 是否已足够（不改变采样路径，也不消耗随机数）
+prox_iters = [1, 2, 3, 5, 10, 20, 50]
+prox_ref = chambolle_prox_TV(X_last, device, {'lambda': lam_beta, 'MaxIter': 50, 'Tol': 0.0})
+prox_rel_diff = {}
+for k in prox_iters:
+    prox_k = chambolle_prox_TV(X_last, device, {'lambda': lam_beta, 'MaxIter': k, 'Tol': 0.0})
+    denom = torch.linalg.vector_norm(prox_ref).item()
+    prox_rel_diff[str(k)] = float(torch.linalg.vector_norm(prox_k - prox_ref).item() / denom)
+prox_rel_diff_used = prox_rel_diff['10']
+
+print(f"\n[链诊断] 后 burn-in 样本数 = {n_post}")
+print(f"  探针 = 全图均值; lag-1 自相关 = {rho1_probe:.4f}, IACT = {iact_probe:.2f}, ESS = {ess_probe:.1f} ({ess_ratio*100:.1f}% of {n_post})")
+print(f"  MMSE-RMSE 前半段均值 = {rmse_first_half:.4f}, 后半段均值 = {rmse_second_half:.4f} (相对变化 {abs(rmse_second_half-rmse_first_half)/max(rmse_first_half,1e-12)*100:.2f}%)")
+print(f"[近端内迭代] MaxIter=10 时相对参考解(MaxIter=50)的误差 = {prox_rel_diff_used:.2e}")
+print("  各 MaxIter 相对误差: " + ", ".join(f"{k}:{v:.2e}" for k, v in prox_rel_diff.items()))
 
 # ══════════════════════════════════════════════════════════
 # 7. 可视化
@@ -286,6 +339,10 @@ print(f"\n[步骤3] 结果:")
 print(f"  PSNR(observation) = {psnr_obs:.2f} dB")
 print(f"  PSNR(MMSE)        = {psnr_mean:.2f} dB")
 print(f"  PSNR(single)      = {psnr_last:.2f} dB")
+print(f"\n[步骤4] 链诊断:")
+print(f"  后 burn-in 样本数 = {n_post}, ESS(全图均值探针) = {ess_probe:.1f}, IACT = {iact_probe:.2f}")
+print(f"  MMSE-RMSE 前半段/后半段 = {rmse_first_half:.4f} / {rmse_second_half:.4f}")
+print(f"  近端算子 MaxIter=10 相对误差 = {prox_rel_diff_used:.2e}")
 # 图像值域统计（MYULA 无约束，样本可能超出 [0,1]）
 print(f"  X_mean range: [{X_mean.min().item():.3f}, {X_mean.max().item():.3f}]")
 print(f"  X_last range: [{X_last.min().item():.3f}, {X_last.max().item():.3f}]")
@@ -349,7 +406,28 @@ results_summary = {
         'psnr_obs': round(float(psnr_obs), 2),
         'psnr_mean': round(float(psnr_mean), 2),
         'psnr_last': round(float(psnr_last), 2),
-    }
+    },
+    'diagnostics': {
+        'chain': {
+            'n_post_burnin': int(n_post),
+            'probe_statistic': '全图均值 mean(X)',
+            'lag1_autocorr': round(float(rho1_probe), 4),
+            'iact': round(float(iact_probe), 2),
+            'ess': round(float(ess_probe), 1),
+            'ess_ratio': round(float(ess_ratio), 4),
+            'rmse_first_half': round(rmse_first_half, 4),
+            'rmse_second_half': round(rmse_second_half, 4),
+            'rmse_relative_change': round(abs(rmse_second_half - rmse_first_half) / max(rmse_first_half, 1e-12), 4),
+        },
+        'prox_inner_iterations': {
+            'maxiter_used_in_chain': 10,
+            'tol_used_in_chain': 1e-3,
+            'reference_maxiter': 50,
+            'probe_state': 'X_last',
+            'rel_diff_by_maxiter': {k: float(f"{v:.3e}") for k, v in prox_rel_diff.items()},
+            'rel_diff_at_used_maxiter': float(f"{prox_rel_diff_used:.3e}"),
+        },
+    },
 }
 
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

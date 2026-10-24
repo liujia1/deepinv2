@@ -118,9 +118,42 @@ best_psnr_clipped = psnr_curve_clipped[best_k - 1]
 # 另：本实验正、反演刻意共用同一离散算子 A，以隔离"噪声×小奇异值"这一单一机制；
 # 正反演模型不一致（Inverse Crime）的影响由实验 1.3-4 专门展示。
 
-# ---- 5. Picard 图 ----
+# 4c. clip 口径的独立峰：raw-best 处的 clipped 值不等于 clipped 曲线自身的峰
+best_k_clipped_scan = int(np.argmax(psnr_curve_clipped)) + 1
+best_psnr_clipped_scan = float(psnr_curve_clipped[best_k_clipped_scan - 1])
+
+# 4d. oracle-Tikhonov 天花板：在同一数据上按真值 PSNR 事后选最优 λ
+# x_λ = Vᵀ diag(σ/(σ²+λ)) Uᵀ y，λ 在全网格上扫描后取真值 PSNR 峰。
+Uty_all = U.T @ y_noisy
+lambda_grid = np.logspace(-6, 2, 200)
+tikhonov_raw_curve, tikhonov_clipped_curve = [], []
+for lam in lambda_grid:
+    coeff = sigma / (sigma ** 2 + lam) * Uty_all
+    _pr, _pc = psnr_two_conventions(Vt.T @ coeff)
+    tikhonov_raw_curve.append(_pr)
+    tikhonov_clipped_curve.append(_pc)
+idx_tik = int(np.argmax(tikhonov_raw_curve))
+tikhonov_oracle = {
+    'lambda_oracle': float(round(float(lambda_grid[idx_tik]), 6)),
+    'psnr_raw_dB': float(round(tikhonov_raw_curve[idx_tik], 2)),
+    'psnr_clipped_dB': float(round(tikhonov_clipped_curve[idx_tik], 2)),
+    'note': 'λ 按真值 PSNR 在 logspace(-6,2,200) 上事后选取，仅作方法天花板参考',
+}
+
+# ---- 5. Picard 图与 Picard 统计 ----
 coeffs_clean = np.abs(U.T @ y_clean)
 coeffs_noisy = np.abs(U.T @ y_noisy)
+
+# 观测信噪比 <1 的方向数，以及这些方向承载的信号能量占比
+snr_per_direction = coeffs_clean / noise_sigma
+mask_snr_below_one = snr_per_direction < 1.0
+picard_stats = {
+    'n_directions_total': int(len(sigma)),
+    'n_directions_snr_below_1': int(mask_snr_below_one.sum()),
+    'signal_energy_fraction_snr_below_1': float(
+        np.sum(coeffs_clean[mask_snr_below_one] ** 2) / np.sum(coeffs_clean ** 2)),
+    'criterion': '|u_i^T y_clean| / sigma_noise < 1（观测信噪比低于噪声水平）',
+}
 
 # ---- 6. 可视化 ----
 fig, axes = plt.subplots(2, 3, figsize=(16, 10))
@@ -223,8 +256,13 @@ results_summary = {
         'raw_dB': round(best_psnr_raw, 2),
         'clipped_dB': round(best_psnr_clipped, 2),
     },
+    'best_k_clipped_scan': int(best_k_clipped_scan),
+    'psnr_best_clipped_scan_dB': float(round(best_psnr_clipped_scan, 2)),
+    'tikhonov_oracle': tikhonov_oracle,
+    'picard_stats': picard_stats,
     'selection_rule_note': 'best_k 按真值 PSNR 在 k=1..1024 上事后选峰（oracle），仅供教学；'
-                           '实战无真值时用 GCV、L 曲线或 Morozov 偏差原理',
+                           '实战无真值时用 GCV、L 曲线或 Morozov 偏差原理。'
+                           'best_k_clipped_scan 为 clip 口径曲线自身的峰（与 raw 峰的 k 不同）',
     'inverse_crime_note': '正、反演刻意共用同一离散算子 A 以隔离噪声放大机制；'
                           '建模误差（Inverse Crime）的影响见实验 1.3-4',
 }

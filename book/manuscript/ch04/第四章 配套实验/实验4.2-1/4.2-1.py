@@ -5,11 +5,12 @@
 
 实验步骤：
   步骤1：MH算法基本流程演示
-  步骤2：细致平衡条件数值验证（统计经验转移频率）
+  步骤2：细致平衡条件数值验证（经验流量统计 + 理论转移矩阵精确核验与负对照）
   步骤3：MH不需要归一化常数的演示
 """
 
 import numpy as np
+import math
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -218,6 +219,73 @@ def _db_compute_metrics(transition_counts):
         'mean_error_all_pairs': float(np.mean(errors_all)) if errors_all else 0.0,
         'n_pairs_all': len(errors_all),
         'flow_imbalance': float(flow_diff / flow_total) if flow_total > 0 else 0.0,
+    }
+
+
+def verify_detailed_balance_theoretical(sigma=1.0, n_bins=20, x_range=(-3.0, 3.0)):
+    """
+    在离散化有限状态链上精确核验细致平衡（代数恒等式），并给出负对照。
+
+    与上面的经验检验互补：经验检验检验"实际运行的链"的流量是否对称，但结果
+    必然带统计噪声；本函数直接构造转移矩阵，可把细致平衡误差检验到机器精度，
+    并用"去掉 MH 接受/拒绝"的负对照说明该指标并非恒为零。
+
+    构造：
+      状态取区间中心 x_i；提议矩阵
+        T_ij = Φ((e_{j+1}-x_i)/σ) - Φ((e_j-x_i)/σ)，
+      越界（x' 落在 x_range 外）的提议质量计入 T_ii（原地不动），故 T 行和为 1。
+      目标质量 pi_i ∝ exp(-x_i²/2)（与目标 N(0,1) 在区间中心的未归一化密度一致）。
+      MH 转移：
+        K_ij = T_ij · min(1, pi_j·T_ji/(pi_i·T_ij))（i≠j），
+        K_ii = T_ii + Σ_{j≠i} T_ij·(1-alpha_ij)（拒绝部分留在原地）。
+
+    指标：max_ij |pi_i·K_ij - pi_j·K_ji| 与相对不平衡度
+          Σ|pi_i·K_ij - pi_j·K_ji| / Σ(pi_i·K_ij + pi_j·K_ji)。
+    负对照：alpha≡1（不做 MH 修正，K=T），同一指标应显著非零。
+    """
+    edges = np.linspace(x_range[0], x_range[1], n_bins + 1)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+
+    def _Phi(z):
+        return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+
+    T = np.zeros((n_bins, n_bins))
+    for i in range(n_bins):
+        for j in range(n_bins):
+            T[i, j] = _Phi((edges[j + 1] - centers[i]) / sigma) \
+                      - _Phi((edges[j] - centers[i]) / sigma)
+        T[i, i] += 1.0 - T[i].sum()   # 越界提议：留在原区间
+
+    pi = np.exp(-0.5 * centers ** 2)
+    pi /= pi.sum()
+
+    alpha = np.ones((n_bins, n_bins))
+    for i in range(n_bins):
+        for j in range(n_bins):
+            if i != j and T[i, j] > 0:
+                alpha[i, j] = min(1.0, pi[j] * T[j, i] / (pi[i] * T[i, j]))
+
+    K = T * alpha
+    # 拒绝部分回到对角线，使 K 每行和严格为 1
+    K[np.diag_indices(n_bins)] += T.sum(axis=1) - K.sum(axis=1)
+
+    def _imbalance(M):
+        F = pi[:, None] * M
+        resid = np.abs(F - F.T)
+        denom = np.abs(F + F.T).sum()
+        return float(resid.max()), float(resid.sum() / denom if denom > 0 else 0.0)
+
+    max_resid, rel_resid = _imbalance(K)
+    nc_max_resid, nc_rel_resid = _imbalance(T)
+    return {
+        'n_bins': n_bins,
+        'x_range': [float(x_range[0]), float(x_range[1])],
+        'sigma': float(sigma),
+        'max_abs_residual': max_resid,
+        'relative_imbalance': rel_resid,
+        'row_sum_error': float(np.abs(K.sum(axis=1) - 1.0).max()),
+        'negative_control_max_abs_residual': nc_max_resid,
+        'negative_control_relative_imbalance': nc_rel_resid,
     }
 
 
@@ -462,6 +530,20 @@ print(f"  [参考] 含单向零计数 bin 对的全口径平均误差 = "
       f"{db_results['mean_error_all_pairs']:.4f}（共 {db_results['n_pairs_all']} 对）")
 print(f"  说明: 全口径误差偏大由两端稀有 bin（期望计数仅个位数）的泊松噪声主导；")
 print(f"        流量加权指标给大流量 bin 对更高权重，统计上更稳健。")
+
+# 精确核验：直接构造离散链的转移矩阵，检验到机器精度，并提供负对照
+db_theory = verify_detailed_balance_theoretical(sigma=1.0, n_bins=20, x_range=(-3.0, 3.0))
+print("")
+print(f"  [精确核验] 离散链转移矩阵（{db_theory['n_bins']} 区间，σ={db_theory['sigma']}）:")
+print(f"    MH 转移（π_i·K_ij vs π_j·K_ji）: max 绝对残差 = {db_theory['max_abs_residual']:.2e}，"
+      f"相对不平衡度 = {db_theory['relative_imbalance']:.2e}，"
+      f"行和误差 = {db_theory['row_sum_error']:.2e}")
+print(f"    负对照（去掉 MH 接受/拒绝，K=T）: max 绝对残差 = "
+      f"{db_theory['negative_control_max_abs_residual']:.4f}，"
+      f"相对不平衡度 = {db_theory['negative_control_relative_imbalance']:.4f}")
+print(f"    说明: MH 构造下细致平衡是代数恒等式，残差只剩浮点舍入；负对照说明该指标")
+print(f"          并非恒为零——经验检验的 {db_results['flow_imbalance']:.4f} 远低于负对照量级，")
+print(f"          其剩余偏差处于有限样本的统计噪声范围。")
 
 # 收敛历史（同一链、计数累积）
 print(f"  收敛历史（流量加权不平衡度随样本量变化）:")
@@ -720,6 +802,16 @@ results_summary = {
             }
             for snap in db_results['convergence']
         ],
+        'theoretical_matrix_check': {
+            'n_bins': db_theory['n_bins'],
+            'x_range': db_theory['x_range'],
+            'sigma': db_theory['sigma'],
+            'max_abs_residual': db_theory['max_abs_residual'],
+            'relative_imbalance': db_theory['relative_imbalance'],
+            'row_sum_error': db_theory['row_sum_error'],
+            'negative_control_max_abs_residual': db_theory['negative_control_max_abs_residual'],
+            'negative_control_relative_imbalance': db_theory['negative_control_relative_imbalance'],
+        },
     },
     'step3_normalization_constant': {
         'constants': [r['C'] for r in results],

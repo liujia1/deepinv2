@@ -26,8 +26,37 @@
     "n_burn_in": 4000
   },
   "results": {
-    "psnr_obs": 21.06,
-    "psnr_mean": 23.59,
-    "psnr_last": 23.41
+    "psnr_obs": 21.03,
+    "psnr_mean": 23.52,
+    "psnr_last": 23.27
+  },
+  "diagnostics": {
+    "chain": {
+      "n_post_burnin": 6000,
+      "probe_statistic": "全图均值 mean(X)",
+      "lag1_autocorr": 0.9731,
+      "iact": 60.01,
+      "ess": 100.0,
+      "ess_ratio": 0.0167,
+      "rmse_first_half": 17.1068,
+      "rmse_second_half": 16.9988,
+      "rmse_relative_change": 0.0063
+    },
+    "prox_inner_iterations": {
+      "maxiter_used_in_chain": 10,
+      "tol_used_in_chain": 0.001,
+      "reference_maxiter": 50,
+      "probe_state": "X_last",
+      "rel_diff_by_maxiter": {
+        "1": 0.0007597,
+        "2": 0.0003316,
+        "3": 0.0002021,
+        "5": 0.0001109,
+        "10": 4.754e-05,
+        "20": 1.689e-05,
+        "50": 0.0
+      },
+      "rel_diff_at_used_maxiter": 4.754e-05
+    }
   }
 }

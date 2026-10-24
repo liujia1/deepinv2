@@ -23,6 +23,8 @@ Step 5: ★自定义模糊核与MRI掩模算子 —— 将自定义退化集成�
   0.4.2 下为 64×64。脚本按算子实际输出尺寸自适应，两版本结果均正确。
   2026-10-15 复核：同环境（torch 2.11.0+cpu + deepinv 0.4.0）原样复跑，
   results_summary.json 全部数值与四张图与存档逐位一致，完全确定可复现。
+  版本漂移提示：上述“逐位一致”只对该环境组合成立；在 deepinv 0.4.1 + CUDA 上
+  复跑时，Blur 的 padding 支持、默认输出尺寸与算子实现差异都可能带来数值变化。
 """
 
 import os, sys
@@ -144,7 +146,27 @@ deepinv Physics 类体系的设计三原则：
 """)
 
 # 加载示例图像
-x_true = load_example("celeba_example.jpg", img_size=(256, 256), resize_mode='resize')
+# ★ 在线优先（官方 deepinv/images 数据集）；网络不可达时回退到脚本同目录下的
+#   celeba_example.jpg（同源文件的本地副本），保证离线环境可复现。
+def _load_test_image():
+    try:
+        img = load_example("celeba_example.jpg", img_size=(256, 256), resize_mode='resize')
+        print("测试图像: 在线加载（deepinv/images 官方数据集）")
+        return img
+    except Exception as e:
+        local_candidates = [
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "celeba_example.jpg"),
+            os.path.join(os.environ.get("TEMP", ""), "celeba_example.jpg"),
+        ]
+        for p in local_candidates:
+            if p and os.path.exists(p):
+                from deepinv.utils import load_image
+                print(f"测试图像: 在线加载失败（{type(e).__name__}），改用本地副本 {p}")
+                return load_image(p, img_size=(256, 256), resize_mode='resize')
+        raise
+
+
+x_true = _load_test_image()
 print(f"load_example 返回 shape: {x_true.shape}, ndim: {x_true.ndim}")
 # 确保是4D张量 (B, C, H, W)（3D 补批维；5D 为非标准格式，按启发式压缩并告警）
 x_true = _ensure_4d(x_true, context="load_example 输出")
@@ -292,6 +314,10 @@ def generate_random_transforms(J, scale=1.0, max_angle=np.pi/8, max_shift=0.05):
     【教学注意】scale 默认 1.0：纯旋转+平移时线性部分为正交矩阵（A^T = A^{-1}），
     手动伴随的连续部分精确；若设 scale≠1 引入缩放，A 不再正交，
     手动伴随误差会显著增大（连续伴随公式需要用 A^{-1} 而非 A^T）。
+
+    max_shift 是平移分量的高斯标准差（transf[i,:,-1] = randn(2)*max_shift），
+    不是硬上限：二维高斯下约 61% 的视角平移模长会超过 max_shift。
+    angle 为双向均匀采样，范围 [-max_angle, max_angle]。
     """
     transf = torch.zeros(J, 2, 3)
     for i in range(J):
@@ -342,7 +368,7 @@ print("="*70)
 print("""
 伴随验证原理 (Dot Product Test):
   对任意 x, y: <Ax, y> ≈ <x, A^T y>
-  相对误差 |<Ax,y> - <x,A^Ty>| / max(|<Ax,y>|, |<x,A^Ty>|) 应接近0
+  相对误差 |<Ax,y> - <x,A^Ty>| / (|<Ax,y>| + |<x,A^Ty>| + 1e-10) 应接近0（对称分母）
 
 deepinv 提供:
   physics.adjointness_test(x) → 未归一化差值 <v,Ax> - <A^T v,x>（量级随输入范数增长，
@@ -1027,7 +1053,9 @@ results = {
         'multiview_num_views_J': 16,
         'multiview_transform': '旋转+平移（scale=1.0，线性部分正交）',
         'max_rotation_angle_rad': float(np.pi / 8),
-        'max_shift': 0.05,
+        'max_shift': 0.05,  # 平移分量的高斯标准差，非硬上限
+        'max_shift_meaning': '平移分量 ~ N(0, 0.05^2)，0.05 是标准差而非最大模长',
+        'rotation_range': 'U[-π/8, π/8]',
         'downsampling_factor': 4,
         'mri_acceleration': 4,
         'gaussian_sigma': sigma_gauss,
@@ -1037,10 +1065,10 @@ results = {
     'adjoint_relative_error': {
         # 归一化 dot product 相对误差（detailed_adjointness_test 均值），
         # 与控制台的阈值判断口径一致；None 表示对应部分未运行
+        # ★ 本字典内所有字段量纲一致（均为无量纲相对误差），可直接横向比较
         'downsampling_factor2': float(adj_err_down),
         'multiview_manual_mean': float(abs(adj_err_multi)),
         'multiview_manual_std': float(std_multi),
-        'multiview_manual_adjointness_test_raw': float(abs(adj_err_multi_raw)),
         'multiview_autograd': (float(abs(adj_err_auto))
                                if 'adj_err_auto' in locals() else None),
         'blur': (float(abs(adj_err_blur))
@@ -1048,6 +1076,13 @@ results = {
         'composite_blur_downsample': (float(abs(adj_err_composite))
                                       if 'adj_err_composite' in locals() else None),
         'mri': (float(abs(adj_err_mri)) if 'adj_err_mri' in locals() else None),
+    },
+    'adjointness_test_raw_inner_product_diff': {
+        # ★ 未归一化的内积差 |<Ax,y> - <x,A^T y>|（adjointness_test 原样返回值）。
+        #   量纲随输入范数与随机 y 的取值增长，**不可**与上面
+        #   'adjoint_relative_error' 的无量纲相对误差横向比较，也不可与固定阈值比较；
+        #   仅作原始量级参考。
+        'multiview_manual': float(abs(adj_err_multi_raw)),
     },
     'noise_mae': {
         'gaussian': float(noise_gauss),

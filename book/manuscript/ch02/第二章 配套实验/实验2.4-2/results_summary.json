@@ -1,16 +1,18 @@
 {
   "single_realization_seed42": {
-    "psnr_linear_dB": 22.81,
-    "psnr_tikhonov_wiener_lam0.01_dB": 14.78,
-    "psnr_tikhonov_cg_lam0.05_dB": 21.89,
-    "psnr_tv_lbfgs_lam0.03_dB": 32.88,
-    "psnr_pnp_gd_dB": 33.57,
-    "psnr_single_pass_sigma0.05_dB": 23.23,
-    "psnr_single_pass_sigma0.2_dB": 22.36
+    "psnr_linear_dB": 22.77,
+    "psnr_tikhonov_wiener_lam0.01_dB": 14.89,
+    "psnr_tikhonov_cg_lam0.01_untuned_dB": 16.77,
+    "psnr_tikhonov_cg_lam0.05_dB": 22.02,
+    "psnr_tv_lbfgs_lam0.03_dB": 32.51,
+    "psnr_pnp_gd_dB": 32.84,
+    "psnr_single_pass_sigma0.05_dB": 23.19,
+    "psnr_single_pass_sigma0.2_dB": 22.32
   },
   "parameters": {
     "noise_sigma": 0.05,
     "lambda_tikhonov_wiener_headline": 0.01,
+    "lambda_tikhonov_cg_untuned": 0.01,
     "lambda_tikhonov_cg_tuned": 0.05,
     "lambda_tv": 0.03,
     "tv_solver": "L-BFGS + strong_wolfe (max_iter=500, 解至收敛)",
@@ -26,36 +28,36 @@
     ],
     "mean_std_dB": {
       "linear": {
-        "mean": 22.741,
-        "std": 0.03
+        "mean": 22.756,
+        "std": 0.043
       },
       "tikhonov_wiener_0.01": {
-        "mean": 14.9,
-        "std": 0.095
+        "mean": 14.886,
+        "std": 0.114
       },
       "tikhonov_cg_0.05": {
-        "mean": 21.912,
-        "std": 0.09
+        "mean": 21.952,
+        "std": 0.08
       },
       "single_pass_0.05": {
-        "mean": 23.152,
-        "std": 0.034
+        "mean": 23.167,
+        "std": 0.048
       },
       "single_pass_0.2": {
-        "mean": 22.298,
-        "std": 0.028
+        "mean": 22.307,
+        "std": 0.039
       },
       "tv_lbfgs_0.03": {
-        "mean": 32.23,
-        "std": 0.388
+        "mean": 32.34,
+        "std": 0.524
       },
       "pnp_gd_50": {
-        "mean": 32.625,
-        "std": 0.614
+        "mean": 32.53,
+        "std": 0.739
       }
     },
-    "pnp_gd_minus_tv_mean_dB": 0.395,
-    "pnp_gd_vs_tv_win_rate": 0.75,
+    "pnp_gd_minus_tv_mean_dB": 0.19,
+    "pnp_gd_vs_tv_win_rate": 0.5,
     "single0.05_minus_linear_mean_dB": 0.411,
     "single0.05_vs_linear_win_rate": 1.0
   }

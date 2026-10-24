@@ -267,7 +267,10 @@ fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 # 子图1: 去噪器输出 vs 真实干净样本
 axes[0, 0].scatter(x_noisy_demo, x_clean_test, c='blue', s=50, alpha=0.6, label='真实干净样本')
 axes[0, 0].scatter(x_noisy_demo, denoised_demo, c='red', s=50, alpha=0.6, marker='x', label='去噪器输出')
-axes[0, 0].plot([-6, 6], [-6, 6], 'k--', alpha=0.3, label='理想去噪')
+axes[0, 0].plot([-6, 6], [-6, 6], 'k--', alpha=0.3, label='恒等映射（完全不去噪）')
+# 真正的理想去噪 = 后验均值 E[x|x~] = x~ + sigma^2 * grad log p_sigma(x~)
+axes[0, 0].plot(x_grid, x_grid + sigma**2 * true_score_grid, 'g-', lw=2,
+                label=r'理想去噪 $E[x|\tilde{x}]$')
 axes[0, 0].set_xlabel('含噪输入 $\\tilde{x}$')
 axes[0, 0].set_ylabel('输出')
 axes[0, 0].set_title(f'去噪效果 ($\\sigma={sigma}$)')
@@ -285,11 +288,19 @@ axes[0, 1].grid(alpha=0.3)
 
 # 子图3: 去噪误差分布（条形图）
 errors = denoised_demo - x_clean_test
+# 参照：贝叶斯最优去噪器（后验均值）在同一批样本上的误差
+ideal_demo = x_noisy_demo + sigma**2 * gm1d_score_noisy(x_noisy_demo, sigma)
+mae_ideal = np.mean(np.abs(ideal_demo - x_clean_test))
+mae_identity = np.mean(np.abs(x_noisy_demo - x_clean_test))
+print(f"  去噪器 MAE: {np.mean(np.abs(errors)):.4f}")
+print(f"  理想去噪器 MAE (后验均值): {mae_ideal:.4f}")
+print(f"  恒等映射 MAE (完全不去噪): {mae_identity:.4f}")
+
 axes[1, 0].bar(range(len(errors)), errors, color='orange', alpha=0.7)
 axes[1, 0].axhline(y=0, color='k', linestyle='--', alpha=0.3)
 axes[1, 0].set_xlabel('样本索引')
 axes[1, 0].set_ylabel('去噪误差')
-axes[1, 0].set_title(f'去噪误差条形图 (平均绝对误差={np.mean(np.abs(errors)):.3f})')
+axes[1, 0].set_title(f'去噪误差条形图 (MAE={np.mean(np.abs(errors)):.3f}, 理想={mae_ideal:.3f})')
 axes[1, 0].grid(alpha=0.3, axis='y')
 
 # 子图4: 去噪误差直方图（与子图3形成对比，展示统计分布）
@@ -320,7 +331,7 @@ print("   - 提取得分: $\\nabla\\log p_\\sigma(\\tilde{x}) = \\frac{D_\\sigma
 print("   - 去噪器与得分函数通过Tweedie等式等价转换")
 print("\n2. 去噪效果验证:")
 print(f"   - 相关系数: {corr:.4f}")
-print(f"   - 平均去噪误差: {np.mean(np.abs(errors)):.4f}")
+print(f"   - 去噪器 MAE: {np.mean(np.abs(errors)):.4f}  (理想去噪器 {mae_ideal:.4f} / 恒等映射 {mae_identity:.4f})")
 print("   - Tweedie等式成功将去噪器转换为得分估计器")
 print("\n3. 实践意义:")
 print("   - 去噪是更容易学习的任务(有明确的监督信号)")

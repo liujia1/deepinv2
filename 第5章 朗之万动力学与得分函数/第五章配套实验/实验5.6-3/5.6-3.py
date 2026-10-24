@@ -385,16 +385,29 @@ def pnp_map(maxit=3000, delta_frac=0.99, momentum=0.9, tol=1e-6):
         print(f"  [Warn] MAP 迭代 {maxit} 步未达 tol={tol:g}（相对变化仍大于容差），"
               f"该点可能不是严格不动点，MAP 指标仅供参考")
     print(f"  [MAP] 确定性PnP收敛：iter={used}, delta={delta:.3e}")
-    return X.detach().cpu().numpy()
+    info = {'iterations': int(used), 'converged': bool(used < maxit),
+            'tol': float(tol), 'delta': float(delta)}
+    return X.detach().cpu().numpy(), info
 
 MAP_PARAMS = dict(maxit=3000, delta_frac=0.99, momentum=0.9, tol=1e-6)
 _map_z = cache_load('map', MAP_PARAMS)
 if _map_z is not None:
     x_map = _map_z['x_map']
+    # 旧缓存未存收敛元数据时取 None（JSON 中显式写 null 并加注记，不伪装成"已收敛"）
+    map_info = {k: (np.asarray(_map_z[k]).item() if k in _map_z else None)
+                for k in ('map_used', 'map_converged', 'map_tol', 'map_delta')}
     print("[MAP] 命中磁盘缓存，跳过 3000 步确定性PnP迭代")
+    if map_info['map_used'] is None:
+        print("[MAP] 旧缓存缺少收敛元数据（新增于本版），JSON 中记为 null；"
+              "删除 cache_map_*.npz 重跑可补齐")
 else:
-    x_map = pnp_map(**MAP_PARAMS)
-    cache_save('map', MAP_PARAMS, x_map=np.asarray(x_map))
+    x_map, map_info_raw = pnp_map(**MAP_PARAMS)
+    map_info = {'map_used': map_info_raw['iterations'],
+                'map_converged': map_info_raw['converged'],
+                'map_tol': map_info_raw['tol'],
+                'map_delta': map_info_raw['delta']}
+    cache_save('map', MAP_PARAMS, x_map=np.asarray(x_map),
+               **{k: np.asarray(v) for k, v in map_info.items()})
     print("[MAP] 确定性PnP解已写入缓存，下次重跑将直接加载")
 map_label = 'MAP (确定性PnP)'
 print("[Info] 使用确定性PnP迭代真实求解MAP（后验众数）")
@@ -879,12 +892,26 @@ results_summary = {
             "全局相似度": round(float(sim_map), 6),
             "NRMSE": round(float(nrmse_map), 6),
             "高频能量": round(hf_map, 6),
+            "MAP收敛信息": {
+                "最大迭代": int(MAP_PARAMS['maxit']),
+                "实际迭代": (None if map_info['map_used'] is None
+                             else int(map_info['map_used'])),
+                "是否达tol收敛": (None if map_info['map_converged'] is None
+                                  else bool(map_info['map_converged'])),
+                "tol": (None if map_info['map_tol'] is None
+                        else float(map_info['map_tol'])),
+                "步长delta": (None if map_info['map_delta'] is None
+                              else float(map_info['map_delta'])),
+                "说明": ("本字段由本版新增；若命中旧缓存则记为 null（删 cache_map_*.npz "
+                         "重跑可补齐）。是否收敛不改变已算出的 MAP 图像，只用于判断"
+                         "该点是否为严格不动点"),
+            },
         },
         "指标口径说明": (
             "NRMSE = ||x_true-x_hat||_F / ||x_true||_F（Frobenius 归一化），"
             "与5.5-1 sampling_tools/measures.py 及5.5-1 JSON 同一口径，"
-            "故MMSE行NRMSE与5.5-1的0.031208一致、可直接互证；"
-            "全局相似度为简化的全局SSIM（非skimage标准局部窗口SSIM），勿与5.5-1的0.9200直接比"),
+            "故MMSE行NRMSE与5.5-1的0.03144一致、可直接互证；"
+            "全局相似度为简化的全局SSIM（非skimage标准局部窗口SSIM），勿与5.5-1的0.9191直接比"),
     },
     "步骤5_不确定性量化": {
         "后验标准差_平均值": round(float(np.mean(post_std)), 6),

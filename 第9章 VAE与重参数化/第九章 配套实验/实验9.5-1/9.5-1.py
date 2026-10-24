@@ -627,11 +627,16 @@ for beta, name_print in zip(betas, beta_names_print):
     enc_q.eval(); dec_q.eval()
     torch.manual_seed(0)  # 每个模型用同一组固定采样噪声，公平且可复现
     bce_sum = 0
+    kl_sum = 0
+    kl_dim_sum = 0
     mse_list = []
     with torch.no_grad():
         for x, _ in test_loader:
             x = x.view(-1, 784).to(device)
             mu, logvar = enc_q(x)
+            kl_dim = 0.5 * (mu.pow(2) + logvar.exp() - logvar - 1)
+            kl_sum += kl_dim.sum().item()
+            kl_dim_sum = kl_dim_sum + kl_dim.sum(dim=0)
             z = reparameterize(mu, logvar)
             x_recon = dec_q(z)
             bce_sum += F.binary_cross_entropy(x_recon, x, reduction='sum').item()
@@ -639,8 +644,12 @@ for beta, name_print in zip(betas, beta_names_print):
     mse_all = torch.cat(mse_list)
     psnr = (10 * torch.log10(1.0 / mse_all.clamp(min=1e-12))).mean().item()
     test_bce = bce_sum / len(test_loader.dataset)
-    test_metrics[beta] = {'test_bce': test_bce, 'test_psnr_db': float(psnr)}
-    print(f"  {name_print}: 测试BCE={test_bce:.2f}, PSNR={psnr:.1f} dB")
+    test_kld = kl_sum / len(test_loader.dataset)
+    test_active = int((kl_dim_sum / len(test_loader.dataset) > 0.01).sum())
+    test_metrics[beta] = {'test_bce': test_bce, 'test_psnr_db': float(psnr),
+                          'test_kld': test_kld, 'test_active': test_active}
+    print(f"  {name_print}: 测试BCE={test_bce:.2f}, PSNR={psnr:.1f} dB, "
+          f"测试KL={test_kld:.2f} nats, 活跃={test_active}/{models[beta]['history']['latent_dim']}")
 
 
 # ============================================================
@@ -859,6 +868,8 @@ for beta in betas:
         # 测试集重建质量（采样z评测，口径同9.3-1）；插值实验仅对比β=0/1，β=4为null
         'test_bce': test_metrics[beta]['test_bce'],
         'test_psnr_db': test_metrics[beta]['test_psnr_db'],
+        'test_kld': test_metrics[beta].get('test_kld'),
+        'test_active': test_metrics[beta].get('test_active'),
         'interp_mid_dist_ratio': midpoint_ratios.get(beta),
     }
 results_summary = _to_native(results_summary)

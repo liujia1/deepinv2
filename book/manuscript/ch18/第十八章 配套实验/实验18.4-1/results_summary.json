@@ -1,76 +1,143 @@
 {
+  "_meta": {
+    "experiment": "实验18.4-1 端到端求解策略对比",
+    "script_version": "CACHE_VERSION=10",
+    "environment": {
+      "device": "cuda",
+      "torch_version": "2.11.0+cu126",
+      "deepinv_version": "0.4.1"
+    },
+    "scenes": {
+      "轻度模糊": "BlurFFT(gaussian sigma=1.5) + GaussianNoise(sigma=0.01)",
+      "重度模糊": "BlurFFT(gaussian sigma=3.0) + GaussianNoise(sigma=0.05)",
+      "2倍超分": "Downsampling(factor=2, filter=bicubic) + GaussianNoise(sigma=0.01)",
+      "4倍超分": "Downsampling(factor=4, filter=bicubic) + GaussianNoise(sigma=0.01)",
+      "50%修复": "Inpainting(固定掩码 keep=0.4986, hash=e680e2cd8386ed76) + GaussianNoise(sigma=0.01)",
+      "80%修复": "Inpainting(固定掩码 keep=0.2004, hash=eaaad88cd8884c90) + GaussianNoise(sigma=0.01)"
+    },
+    "metric_notes": {
+      "psnr": "DiffPIR 的 psnr 是 n_samples 次独立采样 PSNR 的均值；其余方法为单次重建 PSNR",
+      "psnr_std": "单样本 PSNR 的总体标准差（ddof=0）",
+      "psnr_mmse": "n_samples 个样本平均图（后验均值的蒙特卡洛估计）的 PSNR",
+      "ssim": "DiffPIR 的 ssim 在样本平均图上计算，与 psnr 不是同一张图；其余方法为单次重建 SSIM",
+      "time": "单次重建耗时（秒），DiffPIR 为 n_samples 次采样的平均单样本耗时",
+      "baseline_names": "超分场景的无先验基线为双线性插值上采样（插值基线），其余场景为零填充伴随重建（伴随重建）"
+    },
+    "diffpir_config": {
+      "model": "DiffUNet",
+      "max_iter": 100,
+      "zeta": 0.1,
+      "lambda_": 7.0,
+      "n_samples": 3,
+      "seeds": [
+        42,
+        123,
+        2024
+      ],
+      "sigma": "重度模糊 0.05，其余场景 0.01"
+    },
+    "completeness": {
+      "complete": true,
+      "expected_scenes": [
+        "轻度模糊",
+        "重度模糊",
+        "2倍超分",
+        "4倍超分",
+        "50%修复",
+        "80%修复"
+      ],
+      "missing_scenes": [],
+      "missing_diffpir": [],
+      "diffpir_available": true
+    },
+    "provenance": {
+      "mask_generation": "修复场景掩模由固定 CPU Generator(seed=123) 生成并记录 MD5 hash（见 scenes 字段）；v9 之前的归档为 deepinv 内部随机掩模产物，与当前脚本不可复现。",
+      "rerun_history": "v10 全量重跑：与 v8（随机掩模）归档相比，非扩散方法 PSNR 差异 ≤0.21 dB，六场景的方法排序完全不变；修复场景的差异源于掩模像素分布不同，而非算法改动。"
+    },
+    "warnings": []
+  },
   "轻度模糊": {
     "Tikhonov": {
-      "psnr": 31.22,
-      "ssim": 0.8479,
-      "time": 0.295
+      "psnr": 31.21,
+      "ssim": 0.8467,
+      "time": 0.075
     },
     "TV正则化": {
-      "psnr": 31.57,
-      "ssim": 0.8618,
-      "time": 5.876
+      "psnr": 31.58,
+      "ssim": 0.862,
+      "time": 0.779
     },
     "伴随重建": {
-      "psnr": 27.73,
-      "ssim": 0.8085,
+      "psnr": 27.74,
+      "ssim": 0.8087,
       "time": 0.0
     },
     "DPIR(PnP)": {
-      "psnr": 34.66,
-      "ssim": 0.9243,
-      "time": 19.56
+      "psnr": 34.68,
+      "ssim": 0.9245,
+      "time": 0.227
     },
     "DiffPIR(扩散)": {
-      "psnr": 31.63,
-      "ssim": 0.8982,
-      "time": 357.309,
-      "psnr_std": 0.219,
-      "psnr_mmse": 33.6,
+      "psnr": 31.67,
+      "ssim": 0.8992,
+      "time": 9.601,
+      "psnr_std": 0.198,
+      "psnr_mmse": 33.7,
       "n_samples": 3,
-      "time_total": 1071.9
+      "time_total": 28.8,
+      "psnr_samples": [
+        31.47,
+        31.6,
+        31.94
+      ]
     }
   },
   "重度模糊": {
     "Tikhonov": {
-      "psnr": 25.3,
-      "ssim": 0.5642,
-      "time": 0.366
+      "psnr": 25.35,
+      "ssim": 0.5655,
+      "time": 0.061
     },
     "TV正则化": {
-      "psnr": 27.32,
-      "ssim": 0.7388,
-      "time": 5.573
+      "psnr": 27.34,
+      "ssim": 0.7384,
+      "time": 0.713
     },
     "伴随重建": {
       "psnr": 23.91,
-      "ssim": 0.6553,
+      "ssim": 0.6554,
       "time": 0.0
     },
     "DPIR(PnP)": {
-      "psnr": 29.21,
-      "ssim": 0.8026,
-      "time": 19.427
+      "psnr": 29.29,
+      "ssim": 0.8034,
+      "time": 0.172
     },
     "DiffPIR(扩散)": {
-      "psnr": 26.93,
-      "ssim": 0.7661,
-      "time": 355.878,
-      "psnr_std": 0.063,
-      "psnr_mmse": 28.62,
+      "psnr": 27.16,
+      "ssim": 0.7684,
+      "time": 9.557,
+      "psnr_std": 0.134,
+      "psnr_mmse": 28.84,
       "n_samples": 3,
-      "time_total": 1067.6
+      "time_total": 28.7,
+      "psnr_samples": [
+        27.19,
+        26.98,
+        27.31
+      ]
     }
   },
   "2倍超分": {
     "Tikhonov": {
-      "psnr": 33.18,
-      "ssim": 0.8926,
-      "time": 0.606
+      "psnr": 33.2,
+      "ssim": 0.8934,
+      "time": 0.159
     },
     "TV正则化": {
       "psnr": 34.12,
-      "ssim": 0.9182,
-      "time": 5.611
+      "ssim": 0.9183,
+      "time": 1.067
     },
     "插值基线": {
       "psnr": 33.07,
@@ -78,111 +145,131 @@
       "time": 0.0
     },
     "DPIR(PnP)": {
-      "psnr": 35.67,
+      "psnr": 35.68,
       "ssim": 0.9404,
-      "time": 19.348
+      "time": 0.206
     },
     "DiffPIR(扩散)": {
-      "psnr": 33.04,
-      "ssim": 0.9232,
-      "time": 352.987,
-      "psnr_std": 0.157,
-      "psnr_mmse": 34.77,
+      "psnr": 33.07,
+      "ssim": 0.9234,
+      "time": 9.707,
+      "psnr_std": 0.085,
+      "psnr_mmse": 34.88,
       "n_samples": 3,
-      "time_total": 1059.0
+      "time_total": 29.1,
+      "psnr_samples": [
+        33.11,
+        32.95,
+        33.14
+      ]
     }
   },
   "4倍超分": {
     "Tikhonov": {
       "psnr": 29.15,
-      "ssim": 0.805,
-      "time": 0.946
+      "ssim": 0.8053,
+      "time": 0.166
     },
     "TV正则化": {
-      "psnr": 27.81,
-      "ssim": 0.7877,
-      "time": 6.283
+      "psnr": 27.83,
+      "ssim": 0.788,
+      "time": 1.058
     },
     "插值基线": {
-      "psnr": 26.85,
-      "ssim": 0.7655,
+      "psnr": 26.87,
+      "ssim": 0.7656,
       "time": 0.0
     },
     "DPIR(PnP)": {
       "psnr": 30.19,
-      "ssim": 0.8523,
-      "time": 19.364
+      "ssim": 0.8532,
+      "time": 0.204
     },
     "DiffPIR(扩散)": {
-      "psnr": 29.16,
-      "ssim": 0.8356,
-      "time": 353.522,
-      "psnr_std": 0.035,
-      "psnr_mmse": 30.58,
+      "psnr": 29.31,
+      "ssim": 0.8382,
+      "time": 9.724,
+      "psnr_std": 0.119,
+      "psnr_mmse": 30.73,
       "n_samples": 3,
-      "time_total": 1060.6
+      "time_total": 29.2,
+      "psnr_samples": [
+        29.46,
+        29.17,
+        29.29
+      ]
     }
   },
   "50%修复": {
     "Tikhonov": {
-      "psnr": 11.34,
-      "ssim": 0.216,
-      "time": 0.047
+      "psnr": 11.28,
+      "ssim": 0.2134,
+      "time": 0.018
     },
     "TV正则化": {
-      "psnr": 29.01,
-      "ssim": 0.7905,
-      "time": 8.16
+      "psnr": 28.84,
+      "ssim": 0.7877,
+      "time": 0.971
     },
     "伴随重建": {
-      "psnr": 11.34,
-      "ssim": 0.2158,
+      "psnr": 11.28,
+      "ssim": 0.2132,
       "time": 0.0
     },
     "DPIR(PnP)": {
-      "psnr": 33.01,
-      "ssim": 0.876,
-      "time": 48.672
+      "psnr": 33.12,
+      "ssim": 0.8763,
+      "time": 0.737
     },
     "DiffPIR(扩散)": {
-      "psnr": 31.32,
-      "ssim": 0.912,
-      "time": 354.03,
-      "psnr_std": 0.155,
-      "psnr_mmse": 33.3,
+      "psnr": 31.47,
+      "ssim": 0.9123,
+      "time": 9.539,
+      "psnr_std": 0.046,
+      "psnr_mmse": 33.54,
       "n_samples": 3,
-      "time_total": 1062.1
+      "time_total": 28.6,
+      "psnr_samples": [
+        31.46,
+        31.43,
+        31.53
+      ]
     }
   },
   "80%修复": {
     "Tikhonov": {
-      "psnr": 9.32,
-      "ssim": 0.099,
-      "time": 0.053
+      "psnr": 9.31,
+      "ssim": 0.098,
+      "time": 0.018
     },
     "TV正则化": {
-      "psnr": 21.08,
-      "ssim": 0.5411,
-      "time": 7.801
+      "psnr": 20.91,
+      "ssim": 0.5386,
+      "time": 0.953
     },
     "伴随重建": {
-      "psnr": 9.32,
-      "ssim": 0.0992,
+      "psnr": 9.31,
+      "ssim": 0.0982,
       "time": 0.0
     },
     "DPIR(PnP)": {
-      "psnr": 28.14,
-      "ssim": 0.7586,
-      "time": 48.429
+      "psnr": 27.99,
+      "ssim": 0.7615,
+      "time": 0.741
     },
     "DiffPIR(扩散)": {
-      "psnr": 21.05,
-      "ssim": 0.6364,
-      "time": 353.762,
-      "psnr_std": 0.581,
-      "psnr_mmse": 22.39,
+      "psnr": 20.27,
+      "ssim": 0.5964,
+      "time": 9.523,
+      "psnr_std": 0.969,
+      "psnr_mmse": 21.58,
       "n_samples": 3,
-      "time_total": 1061.3
+      "time_total": 28.6,
+      "psnr_samples": [
+        18.95,
+        20.61,
+        21.25
+      ]
     }
   }
 }

@@ -66,7 +66,14 @@
   "psnr_tv_500_iter": 26.96,
   "psnr_tv_2000_iter": 26.96,
   "tv_rel_change_500_vs_2000": 0.000798,
+  "cp_norm_K_squared": 8.0,
+  "cp_tau_sigma_normK2": 1.0,
+  "cp_step_on_convergence_boundary": true,
+  "cp_margin_step_tau_sigma_normK2": 0.81,
+  "cp_margin_vs_boundary_rel_diff": 0.00017405,
   "diff_edge_mean": 0.0736,
   "diff_flat_mean": 0.0419,
-  "diff_edge_to_flat_ratio": 1.76
+  "diff_edge_to_flat_ratio": 1.76,
+  "diff_top10pct_pixels_in_edge_band_pct": 8.1,
+  "edge_band_pixel_pct_of_image": 2.32
 }

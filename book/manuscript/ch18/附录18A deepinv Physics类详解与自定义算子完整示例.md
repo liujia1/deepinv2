@@ -109,19 +109,25 @@ physics.set_noise_model(dinv.physics.GaussianNoise(sigma=0.1))
 ### Blur —— 卷积模糊
 
 ```python
-# 高斯模糊
-kernel = dinv.physics.blur.gaussian_blur(sigma=(3.0, 3.0))
-physics = dinv.physics.Blur(filter=kernel)   # img_size 无需传入，首次前向时自动推断
+# 高斯模糊（0.4.1 起正式路径为 deepinv.physics.functional.blur；
+#           deepinv.physics.blur.gaussian_blur 为已弃用的别名）
+from deepinv.physics.functional.blur import gaussian_blur
+kernel = gaussian_blur(sigma=(3.0, 3.0))   # 4D: (1, 1, H, W)
+physics = dinv.physics.Blur(filter=kernel, padding='reflect')   # 保持输入尺寸
 
 # 运动模糊：deepinv 未内置 motion_blur 生成器，需自构卷积核后交给 Blur
 # （配套实验脚本中的 create_motion_blur_kernel 就是这种做法：
 #   沿给定角度生成一条归一化的线段核）
-kernel = create_motion_blur_kernel(length=15, angle=30)   # 自定义函数，见配套实验
-physics = dinv.physics.Blur(filter=kernel)
+kernel2d = create_motion_blur_kernel(length=15, angle=30)   # 自定义函数，见配套实验，2D
+# Blur 要求 4D filter: (out_ch, in_ch, H, W)；单通道核扩展到 3 通道
+kernel4d = kernel2d.unsqueeze(0).unsqueeze(0).repeat(1, 3, 1, 1)
+physics = dinv.physics.Blur(filter=kernel4d, padding='reflect')
 
-# FFT加速的模糊（大核推荐）
-physics = dinv.physics.BlurFFT(img_size=(3, 256, 256), filter=kernel)
+# FFT加速的模糊（大核推荐）；BlurFFT 接受 2D 核
+physics = dinv.physics.BlurFFT(img_size=(3, 256, 256), filter=kernel2d)
 ```
+
+> 注意：`Blur` 默认 `padding='valid'`，256×256 会因核尺寸缩小（15 核→242×242）；需要同尺寸时显式写 `padding='reflect'`（0.4.1 不支持 `'same'`，可选 `'valid'/'reflect'/'replicate'/'circular'/'zeros'/'constant'`）。2D 核直接传给 `Blur` 会在前向时报 `ValueError: Input and filter must be 4D tensors`。
 
 ### Downsampling —— 下采样（超分辨率）
 
@@ -272,21 +278,24 @@ base_physics.set_noise_model(dinv.physics.GaussianNoise(sigma=0.05))
 # 生成随机仿射变换
 J = 16
 transf = torch.zeros(J, 2, 3)
-scale = 0.8
+scale = 1.0  # 与 18.2 实验一致：纯旋转+平移，线性部分正交（scale≠1 时连续伴随需用 A^{-1}）
 for i in range(J):
-    angle = torch.rand(1) * torch.pi / 8  # 随机旋转角度
+    angle = (torch.rand(1) * 2 - 1) * torch.pi / 8  # 双向旋转，范围 [-π/8, π/8]
     transf[i, 0, 0] = torch.cos(angle) * scale
     transf[i, 0, 1] = -torch.sin(angle) * scale
     transf[i, 1, 0] = torch.sin(angle) * scale
     transf[i, 1, 1] = torch.cos(angle) * scale
-    transf[i, :, -1] = torch.randn(2) * 0.05  # 随机平移
+    # 平移分量 ~ N(0, 0.05²)：0.05 是标准差，不是硬上限（约 61% 的视角 |shift|>0.05）
+    transf[i, :, -1] = torch.randn(2) * 0.05
 
 # 创建多视角算子
 physics = MultiViewPhysics(base_physics, transf=transf)
 
 # 验证伴随算子
 x = torch.randn(1, 3, 256, 256)
-print(f"伴随验证: {physics.adjointness_test(x)}")  # 应接近0
+# adjointness_test 返回未归一化内积差 <Ax,y> - <x,A^T y>，不是相对误差；
+# 其绝对量级取决于 x 的范数，正确实现时只应远小于 |<Ax,y>|。
+print(f"伴随验证（内积差）: {physics.adjointness_test(x)}")
 print(f"算子范数: {physics.compute_norm(x)}")
 
 # 生成测量数据

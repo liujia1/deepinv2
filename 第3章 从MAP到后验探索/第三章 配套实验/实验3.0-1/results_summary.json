@@ -8,5 +8,11 @@
   "rel_err_naive": 2.5229,
   "rel_err_tikhonov": 0.2158,
   "rel_err_l1": 0.5714,
-  "rel_err_tv": 0.0537
+  "rel_err_tv": 0.0537,
+  "cond_A": 69.5228,
+  "noise_amp_actual": 25.5793,
+  "noise_amp_worst_bound": 69.5228,
+  "noise_norm": 0.735451,
+  "signal_norm": 7.456541,
+  "naive_err_norm": 18.812313
 }

@@ -114,6 +114,18 @@ for kappa in kappas:
     # 噪声按绝对量 1e-8 注入，而 ‖y‖ 随 σ 衰减变小 → 数据相对误差随 κ 缓慢漂移
     data_rel_noise.append(delta_y_norm / y_norm)
 
+# ---- 1a. 双对数斜率：验证 rel_err ∝ κ 的线性放大预言 ----
+# 对相邻且 κ≥10^4 的段做 log-log 斜率，理论值应为 1（κ 每增 10 倍、误差增 10 倍）。
+loglog_slopes = {}
+for _i in range(1, len(kappas)):
+    if kappas[_i - 1] >= 1e4:
+        _label = f'{kappas[_i - 1]:.0e}->{kappas[_i]:.0e}'
+        loglog_slopes[_label] = float(
+            np.log(rel_errors[_i] / rel_errors[_i - 1]) / np.log(kappas[_i] / kappas[_i - 1]))
+print("\n双对数斜率（κ≥1e4 各相邻段，理论值 1）:")
+for _label, _slope in loglog_slopes.items():
+    print(f"  {_label:>14s}: {_slope:.3f}")
+
 # ---- 1b. 临界点 κ=1/ε 的独立噪声蒙特卡洛扫描（与主随机流完全隔离）----
 # 主扫描的 10 个点共用 seed(42) 一条随机流，每个 κ 只抽到一份噪声，
 # 本质是"单次实现"——κ=1/ε 处的 0.17 只是这次抽样的结果，不能当作典型误差。
@@ -389,6 +401,7 @@ results_summary = {
     'measured_over_bound_ratio': [float(e / b) if b > 0 else None
                                   for e, b in zip(rel_errors, theory_bound)],
     'kappa_critical_rule': float(kappa_critical),
+    'loglog_slopes': loglog_slopes,
     'demo_shared_noise': True,
     'demo_relative_errors': {f'{kk:.0e}': float(recons[kk][1]) for kk in demo_kappas},
     # 临界点的独立噪声蒙特卡洛扫描（独立发生器、每 κ 独立 2000 份噪声），

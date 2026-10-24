@@ -323,6 +323,14 @@ x_tikh_tuned = cg_tikhonov(y, A, A_T, lam=lam_tikh_tuned)
 psnr_tikh_tuned = compute_psnr(x_tikh_tuned, x_true)
 print(f"  Tikhonov (CG精确解, 扫参最优lam={lam_tikh_tuned}): PSNR={psnr_tikh_tuned:.2f} dB")
 
+# 与 FFT-Wiener 同一 lambda 的 CG 精确解：单独隔离"边界实现"这一因素
+# （正文引用约 16.6 dB，指 lam=0.01 未调优；此前只写在注释里，现落盘 JSON）
+lam_tikh_cg_untuned = lam_tikh
+x_tikh_cg_untuned = cg_tikhonov(y, A, A_T, lam=lam_tikh_cg_untuned)
+psnr_tikh_cg_untuned = compute_psnr(x_tikh_cg_untuned, x_true)
+print(f"  Tikhonov (CG精确解, 与Wiener同lam={lam_tikh_cg_untuned}未调优): "
+      f"PSNR={psnr_tikh_cg_untuned:.2f} dB")
+
 # ── PnP隐式先验 ──
 print("\n" + "-" * 50)
 print("PnP隐式先验 (去噪器即先验)")
@@ -532,6 +540,7 @@ results_summary = {
     'single_realization_seed42': {
         'psnr_linear_dB': round(psnr_lin, 2),
         'psnr_tikhonov_wiener_lam0.01_dB': round(psnr_tikh, 2),
+        'psnr_tikhonov_cg_lam0.01_untuned_dB': round(psnr_tikh_cg_untuned, 2),
         'psnr_tikhonov_cg_lam0.05_dB': round(psnr_tikh_tuned, 2),
         'psnr_tv_lbfgs_lam0.03_dB': round(psnr_tv, 2),
         'psnr_pnp_gd_dB': round(psnr_pnp, 2),
@@ -541,6 +550,7 @@ results_summary = {
     'parameters': {
         'noise_sigma': noise_level,
         'lambda_tikhonov_wiener_headline': lam_tikh,
+        'lambda_tikhonov_cg_untuned': lam_tikh_cg_untuned,
         'lambda_tikhonov_cg_tuned': lam_tikh_tuned,
         'lambda_tv': lam_tv,
         'tv_solver': 'L-BFGS + strong_wolfe (max_iter=500, 解至收敛)',

@@ -343,7 +343,8 @@ print(f"      其中 $\\mathrm{{Tr}}(\\nabla s)$ 项 = {trace_term:.6f}, $\\|s\\
 print(f"    理论恒等式 ISM = $-\\frac{{1}}{{2}} E_p\\|s\\|^2$ = {ism_bound:.6f}")
 print(f"    二者之差 {ism_value - ism_bound:.2e} = 有限窗口边界项 $[ps](8)-[ps](-8) = {boundary_term:.2e}$")
 print(f"    (分部积分边界项仅在 $\\pm\\infty$ 严格消失; 中心差分误差量级 $10^{{-9}}$, 与之无关)")
-print(f"  关键观察: SSM 和 ISM 只差与 $\\theta$ 无关的常数, 因此梯度方向相同")
+print("  关键观察: SSM 与 ISM 严格相等 (E_v[SSM] = ISM, 相差常数为 0), 因此梯度方向相同")
+print("            与之相对, ISM(以及 SSM)与 ESM 之间才差一个与 θ 无关的常数")
 print(f"  呼应步骤4: 完美匹配时 ISM 取上述下界 ({ism_bound:.4f}), SSM 训练损失应收敛到它附近")
 
 
@@ -785,7 +786,7 @@ print(f"   {'DSM':<6s} | {'(1/2) E[||s_θ+z/σ||²]':<32s} | {'否':<8s} | {'否
 print(f"   {'SSM':<6s} | {'E[vᵀ∇s_θ v+(1/2)||s_θ||²]':<32s} | {'否':<8s} | {'O(M)':<12s} | {'∇log p':<14s} | {'可行':<8s}")
 print("\n5. 实验要点")
 print(r"   - 1D 演示: $\mathrm{Tr}(\nabla s) = ds/dx$, '切片'含义退化")
-print(r"   - 1D 高斯混合: SSM 与 ISM 形式相同, SSM = ISM = ESM + 常数")
+print("   - 1D 高斯混合: SSM 与 ISM 严格相等 (E_v[SSM] = ISM, 常数为 0); 二者与 ESM 差与 θ 无关的常数")
 print(r"   - SSM 估计原始 $\nabla \log p$ (无需噪声扰动), 与 DSM 互补")
 
 

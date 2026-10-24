@@ -124,8 +124,8 @@
     }
   ],
   "output_files": [
-    "d:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-1\\步骤1a_U形误差曲线.png",
-    "d:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-1\\步骤1b_解对比与Picard条件.png",
-    "d:\\works\\deepinv\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-1\\步骤2_不同噪声下半收敛曲线族.png"
+    "H:\\deepinv\\deepinv2\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-1\\步骤1a_U形误差曲线.png",
+    "H:\\deepinv\\deepinv2\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-1\\步骤1b_解对比与Picard条件.png",
+    "H:\\deepinv\\deepinv2\\第3章 从MAP到后验探索\\第三章 配套实验\\实验3.6-1\\步骤2_不同噪声下半收敛曲线族.png"
   ]
 }

@@ -30,27 +30,37 @@ $$\widehat{\mathrm{Tr}}_M(A)=\frac{1}{M}\sum_{j=1}^M v_j^T A v_j.$$
 
 ## 方差分析：不同采样分布
 
+先澄清一个常被忽略的前提。$v^TAv$ 是标量，故
+
+$$v^T A v=(v^T A v)^T=v^T A^T v=v^T A_{\text{sym}}\,v,\qquad A_{\text{sym}}=\tfrac12(A+A^T),$$
+
+这条恒等式对每个样本逐点成立。也就是说，**反对称部分对 $v^TAv$ 没有任何贡献**——在纯反对称阵上 $v^TAv\equiv0$。因此方差只取决于 $A_{\text{sym}}$，下面的公式对**任意方阵**都成立；而常见教材里写的 $2\|A\|_F^2$ 形式，其实默认了 $A$ 对称。
+
 **高斯** $v\sim\mathcal \mathcal{N}(0,I)$：方差
 
-$$\mathrm{Var}(v^T A v)=2\|A\|_F^2,$$
+$$\mathrm{Var}(v^T A v)=2\|A_{\text{sym}}\|_F^2=\|A\|_F^2+\mathrm{Tr}(A^2),$$
 
-其中 $\|A\|_F=\sqrt{\sum_{i,j}A_{ij}^2}$ 是 Frobenius 范数。推导用高斯四阶矩 $\mathbb{E}[v_i v_j v_k v_l]=\delta_{ij}\delta_{kl}+\delta_{ik}\delta_{jl}+\delta_{il}\delta_{jk}$。
+其中 $\|A\|_F=\sqrt{\sum_{i,j}A_{ij}^2}$ 是 Frobenius 范数，末步用到 $\|A_{\text{sym}}\|_F^2=\frac12\big(\|A\|_F^2+\mathrm{Tr}(A^2)\big)$。推导用高斯四阶矩 $\mathbb{E}[v_i v_j v_k v_l]=\delta_{ij}\delta_{kl}+\delta_{ik}\delta_{jl}+\delta_{il}\delta_{jk}$。
 
 **Rademacher** $v\in\{-1,+1\}^d$，各分量独立等概率取 $\pm1$。此时 $\mathbb{E}[v_i v_j]=\delta_{ij}$，$\mathbb{E}[v_i^4]=1$，方差
 
-$$\mathrm{Var}(v^T A v)=2\|A\|_F^2-2\sum_{i=1}^d A_{ii}^2=2\big(\|A\|_F^2-\|A\circ I\|_F^2\big),$$
+$$\mathrm{Var}(v^T A v)=2\big(\|A_{\text{sym}}\|_F^2-\|A_{\text{sym}}\circ I\|_F^2\big)=\|A\|_F^2+\mathrm{Tr}(A^2)-2\sum_{i=1}^d A_{ii}^2,$$
 
-其中 $\circ$ 是逐元素乘（Hadamard 积）。
+其中 $\circ$ 是逐元素乘（Hadamard 积）；注意 $A_{\text{sym}}$ 的对角元就是 $A$ 的对角元，故 $\|A_{\text{sym}}\circ I\|_F^2=\sum_i A_{ii}^2$。
 
-**关键对比**：Rademacher 方差严格小于高斯，除非 $A$ 是对角阵：
+**对称特例**：若 $A$ 对称，则 $\mathrm{Tr}(A^2)=\|A\|_F^2$，上面两式分别退化为 $2\|A\|_F^2$ 与 $2\|A\|_F^2-2\sum_iA_{ii}^2$——这正是多数教材直接给出的形式。
+
+**关键对比**：Rademacher 方差严格小于高斯，除非 $A$ 的对角元全为零：
 
 $$\mathrm{Var}_{\text{Rademacher}}-\mathrm{Var}_{\text{Gauss}}=-2\sum_i A_{ii}^2\le0.$$
+
+这条比较与 $A$ 是否对称无关：两个方差都只由 $A_{\text{sym}}$ 决定，相减时 $2\|A_{\text{sym}}\|_F^2$ 正好抵消，只剩对角元。等号成立要求对角元全为零（例如纯反对称阵，此时两者方差都是 $0$）。顺便一提，若 $A$ 是**对角阵**，情况恰恰相反——它是 Rademacher 最有利的极端：$v^TAv\equiv\mathrm{Tr}(A)$ 恒为常数，方差为 $0$。
 
 所以**实践里推荐 Rademacher**——同样 $M$ 下方差更低。这里的直觉是：Rademacher 把分布"squeeze"到 $\pm1$ 两点，在保持二阶矩恒等的同时，避免了高斯分布那种来自长尾的四阶矩波动。
 
 ## 在得分匹配中的应用
 
-SSM 里 $A=\nabla_x s_\theta(\mathbf{x})$ 是得分网络的 Jacobian。要估 $\mathrm{Tr}(\nabla_x s_\theta)=\mathbb{E}_v[v^T\nabla_x s_\theta\,v]$。
+SSM 里 $A=\nabla_x s_\theta(\mathbf{x})$ 是得分网络的 Jacobian。要估 $\mathrm{Tr}(\nabla_x s_\theta)=\mathbb{E}_v[v^T\nabla_x s_\theta\,v]$。**注意这个 $A$ 一般不是对称阵**：理想情况下 $s_\theta\approx\nabla\log p_\sigma$，其 Jacobian 是 Hessian $\nabla^2\log p_\sigma$（对称）；但训好的网络输出并不严格是某个标量函数的梯度，Jacobian 一般含非对称部分。所以估算方差要用上面的 $A_{\text{sym}}$ 形式，不能直接套 $2\|A\|_F^2$。
 
 **前向自动微分实现**：不需构造完整 Jacobian。定义 $g(t)=v^T s_\theta(\mathbf{x}+tv)$，则 $g'(0)=v^T\nabla_x s_\theta(\mathbf{x})\,v$。在 PyTorch 里用 `torch.autograd.functional.jvp`（Jacobian–Vector Product），一次前向传播加一次前向自动微分即可。
 

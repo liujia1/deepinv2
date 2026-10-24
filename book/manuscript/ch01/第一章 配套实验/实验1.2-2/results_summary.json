@@ -7,5 +7,26 @@
   "rmse_fbp_clipped": 0.031952,
   "psnr_fbp_clipped_dB": 29.91,
   "negative_pixel_fraction_raw": 0.1573,
-  "metric_note": "rmse_fbp/psnr_fbp_dB 基于 iradon 原始输出（含振铃负值）；_clipped 为截断[0,1]后的显示口径"
+  "sparse_fbp_30angles": {
+    "rmse_raw": 0.064222,
+    "psnr_raw_dB": 23.85,
+    "rmse_clipped": 0.051767,
+    "psnr_clipped_dB": 25.72,
+    "negative_pixel_fraction_raw": 0.1647
+  },
+  "fbp_180angles": {
+    "rmse_raw": 0.031792,
+    "psnr_raw_dB": 29.95,
+    "rmse_clipped": 0.031646,
+    "psnr_clipped_dB": 29.99,
+    "negative_pixel_fraction_raw": 0.1571
+  },
+  "nearest_phantom_fbp_90angles": {
+    "rmse_raw": 0.056408,
+    "psnr_raw_dB": 24.97,
+    "rmse_clipped": 0.055378,
+    "psnr_clipped_dB": 25.13,
+    "negative_pixel_fraction_raw": 0.1635
+  },
+  "metric_note": "rmse_fbp/psnr_fbp_dB 基于 iradon 原始输出（含振铃负值）；_clipped 为截断[0,1]后的显示口径；三组对照均在同一 ramp-FBP 实现上计算，psnr_raw_dB 为未截断口径"
 }

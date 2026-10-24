@@ -251,7 +251,7 @@ CFG = {
     "lambda_data": 1.0,          # ★ 贝叶斯权重，必须为 1
     "step_size_coeff_annealed": 0.005,
     "ula_noise_scale": 1.0,
-    "ula_projection": (-0.25, 1.25),   # 数值保护，对 [0,1] 的图像不生效
+    "ula_projection": (-0.25, 1.25),   # 数值保护；边界远宽于 [0,1]，但缓存样本最小值约 -0.021，说明偶尔生效
     "ula_init_jitter": 0.01,
     "max_grad_norm": None,       # 可选梯度裁剪（None = 关闭）
 
@@ -661,8 +661,10 @@ def _run_analytic_selftest_impl(cfg, verbose=True):
         ql = torch.quantile(smp, (1 - 0.9333333) / 2, dim=0)
         qh = torch.quantile(smp, 1 - (1 - 0.9333333) / 2, dim=0)
         inside = (x_true >= ql) & (x_true <= qh)
-        r_o = float((emp_sd[obs].mean() / sd_ref[obs].mean()).sqrt())
-        r_m = float((emp_sd[mis].mean() / sd_ref[mis].mean()).sqrt())
+        # emp_sd 与 sd_ref 都已经是标准差，比值即“实测 std / 真实后验 std”，
+        # 不能再开平方根（否则报告的只是标准差比的平方根，验收区间也会被放宽）。
+        r_o = float(emp_sd[obs].mean() / sd_ref[obs].mean())
+        r_m = float(emp_sd[mis].mean() / sd_ref[mis].mean())
         cov = float(inside.float().mean())
         print(f"{name:<40s} {r_o:8.2f} {r_m:8.2f} {cov * 100:10.1f}%")
         fig_data[name] = dict(emp_sd=emp_sd.numpy(), ratio_obs=r_o, ratio_mis=r_m, cov=cov)
@@ -775,6 +777,9 @@ def build_inpainting_physics(x_true, cfg, device):
 # ========================================================================
 def map_warmstart_dpir(y_obs, mask, denoiser, cfg, device, verbose=True):
     """DPIR/HQS 式 MAP 近似：逐级去噪 + 观测像素硬投影（不注入采样噪声）。
+
+    注意：这不是完整 DPIR——它只借“去噪 + 数据投影”的结构做热启动与 MAP 基线，
+    缺少 DPIR 的逐级噪声调度与数据保真近端步（步长/权重按 σ² 缩放）。
 
         x ← D_σ(x)；x[观测] ← y[观测]
     这是退火 ULA 的 σ→0 确定性极限（DPIR, Zhang et al. 2021），给出后验众数
@@ -1033,6 +1038,9 @@ if not IS_POSTERIOR:
 
 SAMPLES = torch.cat(all_samples, 0).to(device)          # (S,C,H,W)
 S = SAMPLES.shape[0]
+# ★ 口径说明：下文所有统计量（PSNR/std/覆盖率）都在采样器原始输出（已投影到 [-0.25,1.25]）
+#   上计算；clamp(0,1) 仅用于绘图。实测两口径的 PSNR 差 ≤0.013 dB（2 位小数下个别值差 0.01），
+#   覆盖率 93.33% 均为 0.9217。缓存样本最小值约 -0.021，说明投影边界偶尔生效。
 sample_psnrs = [psnr(x_true, SAMPLES[i:i + 1]) for i in range(S)]
 
 
@@ -1089,7 +1097,7 @@ if MAP_X is not None:
     map_psnr_mis = psnr(xt[~mask_el[0]], MAP_X[0][~mask_el[0]])
     map_rms_mis = _rms(MAP_X[0][~mask_el[0]] - xt[~mask_el[0]])
     mean_over_map_rms = rms_mean_mis / max(map_rms_mis, 1e-12)
-    print(f"\n★ vs MAP 基线（同一个 DRUNet 的 DPIR 重建，后验众数附近）:")
+    print(f"\n★ vs MAP 基线（同一个 DRUNet 的 DPIR 式热启动近似：去噪+硬投影，非完整 DPIR）:")
     print(f"  MAP      : 整体 {map_psnr:.2f} / 观测 {map_psnr_obs:.2f} / "
           f"缺失 {map_psnr_mis:.2f} dB（缺失 RMS {map_rms_mis:.4f}）")
     print(f"  后验均值 : 整体 {psnr(x_true, posterior_mean):.2f} / "
@@ -1157,21 +1165,22 @@ _dn = _dev / _dev.norm(dim=1, keepdim=True).clamp_min(1e-12)
 _C = (_dn @ _dn.T).cpu().numpy()
 _off = _C[np.triu_indices(S, 1)] if S > 1 else np.array([0.0])
 rho = float(_off.mean()) if len(_off) else 0.0
-rho_indep = -1.0 / max(S - 1, 1)          # 独立链的理论值
-# 各链是独立初始化的，所以 rho 应当 ≈ -1/(S-1)；偏离说明采样器有退化（例如所有链塌到同一点）
-if abs(rho - rho_indep) < 0.05 * max(abs(rho_indep), 0.05):
-    ess = float(S)
+rho_centered = -1.0 / max(S - 1, 1)       # 中心化偏差场的代数基线，不是“独立链理论值”
+# 中心化后每条链的向量和为零，任意两条链的相关系数必然 ≈ -1/(S-1)；
+# 因此 rho 与基线一致不能证明链独立，只能排除“全体塌缩到同一点”（rho≈0）
+# 或“塌到 k 个模态”（rho≈1/k）。收敛性判定以上面的 MAP 基线对比、PIT、lag1 为准。
+if abs(rho - rho_centered) < 0.05 * max(abs(rho_centered), 0.05):
+    ess = float(S)   # 由中心化 rho 反推的粗估，仅作参照
 else:
     ess = float(min(S, max(1.0, S / max(1.0 + (S - 1) * rho, 1e-6))))
-print(f"[样本相关性] 链间相关系数均值 {rho:+.4f} "
-      f"(独立链理论值 {rho_indep:+.4f}), 有效样本数 ≈ {ess:.1f}")
-if abs(rho - rho_indep) < 0.05 * max(abs(rho_indep), 0.05):
-    print("  未检测到链间塌缩 —— 采样器没有退化。")
-    print("  注意：样本偏差场是中心化的，rho 必然 ≈ -1/(S-1)，所以这个统计量只能")
-    print("  排除塌缩（全塌缩→rho≈0，塌到 k 个模态→rho≈1/k），并不能证明各链独立；")
-    print("  真正判定『样本是不是后验样本』的是上面的偏差场 lag1。")
+print(f"[样本相关性] 中心化偏差场的链间相关均值 {rho:+.4f} "
+      f"(代数基线 {rho_centered:+.4f}), ESS 粗估 ≈ {ess:.1f}（仅作参照）")
+if abs(rho - rho_centered) < 0.05 * max(abs(rho_centered), 0.05):
+    print("  与中心化基线一致：未检测到全塌缩/多模态塌缩；这不构成链独立的证据。")
+    print("  该统计量由中心化强行固定基线，不能区分独立链与部分相关的链；")
+    print("  真正判定『样本是不是后验样本』的是上面的 MAP 基线对比、PIT 与偏差场 lag1。")
 else:
-    print("  ⚠️ 链间相关性偏离独立链理论值，说明链之间发生了塌缩，UQ 不可信。")
+    print("  ⚠️ 中心化链间相关偏离代数基线，提示链间可能存在塌缩/强相关，UQ 需谨慎。")
 
 
 # ========================================================================
@@ -1225,12 +1234,13 @@ if S >= 4:
     for n in n_list:
         sub = SAMPLES[:n]
         m = sub.mean(0, keepdim=True)
-        # 均值图自身的"估计标准误"：用链间标准差 / sqrt(n) —— 这才是随 S 变化的量
+        # 后验均值这一估计量的标准误：链间标准差 / sqrt(n)。
+        # 注意：它与“像素 std 估计量自身的误差”不是同一个量（后者见附录 18B）。
         se = sub.std(0, keepdim=True) / math.sqrt(n)
         psnr_by_s.append(psnr(x_true, m))
         std_err_by_s.append(float(se.mean()))
         std_by_s.append(float(sub.std(0, keepdim=True).mean()))
-    print(f"{'S':>4s} {'后验均值PSNR':>13s} {'像素std均值':>12s} {'std的估计标准误':>16s}")
+    print(f"{'S':>4s} {'后验均值PSNR':>13s} {'像素std均值':>12s} {'后验均值标准误':>16s}")
     print("-" * 50)
     for i, n in enumerate(n_list):
         print(f"{n:>4d} {psnr_by_s[i]:>13.2f} {std_by_s[i]:>12.4f} {std_err_by_s[i]:>16.4f}")
@@ -1244,8 +1254,10 @@ if S >= 4:
         f"S{S}_std": round(std_by_s[jS], 4),
     }
     print(f"\n★ 关键: 『像素 std』几乎不随 S 变化（它是后验的固有量，S 只影响估计精度）；"
-          f"\n   随 S 按 1/√S 收缩的是『std 的估计标准误』({std_err_by_s[j4]:.4f} → "
+          f"\n   随 S 按 1/√S 收缩的是『后验均值的标准误』({std_err_by_s[j4]:.4f} → "
           f"{std_err_by_s[-1]:.4f})，以及后验均值的 PSNR。")
+    print(f"   像素 std 估计量自身的相对误差约 sqrt(1/(2(S-1)))≈{math.sqrt(1/(2*(S-1))):.1%}（附录 18B），"
+          f"与上面的均值标准误不是同一个量。")
     print(f"   所以『S 的影响』应当用估计量的方差来衡量，而不是用 PSNR 一个数字。")
 
 
@@ -1312,8 +1324,21 @@ if not IS_POSTERIOR:
     verdict_txt = ("不可信 —— 采样器没有跑起来（使用了『伪逆+噪声』兜底），"
                    "下面的 std/区间都只是扰动幅度的反映。")
 elif n_fail == 0:
-    verdict_txt = ("通过 —— 数据保真、区间校准（对 S 有限样本零模型）、结构相关性、"
-                   "MAP 点估计对比与 PIT 秩检验全部通过，可用于 UQ 结论。")
+    # checks 只验收主置信水平；校准表还可能把其他档判为『严重失配』。
+    # 结论必须显式披露这种局部失配，不能笼统写『区间校准全部通过』。
+    n_severe = sum(1 for sev in grades.values() if sev == 2)
+    n_dev = sum(1 for sev in grades.values() if sev == 1)
+    if n_severe > 0:
+        verdict_txt = (
+            "主水平通过 —— 数据保真、主置信水平 "
+            f"{cl_max:.2%} 的区间校准（对 S 有限样本零模型）、结构相关性、"
+            "MAP 点估计对比与 PIT 秩检验全部通过；"
+            f"但校准表显示 {n_severe} 个置信水平档判『严重失配』、{n_dev} 档『存在偏差』，"
+            f"该局部失配未纳入本 {len(checks)} 项 checks，解读 UQ 结论时需注意。"
+        )
+    else:
+        verdict_txt = ("通过 —— 数据保真、区间校准（对 S 有限样本零模型）、结构相关性、"
+                       "MAP 点估计对比与 PIT 秩检验全部通过，可用于 UQ 结论。")
 else:
     verdict_txt = (f"存疑 —— 有 {n_fail} 项未通过，按以下方向定位："
                    f"『缺失RMS比(均值/MAP)』>2 或『缺失/观测 std 比』>4 或 PIT 偏移，"
@@ -1371,11 +1396,12 @@ uq_results = {
     "偏差场lag1_全图": round(dev_lag1_full, 4),
     "白噪声对照lag1_缺失半区": round(wn_lag1, 4),
     "偏差场结构比": round(structure_ratio, 3),
-    "有效样本数": round(ess, 2),
-    "链间相关系数均值": round(rho, 4),
-    "独立链理论相关系数": round(rho_indep, 4),
+    "ESS粗估_仅参照": round(ess, 2),
+    "链间相关_中心化均值": round(rho, 4),
+    "链间相关_中心化基线": round(rho_centered, 4),
+    "链间相关_说明": "中心化偏差场的相关系数被代数地固定在 -1/(S-1)，只能排除塌缩，不能证明链独立",
 
-    # v3：MAP 基线（同一个 DRUNet 的 DPIR 重建）与后验均值的点估计对比
+    # v3：MAP 基线（DPIR 式热启动近似，非完整 DPIR）与后验均值的点估计对比
     "MAP基线PSNR_整体": round(map_psnr, 2) if map_psnr is not None else None,
     "MAP基线PSNR_观测半区": round(map_psnr_obs, 2) if map_psnr_obs is not None else None,
     "MAP基线PSNR_缺失半区": round(map_psnr_mis, 2) if map_psnr_mis is not None else None,
@@ -1548,10 +1574,10 @@ try:
         ax.set_xscale('log', base=2); ax.set_xlabel("样本数 S"); ax.set_ylabel("后验均值 PSNR (dB)")
         ax.set_title("Step 5-a 均值估计随 S 收敛"); ax.grid(alpha=0.3)
         ax = axes[1]
-        ax.loglog(n_list, std_err_by_s, 'o-', color='#e67e22', label="std 的估计标准误")
+        ax.loglog(n_list, std_err_by_s, 'o-', color='#e67e22', label="后验均值的标准误")
         ax.loglog(n_list, [std_err_by_s[0] * math.sqrt(n_list[0] / n) for n in n_list], 'k--',
                   lw=1, label=r"$\propto 1/\sqrt{S}$")
-        ax.set_xscale('log', base=2); ax.set_xlabel("样本数 S"); ax.set_ylabel("估计标准误")
+        ax.set_xscale('log', base=2); ax.set_xlabel("样本数 S"); ax.set_ylabel("后验均值的标准误")
         ax.set_title("Step 5-b 不确定度估计精度 ∝ 1/√S\n(像素 std 本身几乎不随 S 变)")
         ax.legend(fontsize=9); ax.grid(alpha=0.3, which='both')
         plt.tight_layout()
@@ -1602,7 +1628,7 @@ print(f"""
 
 5. 样本数影响 ✓
    像素 std 基本不随 S 变化（它是后验固有量）；
-   随 S 按 1/√S 收缩的是估计标准误 {_s5_txt}。
+   随 S 按 1/√S 收缩的是后验均值的标准误 {_s5_txt}。
 
 ★ 验收：{verdict_txt}
 

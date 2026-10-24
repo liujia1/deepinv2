@@ -1065,10 +1065,10 @@ results = {
     'adjoint_relative_error': {
         # 归一化 dot product 相对误差（detailed_adjointness_test 均值），
         # 与控制台的阈值判断口径一致；None 表示对应部分未运行
+        # ★ 本字典内所有字段量纲一致（均为无量纲相对误差），可直接横向比较
         'downsampling_factor2': float(adj_err_down),
         'multiview_manual_mean': float(abs(adj_err_multi)),
         'multiview_manual_std': float(std_multi),
-        'multiview_manual_adjointness_test_raw': float(abs(adj_err_multi_raw)),
         'multiview_autograd': (float(abs(adj_err_auto))
                                if 'adj_err_auto' in locals() else None),
         'blur': (float(abs(adj_err_blur))
@@ -1076,6 +1076,13 @@ results = {
         'composite_blur_downsample': (float(abs(adj_err_composite))
                                       if 'adj_err_composite' in locals() else None),
         'mri': (float(abs(adj_err_mri)) if 'adj_err_mri' in locals() else None),
+    },
+    'adjointness_test_raw_inner_product_diff': {
+        # ★ 未归一化的内积差 |<Ax,y> - <x,A^T y>|（adjointness_test 原样返回值）。
+        #   量纲随输入范数与随机 y 的取值增长，**不可**与上面
+        #   'adjoint_relative_error' 的无量纲相对误差横向比较，也不可与固定阈值比较；
+        #   仅作原始量级参考。
+        'multiview_manual': float(abs(adj_err_multi_raw)),
     },
     'noise_mae': {
         'gaussian': float(noise_gauss),

@@ -92,7 +92,8 @@ A_mat = circulant(kernel)                   # 显式循环矩阵，仅用于本�
 # 2) 加噪观测 y = A x_true + 噪声
 # ---------------------------------------------------------------------------
 noise_level = 0.05
-y = A_mat @ x_true + noise_level * rng.standard_normal(n)
+noise_vec = noise_level * rng.standard_normal(n)     # 单独留存，供噪声放大倍数核算
+y = A_mat @ x_true + noise_vec
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +175,22 @@ res = {
     'TV 近端 (CP)': float(rel_err(x_tv)),
 }
 
+# ---------------------------------------------------------------------------
+# 7b) 噪声放大倍数的实算（供正文"病态算子把噪声放大多少倍"引用）
+#     实际倍数 = ||A^+ eps|| / ||eps||（本次噪声实现下伪逆把噪声放大了多少）
+#     最坏上界 = 1/sigma_min(A) = 条件数（沿最小奇异值方向的放大）
+# ---------------------------------------------------------------------------
+_sv = np.linalg.svd(A_mat, compute_uv=False)
+cond_A = float(_sv[0] / _sv[-1])
+noise_part = x_naive - np.linalg.pinv(A_mat) @ (A_mat @ x_true)   # 解中的纯噪声分量
+noise_amp_actual = float(np.linalg.norm(noise_part) / np.linalg.norm(noise_vec))
+noise_amp_worst = float(1.0 / _sv[-1])
+print(f"\n噪声放大倍数（病态的直接后果）:")
+print(f"  实际倍数 ||A^+ eps||/||eps|| = {noise_amp_actual:.2f} 倍")
+print(f"  最坏方向上界 1/sigma_min = {noise_amp_worst:.2f} 倍（= 条件数 {cond_A:.2f}）")
+print(f"  朴素逆误差范数 {np.linalg.norm(x_naive - x_true):.4f} "
+      f"≈ 信号范数 {np.linalg.norm(x_true):.4f} 的 {rel_err(x_naive):.2f} 倍")
+
 print(f"\n相对误差（越小越好）：")
 for name, val in res.items():
     print(f"  {name:<18}: {val:.3f}")
@@ -214,6 +231,12 @@ results_summary = {
     'rel_err_tikhonov': round(res['Tikhonov (L2)'], 4),
     'rel_err_l1': round(res['L1 近端 (ISTA)'], 4),
     'rel_err_tv': round(res['TV 近端 (CP)'], 4),
+    'cond_A': round(cond_A, 4),
+    'noise_amp_actual': round(noise_amp_actual, 4),
+    'noise_amp_worst_bound': round(noise_amp_worst, 4),
+    'noise_norm': round(float(np.linalg.norm(noise_vec)), 6),
+    'signal_norm': round(float(np.linalg.norm(x_true)), 6),
+    'naive_err_norm': round(float(np.linalg.norm(x_naive - x_true)), 6),
 }
 
 def _to_native(obj):

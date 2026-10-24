@@ -10,6 +10,23 @@
   "posterior_var_mean": 0.227046,
   "posterior_var_rel_spread": 7.823761060436298e-15,
   "frequentist_opt_lambda_fixed_phantom": 0.02763,
+  "phantom_stats": {
+    "phantom_mean": 0.1734,
+    "phantom_mean_square": 0.0729,
+    "note": "用于说明 phantom 并非先验 x~N(0, 0.5²) 的样本（均值非零、E[x²]≠0.25）"
+  },
+  "mc_30seed_argmax_lambda": {
+    "n_seeds": 30,
+    "lambda_grid": "logspace(-5, 1, 50)（与主扫描一致）",
+    "argmax_lambda_min": 0.020236,
+    "argmax_lambda_max": 0.035565,
+    "argmax_lambda_median": 0.026827,
+    "fraction_argmax_le_0.01": 0.0,
+    "argmax_psnr_min_dB": 17.94,
+    "argmax_psnr_max_dB": 18.6,
+    "argmax_psnr_median_dB": 18.23,
+    "note": "每个种子独立重抽噪声后在全 λ 网格上取真值 PSNR 峰（oracle），检验偏移是否系统性"
+  },
   "lambda_demo_psnr": {
     "lambda_0.0001": 3.49,
     "lambda_0.01": 17.71,
