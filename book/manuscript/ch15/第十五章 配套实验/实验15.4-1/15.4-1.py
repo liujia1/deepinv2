@@ -38,6 +38,7 @@ import matplotlib.pyplot as plt
 import warnings
 import logging
 from tqdm import tqdm
+from copy import deepcopy
 
 # 设置控制台输出为 UTF-8 (Windows 下避免中文乱码)
 if sys.platform == 'win32':
@@ -313,7 +314,8 @@ class DiT(nn.Module):
         self.patchify = Patchify(patch_size, in_channels, hidden_size)
         self.unpatchify = Unpatchify(patch_size, in_channels, hidden_size)
 
-        # 可学习位置编码（15.3.2节 ViT使用可学习位置编码）
+        # 位置编码: 本章为简化使用可学习参数(与 ViT 一致);
+        # 注意 DiT 论文实际用固定的 2D sine-cosine 编码, 此处不影响参数量与架构对比结论
         num_patches = (28 // patch_size) ** 2  # 14*14=196 for p=2
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size))
         nn.init.trunc_normal_(self.pos_embed, std=0.02)
@@ -434,7 +436,9 @@ transform = transforms.Compose([
 ])
 train_dataset = datasets.MNIST(data_dir, train=True, download=True, transform=transform)
 train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
-print(f"  训练集大小: {len(train_dataset)}")
+test_dataset = datasets.MNIST(data_dir, train=False, download=True, transform=transform)
+test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+print(f"  训练集大小: {len(train_dataset)}, 测试集大小: {len(test_dataset)}")
 print(f"  数据范围: [-1, 1] (匹配标准高斯噪声先验)")
 
 
@@ -494,7 +498,10 @@ num_epochs = 30
 
 # 训练UNet
 print("\n训练UNet...")
-optimizer_unet = torch.optim.Adam(unet.parameters(), lr=2e-4)
+# ★ 与 DiT 严格同设置: AdamW(lr=2e-4, wd=0.01)。
+#   旧版此处用 Adam 且未设 weight_decay, 与正文"同一训练设置"矛盾,
+#   构成"架构 × 优化器"混杂(15.5 已实测同 wd 下 Adam 比 AdamW 差约 21%)
+optimizer_unet = torch.optim.AdamW(unet.parameters(), lr=2e-4, weight_decay=0.01)
 start_epoch_unet, is_final_unet, unet_losses = load_train_state(
     CKPT_UNET, unet, optimizer_unet, num_epochs)
 
@@ -597,7 +604,7 @@ ax.grid(alpha=0.3, axis='y')
 
 plt.suptitle('步骤2: UNet vs DiT训练对比（15.4节）', fontsize=14, y=1.01)
 plt.tight_layout()
-fig_path1 = os.path.join(SAVE_DIR, '步骤1_UNet_vs_DiT.png')
+fig_path1 = os.path.join(SAVE_DIR, '步骤2_UNet_vs_DiT.png')
 plt.savefig(fig_path1, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"\n图1已保存: {fig_path1}")
@@ -623,7 +630,9 @@ print("""
 dit_zero = DiT(hidden_size=128, depth=4, num_heads=4, patch_size=2).to(device)
 
 # 无Zero初始化的DiT
-dit_no_zero = DiT(hidden_size=128, depth=4, num_heads=4, patch_size=2).to(device)
+# ★ 严格配对: 从同一模型 deepcopy, 保证除 adaLN 末层外所有权重完全一致;
+#   旧版连续构造两个模型, RNG 已推进, 两组初始化完全不同, 消融结果混入了初始化噪声
+dit_no_zero = deepcopy(dit_zero)
 # 手动覆盖所有adaLN的Zero初始化（确保对照组完全不含Zero初始化）
 for block in dit_no_zero.blocks:
     nn.init.xavier_uniform_(block.adaLN_modulation[-1].weight)
@@ -723,12 +732,25 @@ ax.legend(fontsize=11)
 ax.grid(alpha=0.3)
 
 plt.tight_layout()
-fig_path2 = os.path.join(SAVE_DIR, '步骤2_Zero初始化消融.png')
+fig_path2 = os.path.join(SAVE_DIR, '步骤3_Zero初始化消融.png')
 plt.savefig(fig_path2, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"\n图2已保存: {fig_path2}")
 
-# ★ 消融实验结论与验证说明
+# ★ 消融实验结论与验证说明（数字与“从第几轮起领先”均实时统计, 不写死）
+_n = min(len(zero_losses), len(no_zero_losses))
+_n_lead = sum(1 for a, b in zip(zero_losses[:_n], no_zero_losses[:_n]) if a < b)
+_lead_start = None
+for _i in range(_n):
+    if all(a < b for a, b in zip(zero_losses[_i:_n], no_zero_losses[_i:_n])):
+        _lead_start = _i + 1
+        break
+# 领先段落之前的那几轮（与正文“前16轮平均”同口径）
+_k = max(1, (_lead_start - 1) if _lead_start else _n // 2)
+_head_zero = sum(zero_losses[:_k]) / _k
+_head_nozero = sum(no_zero_losses[:_k]) / _k
+_lead_txt = (f"自第 {_lead_start} 轮起一直保持到末轮" if _lead_start
+             else "全程无“此后一直领先”的段落, 两组交织领先")
 print(f"""
 ──────────────────────────────────────────────────────────────────────
 ★ 步骤3 消融实验结论与验证说明
@@ -745,8 +767,10 @@ print(f"""
   核心结论（数字实时取自本轮训练日志）:
     1. 机制上: Zero初始化 → gate=0, shift=0, scale=0 → 每个 DiTBlock 初始为恒等映射
        → 理论上梯度传播更平滑（深层网络收益明显, 见15.2.3节）
-    2. 本实验实测: 前11轮两组曲线重合, 约epoch 12起Zero组持续低于NoZero组,
+    2. 本实验实测: {_n} 轮中 Zero 组有 {_n_lead} 轮 Loss 低于 NoZero 组,
        末轮 Zero {zero_losses[-1]:.4f} vs 随机初始化 {no_zero_losses[-1]:.4f}, 差 {abs(zero_losses[-1]-no_zero_losses[-1]):.4f};
+       领先段落之前的 {_k} 轮平均 Zero {_head_zero:.4f} vs 随机 {_head_nozero:.4f} (差 {_head_zero-_head_nozero:+.4f});
+       “Zero 组领先”{_lead_txt}
        但该幅度与同配置跨run种子噪声(~0.002)同量级(步骤2的DiT与步骤3的Zero组同配置不同run),
        单次运行无法区分系统性效应与随机波动, 不做优劣判断, 需多种子重复
     3. ★ 诚实说明: 本实验无法验证 DiT 论文的 adaLN-Zero 优势——
@@ -777,11 +801,11 @@ print("""
 """)
 
 unet.eval()
-dit_zero.eval()
+dit.eval()  # ★ 用步骤2训练30轮的 dit(而非步骤3只训20轮的 dit_zero), 保证与 unet 轮数一致
 
-# ★ 固定种子: 使图3完全可复现——同时锁定 train_loader 的shuffle取样的样本 与 randn_like 的噪声
+# ★ 固定种子: 使图3完全可复现——同时锁定 test_loader 的取样样本 与 randn_like 的噪声
 torch.manual_seed(42)
-test_batch = next(iter(train_loader))[0][:8].to(device)  # 范围 [-1, 1]
+test_batch = next(iter(test_loader))[0][:8].to(device)  # 范围 [-1, 1], shuffle=False 保证可复现
 noise_vis = torch.randn_like(test_batch)
 
 # ★ 反变换回 [0, 1] 区间用于可视化：x_vis = (x + 1) / 2
@@ -801,7 +825,7 @@ for col in range(8):
 
 # 行1-2: UNet t=5, t=100
 # 行3-4: DiT t=5, t=100
-for model_idx, (model, name) in enumerate([(unet, 'UNet'), (dit_zero, 'DiT')]):
+for model_idx, (model, name) in enumerate([(unet, 'UNet'), (dit, 'DiT')]):
     for t_idx, sub_row in [(5, 0), (100, 1)]:
         with torch.no_grad():
             t = torch.full((8,), t_idx, device=device, dtype=torch.long)
@@ -823,7 +847,7 @@ for model_idx, (model, name) in enumerate([(unet, 'UNet'), (dit_zero, 'DiT')]):
 
 plt.suptitle('★ UNet vs DiT去噪行为对比（15.4.1节）', fontsize=14, y=1.01)
 plt.tight_layout()
-fig_path3 = os.path.join(SAVE_DIR, '步骤3_UNet_vs_DiT去噪.png')
+fig_path3 = os.path.join(SAVE_DIR, '步骤4_UNet_vs_DiT去噪.png')
 plt.savefig(fig_path3, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"图3已保存: {fig_path3}")

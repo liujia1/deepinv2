@@ -192,6 +192,15 @@ plt.show()
 print(f"  反投影 PSNR={psnr_bp:.1f}dB (尺度 s={scale_bp:.4f}), SSIM={ssim_bp:.3f}")
 print(f"  FBP    PSNR={psnr_fbp:.1f}dB, SSIM={ssim_fbp:.3f}")
 
+# ---- 同模型基线（inverse crime 对照）：同一 128 网格生成 + 反演 ----
+# 正文引用"同模型基线约 29 dB"即出自此处：它衡量"若不存在模型失配，全角 FBP
+# 能到多少"，用来把 IC-free 双分辨率的失配代价单独量化出来。
+sinogram_same = radon(phantom, theta=theta_full, circle=True)
+recon_fbp_same = iradon(sinogram_same, theta=theta_full, circle=True, filter_name='ramp')
+psnr_fbp_same = psnr(phantom, recon_fbp_same, data_range=1.0)
+print(f"  [同模型基线] 同网格(128→128)全角 FBP PSNR={psnr_fbp_same:.2f}dB  "
+      f"→ IC-free 失配代价 {psnr_fbp_same - psnr_fbp:.2f}dB")
+
 
 # ========================================================================
 # 步骤3：FBP滤波器选择——分辨率与噪声的权衡（16.1.4节）
@@ -255,6 +264,12 @@ results_summary = {
         "反投影": {"PSNR_dB": round(psnr_bp, 2), "SSIM": round(ssim_bp, 4),
                 "scale": round(scale_bp, 5), "说明": "已做全局尺度校准后再算 PSNR"},
         "FBP": {"PSNR_dB": round(psnr_fbp, 2), "SSIM": round(ssim_fbp, 4)},
+    },
+    "步骤2_同模型基线": {
+        "同网格FBP_PSNR_dB": round(psnr_fbp_same, 2),
+        "IC_free_FBP_PSNR_dB": round(psnr_fbp, 2),
+        "失配代价_dB": round(psnr_fbp_same - psnr_fbp, 2),
+        "说明": "同网格(128→128)生成+反演，即 inverse crime 情形，仅用于量化双分辨率失配的代价",
     },
     "步骤3_滤波器对比_相对噪声水平": f"{noise_frac*100:.0f}%峰值",
     "步骤3_滤波器对比": filter_results,

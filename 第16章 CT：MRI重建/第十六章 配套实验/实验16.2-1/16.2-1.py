@@ -107,6 +107,15 @@ recon_fbp_full = iradon(sinogram_full, theta=theta_full, circle=True, filter_nam
 psnr_fbp_full = psnr(phantom, recon_fbp_full, data_range=1.0)
 noise_level = 0.05  # 相对噪声水平（占sinogram峰值的5%）
 
+# ---- 同模型基线（inverse crime 对照）：同一 128 网格生成 + 反演 ----
+# 正文引用"同模型基线实测 29.3 dB"即出自此处，用来把 IC-free 双分辨率的
+# 失配代价单独量化出来（否则会把模型失配误当成"不适定性"的效果）。
+sinogram_full_same = radon(phantom, theta=theta_full, circle=True)
+recon_fbp_full_same = iradon(sinogram_full_same, theta=theta_full, circle=True, filter_name='ramp')
+psnr_fbp_full_same = psnr(phantom, recon_fbp_full_same, data_range=1.0)
+print(f"[同模型基线] 同网格全角 FBP PSNR={psnr_fbp_full_same:.2f}dB "
+      f"(IC-free {psnr_fbp_full:.2f}dB, 失配代价 {psnr_fbp_full_same - psnr_fbp_full:.2f}dB)")
+
 
 # ========================================================================
 # 步骤1：稀疏角度与有限角度CT——两种不同的不适定性
@@ -379,6 +388,12 @@ results_summary = {
     "experiment": "实验16.2-1 CT不适定性与正则化重建",
     "相对噪声水平": noise_level,
     "噪声说明": "占sinogram峰值的比例（相对噪声）",
+    "同模型基线": {
+        "同网格FBP_PSNR_dB": round(psnr_fbp_full_same, 2),
+        "IC_free_FBP_PSNR_dB": round(psnr_fbp_full, 2),
+        "失配代价_dB": round(psnr_fbp_full_same - psnr_fbp_full, 2),
+        "说明": "同网格(128→128)生成+反演，即 inverse crime 情形，仅用于量化双分辨率失配的代价",
+    },
     "步骤1_稀疏vs有限角": {
         "全角FBP_PSNR_dB": round(psnr_fbp_full, 2),
         "稀疏30角度": {"PSNR_dB": round(p_sparse, 2), "SSIM": round(s_sparse, 4)},

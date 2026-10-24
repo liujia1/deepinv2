@@ -309,6 +309,17 @@ else:
 
     parall_psnr = compute_psnr(ellipses, recon_full, data_range=1.0)
 
+    # ---- 同模型基线（inverse crime 对照）：同一 256 网格生成 + 反演 ----
+    # 正文引用"同模型基线约 32 dB"即出自此处，用于把双分辨率失配代价单独量化。
+    sino_same = radon(ellipses, theta=theta_full, circle=True)
+    recon_same = iradon(sino_same, theta=theta_full, circle=True, filter_name='ramp')
+    recon_same = np.clip(recon_same, 0, None)
+    if recon_same.max() > 0:
+        recon_same = recon_same / recon_same.max()
+    same_psnr = compute_psnr(ellipses, recon_same, data_range=1.0)
+    print(f"  [同模型基线] 同网格(256→256) FBP PSNR={same_psnr:.2f} dB "
+          f"→ IC-free {parall_psnr:.2f} dB，失配代价 {same_psnr - parall_psnr:.2f} dB")
+
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
     axes[0].imshow(ellipses, cmap='gray')
@@ -603,6 +614,13 @@ results_summary = {
 }
 if ASTRA_AVAILABLE:
     results_summary["步骤3_扇形束FBP_PSNR_dB"] = round(float(fan_psnr), 2)
+else:
+    results_summary["同模型基线"] = {
+        "同网格FBP_PSNR_dB": round(float(same_psnr), 2),
+        "IC_free_FBP_PSNR_dB": round(float(parall_psnr), 2),
+        "失配代价_dB": round(float(same_psnr - parall_psnr), 2),
+        "说明": "同网格(256→256)生成+反演，即 inverse crime 情形，仅用于量化双分辨率失配的代价",
+    }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
     json.dump(results_summary, f, ensure_ascii=False, indent=2)

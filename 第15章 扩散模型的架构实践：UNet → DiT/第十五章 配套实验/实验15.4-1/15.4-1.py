@@ -604,7 +604,7 @@ ax.grid(alpha=0.3, axis='y')
 
 plt.suptitle('步骤2: UNet vs DiT训练对比（15.4节）', fontsize=14, y=1.01)
 plt.tight_layout()
-fig_path1 = os.path.join(SAVE_DIR, '步骤1_UNet_vs_DiT.png')
+fig_path1 = os.path.join(SAVE_DIR, '步骤2_UNet_vs_DiT.png')
 plt.savefig(fig_path1, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"\n图1已保存: {fig_path1}")
@@ -732,12 +732,25 @@ ax.legend(fontsize=11)
 ax.grid(alpha=0.3)
 
 plt.tight_layout()
-fig_path2 = os.path.join(SAVE_DIR, '步骤2_Zero初始化消融.png')
+fig_path2 = os.path.join(SAVE_DIR, '步骤3_Zero初始化消融.png')
 plt.savefig(fig_path2, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"\n图2已保存: {fig_path2}")
 
-# ★ 消融实验结论与验证说明
+# ★ 消融实验结论与验证说明（数字与“从第几轮起领先”均实时统计, 不写死）
+_n = min(len(zero_losses), len(no_zero_losses))
+_n_lead = sum(1 for a, b in zip(zero_losses[:_n], no_zero_losses[:_n]) if a < b)
+_lead_start = None
+for _i in range(_n):
+    if all(a < b for a, b in zip(zero_losses[_i:_n], no_zero_losses[_i:_n])):
+        _lead_start = _i + 1
+        break
+# 领先段落之前的那几轮（与正文“前16轮平均”同口径）
+_k = max(1, (_lead_start - 1) if _lead_start else _n // 2)
+_head_zero = sum(zero_losses[:_k]) / _k
+_head_nozero = sum(no_zero_losses[:_k]) / _k
+_lead_txt = (f"自第 {_lead_start} 轮起一直保持到末轮" if _lead_start
+             else "全程无“此后一直领先”的段落, 两组交织领先")
 print(f"""
 ──────────────────────────────────────────────────────────────────────
 ★ 步骤3 消融实验结论与验证说明
@@ -754,8 +767,10 @@ print(f"""
   核心结论（数字实时取自本轮训练日志）:
     1. 机制上: Zero初始化 → gate=0, shift=0, scale=0 → 每个 DiTBlock 初始为恒等映射
        → 理论上梯度传播更平滑（深层网络收益明显, 见15.2.3节）
-    2. 本实验实测: 前11轮两组曲线重合, 约epoch 12起Zero组持续低于NoZero组,
+    2. 本实验实测: {_n} 轮中 Zero 组有 {_n_lead} 轮 Loss 低于 NoZero 组,
        末轮 Zero {zero_losses[-1]:.4f} vs 随机初始化 {no_zero_losses[-1]:.4f}, 差 {abs(zero_losses[-1]-no_zero_losses[-1]):.4f};
+       领先段落之前的 {_k} 轮平均 Zero {_head_zero:.4f} vs 随机 {_head_nozero:.4f} (差 {_head_zero-_head_nozero:+.4f});
+       “Zero 组领先”{_lead_txt}
        但该幅度与同配置跨run种子噪声(~0.002)同量级(步骤2的DiT与步骤3的Zero组同配置不同run),
        单次运行无法区分系统性效应与随机波动, 不做优劣判断, 需多种子重复
     3. ★ 诚实说明: 本实验无法验证 DiT 论文的 adaLN-Zero 优势——
@@ -832,7 +847,7 @@ for model_idx, (model, name) in enumerate([(unet, 'UNet'), (dit, 'DiT')]):
 
 plt.suptitle('★ UNet vs DiT去噪行为对比（15.4.1节）', fontsize=14, y=1.01)
 plt.tight_layout()
-fig_path3 = os.path.join(SAVE_DIR, '步骤3_UNet_vs_DiT去噪.png')
+fig_path3 = os.path.join(SAVE_DIR, '步骤4_UNet_vs_DiT去噪.png')
 plt.savefig(fig_path3, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"图3已保存: {fig_path3}")

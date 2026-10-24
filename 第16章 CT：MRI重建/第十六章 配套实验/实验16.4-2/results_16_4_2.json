@@ -38,9 +38,9 @@
     }
   },
   "images": {
-    "test_sample": "h:\\deepinv\\deepinv2\\第16章 CT：MRI重建\\第十六章 配套实验\\实验16.4-2\\comparison_test_sample.png",
-    "shepp_logan": "h:\\deepinv\\deepinv2\\第16章 CT：MRI重建\\第十六章 配套实验\\实验16.4-2\\comparison_shepp_logan.png",
-    "curves": "h:\\deepinv\\deepinv2\\第16章 CT：MRI重建\\第十六章 配套实验\\实验16.4-2\\training_curves.png"
+    "test_sample": "H:\\deepinv\\deepinv2\\第16章 CT：MRI重建\\第十六章 配套实验\\实验16.4-2\\comparison_test_sample.png",
+    "shepp_logan": "H:\\deepinv\\deepinv2\\第16章 CT：MRI重建\\第十六章 配套实验\\实验16.4-2\\comparison_shepp_logan.png",
+    "curves": "H:\\deepinv\\deepinv2\\第16章 CT：MRI重建\\第十六章 配套实验\\实验16.4-2\\training_curves.png"
   },
   "training": {
     "unet_mse_losses": [

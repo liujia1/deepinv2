@@ -401,18 +401,18 @@ print(f"Linear Attention 参数量:  {sum(p.numel() for p in attn_linear.paramet
 for size in [16, 32, 64]:
     x_s = torch.randn(1, 64, size, size)
     N = size * size
-    d_head = 32
-    print(f"  特征图 {size}×{size} (N={N}):")
-    print(f"    Full Attn  复杂度: O(N^2)    = O({N**2:,})")
-    print(f"    Linear Attn 复杂度: O(N·d^2) = O({N * d_head**2:,})")
-    # 注意: 仅当 N > d² 时 Full 的 N×N 注意力矩阵才大于 Linear 的 N×d² 上下文矩阵
-    if N > d_head ** 2:
-        ratio = (N**2) / (N * d_head**2)
-        print(f"    节省比: {ratio:.1f}× (Linear更省)")
-    else:
-        ratio = (N * d_head**2) / (N**2)
-        tag = "Full更省" if ratio > 1 else "两者持平"
-        print(f"    {tag}: {max(ratio, 1/ratio):.1f}× (N≤d²时Full不劣于Linear)")
+    # 维度口径统一: 注意力的通道宽度是 heads×dim_head = 128, 不是单头 dim_head=32
+    HIDDEN = 4 * 32
+    full_flops = N * N * HIDDEN          # Full: 注意力矩阵 N×N, 每元素 O(d)
+    linear_flops = N * HIDDEN ** 2       # Linear: 上下文向量 N×d, 每元素 O(d)
+    full_mem = 4 * 4 * N * N             # 每头一份 N×N (float32, 4 头)
+    linear_mem = 4 * N * HIDDEN          # 一份 N×d (float32)
+    print(f"  特征图 {size}×{size} (N={N}, d={HIDDEN}):")
+    print(f"    Full   O(N²·d) = {full_flops:,}   主导激活 {full_mem/1024**2:.3f} MB")
+    print(f"    Linear O(N·d²) = {linear_flops:,}   主导激活 {linear_mem/1024**2:.3f} MB")
+    verdict = "Linear更省" if full_flops > linear_flops else "N<d, Full 反而更便宜"
+    print(f"    Full/Linear: 算力 {full_flops/linear_flops:.1f}×, "
+          f"激活 {full_mem/linear_mem:.1f}×  ({verdict})")
 
 # ★ 实测: 两种注意力的显存开销（把步骤2的"显存"宣称落地）
 # - GPU: 用 torch.cuda 实测单次前向+反传的峰值显存
@@ -795,9 +795,10 @@ print("""
     - num_epochs=30: 小模型需要多看几遍数据以充分收敛
 
   设计考量（文献经验+架构分析，非本实验消融结论）:
-    - FullAttention: 仅部署在mid块(16×16)提供全局信息，该分辨率下
-      N=256<d²=1024，Full反而比Linear更省——"高分辨率用Linear、
-      低分辨率用Full"是标准扩散UNet的混合策略
+    - FullAttention: 仅部署在mid块(16×16)提供全局信息。该分辨率下 N=256、d=128,
+      Full 仍比 Linear 贵约 2× 算力 / 8× 激活, 但绝对开销都很小, 而全局建模
+      收益最大——“高分辨率用Linear、低分辨率用Full”是标准扩散UNet的混合策略
+      (实测数据见步骤2输出)
     - PreNorm: 通过在残差前归一化稳定深层训练，是现代UNet/Transformer的事实标准
     - ConvNext深度可分离卷积: 提供7×7大感受野，兼顾参数效率与空间建模能力
 

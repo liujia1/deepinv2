@@ -1289,12 +1289,18 @@ results_summary = {
         'MOI_vs_EI判定': moi_ei_desc + '；' + mc_baseline_desc,
     },
     '联合覆盖度验证': {
-        f"G={G}": {
-            '经验覆盖率': coverage_stats[G]['coverage_at_least_once'],
-            '理论覆盖率': coverage_stats[G]['theoretical_at_least_once'],
-            '秩占比': coverage_stats[G]['rank_ratio'],
-            '全部覆盖比例': coverage_stats[G]['all_covered'],
-        } for G in coverage_stats.keys()
+        # ★ 这段说明必须写在代码里：否则每次重跑重写 JSON 时会被丢掉
+        '说明': ("单次抽样下G个算子的联合覆盖度，等于对角0/1掩码下的 "
+                 "rank(Σ_g A_gᵀA_g)/n；与正文17.5.2的期望满秩条件 rank(E[AᵀA])=n"
+                 "（iid掩码下G=1即成立）不是同一量"),
+        **{
+            f"G={G}": {
+                '经验覆盖率': coverage_stats[G]['coverage_at_least_once'],
+                '理论覆盖率': coverage_stats[G]['theoretical_at_least_once'],
+                '秩占比': coverage_stats[G]['rank_ratio'],
+                '全部覆盖比例': coverage_stats[G]['all_covered'],
+            } for G in coverage_stats.keys()
+        },
     },
     '实验参数': {
         '噪声水平': SIGMA,

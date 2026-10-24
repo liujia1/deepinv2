@@ -3,16 +3,16 @@
   "total_steps": 46900,
   "warmup_steps": 500,
   "final_train_losses": {
-    "adam_const": 0.061171,
-    "adamw_const": 0.045999,
-    "adam_cosine": 0.057859,
-    "adamw_cosine": 0.046911
+    "adam_const": 0.05986,
+    "adamw_const": 0.046047,
+    "adam_cosine": 0.05797,
+    "adamw_cosine": 0.046895
   },
   "final_val_losses": {
-    "adam_const": 0.059529,
-    "adamw_const": 0.046184,
-    "adam_cosine": 0.057515,
-    "adamw_cosine": 0.046931
+    "adam_const": 0.059167,
+    "adamw_const": 0.045967,
+    "adam_cosine": 0.057559,
+    "adamw_cosine": 0.046841
   },
   "val_ranking_best_to_worst": [
     "AdamW + Constant",
@@ -21,8 +21,8 @@
     "Adam + Constant"
   ],
   "crossover_epoch_cosine_minus_constant": {
-    "Adam": 8,
-    "AdamW": 16
+    "Adam": 10,
+    "AdamW": 37
   },
   "verdict_cosine_overtakes_on_val": false
 }

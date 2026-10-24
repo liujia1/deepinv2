@@ -367,6 +367,17 @@ else:
             'name_en': cfg['name_en'],
         }
 
+    # ---- 同模型基线（inverse crime 对照）：同一 256 网格生成 + 反演 ----
+    # 正文引用"同模型基线约 27.8 dB"即出自此处，用于把双分辨率失配代价单独量化。
+    theta_full_cfg = [c['theta'] for c in configs if c['name'] == '全角CT'][0]
+    sino_same = radon(phantom, theta=theta_full_cfg, circle=True)
+    _, recon_same = skimage_parallel_reconstruct(
+        phantom, theta_full_cfg, filter_name='ramp', sinogram=sino_same)
+    same_psnr = compute_psnr(phantom, recon_same)
+    print(f"  [同模型基线] 同网格(256→256)全角 FBP PSNR={same_psnr:.2f} dB "
+          f"→ IC-free {results['全角CT']['psnr']:.2f} dB，"
+          f"失配代价 {same_psnr - results['全角CT']['psnr']:.2f} dB")
+
 
 # ========================================================================
 # 绘制三种配置对比图
@@ -631,6 +642,13 @@ results_summary = {
         "PSNR_dB": [round(float(v), 2) for v in psnr_limited_curve],
     },
 }
+if not ASTRA_AVAILABLE:
+    results_summary["同模型基线"] = {
+        "同网格FBP_PSNR_dB": round(float(same_psnr), 2),
+        "IC_free_FBP_PSNR_dB": round(float(results['全角CT']['psnr']), 2),
+        "失配代价_dB": round(float(same_psnr - results['全角CT']['psnr']), 2),
+        "说明": "同网格(256→256)全角生成+反演，即 inverse crime 情形，仅用于量化双分辨率失配的代价",
+    }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
     json.dump(results_summary, f, ensure_ascii=False, indent=2)

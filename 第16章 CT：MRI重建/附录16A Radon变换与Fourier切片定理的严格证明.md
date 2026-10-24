@@ -60,6 +60,6 @@ $$\boxed{u(\mathbf{x}) = \int_0^{\pi} \mathcal{F}^{-1}\left[|\omega| \cdot \wide
 
 这就是 FBP 公式。$\blacksquare$
 
-回顾这个推导全过程：斜坡滤波器 $|\omega|$ 并非凭空出现，而是极坐标 Jacobian 的必然产物——它抵消了"低频被反复扫描"造成的过度加权。这一转变意味着，FBP 的本质是一次"重加权后的反投影"：先用 $|\omega|$ 把径向频域的权重补齐，再反投影回图像空间。这也是 16.1.4 中"先滤波、再反投影"最严格的来源。
+回顾这个推导全过程：斜坡滤波器 $|\omega|$ 并非凭空出现，而是极坐标 Jacobian 的必然产物——它抵消了"低频被反复扫描"造成的过度加权。换句话说，FBP 的本质是一次"重加权后的反投影"：先用 $|\omega|$ 把径向频域的权重补齐，再反投影回图像空间。这也是 16.1.4 中"先滤波、再反投影"最严格的来源。
 
 **来源**：IP_and_Im_Lectures-master tomography.md；Siltanen Day3A P51；Natterer (1986) The Mathematics of Computerized Tomography

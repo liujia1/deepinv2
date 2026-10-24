@@ -190,8 +190,9 @@ def flow_ode_sample(model, shape, n_steps=50, z=None):
     for step in range(n_steps):
         t_val = step / n_steps
         # ★ 修正：RF中t_val=0是噪声，DDPM中t_int=T-1是噪声
-        # 反转映射使正弦嵌入语义对齐
-        t_int = torch.full((shape[0],), int((1 - t_val) * (T - 1)), device=device, dtype=torch.long)
+        # 反转映射使正弦嵌入语义对齐；floor((1-t)*T) 再截断到 T-1，
+        # 旧写法 floor((1-t)*(T-1)) 会让采样首步查询的 T-1 在训练中取不到（同 14.5-1）。
+        t_int = torch.full((shape[0],), min(int((1 - t_val) * T), T - 1), device=device, dtype=torch.long)
         v = model(x, t_int)
         x = x + v * dt
 
@@ -281,8 +282,8 @@ if not skip_training_1rf:
             t_continuous = torch.rand(batch, device=device)
             # RF中t_continuous=0是噪声，t_continuous=1是干净
             # DDPM中t_int=0是干净，t_int=T-1是噪声
-            # 反转映射使正弦嵌入语义对齐：RF噪声端→DDPM噪声端
-            t_int = ((1 - t_continuous) * (T - 1)).long()
+            # 反转映射使正弦嵌入语义对齐：RF噪声端→DDPM噪声端；采样端同一映射
+            t_int = torch.clamp(((1 - t_continuous) * T).long(), max=T - 1)
 
             # 线性插值: x_t = (1-t)z + t*x_0
             t_4d = t_continuous[:, None, None, None]
@@ -371,7 +372,7 @@ else:
             dt = 1.0 / 50
             for step in range(50):
                 t_val = step / 50
-                t_int = torch.full((batch_sz,), int((1 - t_val) * (T - 1)), device=device, dtype=torch.long)
+                t_int = torch.full((batch_sz,), min(int((1 - t_val) * T), T - 1), device=device, dtype=torch.long)
                 v = rf_model(x_t, t_int)
                 x_t = x_t + v * dt
             reflow_pairs_z.append(z.cpu())
@@ -441,8 +442,8 @@ if not skip_training_2rf:
             batch = z_batch.shape[0]
 
             t_continuous = torch.rand(batch, device=device)
-            # 反转映射使正弦嵌入语义对齐：RF噪声端→DDPM噪声端
-            t_int = ((1 - t_continuous) * (T - 1)).long()
+            # 反转映射使正弦嵌入语义对齐：RF噪声端→DDPM噪声端；采样端同一映射
+            t_int = torch.clamp(((1 - t_continuous) * T).long(), max=T - 1)
             t_4d = t_continuous[:, None, None, None]
 
             x_t = (1 - t_4d) * z_batch + t_4d * x0_batch

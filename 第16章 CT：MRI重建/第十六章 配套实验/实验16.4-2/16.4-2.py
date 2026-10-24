@@ -856,7 +856,7 @@ def main():
 
     # 图 1：随机测试样本对比
     fig, axes = plt.subplots(2, 3, figsize=(14, 9))
-    idx = np.random.randint(0, N_TEST)
+    idx = int(np.random.RandomState(0).randint(0, N_TEST))  # 固定抽样，保证配图可复现
     fbp_i = test_fbp[idx]
     gt_i  = test_gt[idx]
     fbp_t = torch.from_numpy(fbp_i).unsqueeze(0).unsqueeze(0).to(device)
@@ -872,8 +872,8 @@ def main():
         return f'{name}\nPSNR={psnr_label(pred, gt)} dB'
 
     titles_row1 = [
-        (fbp_i, f'FBP ($\\hat{{x}}_\\mathrm{{FBP}}$)'),
-        (gt_i, 'Ground Truth ($x$)'),
+        (fbp_i, f'FBP 重建（$\\hat{{x}}_\\mathrm{{FBP}}$）'),
+        (gt_i, '真值（$x$）'),
         (pred_unet_i, _title_or_na('UNet (MSE)', pred_unet_i, gt_i, unet_ready)),
     ]
     for ax, (img, title) in zip(axes[0], titles_row1):
@@ -893,7 +893,7 @@ def main():
         ax.set_title(title, fontsize=10)
         ax.axis('off')
 
-    fig.suptitle('CT $\\rightarrow$ FBP $\\rightarrow$ Post-Processing: UNet vs VDSR',
+    fig.suptitle('CT 后处理管线：Radon $\\rightarrow$ FBP $\\rightarrow$ UNet / VDSR',
                  fontsize=13, fontweight='bold')
     # rect 顶部留出 7% 空间给 suptitle，避免与子图标题重叠
     plt.tight_layout(rect=[0, 0, 1, 0.93])
@@ -918,9 +918,9 @@ def main():
         ax.axis('off')
 
     _add_sl_panel(axes2.flat[panel_idx], sl_fbp,
-                  f'FBP ($\\hat{{x}}_\\mathrm{{FBP}}$)\nPSNR={sl_fbp_psnr:.1f} dB')
+                  f'FBP 重建（$\\hat{{x}}_\\mathrm{{FBP}}$）\nPSNR={sl_fbp_psnr:.1f} dB')
     panel_idx += 1
-    _add_sl_panel(axes2.flat[panel_idx], sl_gt, 'Shepp-Logan ($x$)')
+    _add_sl_panel(axes2.flat[panel_idx], sl_gt, 'Shepp-Logan 真值（$x$）')
     panel_idx += 1
 
     if unet_ready:
@@ -940,7 +940,7 @@ def main():
     for j in range(panel_idx, len(axes2.flat)):
         axes2.flat[j].axis('off')
 
-    fig2.suptitle('Shepp-Logan Phantom: FBP vs Learned Post-Processing',
+    fig2.suptitle('Shepp-Logan 幻影：FBP vs 学习型后处理',
                   fontsize=13, fontweight='bold')
     # rect 顶部留出 7% 空间给 suptitle，避免与子图标题重叠
     plt.tight_layout(rect=[0, 0, 1, 0.93])
@@ -964,9 +964,9 @@ def main():
         ax1.plot(range(1, len(loss_unet_mae) + 1), loss_unet_mae, 'g--',
                  label=r'UNet (MAE, $L_1$)', linewidth=1.5)
         any_loss = True
-    ax1.set_xlabel('Epoch')
-    ax1.set_ylabel('Loss')
-    ax1.set_title('Training Loss Curves')
+    ax1.set_xlabel('训练轮次（epoch）')
+    ax1.set_ylabel('损失')
+    ax1.set_title('训练损失曲线（三者量纲不同，不可直接比高低）')
     if any_loss:
         ax1.legend()
     ax1.grid(True, alpha=0.3)
@@ -984,13 +984,13 @@ def main():
             colors_bars.append(color)
     bars = ax2.bar(methods_bars, psnrs_bars, color=colors_bars, edgecolor='black', alpha=0.85)
     ax2.set_ylabel('PSNR (dB)')
-    ax2.set_title('Test Set PSNR Comparison')
+    ax2.set_title('测试集 PSNR 对比')
     for bar, val in zip(bars, psnrs_bars):
         ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
                  f'{val:.1f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
     ax2.grid(True, alpha=0.3, axis='y')
 
-    fig3.suptitle('Experiment 16.4-2: CT Post-Processing Results',
+    fig3.suptitle('实验 16.4-2：CT 后处理结果',
                   fontsize=13, fontweight='bold')
     plt.tight_layout()
     fig_path3 = os.path.join(OUTPUT_DIR, 'training_curves.png')

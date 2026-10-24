@@ -473,7 +473,8 @@ else:
 # 可视化对比（固定可视化随机流使图可复现, 与训练路径无关）
 torch.manual_seed(42)
 fig, axes = plt.subplots(3, 6, figsize=(15, 8))
-test_imgs = next(iter(train_loader))[0][:6].to(device)  # 范围 [-1, 1]
+# 用测试集图像(未参与训练, shuffle=False可复现), 避免用训练样本评估/可视化导致记忆效应混入
+test_imgs = next(iter(test_loader))[0][:6].to(device)  # 范围 [-1, 1]
 
 # 高斯去噪（DnCNN）
 dncnn.eval()  # BN切换到推理模式, 使用训练期间累积的滑动统计量
@@ -757,8 +758,9 @@ best_model.eval()
 
 fig, axes = plt.subplots(4, 6, figsize=(15, 10))
 t_indices_vis = [5, 50, 100, 180]
+torch.manual_seed(123)  # 固定可视化噪声, 使步骤4图可复现
 noise_vis = torch.randn(6, 1, 28, 28, device=device)
-test_vis = next(iter(train_loader))[0][:6].to(device)  # 范围 [-1, 1]
+test_vis = next(iter(test_loader))[0][:6].to(device)  # 测试集图像, 与步骤3口径一致
 snr_by_t = {}  # 记录各时间步的实测SNR, 供JSON存档
 
 for row, t_idx in enumerate(t_indices_vis):

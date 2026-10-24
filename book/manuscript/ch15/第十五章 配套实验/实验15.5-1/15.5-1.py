@@ -278,7 +278,10 @@ def compute_warmup_cosine_factor(step, warmup_steps, total_steps):
     返回值 ∈ [0, 1], 实际 lr = base_lr * factor
     """
     if step < warmup_steps:
-        return float(step) / float(max(1, warmup_steps))
+        # step 从 0 开始, 而 LambdaLR 在构造时会立即调用一次(step=0);
+        # 若返回 step/warmup_steps=0, 第一个 batch 的 lr 为 0, 参数完全不变(白跑一个 batch).
+        # 故用 (step+1) 使首步 lr=base_lr/warmup_steps, 仍在 warmup_steps 步内线性升至 base_lr
+        return float(step + 1) / float(max(1, warmup_steps))
     progress = float(step - warmup_steps) / float(max(1, total_steps - warmup_steps))
     return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
 
@@ -656,9 +659,11 @@ print(f"  最差配置: {configs[worst_name]['label']} (Loss={trained_histories[
 n_samples = 8
 
 @torch.no_grad()
-def sample_ddpm(model, n_samples):
+def sample_ddpm(model, n_samples, init_noise=None, noise_seq=None):
+    """init_noise / noise_seq: 可选的预生成噪声序列.
+    多个模型对比时传入同一份噪声, 使采样差异只来自模型本身而非噪声随机性"""
     model.eval()
-    x = torch.randn(n_samples, 1, 28, 28, device=device)
+    x = init_noise.clone() if init_noise is not None else torch.randn(n_samples, 1, 28, 28, device=device)
     for t_val in reversed(range(T)):
         t = torch.full((n_samples,), t_val, device=device, dtype=torch.long)
         pred = model(x, t)
@@ -672,14 +677,21 @@ def sample_ddpm(model, n_samples):
             # 与真实后验均值严格等价 (原实现 sigma=sqrt(beta_t) 仅为DDIM族近似)
             sigma_t = torch.sqrt(betas[t_val] * (1 - alpha_bar_prev) / (1 - alpha_bar_t))
             dir_xt = torch.sqrt(torch.clamp(1 - alpha_bar_prev - sigma_t**2, min=0)) * pred
-            x = torch.sqrt(alpha_bar_prev) * x0_pred + dir_xt + sigma_t * torch.randn_like(x)
+            z = noise_seq[t_val] if noise_seq is not None else torch.randn_like(x)
+            x = torch.sqrt(alpha_bar_prev) * x0_pred + dir_xt + sigma_t * z
         else:
             x = x0_pred
     return x
 
+# ★ 最佳/最差共享同一初始 x_T 与逐步噪声轨迹, 采样差异只来自模型本身
+_sample_gen = torch.Generator(device=device).manual_seed(999)
+_init_noise = torch.randn(n_samples, 1, 28, 28, device=device, generator=_sample_gen)
+_noise_seq = [torch.randn(n_samples, 1, 28, 28, device=device, generator=_sample_gen)
+              for _ in range(T)]
+
 print(f"\n  DDPM采样 ({T}步, 各{n_samples}张)...")
-samples_best = sample_ddpm(trained_models[best_name], n_samples)
-samples_worst = sample_ddpm(trained_models[worst_name], n_samples)
+samples_best = sample_ddpm(trained_models[best_name], n_samples, _init_noise, _noise_seq)
+samples_worst = sample_ddpm(trained_models[worst_name], n_samples, _init_noise, _noise_seq)
 
 fig, axes = plt.subplots(2, n_samples, figsize=(n_samples * 2, 4.5))
 for col in range(n_samples):
