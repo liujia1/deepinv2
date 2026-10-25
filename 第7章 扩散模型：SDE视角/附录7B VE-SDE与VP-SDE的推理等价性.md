@@ -58,4 +58,3 @@ $$\hat{x}_t = \mathbf{x}_0 + \hat{\sigma}(t)\,\varepsilon$$
 
 详细公式与逐项推导见附录 12B（B.5 节）。
 
-**来源**：@kawar2022ddrm; @karras2022edm; @song2021scoresde

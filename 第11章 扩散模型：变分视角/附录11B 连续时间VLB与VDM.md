@@ -40,5 +40,3 @@ VDM 发现最优调度高度非线性：更多步分配给"信噪比变化剧烈
 **意义**：自适应噪声调度免手动调参，不同数据集自动找到合适调度；连续 VLB 可直接优化数据似然（压缩、异常检测有用）；VDM 统一了 DDPM（固定调度+简化 VLB）、Score-SDE（固定 SDE+得分匹配）、VDM（可优调度+连续 VLB）三者，后两者只是 VDM 加约束的特例。
 
 **局限**：同时优化 $\theta$ 和调度，计算比固定调度的 DDPM 贵；调度优化可能过拟合，需正则化；连续时间理论分析更复杂。
-
-**来源**：@kingma2021vdm VDM; @kingma2023vdmobj Understanding Diffusion Objectives; 2406.08929v2 Sec 2.3

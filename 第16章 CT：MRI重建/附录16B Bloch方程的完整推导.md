@@ -68,4 +68,3 @@ $$s(\mathbf{k}) = \int u(\mathbf{r}) e^{-2\pi i \mathbf{k}\cdot\mathbf{r}} d\mat
 
 走到这一步，"从自旋到 k-space"的链条便完整闭合：磁化矢量在梯度中进动（旋转项）、随时间弛豫（弛豫项），线圈读到的合成信号正好是对有效自旋密度的傅里叶采样。也就是说，MRI 求逆问题的难度并不在于"信号难解"，而在于"我们选择只采一部分频率"——这正是 16.3.3、16.3.4 加速采集及后续学习型、扩散方法的真正切入点。
 
-**来源**：IP_and_Im_Lectures-master magnetic_resonance_imaging.md；@bloch1946nmr Nuclear Induction

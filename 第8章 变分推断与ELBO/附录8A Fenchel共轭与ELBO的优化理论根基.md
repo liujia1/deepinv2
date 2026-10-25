@@ -96,9 +96,9 @@ ELBO 的 Jensen 推导，本身就是 Fenchel-Young 在凹函数情形的特例�
 
 ### 实验结果
 
-#### 步骤1：Fenchel共轭的数值验证
+#### 步骤1：Fenchel共轭的数值验证（图 8.7）
 
-![实验8A-1 步骤1：Fenchel共轭的几何意义](<./第八章 配套实验/实验8A-1/步骤1_fenchel共轭几何.png>)
+![图 8.7　Fenchel共轭的几何意义](<./第八章 配套实验/实验8A-1/步骤1_fenchel共轭几何.png>)
 
 图中每条红色虚线都是相应 $f$ 的**最优线性下界** $\ell(\mathbf{x})=\langle \mathbf{y},\mathbf{x}\rangle-f^*(\mathbf{y})$，切点满足 $\mathbf{y} \in \partial f(\mathbf{x}^*)$（次梯度取等条件）；右下角板则显示 $|\mathbf{y}|>1$ 时根本不存在这样的支撑线。
 
@@ -122,9 +122,9 @@ ELBO 的 Jensen 推导，本身就是 Fenchel-Young 在凹函数情形的特例�
 
    数值解随区间单调增长、永不收敛，且逐点等于 $hi\cdot(|\mathbf{y}|-1)$——这正是 $+\infty$ 的正确数值表现。无法用有限域搜索触及 $+\infty$ 是**工具的定义域限制**（共轭的自然定义域 $\mathrm{dom}\,f^*=[-1,1]$ 之外），不是数值方法与理论的矛盾。
 
-#### 步骤2：ELBO的Fenchel对偶表示
+#### 步骤2：ELBO的Fenchel对偶表示（图 8.8）
 
-![实验8A-1 步骤2：变分间隙与ELBO地形](<./第八章 配套实验/实验8A-1/步骤2_变分间隙与elbo地形.png>)
+![图 8.8　变分间隙与ELBO地形](<./第八章 配套实验/实验8A-1/步骤2_变分间隙与elbo地形.png>)
 
 **证据与后验形态**（$\log p(\mathbf{x})$ 用数值积分与混合边际闭式两法独立计算，配置A 相差 $2.2\times10^{-16}$，配置B 相差 $0$）：
 
@@ -181,5 +181,3 @@ $$\max_p \left[-\frac{1}{2}\|A^*p\|^2 - \frac{1}{2\lambda}\|p - \mathbf{y}/\lamb
 | $q = p(\mathbf{z}|\mathbf{x})$ 时间隙为零 | 强对偶时间隙为零 |
 
 两者共享同一套凸分析工具——Fenchel 共轭是统一数学语言。这解释了为何 ELBO 与正则化有相同"数据+正则"结构：**它们是同一个凸优化问题的不同表达**。这一转变意味着，第 2 章的 MAP 正则化作图和本章的 ELBO 变分推断，并不是两条不相干的支流，而是一条凸分析大河的两岸。
-
-**来源**：Benning L2 P23-25; LectureNotes2020_v2 Ch4 (Fenchel conjugate, lines 1832-1979); @rockafellar1970convex Convex Analysis; @borwein2010convex Convex Analysis and Nonlinear Optimization

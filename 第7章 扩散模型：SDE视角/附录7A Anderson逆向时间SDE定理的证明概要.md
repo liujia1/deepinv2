@@ -78,4 +78,3 @@ $$dx = \left[\nabla\log p(\mathbf{x}) - 2\nabla\log p(\mathbf{x})\right]\,dt + \
 - 逆向过程需"恢复"信息——得分函数 $\nabla\log p_t(\mathbf{x})$ 指向概率增长方向；
 - $-g(t)^2$ 的系数确保修正强度与正向噪声强度匹配——噪声越强，修正越大。
 
-**来源**：@anderson1982reverse; @winkler2021reverse; @risken1996fokkerplanck; @song2021scoresde
