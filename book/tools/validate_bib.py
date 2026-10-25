@@ -10,7 +10,8 @@ validate_bib.py —— Phase 3 参考文献体系结构校验
   4. 映射表覆盖（citations_mapping.md 主表）：
      - 每行 bib 键必须存在于 bib（🗑️已废弃/redirect 行除外，但 redirect 目标必须在 bib）
      - bib 每个键必须被主表引用
-  5. 反查覆盖（citations_raw.csv ↔ 映射表主表）：211 条双向一致
+  5. 反查覆盖（citations_raw.csv → 映射表主表，**单向**）：散文引用必须全部有映射行；
+   映射行未在散文出现只计提示（Phase 5 后多数引用已转为 @key citeproc 形态，散文扫不到）
 
 用法：python book/tools/validate_bib.py
 退出码：0 = 全部通过；1 = 存在失败项
@@ -140,7 +141,7 @@ def main():
     print(f"[4] 映射表主表 {len(main_rows)} 行；引用键 {len(cited)}；bib 键 {len(bibkeys)}；"
           f"bib 未引用键 {len(uncited)}")
 
-    # ---------- 5. CSV ↔ 映射表 ----------
+    # ---------- 5. CSV → 映射表（单向反查）----------
     csv_pairs = [(r[1], r[2]) for r in list(csv.reader(io.open(CSV, encoding="utf-8")))[1:]
                  if len(r) >= 5]
     mp_pairs = [(r[1].strip(), r[2].strip()) for r in main_rows]
@@ -149,9 +150,12 @@ def main():
     if only_csv:
         fails.append(f"CSV 有、映射表无: {only_csv}")
     if only_mp:
-        fails.append(f"映射表有、CSV 无: {only_mp}")
-    print(f"[5] CSV 条目 {len(csv_pairs)} ↔ 映射表 {len(mp_pairs)}：双向一致"
-          if not (only_csv or only_mp) else "[5] 覆盖不一致")
+        warns.append(f"映射表有、散文未出现 ({len(only_mp)} 行，多为 @key/nocite 引用): "
+                       + "; ".join("%s (%s)" % p for p in only_mp[:10])
+                       + (" ..." if len(only_mp) > 10 else ""))
+    print(f"[5] 散文引用 {len(csv_pairs)} 条 → 映射表 {len(mp_pairs)} 行："
+          + ("单向覆盖通过" if not only_csv else f"散文引用缺映射 {len(only_csv)} 条")
+          + f"（映射行未在散文出现 {len(only_mp)} 条，仅提示）")
 
     # ---------- 汇总 ----------
     print()

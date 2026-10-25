@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-scan_citations.py —— 扫描 book/manuscript/ 全部正文（排除代码块/行内代码），
+scan_citations.py —— 扫描构建源（仓库根 第N章/ 与 绪论/）全部正文（排除代码块/行内代码），
 提取散文中的 Author (Year) 引用，去重输出为生成 references.bib 做准备。
 
 输出格式：每行一条 "作者 | 年份 | 次数 | 首见文件#行号"
@@ -36,9 +36,21 @@ from collections import defaultdict
 # UTF-8 stdout
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-BASE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "manuscript")
-if not os.path.exists(BASE):
-    BASE = os.path.join(os.getcwd(), "book", "manuscript")
+# 扫描根 = 构建源。2026-10-25 口径修正：此前扫的是 book/manuscript/ 旧镜像，
+# 与构建源不同步，会把镜像里早已修掉的写法（如 Chung et al. (2209.14687) ×5）
+# 报成现存问题；现按 audit_notation/audit_crossrefs 同口径取仓库根的章目录。
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BASE = REPO
+
+
+def source_dirs():
+    """构建源目录：仓库根的第N章*/ 加 绪论/（其他目录一律不参与引用扫描）。"""
+    ds = [os.path.join(REPO, d) for d in sorted(os.listdir(REPO))
+          if os.path.isdir(os.path.join(REPO, d)) and re.match(r"^第\d+章", d)]
+    intro = os.path.join(REPO, "绪论")
+    if os.path.isdir(intro):
+        ds.append(intro)
+    return ds
 
 # ---------- 作者串构件 ----------
 _SURNAME = r"[A-ZÀ-Þ][A-Za-zÀ-ÿ\-\u2013\u2014]+"  # 姓氏：连字符/连接号可跨大写（Rudin-Osher-Fatemi / Vanden-Eijnden / Rudin–Osher–Fatemi）
@@ -200,10 +212,11 @@ def main():
     findings = defaultdict(lambda: {"count": 0, "first_seen": None, "examples": []})
 
     md_files = []
-    for root, _dirs, files in os.walk(BASE):
-        for f in files:
-            if f.endswith(".md"):
-                md_files.append(os.path.join(root, f))
+    for d in source_dirs():
+        for root, _dirs, files in os.walk(d):
+            for f in files:
+                if f.endswith(".md"):
+                    md_files.append(os.path.join(root, f))
 
     md_files.sort()
 
@@ -261,7 +274,7 @@ def main():
     sorted_keys = sorted(findings.keys(), key=lambda k: (k[1], k[0]), reverse=False)
 
     print("=" * 80)
-    print(f"扫描范围: {os.path.relpath(BASE, os.getcwd())}")
+    print(f"扫描范围: 构建源（第N章 + 绪论，共 {len(source_dirs())} 个目录）")
     print(f"md 文件数: {len(md_files)}")
     print(f"去重后引用条目数: {len(sorted_keys)}")
     print("=" * 80)

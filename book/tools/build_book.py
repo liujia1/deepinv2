@@ -23,7 +23,9 @@ PANDOC = pypandoc.get_pandoc_path()
 CSL = REPO / 'book' / 'tools' / 'csl' / 'chinese-author-date.csl'
 BIB = REPO / 'book' / 'meta' / 'references.bib'
 # 正文以纯文本提到的文献（无 @key 引注），由 .audit_tmp/_gennocite.py 生成，
-# 仅用于让它们进入参考文献表，不产生正文引注
+# 仅用于让它们进入参考文献表，不产生正文引注。
+# 注意：--metadata nocite=@key 传进去的是纯字符串，citeproc 不解析（实测无效）；
+# 必须写成 YAML 块标量并经 --metadata-file 注入。
 NOCITE = REPO / 'book' / 'meta' / 'nocite.txt'
 # 去掉叙述式引用括号前的多余空格；必须排在 --citeproc 之后
 LUA = REPO / 'book' / 'tools' / 'lua' / 'fix_cite_space.lua'
@@ -102,13 +104,15 @@ def main():
     search = [str(d) for d in chapter_dirs()] + [str(REPO / '绪论')]
     tag = ('ch%s' % ch) if ch else 'all'
     log = []
+    extra = []
+    if NOCITE.exists():
+        keys = [k.strip() for k in NOCITE.read_text(encoding='utf-8').split('\n') if k.strip()]
+        if keys:
+            meta = BUILD / '_nocite_meta.yaml'
+            meta.write_text('nocite: |\n' + ''.join('  @%s\n' % k for k in keys), encoding='utf-8')
+            extra = ['--metadata-file', str(meta)]
     for fmt in fmts:
         out = BUILD / ('试排_%s.%s' % (tag, fmt))
-        extra = []
-        if NOCITE.exists():
-            keys = [k.strip() for k in NOCITE.read_text(encoding='utf-8').split('\n') if k.strip()]
-            if keys:
-                extra = ['--metadata', 'nocite=' + ' '.join('@' + k for k in keys)]
         cmd = [PANDOC] + [str(f) for f in files] + extra + [
             '-o', str(out), '--standalone', '--citeproc',
             '--csl', str(CSL), '--bibliography', str(BIB),

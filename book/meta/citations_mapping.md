@@ -3,6 +3,10 @@
 > 用途：Phase 5 排版时，按本表把正文里每一处散文式 `Author (Year)` 替换为 `\cite{bibkey}`。
 > 输入：`meta/citations_review.md` 反查 211 条（实例计数）；产出键见 `meta/references.bib`（去重合并后 **198 键**，经 `book/tools/validate_bib.py` 校验通过；历史：200→198→197→196→197→198——废弃 2 键（holden2022langevin 后平反、chung2025survey redirect）+ 新增 laumont2023convergence + 2026-10-21 tachella2025unknown 合并入 tachella2025unsure + 新增 wu2024dpps（DPPS 坐实）+ 2026-10-25 E1 返工：新增 laumont2022langevintweedie(WT)+hurault2024convergence、废弃 laumont2022pnpdm）。
 > 状态图例：`✓`=字段完整可信｜`⚠`=bib 中带 `note={⚠待补/待核}`，须作者坐实｜`合并`=多条正文写法并入同一键。
+> 2026-10-25 口径更新：`scan_citations.py` 改扫构建源（仓库根 `第N章/` + `绪论/`）后，散文式
+> `Author (Year)` 只剩 **95 条**（Phase 5 已把多数引用转为 `@key` citeproc 形态），故
+> `validate_bib.py` 第 5 项由「双向一致」改为**单向覆盖**：散文引用必须都有映射行，映射行未在
+> 散文出现仅计提示。本表 #18/#93/#147/#148 四行已按现文回写（1990 / Gözcü / 2022 / 2022+ch18）。
 > 口径（作者已拍板）：优先已发表版；非正式来源剔除；`Black Forest Labs (2024) Flux` 保留为 `@misc`；citekey=作者+年份+关键词小写。
 
 ## 一、非正式来源（按口径 Q3 剔除，不进 bib / 不进对照主表）
@@ -40,7 +44,7 @@
 | 15 | Natterer | 1986 | ch16/16A#65 | natterer1986ct | ✓ |
 | 16 | Parisi | 1988 | ch08/8B#111 | parisi1988fieldtheory | ✓ |
 | 17 | Cybenko | 1989 | ch09/9C#125 | cybenko1989approximation | ✓ |
-| 18 | Greenleaf & Uhlmann | 1989 | ch16/16C#33 | greenleaf1989visibility | ✓ |
+| 18 | Greenleaf & Uhlmann | 1990 | ch16/16C#33 | greenleaf1989visibility | ✓ |
 | 19 | Hutchinson | 1990 | ch06/6.4#23 | hutchinson1990stochastic | ✓ |
 | 20 | Hornik | 1991 | ch09/9C#125 | hornik1991approximation | ✓ |
 | 21 | Geman & Reynolds | 1992 | ch04/4.5#39 | geman1992convergence | ✓ |
@@ -115,7 +119,7 @@
 | 90 | Chen et al | 2018 | ch14/14.2#52 | chen2018node | ✓ |
 | 91 | Durmus et al | 2018 | ch04/4.4#182 | durmus2018proximal | 合并 |
 | 92 | Durmus, Moulines & Pereyra | 2018 | ch04/4A#122 | durmus2018proximal | 合并 |
-| 93 | Gozcu et al | 2018 | ch16/16.4#107 | gozcu2018compressive | ✓ |
+| 93 | Gözcü et al | 2018 | ch16/16.4#107 | gozcu2018compressive | ✓ |
 | 94 | Jamil | 2018 | ch08/8.1#238 | jamil2018vi | ✓ |
 | 95 | Kim & Mnih | 2018 | ch09/9.3#273 | kim2018factorvae | ✓ |
 | 96 | Kingma & Dhariwal | 2018 | ch14/14.2#234 | kingma2018glow | ✓ |
@@ -169,8 +173,8 @@
 | 144 | Song et al | 2021 | ch06/6.5#111 | song2021scoresde | ✓ |
 | 145 | Tran et al | 2021 | ch08/8.5#113 | tran2021tutorialvb | ✓ |
 | 146 | Winkler | 2021 | ch07/7A#79 | winkler2021reverse | ✓ |
-| 147 | Zhang | 2021 | ch06/6.6#34 | zhang2021pnp | 合并 |
-| 148 | Zhang et al | 2021 | ch05/5.5#159 | zhang2021pnp | 合并 |
+| 147 | Zhang | 2022 | ch06/6.6#34 | zhang2021pnp | 合并 |
+| 148 | Zhang et al | 2022 | ch18/18.3#61 | zhang2021pnp | 合并 |
 | 149 | Campbell et al | 2022 | ch14/14.6#14 | campbell2022discrete | ✓ |
 | 150 | Chung et al | 2022 | ch13/13.3#81 | chung2023dps | 合并 |
 | 151 | Ho & Salimans | 2022 | ch13/13.4#138 | ho2022cfg | ✓ |
@@ -234,6 +238,7 @@
 | 210 | Xu et al | 2025 | ch13/13.3#745 | xu2025dmap | ✓ |
 | 211 | Chung et al | 2209.14687 | ch13/13.4#402 | chung2023dps | 合并 |
 | 212 | Trippe et al | 2022 | ch13/13.3#630 | trippe2022smcdiff | ✓（2026-10-21 正文修正后新增行；原 #196 的 SMCDiff 三处已并入本行） |
+| 213 | Chen, Tachella & Davies | 2022 | ch17/17.5#255 | chen2022rei | ✓（2026-10-25 新增：REI 篇与 EI/ICCV 2021 分离单列） |
 | 213 | Hurault et al | 2024 | ch04/4.7#153 | hurault2024convergence | ✓（E1 补引：非对数凹严格收敛后续分析，主引仍 laumont2022langevintweedie，2026-10-25） |
 
 ## 三、需作者优先坐实的 ⚠ 清单（按影响排序）

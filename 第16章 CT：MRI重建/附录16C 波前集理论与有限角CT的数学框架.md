@@ -30,7 +30,7 @@ $$(\mathbf{x}_0,\xi_0) \in WF(u) \iff \text{存在 }\theta_0\text{ 使得 }(\the
 
 ## C.3 有限角CT的可见性定理
 
-**定理**（Greenleaf & Uhlmann 1989；Frikel & Quinto 2013）：设测量角度范围为 $\Theta \subset [0,\pi)$，则从有限角度数据 $\mathcal{R}_\Theta u$ 能稳定恢复的波前集为：
+**定理**（Greenleaf & Uhlmann 1990；Frikel & Quinto 2013）：设测量角度范围为 $\Theta \subset [0,\pi)$，则从有限角度数据 $\mathcal{R}_\Theta u$ 能稳定恢复的波前集为：
 
 $$WF_{\text{visible}}(u) = \{(\mathbf{x},\xi) \in WF(u) : \xi/|\xi| = (\cos\theta,\sin\theta),\ \theta \in \Theta\}$$
 

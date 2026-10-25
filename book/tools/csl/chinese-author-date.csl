@@ -30,7 +30,7 @@
     </names>
   </macro>
 
-  <!-- 文献表全名：姓, 名缩写 -->
+  <!-- 文献表全名：姓, 名缩写；四人以上列前三加"等" -->
   <macro name="author-long">
     <names variable="author">
       <name name-as-sort-order="all" sort-separator=", " delimiter=", "
@@ -49,7 +49,7 @@
     </date>
   </macro>
 
-  <!-- 文献类型标识：GB/T 7714 的 [M] [J] [C] 等 -->
+  <!-- GB/T 7714-2015 文献类型标识；未标注类型一律 [Z] -->
   <macro name="type-mark">
     <choose>
       <if type="article-journal article-magazine article-newspaper" match="any">
@@ -64,40 +64,77 @@
       <else-if type="report" match="any">
         <text value="[R]"/>
       </else-if>
-      <else-if type="webpage post-weblog" match="any">
+      <else-if type="chapter entry-encyclopedia" match="any">
+        <text value="[M]"/>
+      </else-if>
+      <else-if type="book" match="any">
+        <text value="[M]"/>
+      </else-if>
+      <else-if type="webpage post-weblog post article-website dataset software" match="any">
         <text value="[EB/OL]"/>
       </else-if>
       <else>
-        <text value="[M]"/>
+        <text value="[Z]"/>
       </else>
     </choose>
   </macro>
 
-  <macro name="secondary">
+  <!-- 析出文献的出处，GB/T 7714 以 // 引出 -->
+  <macro name="in-source">
     <choose>
+      <if type="paper-conference chapter entry-encyclopedia" match="any">
+        <text variable="container-title" prefix="// "/>
+      </if>
+    </choose>
+  </macro>
+
+  <!-- 出版项 + 年份 + 页码 -->
+  <macro name="imprint">
+    <choose>
+      <!-- 期刊：刊名, 年, 卷(期): 页码 -->
       <if type="article-journal article-magazine article-newspaper" match="any">
         <group delimiter=", ">
           <text variable="container-title" font-style="italic"/>
           <text macro="issued-year"/>
-          <group delimiter=" ">
+          <group delimiter="">
             <text variable="volume" font-weight="bold"/>
             <text variable="issue" prefix="(" suffix=")"/>
           </group>
-          <text variable="page"/>
         </group>
+        <text variable="page" prefix=": "/>
       </if>
-      <else-if type="paper-conference" match="any">
+
+      <!-- 析出文献：出版地: 出版者, 年: 页码 -->
+      <else-if type="paper-conference chapter entry-encyclopedia" match="any">
         <group delimiter=", ">
-          <text variable="container-title"/>
+          <group delimiter=": ">
+            <text variable="publisher-place"/>
+            <text variable="publisher"/>
+          </group>
           <text macro="issued-year"/>
-          <text variable="page"/>
         </group>
+        <text variable="page" prefix=": "/>
       </else-if>
-      <else>
-        <group delimiter=": ">
+
+      <!-- 学位论文：保存地: 保存者, 年 -->
+      <else-if type="thesis" match="any">
+        <group delimiter=", ">
           <text variable="publisher-place"/>
           <text variable="publisher"/>
+          <text macro="issued-year"/>
         </group>
+      </else-if>
+
+      <!-- 专著 / 报告 / 网络资源：出版地: 出版者, 年 -->
+      <else>
+        <group delimiter=", ">
+          <group delimiter=": ">
+            <text variable="publisher-place"/>
+            <text variable="publisher"/>
+          </group>
+          <text macro="issued-year"/>
+        </group>
+        <text variable="page" prefix=": "/>
       </else>
     </choose>
   </macro>
@@ -127,9 +164,11 @@
         <group delimiter="">
           <text variable="title"/>
           <text macro="type-mark"/>
+          <text macro="in-source"/>
         </group>
-        <text macro="secondary"/>
+        <text macro="imprint"/>
       </group>
+      <text variable="DOI" prefix=" DOI: "/>
     </layout>
   </bibliography>
 </style>

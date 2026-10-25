@@ -1,213 +1,96 @@
 index,author,year,count,first_seen
-1,"Bloch",1946,1,ch16\附录16B Bloch方程的完整推导.md#71
-2,"Frankel",1950,2,ch04\4.6 加速采样方法：过松弛与惯性Langevin算法.md#26
-3,"Robbins",1956,5,ch05\5.3 Tweedie等式：从去噪器到得分函数.md#206
-4,"Miyasawa",1961,2,ch05\5.3 Tweedie等式：从去噪器到得分函数.md#207
-5,"Polyak",1964,2,ch04\4.6 加速采样方法：过松弛与惯性Langevin算法.md#67
-6,"Moreau",1965,1,ch05\5.4 MAP与MMSE的结构对偶性.md#245
-7,"Hastings",1970,1,ch04\附录4A 马尔可夫链收敛性与Gibbs分布.md#128
-8,"Rockafellar",1970,1,ch08\附录8A Fenchel共轭与ELBO的优化理论根基.md#185
-9,"Hudson",1978,2,ch17\附录17A SURE的无偏性证明.md#97
-10,"Adler",1981,2,ch04\4.6 加速采样方法：过松弛与惯性Langevin算法.md#32
-11,"Stein",1981,3,ch13\13.6 闭环：回到第1章的逆问题.md#315
-12,"Anderson",1982,14,ch07\7.1 从Langevin到扩散：连续时间推广.md#78
-13,"Shepp & Vardi",1982,1,ch16\附录16D PET与发射断层成像.md#158
-14,"Geman & Geman",1984,1,ch04\附录4A 马尔可夫链收敛性与Gibbs分布.md#126
-15,"Natterer",1986,2,ch16\附录16A Radon变换与Fourier切片定理的严格证明.md#65
-16,"Parisi",1988,1,ch08\附录8B 平均场近似的闭式推导.md#113
-17,"Cybenko",1989,1,ch09\附录9C 过参数化与双重下降.md#125
-18,"Greenleaf & Uhlmann",1989,2,ch16\附录16C 波前集理论与有限角CT的数学框架.md#33
-19,"Hutchinson",1990,4,ch06\6.4 切片得分匹配（SSM）与Hutchinson迹估计.md#23
-20,"Hornik",1991,1,ch09\附录9C 过参数化与双重下降.md#125
-21,"Geman & Reynolds",1992,2,ch04\4.5 Gibbs采样：利用条件结构的采样.md#39
-22,"Geyer",1992,2,ch04\4.2 Metropolis-Hastings算法.md#409
-23,"Rudin-Osher-Fatemi",1992,2,ch02\2.2 经典先验族.md#513
-24,"Williams",1992,1,ch09\9.2 重参数化技巧.md#323
-25,"Quinto",1993,2,ch16\附录16C 波前集理论与有限角CT的数学框架.md#23
-26,"Hudson & Larkin",1994,1,ch16\附录16D PET与发射断层成像.md#158
-27,"Risken",1996,3,ch05\5.1 从MCMC到Langevin SDE.md#215
-28,"Roberts et al",1997,2,ch04\4.2 Metropolis-Hastings算法.md#82
-29,"Roberts, Gelman & Gilks",1997,2,ch04\4.2 Metropolis-Hastings算法.md#330
-30,"Roberts-Gelman-Gilks",1997,2,ch04\4.2 Metropolis-Hastings算法.md#394
-31,"Otto",2001,3,ch14\附录14C Wasserstein空间的黎曼结构.md#33
-32,"Vogel",2002,1,ch03\3.6 收敛性分析与正则化参数选择.md#160
-33,"Wang et al",2004,2,ch00\术语索引.md#7
-34,"Buades et al",2005,1,ch05\5.5 PnP框架：用去噪器替换先验梯度.md#153
-35,"Hyvärinen",2005,10,ch05\5.2 得分函数：对数概率的梯度.md#18
-36,"Minka",2005,2,ch08\8.4 变分推断与正则化的统一视角.md#331
-37,"Roth & Black",2005,1,ch04\附录4A 马尔可夫链收敛性与Gibbs分布.md#134
-38,"Cover & Thomas",2006,1,ch08\附录8C KL散度的性质与变分推断的信息论视角.md#95
-39,"Dabov et al",2007,1,ch05\5.5 PnP框架：用去噪器替换先验梯度.md#152
-40,"Rahimi & Recht",2007,1,ch15\附录15B 正弦位置编码的数学性质.md#60
-41,"Ramani et al",2007,2,ch17\17.3 SURE：Stein无偏风险估计与R2R.md#79
-42,"Ambrosio et al",2008,2,ch14\附录14C Wasserstein空间的黎曼结构.md#3
-43,"Ambrosio, Gigli & Savaré",2008,1,ch14\附录14C Wasserstein空间的黎曼结构.md#62
-44,"Lustig et al",2008,1,ch16\16.3 MRI成像：从自旋到k-space.md#206
-45,"Villani",2008,6,ch14\14.1 最优传输基础.md#204
-46,"Villani",2009,1,ch05\附录5A Fokker-Planck方程与Langevin平稳分布证明.md#162
-47,"Borwein & Lewis",2010,1,ch08\附录8A Fenchel共轭与ELBO的优化理论根基.md#185
-48,"Bredies, Kunisch & Pock",2010,1,ch02\附录2B TGV：TV的改进.md#21
-49,"Glorot & Bengio",2010,2,ch15\15.5 训练最佳实践.md#187
-50,"Efron",2011,4,ch05\5.3 Tweedie等式：从去噪器到得分函数.md#208
-51,"Kloeden & Platen",2011,1,ch07\7.5 数值离散化：从连续方程到可执行算法.md#150
-52,"Vincent",2011,13,ch06\6.0 本章导读.md#49
-53,"Cotter et al",2013,2,ch04\4.2 Metropolis-Hastings算法.md#342
-54,"Cotter, Roberts, Stuart & White",2013,1,ch04\附录4A 马尔可夫链收敛性与Gibbs分布.md#120
-55,"Cuturi",2013,3,ch14\14.1 最优传输基础.md#141
-56,"Frikel & Quinto",2013,2,ch16\附录16C 波前集理论与有限角CT的数学框架.md#33
-57,"Venkatakrishnan et al",2013,1,ch05\5.5 PnP框架：用去噪器替换先验梯度.md#266
-58,"Venkatakrishnan, Bouman & Wohlberg",2013,1,ch05\5.5 PnP框架：用去噪器替换先验梯度.md#245
-59,"Bakry, Gentil & Ledoux",2014,1,ch05\附录5A Fokker-Planck方程与Langevin平稳分布证明.md#162
-60,"Chen, Ranftl & Pock",2014,2,ch02\2.4 从显式先验到隐式先验.md#107
-61,"Hörmann & Leydold",2014,1,ch04\附录4A 马尔可夫链收敛性与Gibbs分布.md#92
-62,"Kingma & Welling",2014,10,ch08\8.2 ELBO推导：证据下界.md#277
-63,"Rezende et al",2014,4,ch08\8.5 从变分推断到生成模型：路线图.md#113
-64,"He et al",2015,2,ch15\15.5 训练最佳实践.md#188
-65,"Kingma & Ba",2015,2,ch15\15.5 训练最佳实践.md#19
-66,"Pereyra",2015,2,ch04\4.4 MYULA：近端ULA.md#42
-67,"Rezende & Mohamed",2015,2,ch09\9.2 重参数化技巧.md#311
-68,"Ronneberger",2015,1,ch06\6.6 去噪器作为得分估计器：实践与架构.md#32
-69,"Ronneberger et al",2015,4,ch14\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#199
-70,"Santambrogio",2015,3,ch14\14.1 最优传输基础.md#204
-71,"Bowman et al",2016,1,ch09\9.3 ELBO训练与KL正则化.md#325
-72,"Cohen & Welling",2016,1,ch17\17.6 测量一致性与等变架构.md#63
-73,"Hoffman & Johnson",2016,2,ch09\9.3 ELBO训练与KL正则化.md#321
-74,"Salimans et al",2016,1,ch01\附录1A 图像质量度量.md#188
-75,"Sreehari et al",2016,1,ch05\5.5 PnP框架：用去噪器替换先验梯度.md#246
-76,"Sønderby et al",2016,1,ch10\10.1 从VAE到层级VAE.md#257
-77,"Alemi et al",2017,1,ch08\附录8C KL散度的性质与变分推断的信息论视角.md#95
-78,"Blei et al",2017,4,ch08\8.1 为什么需要变分推断？.md#238
-79,"Bora et al",2017,1,ch02\2.4 从显式先验到隐式先验.md#248
-80,"Dinh et al",2017,1,ch14\14.2 连续归一化流(CNF).md#236
-81,"Fox & Parker",2017,2,ch04\4.6 加速采样方法：过松弛与惯性Langevin算法.md#42
-82,"Heusel et al",2017,1,ch01\附录1A 图像质量度量.md#228
-83,"Higgins et al",2017,5,ch08\附录8C KL散度的性质与变分推断的信息论视角.md#77
-84,"Jang et al",2017,2,ch09\9.2 重参数化技巧.md#299
-85,"Vaswani et al",2017,5,ch15\15.2 时间步嵌入：让网络感知噪声水平.md#36
-86,"Zhang et al",2017,4,ch05\5.5 PnP框架：用去噪器替换先验梯度.md#158
-87,"Adler & Öktem",2018,2,ch16\16.4 学习型重建方法.md#79
-88,"Barratt & Sharma",2018,1,ch01\附录1A 图像质量度量.md#213
-89,"Blau & Michaeli",2018,2,ch13\13.3 近似方法分类与DPS深度剖析.md#742
-90,"Chen et al",2018,4,ch14\14.2 连续归一化流(CNF).md#52
-91,"Durmus et al",2018,4,ch04\4.4 MYULA：近端ULA.md#210
-92,"Durmus, Moulines & Pereyra",2018,1,ch04\附录4A 马尔可夫链收敛性与Gibbs分布.md#122
-93,"Gozcu et al",2018,1,ch16\16.4 学习型重建方法.md#107
-94,"Jamil",2018,4,ch08\8.1 为什么需要变分推断？.md#238
-95,"Kim & Mnih",2018,1,ch09\9.3 ELBO训练与KL正则化.md#277
-96,"Kingma & Dhariwal",2018,1,ch14\14.2 连续归一化流(CNF).md#236
-97,"Kumar et al",2018,1,ch09\9.3 ELBO训练与KL正则化.md#278
-98,"Lehtinen et al",2018,2,ch17\17.2 Noise2Noise：用噪声替代干净标签.md#33
-99,"Perez et al",2018,1,ch15\15.2 时间步嵌入：让网络感知噪声水平.md#321
-100,"Ardizzone et al",2019,1,ch14\14.2 连续归一化流(CNF).md#244
-101,"Batson & Royer",2019,2,ch17\17.4 盲点网络与UNSURE：Noise2Self-Noise2Void及未知噪声.md#64
-102,"Belkin et al",2019,4,ch09\附录9C 过参数化与双重下降.md#72
-103,"Belthangady & Royer",2019,2,ch17\17.1 为什么自监督——数据困境与学习设定的谱系.md#30
-104,"Bubba et al",2019,3,ch16\16.2 CT的不适定性与正则化重建.md#85
-105,"Devlin et al",2019,1,ch14\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#204
-106,"Durmus & Moulines",2019,8,ch04\4.3 ULA：Langevin采样的Euler离散.md#115
-107,"Grathwohl et al",2019,2,ch14\14.2 连续归一化流(CNF).md#85
-108,"Karras et al",2019,1,ch15\15.2 时间步嵌入：让网络感知噪声水平.md#321
-109,"Krull et al",2019,2,ch17\17.4 盲点网络与UNSURE：Noise2Self-Noise2Void及未知噪声.md#33
-110,"Laine et al",2019,3,ch17\17.4 盲点网络与UNSURE：Noise2Self-Noise2Void及未知噪声.md#46
-111,"Loshchilov & Hutter",2019,2,ch15\15.5 训练最佳实践.md#23
-112,"Narnhofer et al",2019,1,ch02\2.4 从显式先验到隐式先验.md#248
-113,"Pereyra",2019,1,ch03\3.1 MAP估计：从后验众数到优化问题.md#69
-114,"Peyré & Cuturi",2019,1,ch14\14.1 最优传输基础.md#204
-115,"Ryu et al",2019,3,ch05\5.5 PnP框架：用去噪器替换先验梯度.md#248
-116,"Song & Ermon",2019,13,ch05\5.2 得分函数：对数概率的梯度.md#214
-117,"Song et al",2019,2,ch06\6.4 切片得分匹配（SSM）与Hutchinson迹估计.md#125
-118,"Weiler & Cesa",2019,1,ch17\17.6 测量一致性与等变架构.md#97
-119,"Zhang et al",2019,1,ch08\8.3 变分推断作为优化问题.md#364
-120,"Bahadir et al",2020,2,ch16\16.4 学习型重建方法.md#107
-121,"Ho et al",2020,40,ch06\6.5 多尺度得分匹配：从单一噪声到噪声条件网络.md#111
-122,"Kobler, Effland, Kunisch & Pock",2020,1,ch02\2.4 从显式先验到隐式先验.md#204
-123,"Ongie et al",2020,1,ch09\9.4 VAE作为逆问题的学习先验.md#212
-124,"Pereyra, Mieles & Zygalakis",2020,1,ch04\附录4A 马尔可夫链收敛性与Gibbs分布.md#131
-125,"Soltanayev et al",2020,2,ch17\17.3 SURE：Stein无偏风险估计与R2R.md#91
-126,"Song & Ermon",2020,1,ch06\6.5 多尺度得分匹配：从单一噪声到噪声条件网络.md#137
-127,"Song et al",2020,4,ch07\7.4 概率流ODE：随机采样的确定性等价.md#3
-128,"Tancik et al",2020,1,ch15\附录15B 正弦位置编码的数学性质.md#60
-129,"Austin et al",2021,2,ch14\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#345
-130,"Bellec et al",2021,1,ch17\17.7 本章小结：从数据困境到自监督统一.md#104
-131,"Chen, Tachella & Davies",2021,1,ch17\17.5 等变成像：从不完整测量中学习.md#216
-132,"Dhariwal & Nichol",2021,6,ch13\13.3 近似方法分类与DPS深度剖析.md#972
-133,"Dosovitskiy et al",2021,3,ch15\15.3 从ViT到DiT：Transformer接管扩散模型.md#59
-134,"Huang et al",2021,2,ch17\17.2 Noise2Noise：用噪声替代干净标签.md#99
-135,"Jalal et al",2021,2,ch13\13.3 近似方法分类与DPS深度剖析.md#41
-136,"Kadkhodaie & Soltanolkotabi",2021,1,ch13\13.3 近似方法分类与DPS深度剖析.md#972
-137,"Kim & Ye",2021,2,ch17\17.3 SURE：Stein无偏风险估计与R2R.md#117
-138,"Kingma",2021,7,ch11\附录11B 连续时间VLB与VDM.md#3
-139,"Kingma et al",2021,5,ch08\8.5 从变分推断到生成模型：路线图.md#113
-140,"Nakkiran et al",2021,3,ch09\附录9C 过参数化与双重下降.md#72
-141,"Nichol & Dhariwal",2021,12,ch07\7.6 实践：用扩散SDE实现图像生成.md#37
-142,"Pang et al",2021,2,ch17\17.3 SURE：Stein无偏风险估计与R2R.md#121
-143,"Song et al",2021,20,ch06\6.5 多尺度得分匹配：从单一噪声到噪声条件网络.md#111
-144,"Tran et al",2021,1,ch08\8.5 从变分推断到生成模型：路线图.md#113
-145,"Winkler",2021,1,ch07\附录7A Anderson逆向时间SDE定理的证明概要.md#81
-146,"Zhang",2021,1,ch06\6.6 去噪器作为得分估计器：实践与架构.md#34
-147,"Zhang et al",2021,3,ch05\5.5 PnP框架：用去噪器替换先验梯度.md#159
-148,"Campbell et al",2022,3,ch14\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#14
-149,"Chung et al",2022,3,ch13\13.3 近似方法分类与DPS深度剖析.md#83
-150,"Ho & Salimans",2022,2,ch13\13.4 引导采样：从分类器引导到逆问题引导.md#140
-151,"Holden et al",2022,1,ch09\9.4 VAE作为逆问题的学习先验.md#212
-152,"Holden, Pereyra & Zygalakis",2022,1,ch02\2.4 从显式先验到隐式先验.md#293
-153,"Karras et al",2022,14,ch07\7.2 正向SDE：从数据到噪声的连续过程.md#89
-154,"Kawar et al",2022,7,ch07\附录7B VE-SDE与VP-SDE的推理等价性.md#61
-155,"Laumont et al",2022,6,ch03\3.7 从MAP到后验：点估计的局限与分叉.md#182
-156,"Lu et al",2022,9,ch07\7.5 数值离散化：从连续方程到可执行算法.md#111
-157,"Lugmayr et al",2022,1,ch18\18.6 拓展方向与前沿挑战.md#58
-158,"Rombach et al",2022,5,ch13\13.3 近似方法分类与DPS深度剖析.md#512
-159,"Tachella et al",2022,1,ch17\17.5 等变成像：从不完整测量中学习.md#39
-160,"Terris et al",2022,1,ch05\5.5 PnP框架：用去噪器替换先验梯度.md#249
-161,"Trippe et al",2022,3,ch13\13.3 近似方法分类与DPS深度剖析.md#636
-162,"Zamir et al",2022,2,ch15\15.3 从ViT到DiT：Transformer接管扩散模型.md#92
-163,"Zhang & Chen",2022,1,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#157
-164,"Albergo & Vanden-Eijnden",2023,1,ch14\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#313
-165,"Cardoso et al",2023,3,ch13\13.3 近似方法分类与DPS深度剖析.md#636
-166,"Chung et al",2023,10,ch13\13.2 后验得分分解：条件化的理论基础.md#71
-167,"Feng et al",2023,3,ch13\13.3 近似方法分类与DPS深度剖析.md#458
-168,"Kim et al",2023,2,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#94
-169,"Kingma & Gao",2023,1,ch11\附录11B 连续时间VLB与VDM.md#44
-170,"Laumont et al",2023,3,ch13\13.3 近似方法分类与DPS深度剖析.md#607
-171,"Lipman et al",2023,8,ch14\14.3 Flow Matching.md#68
-172,"Liu et al",2023,5,ch14\14.4 Rectified Flow.md#3
-173,"Mardani et al",2023,3,ch13\13.3 近似方法分类与DPS深度剖析.md#440
-174,"Peebles & Xie",2023,10,ch14\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#200
-175,"Pooladian et al",2023,1,ch14\14.3 Flow Matching.md#724
-176,"Song & Dhariwal",2023,2,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#94
-177,"Song et al",2023,8,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#74
-178,"Tachella et al",2023,2,ch17\17.5 等变成像：从不完整测量中学习.md#184
-179,"Zhang et al",2023,3,ch13\13.4 引导采样：从分类器引导到逆问题引导.md#419
-180,"Zhao et al",2023,1,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#157
-181,"Zhu et al",2023,5,ch13\13.3 近似方法分类与DPS深度剖析.md#522
-182,"Black Forest Labs",2024,3,ch14\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#263
-183,"Chen & Lipman",2024,1,ch14\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#313
-184,"Daras et al",2024,8,ch12\12.7 全书叙事的汇合.md#158
-185,"Esser et al",2024,5,ch14\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#3
-186,"Gat et al",2024,2,ch14\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#346
-187,"He et al",2024,1,ch13\13.3 近似方法分类与DPS深度剖析.md#753
-188,"Holderrieth et al",2024,1,ch14\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#348
-189,"Hurault et al",2024,1,ch04\4.7 收敛诊断与不确定性量化.md#153
-190,"Li & Pereira",2024,7,ch13\13.5 扩散最优控制（进阶）.md#73
-191,"Liu et al",2024,2,ch14\14.4 Rectified Flow.md#319
-192,"Lou et al",2024,1,ch14\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#347
-193,"Lu & Song",2024,2,ch07\7.7 采样加速：从高阶求解器到一致性模型.md#94
-194,"Nakkiran et al",2024,3,ch14\14.3 Flow Matching.md#456
-195,"Patel et al",2024,1,ch13\13.3 近似方法分类与DPS深度剖析.md#756
-196,"Sahoo et al",2024,2,ch14\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#347
-197,"Tong et al",2024,2,ch14\14.3 Flow Matching.md#724
-198,"Wu et al",2024,1,ch13\13.3 近似方法分类与DPS深度剖析.md#752
-199,"Yang et al",2024,1,ch13\13.3 近似方法分类与DPS深度剖析.md#754
-200,"Falk, Habring & Pock",2025,3,ch04\4.6 加速采样方法：过松弛与惯性Langevin算法.md#50
-201,"Gutha et al",2025,1,ch13\13.3 近似方法分类与DPS深度剖析.md#545
-202,"Habring et al",2025,2,ch05\5.7 本章小结：去噪器即隐式先验即得分估计器.md#56
-203,"Habring, Falk, Zach & Pock",2025,2,ch05\5.4 MAP与MMSE的结构对偶性.md#212
-204,"Kim, Kim & Ye",2025,1,ch13\13.3 近似方法分类与DPS深度剖析.md#756
-205,"Kuric et al",2025,1,ch04\4.5 Gibbs采样：利用条件结构的采样.md#83
-206,"Kuric, Zach, Habring, Unser & Pock",2025,1,ch04\附录4A 马尔可夫链收敛性与Gibbs分布.md#129
-207,"Monroy, Bacca & Tachella",2025,1,ch17\17.3 SURE：Stein无偏风险估计与R2R.md#147
-208,"Tachella",2025,1,ch16\16.4 学习型重建方法.md#40
-209,"Tachella et al",2025,1,ch17\17.4 盲点网络与UNSURE：Noise2Self-Noise2Void及未知噪声.md#309
-210,"Terris et al",2025,1,ch17\17.5 等变成像：从不完整测量中学习.md#290
-211,"Xu et al",2025,1,ch13\13.3 近似方法分类与DPS深度剖析.md#751
-212,"Chung et al",2209.14687,5,ch13\13.4 引导采样：从分类器引导到逆问题引导.md#413
+1,"Frankel",1950,1,第4章 MCMC与ULA算法\附录4A 马尔可夫链收敛性与Gibbs分布.md#125
+2,"Polyak",1964,1,第4章 MCMC与ULA算法\附录4A 马尔可夫链收敛性与Gibbs分布.md#132
+3,"Hastings",1970,1,第4章 MCMC与ULA算法\附录4A 马尔可夫链收敛性与Gibbs分布.md#128
+4,"Adler",1981,1,第4章 MCMC与ULA算法\附录4A 马尔可夫链收敛性与Gibbs分布.md#119
+5,"Stein",1981,2,第13章 条件生成与逆问题求解\13.6 闭环：回到第1章的逆问题.md#319
+6,"Anderson",1982,2,第7章 扩散模型：SDE视角\7.3 逆向SDE：从噪声到数据的采样过程.md#30
+7,"Geman & Geman",1984,1,第4章 MCMC与ULA算法\附录4A 马尔可夫链收敛性与Gibbs分布.md#126
+8,"Natterer",1986,1,第16章 CT：MRI重建\16.2 CT的不适定性与正则化重建.md#147
+9,"Greenleaf & Uhlmann",1990,1,第16章 CT：MRI重建\附录16C 波前集理论与有限角CT的数学框架.md#33
+10,"Hutchinson",1990,2,第6章 得分匹配：从去噪中学习得分\6.4 切片得分匹配（SSM）与Hutchinson迹估计.md#23
+11,"Geman & Reynolds",1992,2,第4章 MCMC与ULA算法\4.5 Gibbs采样：利用条件结构的采样.md#39
+12,"Rudin-Osher-Fatemi",1992,1,第2章 先验：贝叶斯推断的灵魂\2.2 经典先验族.md#525
+13,"Quinto",1993,1,第16章 CT：MRI重建\附录16C 波前集理论与有限角CT的数学框架.md#23
+14,"Roberts, Gelman & Gilks",1997,1,第4章 MCMC与ULA算法\附录4A 马尔可夫链收敛性与Gibbs分布.md#133
+15,"Roberts-Gelman-Gilks",1997,2,第4章 MCMC与ULA算法\4.2 Metropolis-Hastings算法.md#396
+16,"Otto",2001,1,第14章 Flow Matching与最优传输\附录14C Wasserstein空间的黎曼结构.md#63
+17,"Vogel",2002,1,第3章 从MAP到后验探索\3.6 收敛性分析与正则化参数选择.md#160
+18,"Hyvärinen",2005,1,第5章 朗之万动力学与得分函数\5.2 得分函数：对数概率的梯度.md#219
+19,"Roth & Black",2005,1,第4章 MCMC与ULA算法\附录4A 马尔可夫链收敛性与Gibbs分布.md#134
+20,"Ambrosio, Gigli & Savaré",2008,1,第14章 Flow Matching与最优传输\附录14C Wasserstein空间的黎曼结构.md#62
+21,"Villani",2008,1,第14章 Flow Matching与最优传输\附录14C Wasserstein空间的黎曼结构.md#64
+22,"Bredies, Kunisch & Pock",2010,1,第2章 先验：贝叶斯推断的灵魂\附录2B TGV：TV的改进.md#21
+23,"Cotter, Roberts, Stuart & White",2013,1,第4章 MCMC与ULA算法\附录4A 马尔可夫链收敛性与Gibbs分布.md#120
+24,"Cuturi",2013,1,第14章 Flow Matching与最优传输\14.3 Flow Matching.md#237
+25,"Frikel & Quinto",2013,1,第16章 CT：MRI重建\附录16C 波前集理论与有限角CT的数学框架.md#33
+26,"Chen, Ranftl & Pock",2014,1,第2章 先验：贝叶斯推断的灵魂\2.4 从显式先验到隐式先验.md#111
+27,"Kingma & Welling",2014,1,第9章 VAE与重参数化\9.0 本章导读.md#29
+28,"Pereyra",2015,1,第4章 MCMC与ULA算法\附录4A 马尔可夫链收敛性与Gibbs分布.md#130
+29,"Ronneberger",2015,1,第6章 得分匹配：从去噪中学习得分\6.6 去噪器作为得分估计器：实践与架构.md#32
+30,"Ronneberger et al",2015,1,第14章 Flow Matching与最优传输\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#199
+31,"Cohen & Welling",2016,1,第17章 自监督学习与等变架构\17.6 测量一致性与等变架构.md#63
+32,"Hoffman & Johnson",2016,1,第9章 VAE与重参数化\9.3 ELBO训练与KL正则化.md#321
+33,"Fox & Parker",2017,1,第4章 MCMC与ULA算法\附录4A 马尔可夫链收敛性与Gibbs分布.md#124
+34,"Adler & Öktem",2018,1,第16章 CT：MRI重建\16.4 学习型重建方法.md#79
+35,"Barratt & Sharma",2018,1,第1章 逆问题与贝叶斯推断\附录1A 图像质量度量.md#215
+36,"Chen et al",2018,1,第14章 Flow Matching与最优传输\14.2 连续归一化流(CNF).md#73
+37,"Durmus et al",2018,1,第4章 MCMC与ULA算法\4.4 MYULA：近端ULA.md#212
+38,"Durmus, Moulines & Pereyra",2018,1,第4章 MCMC与ULA算法\附录4A 马尔可夫链收敛性与Gibbs分布.md#122
+39,"Gözcü et al",2018,1,第16章 CT：MRI重建\16.4 学习型重建方法.md#107
+40,"Lehtinen et al",2018,1,第17章 自监督学习与等变架构\17.2 Noise2Noise：用噪声替代干净标签.md#33
+41,"Ardizzone et al",2019,1,第14章 Flow Matching与最优传输\14.2 连续归一化流(CNF).md#243
+42,"Batson & Royer",2019,1,第17章 自监督学习与等变架构\17.4 盲点网络与UNSURE：Noise2Self-Noise2Void及未知噪声.md#64
+43,"Belthangady & Royer",2019,1,第17章 自监督学习与等变架构\17.1 为什么自监督——数据困境与学习设定的谱系.md#30
+44,"Durmus & Moulines",2019,1,第4章 MCMC与ULA算法\附录4A 马尔可夫链收敛性与Gibbs分布.md#121
+45,"Grathwohl et al",2019,1,第14章 Flow Matching与最优传输\14.2 连续归一化流(CNF).md#85
+46,"Krull et al",2019,1,第17章 自监督学习与等变架构\17.4 盲点网络与UNSURE：Noise2Self-Noise2Void及未知噪声.md#33
+47,"Laine et al",2019,1,第17章 自监督学习与等变架构\17.4 盲点网络与UNSURE：Noise2Self-Noise2Void及未知噪声.md#46
+48,"Song & Ermon",2019,4,第5章 朗之万动力学与得分函数\5.2 得分函数：对数概率的梯度.md#219
+49,"Weiler & Cesa",2019,1,第17章 自监督学习与等变架构\17.6 测量一致性与等变架构.md#97
+50,"Bahadir et al",2020,1,第16章 CT：MRI重建\16.4 学习型重建方法.md#107
+51,"Ho et al",2020,10,第11章 扩散模型：变分视角\11.1 VLB分解与正向过程后验.md#111
+52,"Pereyra, Mieles & Zygalakis",2020,1,第4章 MCMC与ULA算法\附录4A 马尔可夫链收敛性与Gibbs分布.md#131
+53,"Austin et al",2021,1,第14章 Flow Matching与最优传输\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#345
+54,"Bellec et al",2021,1,第17章 自监督学习与等变架构\17.7 本章小结：从数据困境到自监督统一.md#104
+55,"Chen, Tachella & Davies",2021,1,第17章 自监督学习与等变架构\17.5 等变成像：从不完整测量中学习.md#216
+56,"Huang et al",2021,1,第17章 自监督学习与等变架构\17.2 Noise2Noise：用噪声替代干净标签.md#99
+57,"Kim & Ye",2021,1,第17章 自监督学习与等变架构\17.3 SURE：Stein无偏风险估计与R2R.md#117
+58,"Kingma",2021,2,第11章 扩散模型：变分视角\附录11B 连续时间VLB与VDM.md#3
+59,"Nichol & Dhariwal",2021,5,第11章 扩散模型：变分视角\11.6 本章小结：从VLB到DDPM——变分路径的落地.md#21
+60,"Pang et al",2021,1,第17章 自监督学习与等变架构\17.3 SURE：Stein无偏风险估计与R2R.md#121
+61,"Song et al",2021,2,第18章 综合项目：用扩散模型求解自定义逆问题\18.3 求解策略选择与对比.md#207
+62,"Campbell et al",2022,1,第14章 Flow Matching与最优传输\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#345
+63,"Ho & Salimans",2022,1,第13章 条件生成与逆问题求解\13.4 引导采样：从分类器引导到逆问题引导.md#140
+64,"Karras et al",2022,1,第12章 Score ≡ ELBO：殊途同归\12.4 DSM ≡ VLB：等价性的形式化证明.md#47
+65,"Kawar et al",2022,1,第16章 CT：MRI重建\16.5 扩散先验重建.md#91
+66,"Laumont et al",2022,1,第3章 从MAP到后验探索\3.7 从MAP到后验：点估计的局限与分叉.md#182
+67,"Lu et al",2022,5,第18章 综合项目：用扩散模型求解自定义逆问题\18.3 求解策略选择与对比.md#208
+68,"Lugmayr et al",2022,1,第18章 综合项目：用扩散模型求解自定义逆问题\18.6 拓展方向与前沿挑战.md#58
+69,"Rombach et al",2022,1,第13章 条件生成与逆问题求解\13.3 近似方法分类与DPS深度剖析.md#512
+70,"Tachella et al",2022,1,第17章 自监督学习与等变架构\17.5 等变成像：从不完整测量中学习.md#39
+71,"Zhang",2022,1,第6章 得分匹配：从去噪中学习得分\6.6 去噪器作为得分估计器：实践与架构.md#34
+72,"Zhang et al",2022,1,第18章 综合项目：用扩散模型求解自定义逆问题\18.3 求解策略选择与对比.md#61
+73,"Chung et al",2023,3,第13章 条件生成与逆问题求解\13.3 近似方法分类与DPS深度剖析.md#83
+74,"Kim et al",2023,1,第7章 扩散模型：SDE视角\7.7 采样加速：从高阶求解器到一致性模型.md#94
+75,"Lipman et al",2023,1,第14章 Flow Matching与最优传输\附录14B 条件Flow Matching定理的完整证明.md#7
+76,"Liu et al",2023,2,第14章 Flow Matching与最优传输\14.4 Rectified Flow.md#74
+77,"Peebles & Xie",2023,2,第15章 扩散模型的架构实践：UNet → DiT\15.3 从ViT到DiT：Transformer接管扩散模型.md#96
+78,"Song et al",2023,2,第18章 综合项目：用扩散模型求解自定义逆问题\18.6 拓展方向与前沿挑战.md#48
+79,"Tachella et al",2023,2,第17章 自监督学习与等变架构\17.5 等变成像：从不完整测量中学习.md#184
+80,"Zhu et al",2023,1,第16章 CT：MRI重建\16.5 扩散先验重建.md#58
+81,"Black Forest Labs",2024,2,第14章 Flow Matching与最优传输\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#263
+82,"Daras et al",2024,2,第13章 条件生成与逆问题求解\13.3 近似方法分类与DPS深度剖析.md#748
+83,"Esser et al",2024,1,第14章 Flow Matching与最优传输\14.5 前沿组合：SD3-Flux = Rectified Flow + DiT.md#19
+84,"Gat et al",2024,1,第14章 Flow Matching与最优传输\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#346
+85,"Holderrieth et al",2024,1,第14章 Flow Matching与最优传输\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#348
+86,"Li & Pereira",2024,4,第13章 条件生成与逆问题求解\13.5 扩散最优控制（进阶）.md#73
+87,"Liu et al",2024,1,第14章 Flow Matching与最优传输\14.4 Rectified Flow.md#319
+88,"Lou et al",2024,1,第14章 Flow Matching与最优传输\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#347
+89,"Sahoo et al",2024,1,第14章 Flow Matching与最优传输\14.6 离散扩散与掩码语言模型：从向量场到速率矩阵.md#347
+90,"Falk, Habring & Pock",2025,1,第4章 MCMC与ULA算法\附录4A 马尔可夫链收敛性与Gibbs分布.md#123
+91,"Gutha et al",2025,1,第13章 条件生成与逆问题求解\13.3 近似方法分类与DPS深度剖析.md#545
+92,"Kuric, Zach, Habring, Unser & Pock",2025,1,第4章 MCMC与ULA算法\附录4A 马尔可夫链收敛性与Gibbs分布.md#129
+93,"Monroy, Bacca & Tachella",2025,1,第17章 自监督学习与等变架构\17.3 SURE：Stein无偏风险估计与R2R.md#147
+94,"Tachella et al",2025,1,第17章 自监督学习与等变架构\17.4 盲点网络与UNSURE：Noise2Self-Noise2Void及未知噪声.md#309
+95,"Terris et al",2025,1,第17章 自监督学习与等变架构\17.5 等变成像：从不完整测量中学习.md#290
