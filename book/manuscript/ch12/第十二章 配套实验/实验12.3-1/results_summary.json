@@ -8,6 +8,8 @@
     "ratio_mean": 2.0,
     "ratio_std": 3.324179968789511e-16,
     "ratio_max_dev_from_2": 1.3322676295501878e-15,
+    "random_schedule_ratio_mean": 2.0,
+    "random_schedule_max_dev_from_2": 8.881784197001252e-16,
     "note": "DSM权重 = 2 × VLB权重；匹配公式的代数恒等性自检（与噪声调度无关，任意调度下恒为2）"
   },
   "VLB_weights_sampled": {
@@ -19,5 +21,25 @@
     "t_500": 0.005514461959635301,
     "t_750": 0.00766046362590419,
     "t_999": 0.010204501873800032
+  },
+  "schedule_profile": {
+    "beta_first": 0.0001,
+    "beta_last": 0.02,
+    "beta_ratio": 200.0,
+    "alpha_bar_first": 0.9999,
+    "alpha_bar_last": 4.0358297653756754e-05,
+    "sqrt_alpha_bar_T": 0.006352818087570016,
+    "snr_first": 9999.0000000011,
+    "snr_last": 4.03599265116842e-05,
+    "snr_decades": 8.394006201588388,
+    "snr1_index": 258,
+    "snr1_step": 259,
+    "w_max": 0.5996715121593821,
+    "w_max_index": 1,
+    "w_min": 0.00498203291299859,
+    "w_min_index": 349,
+    "w_last": 0.010204501873800032,
+    "w_decades": 2.0805068255393055,
+    "note": "下标为 0 起数组下标（与 VLB_weights_sampled 的 t_* 键同口径，即论文第 i+1 步）；w 的 max/min 只在 i>=1 上取"
   }
 }

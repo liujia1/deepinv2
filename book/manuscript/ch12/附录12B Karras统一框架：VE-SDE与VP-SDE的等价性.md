@@ -97,13 +97,17 @@ $w(t)$ 由 $(s(t), \sigma(t))$ 的动力学方程确定。
 
 1. 建立 SNR 对应：$\sigma_\text{VE} \leftrightarrow \sigma_\text{VP}(t) = \sqrt{(1-\bar\alpha_t)/\bar\alpha_t}$
 2. 把 $\lambda_\text{VE}(\sigma)$ 里的 $\sigma$ 替换成 $\sigma_\text{VP}(t)$
-3. 考虑信号缩放因子 $s(t)$ 的影响
+3. **把信号缩放乘回去**：$\lambda_\text{VE}$ 的自变量是扰动噪声的标准差，在统一记法下它等于 $s(t)\sigma(t)$（B.1 中 $q(\mathbf{x}_t|\mathbf{x}_0)$ 的方差为 $s^2\sigma^2$），因此映射到 VP 后应写成 $\lambda_\text{VP}(t)=s^2(t)\sigma_\text{VP}^2(t)$
 
-当 $\lambda_\text{VE}(\sigma) = \sigma^2$（NCSN 默认）时，在 VP-SDE 下对应 $\lambda_\text{VP}(t) = \sigma_\text{VP}^2(t) = (1-\bar\alpha_t)/\bar\alpha_t$，此时 DSM 权重为：
+第 3 步最容易被漏掉。当 $\lambda_\text{VE}(\sigma)=\sigma^2$（NCSN 默认）时：
 
-$$\frac{\lambda_\text{VP}(t)}{s^2(t)\sigma_\text{VP}^2(t)} = \frac{(1-\bar\alpha_t)/\bar\alpha_t}{\bar\alpha_t \cdot (1-\bar\alpha_t)/\bar\alpha_t} = \frac{1}{\bar\alpha_t}$$
+$$\lambda_\text{VP}(t) = s^2(t)\sigma_\text{VP}^2(t) = \bar\alpha_t\cdot\frac{1-\bar\alpha_t}{\bar\alpha_t} = 1-\bar\alpha_t$$
 
-这与 VP-SDE 下简化 VLB 的权重一致（均匀权重，仅差 $\bar\alpha_t$ 的缩放，当 $\bar\alpha_t \approx 1$ 时近似为 1）。
+此时 DSM 权重（含 B.3 目标前的 $1/2$）为：
+
+$$\frac{1}{2}\cdot\frac{\lambda_\text{VP}(t)}{s^2(t)\sigma_\text{VP}^2(t)} = \frac{1-\bar\alpha_t}{2(1-\bar\alpha_t)} = \frac{1}{2}$$
+
+**它对任意 $t$ 精确等于 $1/2$**，与 VP-SDE 下简化 VLB 的均匀权重逐点相同（仅差常数因子 2），不是“$\bar\alpha_t\approx1$ 时的近似”。若漏掉第 3 步，会得到 $1/\bar\alpha_t$，只能靠 $\bar\alpha_t\approx1$ 勉强近似——这正是把一个精确恒等式误读成近似的典型来源（参见 12.4 “简化目标下的等价性”）。
 
 ---
 

@@ -200,7 +200,12 @@ def flow_ode_sample(model, shape, n_steps=50):
         # RF中t_val=0是噪声，DDPM中t_int=T-1是噪声
         # 反转映射使正弦嵌入语义对齐
         # 注：t_int仅用作位置编码信号，不要求与实际噪声方差精确对应
-        t_int = torch.full((shape[0],), int((1 - t_val) * (T - 1)), device=device, dtype=torch.long)
+        # 与训练端同一映射：floor((1-t)*T) 再截断到 T-1。旧写法 floor((1-t)*(T-1))
+        # 会让采样首步查询的索引 T-1 在训练中取不到（同 14.5-1 的修正）。
+        # 修正后复跑：RF 最终 loss 0.091055（原存档 0.091016），采样质量/多样性
+        # 指标量级与结论均不变（ddpm 分支不经过此映射）。
+        # 注：原存档产自 CPU 环境，CPU 与 CUDA 的随机数序列不同，跨设备不可逐位对齐。
+        t_int = torch.full((shape[0],), min(int((1 - t_val) * T), T - 1), device=device, dtype=torch.long)
         v = model(x, t_int)
         x = x + v * dt
 
@@ -297,7 +302,8 @@ def train_model(model, optimizer, train_loader, model_type='rf', num_epochs=50,
                 # Rectified Flow训练
                 z = torch.randn_like(x)
                 t_continuous = torch.rand(batch, device=device)
-                t_int = ((1 - t_continuous) * (T - 1)).long()
+                # 与采样端同一映射（见 flow_ode_sample 注释），保证 T-1 也有训练覆盖
+                t_int = torch.clamp(((1 - t_continuous) * T).long(), max=T - 1)
                 t_4d = t_continuous[:, None, None, None]
                 x_t = (1 - t_4d) * z + t_4d * x
                 v_target = x - z

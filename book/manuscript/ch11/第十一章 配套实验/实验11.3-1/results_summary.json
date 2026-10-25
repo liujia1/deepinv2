@@ -7,7 +7,7 @@
     "schedule": "DDPM linear beta schedule",
     "numpy_seed": 42,
     "torch_seed": 42,
-    "torch_version": "2.11.0+cpu",
+    "torch_version": "2.11.0+cu126",
     "gaussian_consistency_terms": "t=2,...,T; t=1 is deterministic and is treated as L0"
   },
   "L_T_prior_matching": {
@@ -21,12 +21,13 @@
     "dimension": 2,
     "n_monte_carlo": 50000,
     "sigma_squared": 0.5,
-    "KL_MC_estimate": 0.020519569516181946,
-    "KL_MC_standard_error": 0.0009133268031291664,
-    "KL_formula": 0.020757609978318214,
-    "absolute_error": 0.00023804046213626862,
-    "relative_error": 0.011467623796039486,
-    "error": 0.00023804046213626862,
+    "KL_MC_estimate": 0.2491738498210907,
+    "KL_MC_standard_error": 0.003169621806591749,
+    "KL_formula": 0.2499999701976776,
+    "absolute_error": 0.0008261203765869141,
+    "relative_error": 0.003304481900272596,
+    "z_score": 0.2606368920319961,
+    "error": 0.0008261203765869141,
     "passed": true
   },
   "VLB_weights_sampled": {

@@ -125,6 +125,15 @@ def vp_score_analytic(x, t):
         dpdf += w * (-(x - new_mean) / new_std**2) * np.exp(-0.5 * ((x - new_mean) / new_std)**2) / (new_std * np.sqrt(2 * np.pi))
     return dpdf / (pdf + 1e-30)
 
+from scipy.special import erf
+
+
+def target_cdf(x):
+    """解析目标分布CDF：0.3·N(-2,1) + 0.7·N(1,1)，供单样本KS使用"""
+    z1 = 0.5 * (1 + erf((x + 2) / np.sqrt(2)))
+    z2 = 0.5 * (1 + erf((x - 1) / np.sqrt(2)))
+    return 0.3 * z1 + 0.7 * z2
+
 
 # ============================================================
 # 步骤1：PF-ODE采样
@@ -348,12 +357,13 @@ eta_values = [0.0, 0.25, 0.5, 0.75, 1.0]
 eta_results = {}        # (a) 边际样本
 eta_marg_ks = {}        # (a) 边际KS
 
-# (a) 边际分布（每个η一次5000粒子采样）
+# (a) 边际分布（每个η一次5000粒子采样）；KS 用对解析目标CDF的单样本检验——
+#     此规模下两样本KS噪声底≈0.017，会把“对η不敏感”淹没成纯噪声
 for eta in eta_values:
     np.random.seed(42)
     final = ddim_sample_vp(vp_score_analytic, N_particles, 500, eta=eta)[-1]
     eta_results[eta] = final
-    eta_marg_ks[eta] = float(sp_stats.ks_2samp(final, x0_ref).statistic)
+    eta_marg_ks[eta] = float(sp_stats.kstest(final, target_cdf).statistic)
 
 # (b) 条件随机性：固定同一批x_T，对每个η独立重复K_rep次
 #     重复之间只有每步注入的布朗噪声不同
@@ -379,6 +389,8 @@ for eta in eta_values:
 
 print(f"  配置：边际{N_particles}粒子；条件研究固定{N_cond}个x_T×{K_rep}次重复；"
       f"单点演示x_T={x_star}×{K_point}副本")
+print(f"  边际KS=单样本KS(vs解析目标CDF)；N={N_particles}时纯MC地板≈0.87/√N="
+      f"{0.8687 / np.sqrt(N_particles):.4f}")
 print(f"  {'η':>5} {'边际KS':>8} {'样本Std':>9} "
       f"{'条件方差E[Var(x0|xT)]':>22} {'单点重复Std':>11}")
 for eta in eta_values:
@@ -403,13 +415,6 @@ print("步骤4：DDPM vs DDIM采样质量与速度对比")
 print("=" * 60)
 
 import time
-from scipy.special import erf
-
-def target_cdf(x):
-    """解析目标分布CDF：0.3·N(-2,1) + 0.7·N(1,1)"""
-    z1 = 0.5 * (1 + erf((x + 2) / np.sqrt(2)))
-    z2 = 0.5 * (1 + erf((x - 1) / np.sqrt(2)))
-    return 0.3 * z1 + 0.7 * z2
 
 step_counts = [10, 20, 50, 100, 200, 500, 1000]
 n_seeds = 10

@@ -286,6 +286,7 @@ def train_ddpm(checkpoint_path, pred_type='epsilon', num_epochs=50):
 
     start_epoch = 0
     is_final = False
+    epochs_done = 0
     history = {'loss': []}
 
     # Checkpoint加载逻辑
@@ -309,6 +310,7 @@ def train_ddpm(checkpoint_path, pred_type='epsilon', num_epochs=50):
                 optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
                 history = checkpoint.get('history', {'loss': []})
                 start_epoch = checkpoint['epoch'] + 1
+                epochs_done = checkpoint['epoch'] + 1
                 is_final = True
         else:
             print(f"检测到未完成的训练, 从第 {checkpoint['epoch']+1} 轮继续")
@@ -338,6 +340,7 @@ def train_ddpm(checkpoint_path, pred_type='epsilon', num_epochs=50):
         # 边界保护
         if start_epoch >= num_epochs:
             print(f"  注意: start_epoch({start_epoch}) >= num_epochs({num_epochs}), 无需继续训练")
+            epochs_done = start_epoch
             is_final = True
 
         if not is_final:
@@ -400,6 +403,9 @@ def train_ddpm(checkpoint_path, pred_type='epsilon', num_epochs=50):
             print("-" * 75)
             print(f"训练完成, 最终Loss={history['loss'][-1]:.6f}, 耗时: {t_elapsed:.1f}秒")
 
+            # 本次实际完成的训练轮数（供图表/JSON标注）
+            epochs_done = num_epochs
+
             # 保存最终checkpoint
             torch.save({
                 'epoch': num_epochs - 1,
@@ -414,7 +420,7 @@ def train_ddpm(checkpoint_path, pred_type='epsilon', num_epochs=50):
     else:
         print(f"\n使用已训练完成的 {pred_type}-prediction DDPM模型, 跳过训练过程")
 
-    return model, history
+    return model, history, epochs_done
 
 
 # ============================================================
@@ -450,9 +456,9 @@ print("  注意: 两者参数化同一个后验均值(完整VLB下仅差时间�
 print("  但各自的简化目标监督信号尺度不同(ε方差≈1，x₀方差≈0.35)，")
 print("  训练曲线的损失数值不能直接比较大小，需换算到统一尺度(见后续评估)。")
 
-model_eps, history_eps = train_ddpm(EPS_CHECKPOINT_PATH, 'epsilon', num_epochs)
+model_eps, history_eps, ep_eps = train_ddpm(EPS_CHECKPOINT_PATH, 'epsilon', num_epochs)
 
-model_x0, history_x0 = train_ddpm(X0_CHECKPOINT_PATH, 'x0', num_epochs)
+model_x0, history_x0, ep_x0 = train_ddpm(X0_CHECKPOINT_PATH, 'x0', num_epochs)
 
 
 # ============================================================
@@ -556,24 +562,23 @@ print(f"图1a已保存: {fig_path1a}")
 
 # (b) 前向加噪过程可视化
 test_imgs, _ = next(iter(test_loader))
-t_show = [0, 20, 50, 100, 150, 199]
+t_show = [1, 21, 51, 101, 151, 200]   # 物理时间步(1-based)：t=1 即 ᾱ₁，t=200 即 ᾱ_T
 
 fig2, axes_sub = plt.subplots(2, 3, figsize=(14, 6))
-for i, t_idx in enumerate(t_show):
+for i, t_phys in enumerate(t_show):
     torch.manual_seed(42)
     x0_t = test_imgs[0:1].to(device)
-    t_t = torch.tensor([t_idx], device=device)
+    t_t = torch.tensor([t_phys - 1], device=device)   # 数组下标 = 物理时间步 - 1
     eps_t = torch.randn_like(x0_t)
     x_t = q_sample(x0_t, t_t, eps_t)
     row, col = i // 3, i % 3
-    # 反归一化到[0,1]用于可视化
-    img_show = (x_t[0, 0].cpu().numpy() + 1) / 2
-    img_show = np.clip(img_show, 0, 1)
-    axes_sub[row, col].imshow(img_show, cmap='gray')
-    if t_idx == 0:
-        axes_sub[row, col].set_title(r'$x_0$ (原始)', fontsize=11)
+    # 数据已在[-1,1]，直接用 vmin/vmax 显示；
+    # 若先(x+1)/2再clip，高噪声图会有约1/3像素饱和到0/1，看起来像椒盐噪声
+    axes_sub[row, col].imshow(x_t[0, 0].cpu().numpy(), cmap='gray', vmin=-1, vmax=1)
+    if t_phys == 1:
+        axes_sub[row, col].set_title(r'$x_1$ ($\bar\alpha_1\approx0.9999$)', fontsize=11)
     else:
-        axes_sub[row, col].set_title(f't={t_idx}', fontsize=11)
+        axes_sub[row, col].set_title(f't={t_phys}', fontsize=11)
     axes_sub[row, col].axis('off')
 plt.suptitle('(b) 前向加噪过程', fontsize=13)
 plt.tight_layout()
@@ -584,7 +589,11 @@ print(f"图1b已保存: {fig_path1b}")
 
 print("\n[观察]")
 print("  - 两种参数化的原生训练损失都稳定收敛(左图)，但二者尺度不同，不可直接比数值")
-print("  - 换算到统一尺度后(右图)才能公平比较：两条曲线总体接近，印证后验参数化的等价性")
+print(f"  - 换算到统一尺度后(右图)才能公平比较：最低噪声分箱 t={t_centers[0]:.0f} 处 x0-MSE "
+      f"{common_scale['eps_model']['x0_mse'][0]:.3e}(eps) vs {common_scale['x0_model']['x0_mse'][0]:.3e}(x0)，"
+      f"全时间步平均 {_global_eps_x0:.4f} vs {_global_x0_x0:.4f}，总体接近")
+print("  - 注意：'两种参数化刻画同一后验均值'是代数恒等式，与网络权重无关；")
+print("    实验结果只能说明二者在本设置下的重建能力相近，不能用来'证明'数学等价")
 print("  - ε-prediction是DDPM的标准选择(文献经验，Ho et al. 2020)；本实验两种方案均训练稳定")
 print("  - 前向加噪过程展示: 随着t增大，信号系数√ᾱ_t衰减，图像信息逐步被噪声淹没")
 
@@ -630,7 +639,7 @@ for i in range(n_samples):
     if i == 0:
         axes[1, i].set_ylabel(r'$x_0$-prediction', fontsize=12, rotation=0, labelpad=60)
 
-plt.suptitle(f'DDPM配对采样：上下排共享同一$x_T$与整条逐步噪声$z_t$ (T={T}, {num_epochs} epochs, UNet)', fontsize=13, y=1.02)
+plt.suptitle(f'DDPM配对采样：上下排共享同一$x_T$与整条逐步噪声$z_t$ (T={T}, {ep_eps} epochs, UNet)', fontsize=13, y=1.02)
 plt.tight_layout()
 fig_path2 = os.path.join(SAVE_DIR, '步骤2_DDPM采样对比.png')
 plt.savefig(fig_path2, dpi=150, bbox_inches='tight')
@@ -639,7 +648,7 @@ print(f"图2已保存: {fig_path2}")
 
 print("\n[关键结论]")
 print("  - 配对采样共享同一x_T与整条z_t，上下排唯一差异来自参数化(ε̂ vs x₀)本身")
-print("    (小规模UNet+50轮训练，个别样本仍会畸形，属教学规模下的正常现象)")
+print(f"    (小规模UNet + {ep_eps} 轮训练，个别样本仍会畸形，属教学规模下的正常现象)")
 print("  - DDPM采样从x_T~N(0,I)开始，逐步去噪恢复图像")
 
 
@@ -680,10 +689,8 @@ with torch.no_grad():
 
 fig, axes = plt.subplots(1, len(denoise_trajectory), figsize=(20, 3))
 for i, (t_val, img) in enumerate(denoise_trajectory):
-    # 反归一化到[0,1]用于可视化
-    img_show = (img + 1) / 2
-    img_show = np.clip(img_show, 0, 1)
-    axes[i].imshow(img_show, cmap='gray')
+    # 数据在[-1,1]，直接用 vmin/vmax 显示（clip 到[0,1]会把高噪声图压成二值伪影）
+    axes[i].imshow(img, cmap='gray', vmin=-1, vmax=1)
     if t_val == 0:
         axes[i].set_title(r'$x_0$ (去噪完成)', fontsize=11)
     else:
@@ -779,7 +786,11 @@ results_summary = {
         'note': '步骤2两种参数化共享同一个x_T(种子2024)，上下排同列样本可配对比较',
     },
     'T': T,
-    'num_epochs': num_epochs,
+    'num_epochs_requested': num_epochs,
+    'epochs_trained': {
+        'epsilon_prediction': ep_eps,
+        'x0_prediction': ep_x0,
+    },
 }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:

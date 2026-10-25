@@ -219,6 +219,11 @@ mu1 = torch.randn(d)
 mu2 = torch.randn(d)
 sigma2 = 0.5  # 方差
 
+# 刻意把两均值拉开到固定距离 ||μ₁-μ₂||=0.5，
+# 避免随机种子恰好给出 μ₁≈μ₂ 的退化用例（那样 KL 本身≈0，任何估计都能“通过”）
+_delta = mu2 - mu1
+mu2 = mu1 + 0.5 * _delta / _delta.norm().clamp(min=1e-12)
+
 # MC估计 KL
 z = mu1.unsqueeze(0) + torch.sqrt(torch.tensor(sigma2)) * torch.randn(n_mc, d)
 log_q = -0.5 * ((z - mu1.unsqueeze(0))**2).sum(dim=1) / sigma2
@@ -231,12 +236,14 @@ kl_mc_standard_error = (kl_samples.std(unbiased=True) / np.sqrt(n_mc)).item()
 kl_formula = 0.5 * torch.sum((mu1 - mu2)**2).item() / sigma2
 kl_abs_error = abs(kl_mc - kl_formula)
 kl_relative_error = kl_abs_error / max(abs(kl_formula), 1e-30)
+kl_z_score = kl_abs_error / max(kl_mc_standard_error, 1e-30)
 
 print(f"\n验证结果:")
 print(f"  MC估计 KL = {kl_mc:.6f}")
 print(f"  MC标准误 = {kl_mc_standard_error:.6f}")
 print(f"  均值匹配公式 1/(2σ²)||μ₁-μ₂||² = {kl_formula:.6f}")
 print(f"  绝对误差 = {kl_abs_error:.6f}，相对误差 = {kl_relative_error:.4%}")
+print(f"  误差/标准误 = {kl_z_score:.3f}（应 < 3，否则视为公式与估计不相容）")
 
 print(f"\n[关键结论]")
 print(f"  11.2节等价性精确成立: KL散度 = 均值匹配（相同方差时）")
@@ -553,6 +560,7 @@ results_summary = {
         'KL_formula': kl_formula,
         'absolute_error': kl_abs_error,
         'relative_error': kl_relative_error,
+        'z_score': kl_z_score,
         'error': kl_abs_error,
         'passed': kl_abs_error < 3.0 * kl_mc_standard_error,
     },

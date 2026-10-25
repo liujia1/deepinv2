@@ -368,6 +368,25 @@ if train_losses and not is_final:
     ax_loss.set_title('NCSN 训练损失曲线')
     ax_loss.grid(alpha=0.3)
     ax_loss.set_yscale('log')
+    # 对数轴刻度修复: 默认的 LogFormatterSciNotation 生成形如 $\mathdefault{10^{-1}}$ 的标签,
+    # 而 \mathdefault 会绕过 mathtext.fontset、改用 font.sans-serif[0]=SimHei; SimHei 缺
+    # U+2212(上标负号), 负指数于是被渲染成 "10m1" (axes.unicode_minus 只管普通文本,
+    # 管不到 mathtext)。这里用 ASCII 连字符手写 mathtext, 并对 major/minor 两级同时生效。
+    from matplotlib.ticker import FuncFormatter as _FuncFormatter
+
+    def _log_tick(v, _pos):
+        if v <= 0:
+            return ''
+        e = int(np.floor(np.log10(v) + 1e-9))
+        m = v / 10.0 ** e
+        if m > 10.0 - 1e-6:      # 浮点误差导致 m≈10 时归一到 1×10^(e+1)
+            e, m = e + 1, 1.0
+        return (r'$10^{%d}$' % e if abs(m - 1.0) < 1e-9
+                else r'$%g\times 10^{%d}$' % (m, e))
+
+    _log_fmt = _FuncFormatter(_log_tick)
+    ax_loss.yaxis.set_major_formatter(_log_fmt)
+    ax_loss.yaxis.set_minor_formatter(_log_fmt)
     plt.tight_layout()
     plt.savefig(os.path.join(SAVE_DIR, '步骤2_NCSN训练损失.png'), dpi=150, bbox_inches='tight')
     plt.close()
@@ -505,16 +524,17 @@ axes2[2].set_xlabel(r'$x_1$')
 axes2[2].set_ylabel(r'$x_2$')
 
 plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤2_退火Langevin对比.png'), dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, '步骤3_退火Langevin对比.png'), dpi=150, bbox_inches='tight')
 plt.close()
 
-print(f"\n图表已保存: 步骤2_退火Langevin对比.png")
+print(f"\n图表已保存: 步骤3_退火Langevin对比.png")
 print("\n观察 (公平对比: 两种方法均从大噪声 $\\sigma={:.2f}$ 初始化):".format(sigmas[0]))
-print("  单噪声Langevin: 全程用小噪声 $\\sigma={:.2f}$ 采样, 虽能覆盖4个模态,".format(sigmas[-1]))
-print("    但步长固定且较小, 粒子收敛到模态中心的精度受限, 分布形状偏散。")
+print("  单噪声Langevin: 全程用小噪声 $\\sigma={:.2f}$ 采样, 能覆盖4个模态,".format(sigmas[-1]))
+print("    但步长固定且较小, 跨模态移动的效率低。")
 print("  退火Langevin: 步长 $\\alpha_i \\propto \\sigma_i^2$ 自适应, 大噪声阶段粗定位,")
-print("    小噪声阶段精修, 样本更集中地落在模态中心, 更接近真实分布的紧致形态。")
-print("  注: 在此2D简单分布上两者差异不大; 在高维/复杂分布上退火优势更显著。")
+print("    小噪声阶段精修, 设计上更符合'从粗到精'的策略。")
+print("  实测(本次运行): 见上方'到最近模态中心平均距离', 两者紧致度几乎相同;")
+print("    在此2D简单分布上退火优势不明显, 高维/复杂分布上才更显著。")
 
 
 # ============================================================
@@ -541,10 +561,10 @@ for i, traj in enumerate(trajectories):
 
 fig3.suptitle(r'退火Langevin采样轨迹: 从大噪声到小噪声', fontsize=14)
 plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤3_退火轨迹演化.png'), dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, '步骤4_退火轨迹演化.png'), dpi=150, bbox_inches='tight')
 plt.close()
 
-print(f"图表已保存: 步骤3_退火轨迹演化.png")
+print(f"图表已保存: 步骤4_退火轨迹演化.png")
 print("\n观察:")
 print("  大噪声阶段: 粒子快速分布到整个空间, 找到大致的高密度区域")
 print("  小噪声阶段: 粒子在每个模态附近精修, 形成最终的清晰分布")
@@ -619,7 +639,7 @@ print("\n3. 退火Langevin采样:")
 print("   - 从大噪声到小噪声逐步采样, 步长 $\\alpha_i \\propto \\sigma_i^2$")
 print("   - 大噪声阶段: 粗粒度调整, 快速定位高密度区域")
 print("   - 小噪声阶段: 细粒度调整, 精确刻画模态细节")
-print("   - 公平对比 (同起点初始化): 退火ULA样本更紧致地集中于模态中心")
+print("   - 公平对比 (同起点初始化): 两者紧致度接近, 本例中退火优势不明显")
 print("\n4. NCSN与扩散模型的桥梁:")
 print("   - 噪声调度 $\\leftrightarrow$ 时间步, 退火Langevin $\\leftrightarrow$ 逆向SDE")
 print("   - NCSN = 离散化扩散模型, 第7章将展示连续化版本")

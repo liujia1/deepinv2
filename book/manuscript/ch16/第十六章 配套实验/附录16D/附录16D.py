@@ -120,13 +120,19 @@ def _to_native(obj):
 def metrics(ref, x):
     """计算 ref 与 x 之间的 PSNR / SSIM / NMSE。
 
-    采用动态 data_range = max(ref.max(), x.max())：体模已归一化到 [0,1]，
-    但迭代重建可能因噪声/过冲使结果超过 1；固定 data_range=1.0 会低估真实
-    动态范围、导致 PSNR 偏保守，故取两者峰值以保证度量口径严格一致。
+    固定 data_range = ref.max()（体模已归一化，即 1.0）。
+
+    为什么不用动态 max(ref.max(), x.max())：那样会让“重建结果越大 → 分母越大 →
+    PSNR 越好看”，不同 beta 的 PSNR 就落在不同尺子上，无法横向比较（本实验 x.max
+    随 beta 从 1.199 单调降到 1.005，用动态范围等于给大 beta 额外加分）。更危险的是：
+    OSL 一旦发散，x.max 可达数千，动态 data_range 会把发散解的 PSNR 一并“冲高”到
+    约 40 dB / SSIM 0.99，看起来反而比正常解更好（本脚本历史版本踩过这个坑，
+    见 osem_recon 的 OSL 稳定性注释）。
+    超过 ref.max() 的部分应当被当作误差计罚，而不是被“原谅”。
     """
     ref = np.asarray(ref, dtype=np.float64)
     x = np.asarray(x, dtype=np.float64)
-    dr = float(max(ref.max(), x.max()))
+    dr = float(ref.max())
     p = float(psnr(ref, x, data_range=dr))
     s = float(ssim(ref, x, data_range=dr))
     nmse = float(np.mean((ref - x) ** 2) / (np.mean(ref ** 2) + 1e-12))
@@ -260,9 +266,9 @@ def osem_recon(y_counts, scale, background, num_subsets=10, n_subiter=20,
     “冲高”到约 40 dB / 0.99，看起来反而比正常解更好，极具误导性。
     当时为救它加过“denom 相对下限 + 单步幅度限幅”两层稳定化，但实测
     表明：角度子集管线下裸 OSL（无任何稳定化）beta 扫到 2.0 全程稳定
-    （x.max 单调 1.18→1.00，无发散）；而限幅反而在实质性塑形结果——
+    （x.max 单调 1.20→1.01，无发散）；而限幅反而在实质性塑形结果——
     它主要在裁剪 FOV 外 sens≈1e-6 像素的步长，实测使 β=0.05 的 PSNR
-    从 25.44 被压到 25.29 dB、偏离教材 OSMAPOSL 公式。因此本版本
+    出现可测的下降、偏离教材 OSMAPOSL 公式。因此本版本
     删除两层稳定化，直接实现教材公式；若未来把 FOV 外像素纳入更新或
     改用 bin 子集，需重新审视发散风险。
     """
@@ -387,7 +393,7 @@ ln2 = ax2.plot(beta_sweep, nmse_beta, 's--', color='tab:orange', label='NMSE (�
 ax2.set_ylabel('NMSE')
 lines = ln1 + ln2
 ax.legend(lines, [l.get_label() for l in lines], loc='upper right')
-ax.set_title('OSL：β 越大越平滑——PSNR 单调缓降，NMSE 在 β≈1 最优，β=2 过度平滑')
+ax.set_title('OSL：β 越大越平滑——NMSE 在 β≈1 最优、β=2 过度平滑；PSNR 先升后降')
 ax.grid(True, alpha=0.3)
 fig.tight_layout()
 fig.savefig(os.path.join(SAVE_DIR, '步骤5_OSL_beta稳定性.png'),
@@ -406,6 +412,10 @@ print("          此处故意把重建用 background 乘以 0.5 / 2.0（约 -50%
 bg_factors = [0.5, 1.0, 2.0]
 psnr_bg_osem, psnr_bg_osl = [], []
 ssim_bg_osem, ssim_bg_osl = [], []
+# 平均活度比 x.mean()/x_true.mean()：检验“背景高估 → 重建整体偏暗（定量低估）”
+# 这一纯定量偏差。它不会被 PSNR/SSIM 充分反映（SSIM 甚至会因图像变平滑而上升），
+# 必须单独记录，否则“看着更好”与“定量更准”的背离就没有证据。
+mean_ratio_osem, mean_ratio_osl = [], []
 for f in bg_factors:
     xbo = osem_recon(y_counts, scale, background * f,
                      num_subsets=10, n_subiter=20, prior_beta=0.0)
@@ -415,12 +425,18 @@ for f in bg_factors:
     pbl, sbl, nbl = metrics(x_true, xbl)
     psnr_bg_osem.append(pbo); ssim_bg_osem.append(sbo)
     psnr_bg_osl.append(pbl);  ssim_bg_osl.append(sbl)
-    print(f"    bg×{f:4.2f} : OSEM PSNR={pbo:6.2f} dB, OSL PSNR={pbl:6.2f} dB")
+    mean_ratio_osem.append(float(xbo.mean() / x_true.mean()))
+    mean_ratio_osl.append(float(xbl.mean() / x_true.mean()))
+    print(f"    bg×{f:4.2f} : OSEM PSNR={pbo:6.2f} dB, OSL PSNR={pbl:6.2f} dB, "
+          f"平均活度比 OSEM={mean_ratio_osem[-1]:.3f}, OSL={mean_ratio_osl[-1]:.3f}")
 print("    注：本仿真 background 仅约为计数均值的 5%，×0.5/×2 的估计误差对 PSNR")
-print("         的影响也只有 +0.04/−0.29 dB（OSEM 与 OSL 几乎相同）——本底占比低时")
+print(f"         的影响也只有 {psnr_bg_osem[0]-psnr_bg_osem[1]:+.2f}/"
+      f"{psnr_bg_osem[2]-psnr_bg_osem[1]:+.2f} dB（OSEM）、"
+      f"{psnr_bg_osl[0]-psnr_bg_osl[1]:+.2f}/{psnr_bg_osl[2]-psnr_bg_osl[1]:+.2f} dB（OSL）——本底占比低时")
 print("         背景校正误差天然不敏感，本实验如实展示的正是这种‘不敏感’。但注意")
 print("         SSIM 随背景高估反而略升（过度扣除本底相当于轻度正则、图像更平滑），")
-print("         代价是平均活度被系统性低估约 3.8%（bg×2 实测）——‘看着更好’不等于")
+print(f"         代价是平均活度被系统性低估约 {(1-mean_ratio_osem[2])*100:.1f}%")
+print("         （bg×2 实测，OSEM；OSL 相近）——‘看着更好’不等于")
 print("         ‘定量更准’。真实 PET 的 randoms/scatter 占比常达 10%~30%，背景误差")
 print("         的影响将随占比显著放大（调低 total_counts 或调高本底占比即可复现），")
 print("         是 PET 定量校正的经典难点。")
@@ -483,6 +499,8 @@ results = {
             "osem_ssim": ssim_bg_osem,
             "osl_psnr_db": psnr_bg_osl,
             "osl_ssim": ssim_bg_osl,
+            "osem_mean_ratio": mean_ratio_osem,
+            "osl_mean_ratio": mean_ratio_osl,
         },
     },
 }

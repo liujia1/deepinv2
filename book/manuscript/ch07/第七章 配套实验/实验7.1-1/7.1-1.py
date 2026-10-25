@@ -5,7 +5,7 @@
 素材来源: ★ 原创设计，基于7.1节"Langevin→扩散SDE连续时间推广"
 
 实验内容:
-  步骤1: 1D高斯混合上，单步Langevin vs 多步扩散采样对比
+  步骤1: 1D高斯混合上，单尺度Langevin vs 退火Langevin采样对比
   步骤2: 从离散噪声调度到连续SDE——β(t)调度可视化
   步骤3: "离散→连续→再离散"认知螺旋的数值验证
 
@@ -86,28 +86,30 @@ def gm1d_score_sigma(x, sigma):
 
 
 # ============================================================
-# 步骤1：单步Langevin vs 多步扩散采样对比
+# 步骤1：单尺度Langevin vs 退火Langevin采样对比
 # ★ 原创设计：在1D高斯混合上直观展示NCSN的三个根本局限
 # ============================================================
 print("=" * 60)
-print("步骤1：单步Langevin vs 多步扩散采样对比")
+print("步骤1：单尺度Langevin vs 退火Langevin采样对比")
 print("=" * 60)
 
-# 方法1：单步（单尺度/固定噪声水平）Langevin，用"较粗"的得分函数做所有步骤
+# 方法1：单尺度Langevin（固定σ=1.0、跑满2000步），用"较粗"的得分函数做所有步骤
 def langevin_1d(n_samples, n_iter, delta, sigma_score):
-    """单步Langevin：用固定σ_score的得分函数采样整个过程。
+    """单尺度Langevin：用固定σ_score的得分函数采样整个过程。
     ★ 得分函数是p被高斯核平滑后的版本∇log p_{σ_score}，无论链跑多久，
        其平稳分布都只能是p_{σ_score}而非p——σ越大，模态被平滑得越厉害。
-    ★ 注意失败机理不是"跨不过模态"：大σ反而把模态间势垒填平（σ=1时
-       势垒/峰高比从0.41升到0.72），链跨模态更容易；它跨完之后收敛到的
-       是过平滑的【错误目标】p_σ。这才是单尺度得分的失败模式，NCSN用退火解决。"""
+    ★ 注意失败机理不是"跨不过模态"：大σ反而把模态间势垒填平——按p_σ自身
+       的内部极小计，谷/峰高比从σ=0时的0.393升到σ=0.4时的0.445，σ≈0.47时
+       内部极小彻底消失、分布并成单峰（σ=1时已是单峰），链跨模态因此更容易；
+       它跨完之后收敛到的是过平滑的【错误目标】p_σ。这才是单尺度得分的失败
+       模式，NCSN用退火解决。"""
     x = np.random.randn(n_samples) * 3
     for _ in range(n_iter):
         score = gm1d_score_sigma(x, sigma_score)
         x = x + delta * score + np.sqrt(2*delta) * np.random.randn(n_samples)
     return x
 
-# 方法2：退火Langevin（多步扩散，第6章NCSN）
+# 方法2：退火Langevin（多级噪声σ_1..σ_10，第6章NCSN）
 def annealed_langevin_1d(n_samples, sigmas, T_per_level, epsilon):
     """退火Langevin：从大σ到小σ逐步采样。
     ★ 注意：NCSN原始公式 alpha_i = ε·(σ_i/σ_L)² 在粗粒度级别会产生较大步长
@@ -123,7 +125,7 @@ def annealed_langevin_1d(n_samples, sigmas, T_per_level, epsilon):
     return x
 
 # 运行对比
-# ★ 关键：单步Langevin的sigma_score=1.0（与真实分布std≈1.70同量级，但平滑后
+# ★ 关键：单尺度Langevin的sigma_score=1.0（与真实分布std≈1.70同量级，但平滑后
 #   组件方差从1变成2，已足以造成可测的形态畸变），模拟"用一个粗粒度的score
 #   函数做所有步骤"的失败模式。此时p_σ = 0.3*N(-2,2) + 0.7*N(1,2)，模态被平滑，
 #   即使链充分收敛也只能采样到p_σ≠p。注意p_σ与p的【模态比例】很接近（0.314 vs 0.293），
@@ -144,11 +146,11 @@ def mode_proportions(samples, threshold=-0.78):
     p_right = np.mean(samples >= threshold)
     return p_left, p_right
 
-# ★ 关键：模态比例（左/右计数）对单步Langevin的失败几乎不敏感——
-#   单步链收敛到 p_σ=1，其左比例≈0.314，与真实的0.292只差0.02，
+# ★ 关键：模态比例（左/右计数）对单尺度Langevin的失败几乎不敏感——
+#   单尺度链收敛到 p_σ=1，其左比例≈0.314，与真实的0.292只差0.02，
 #   谈不上"严重偏离"。真正的失败是"过平滑"：分布被摊宽、峰被压平，
 #   双模态糊成一团。因此用【标准差】和【峰值密度】刻画形态畸变，
-#   这才是单步Langevin失效的定量信号（std 1.70→1.96，峰值 0.28→0.22）。
+#   这才是单尺度Langevin失效的定量信号（std 1.70→1.96，峰值 0.28→0.22）。
 # ★ 三组样本必须共享同一套bin：若各自用 bins=60，np.histogram 会按每组的
 #   数据范围自动定bin宽——退火样本范围较窄（约[-5.7,4.4]）会得到更窄的bin
 #   （0.169 vs 真实样本的0.191），把峰值密度人为抬高（0.299→公平值0.286）。
@@ -169,13 +171,13 @@ annealed_std, annealed_peak = shape_metrics(x_annealed)
 
 print(f"模态比例对比 (左模态N(-2,1):右模态N(1,1)):")
 print(f"  真实分布:    {true_props[0]:.3f} : {true_props[1]:.3f}")
-print(f"  单步Langevin: {langevin_props[0]:.3f} : {langevin_props[1]:.3f}")
+print(f"  单尺度Langevin: {langevin_props[0]:.3f} : {langevin_props[1]:.3f}")
 print(f"  退火Langevin: {annealed_props[0]:.3f} : {annealed_props[1]:.3f}")
-print(f"\n★ 注意：模态比例几乎无法区分单步Langevin与真实分布（{langevin_props[0]:.3f} vs {true_props[0]:.3f}，仅差{abs(langevin_props[0]-true_props[0]):.3f}），")
-print(f"  因为单步链收敛到 p_σ=1，其左右比例本就接近 p。真正暴露失败的是【分布形态】：")
+print(f"\n★ 注意：模态比例几乎无法区分单尺度Langevin与真实分布（{langevin_props[0]:.3f} vs {true_props[0]:.3f}，仅差{abs(langevin_props[0]-true_props[0]):.3f}），")
+print(f"  因为单尺度链收敛到 p_σ=1，其左右比例本就接近 p。真正暴露失败的是【分布形态】：")
 print(f"分布形态对比 (标准差 / 峰值密度):")
 print(f"  真实分布:    std={true_std:.3f}, 峰值={true_peak:.3f}")
-print(f"  单步Langevin: std={langevin_std:.3f}, 峰值={langevin_peak:.3f}  ← 被摊宽、峰被压平（过平滑）")
+print(f"  单尺度Langevin: std={langevin_std:.3f}, 峰值={langevin_peak:.3f}  ← 被摊宽、峰被压平（过平滑）")
 print(f"  退火Langevin: std={annealed_std:.3f}, 峰值={annealed_peak:.3f}  ← 与真实吻合")
 print(f"\nNCSN的三个根本局限（7.1节）：")
 print(f"  1. 跳跃式切换噪声水平——离散σ_i不连续")
@@ -295,17 +297,17 @@ fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
 # 子图1：采样对比（方案B：保留 x_true，line style 区分两条几乎重叠的 p 曲线）
 #   黑色实线 = 真密度 p(x)        x_true = 蓝色实线（"经验 p"，与绿实线应重合）
-#   红色 step = 单步Langevin（远离黑线 = 失败）  绿色 step = 退火Langevin（贴合黑线 = 成功）
+#   红色 step = 单尺度Langevin（远离黑线 = 失败）  绿色 step = 退火Langevin（贴合黑线 = 成功）
 #   绘制顺序：黑 → 红 → 绿 → 蓝，蓝实线最后画确保不被绿实线覆盖。
 #   ★ alpha=0.5 让蓝实线覆盖处仍能透出黑色密度曲线，避免视觉遮挡。
 x_grid = np.linspace(-6, 6, 200)
 axes[0].plot(x_grid, gm1d_pdf(x_grid), 'k-', lw=2, alpha=0.5, label='真实密度 p(x)')
-axes[0].hist(x_langevin, bins=HIST_BINS, density=True, histtype='step', lw=1.5, color='red', alpha=0.5, label=f'单步Langevin (std={langevin_std:.2f},峰={langevin_peak:.2f})')
+axes[0].hist(x_langevin, bins=HIST_BINS, density=True, histtype='step', lw=1.5, color='red', alpha=0.5, label=f'单尺度Langevin (std={langevin_std:.2f},峰={langevin_peak:.2f})')
 axes[0].hist(x_annealed, bins=HIST_BINS, density=True, histtype='step', lw=1.5, color='green', alpha=0.5, label=f'退火Langevin (std={annealed_std:.2f},峰={annealed_peak:.2f})')
 axes[0].hist(x_true, bins=HIST_BINS, density=True, histtype='step', lw=1.5, color='blue', alpha=0.5, label=f'真实分布(经验) (std={true_std:.2f},峰={true_peak:.2f})')
 axes[0].set_xlabel('$x$')
 axes[0].set_ylabel('密度')
-axes[0].set_title('单步Langevin vs 退火Langevin')
+axes[0].set_title('单尺度Langevin vs 退火Langevin')
 axes[0].legend(fontsize=8)
 axes[0].grid(alpha=0.3)
 
@@ -321,7 +323,8 @@ ax2.grid(alpha=0.3)
 
 # 子图3：不同σ下的得分函数∇log p_σ
 # ★ 直接呼应步骤1的"粗粒度score"失败模式与退火策略的几何直觉：
-#   σ越大，势垒被填平（σ=5时双峰几乎并成一座），链越容易跨模态、全局探索
+#   σ越大，势垒被填平（σ≈0.47时内部极小消失、并成单峰，σ=5时完全平滑），
+#   链越容易跨模态、全局探索
 #   越充分，但模态细节全部丢失——固定大σ的链只能收敛到过平滑的错误目标p_σ；
 #   σ越小，p_σ越接近p，但模态间沟壑越深、跨模态mixing越慢。
 #   退火Langevin正是"先用大σ轻松跨过势垒完成全局定位，再用小σ精修细节"。
@@ -362,8 +365,8 @@ print(f"图表已保存: 步骤1_Langevin到扩散.png")
 print("\n" + "=" * 60)
 print("实验7.1-1 总结")
 print("=" * 60)
-print("1. 单步Langevin vs 退火Langevin：")
-print(f"   单步Langevin的模态比例看似接近（{langevin_props[0]:.3f} vs 真实{true_props[0]:.3f}），但分布被过平滑：std {true_std:.2f}→{langevin_std:.2f}、峰值 {true_peak:.2f}→{langevin_peak:.2f}（双模态糊成一团）")
+print("1. 单尺度Langevin vs 退火Langevin：")
+print(f"   单尺度Langevin的模态比例看似接近（{langevin_props[0]:.3f} vs 真实{true_props[0]:.3f}），但分布被过平滑：std {true_std:.2f}→{langevin_std:.2f}、峰值 {true_peak:.2f}→{langevin_peak:.2f}（双模态糊成一团）")
 print(f"   退火Langevin恢复真实形态（std {annealed_std:.2f}、峰值 {annealed_peak:.2f}，均贴合真实）")
 print("2. NCSN的三个根本局限→推动连续化：")
 print("   跳跃式切换、步数无原则、框架不统一")

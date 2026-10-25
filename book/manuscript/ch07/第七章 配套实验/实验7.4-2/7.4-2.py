@@ -478,6 +478,19 @@ p_end_2d = interpolation_2d[-1]    # α=1，对应 z_A_2d
 print("\n2D数据空间端点（PF-ODE输出）：")
 print(f"  α=0: T(z_B={tuple(z_B_2d.tolist())}) = ({p_start_2d[0]:+.3f}, {p_start_2d[1]:+.3f})")
 print(f"  α=1: T(z_A={tuple(z_A_2d.tolist())}) = ({p_end_2d[0]:+.3f}, {p_end_2d[1]:+.3f})")
+# 路径直线性诊断：与端点弦的最大偏离、alpha=0.5 的位置
+p_start_v = np.asarray(p_start_2d, dtype=float)
+p_end_v = np.asarray(p_end_2d, dtype=float)
+chord_2d = p_end_v - p_start_v
+chord_len_2d = float(np.linalg.norm(chord_2d))
+path_dev_2d = max(
+    abs((np.asarray(p, dtype=float)[0] - p_start_v[0]) * chord_2d[1]
+        - (np.asarray(p, dtype=float)[1] - p_start_v[1]) * chord_2d[0]) / chord_len_2d
+    for p in interpolation_2d
+)
+mid_2d = np.asarray(interpolation_2d[len(interpolation_2d) // 2], dtype=float)
+print(f"  直线性诊断: max|path-chord| = {path_dev_2d:.4f} (弦长 {chord_len_2d:.4f}), "
+      f"α=0.5 点 = ({mid_2d[0]:+.3f}, {mid_2d[1]:+.3f})")
 
 # 可视化2D插值
 fig, ax = plt.subplots(figsize=(10, 10))
@@ -537,7 +550,7 @@ print(f"\n图像已保存: {save_path}")
 
 print("\n观察要点：")
 print("  1. 数据空间路径从 T(z_B)（右上, α=0）平滑过渡到 T(z_A)（左下, α=1）")
-print("  2. 路径依次贴近右模 (2,1) 与左模 (-2,-1)，而非直穿低密度谷底")
+print(f"  2. 路径近似为连接两端点的直线（与弦最大偏离 {path_dev_2d:.3f}），α=0.5 处经过原点附近的低密度鞍点，并未贴近任一模态")
 print("  3. 这是PF-ODE在图像生成中做语义插值的基础")
 
 

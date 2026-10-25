@@ -1,12 +1,14 @@
 {
-  "dist_1rf_1step": 5.9394,
-  "dist_2rf_1step": 6.8389,
-  "dist_1rf_10step": 6.049,
-  "dist_1rf_50step": 7.1966,
+  "dist_1rf_1step": 5.8336,
+  "dist_2rf_1step": 5.747,
+  "dist_1rf_10step": 5.6765,
+  "dist_1rf_50step": 5.8208,
   "dist_real_baseline": 6.5112,
-  "diversity_1rf_1step": 0.8902,
-  "diversity_2rf_1step": 8.7993,
-  "diversity_1rf_10step": 8.587,
-  "diversity_1rf_50step": 10.0683,
-  "diversity_real": 9.9189
+  "diversity_1rf_1step": 0.9508,
+  "diversity_2rf_1step": 8.754,
+  "diversity_1rf_10step": 9.437,
+  "diversity_1rf_50step": 9.723,
+  "diversity_real": 9.9189,
+  "sampling_seed": 2025,
+  "sampling_note": "CRN：四组采样共用 seed=2025 的同一批 8 个噪声，组间差异只来自模型与步数"
 }

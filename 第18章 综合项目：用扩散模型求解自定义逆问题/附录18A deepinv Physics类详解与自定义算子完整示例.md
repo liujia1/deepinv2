@@ -6,7 +6,7 @@
 
 ## LinearPhysics类的方法详解
 
-`deepinv.physics.LinearPhysics`是定义线性前向算子的基类。它是 18.2 那句"成对写 $A$ 与 $A^\top$"的直接代码化：$A$ 负责"把世界变成数据"，`A_adjoint` 负责"把数据拉回世界"，两者互为镜像、缺一不可。以下是其核心方法的详细说明。
+`deepinv.physics.LinearPhysics`是定义线性正向算子的基类。它是 18.2 那句"成对写 $A$ 与 $A^\top$"的直接代码化：$A$ 负责"把世界变成数据"，`A_adjoint` 负责"把数据拉回世界"，两者互为镜像、缺一不可。以下是其核心方法的详细说明。
 
 ### 构造函数
 
@@ -15,7 +15,7 @@ class LinearPhysics(nn.Module):
     def __init__(self, A=None, A_adjoint=None, noise_model=None, **kwargs):
         """
         参数:
-            A: 前向算子函数，签名 A(x, **kwargs) -> y
+            A: 正向算子函数，签名 A(x, **kwargs) -> y
             A_adjoint: 伴随算子函数，签名 A_adjoint(y, **kwargs) -> z
             noise_model: 噪声模型，None表示无噪声
         """
@@ -176,12 +176,12 @@ import deepinv as dinv
 
 class MultiViewPhysics(dinv.physics.LinearPhysics):
     """
-    多视角下采样前向算子
+    多视角下采样正向算子
 
-    前向模型: y_j = A * T_j * x, j = 1, ..., J
+    正向模型: y_j = A * T_j * x, j = 1, ..., J
 
     其中:
-        A: 基础前向算子（如下采样）
+        A: 基础正向算子（如下采样）
         T_j: 仿射变换（旋转+平移+缩放）
         J: 视角数量
     """
@@ -189,7 +189,7 @@ class MultiViewPhysics(dinv.physics.LinearPhysics):
     def __init__(self, base_physics, transf=None, device='cpu', **kwargs):
         """
         参数:
-            base_physics: 基础前向算子（如Downsampling）
+            base_physics: 基础正向算子（如Downsampling）
             transf: 仿射变换矩阵, shape (J, 2, 3)
             device: 计算设备
         """

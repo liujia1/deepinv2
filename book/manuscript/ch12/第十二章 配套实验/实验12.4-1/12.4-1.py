@@ -286,6 +286,8 @@ print("生成可视化图表...")
 print("=" * 60)
 
 fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+# 数学步 t 对应数组下标 t-1：t=1 处 β̃_1=0 使 w_1=inf（该项即离散解码器 L_0），
+# matplotlib 会自动跳过该点，因此曲线实际从 t=2 开始。
 t_range = range(1, T + 1)
 
 # (a) 两条路径的权重对比：VLB权重和使DSM≡VLB的DSM权重完全重合
@@ -343,8 +345,15 @@ print(f"图表已保存: {fig_path}")
 #   VLB目标: mean_t [ w_t · ||ε-εθ||² ]，t~U{1,99}（t=0处权重为inf，按惯例排除）
 #   DSM目标: mean_t [ λ(t)/(2(1-ᾱ_t)) · ||ε-εθ||² ]，λ按12.4定理匹配
 #   同步组: 两网络同初始化、每步喂同一批(x0,ε,t)，仅损失定义不同 →
-#           若两目标等价，每步损失应逐点相等、梯度相同、参数轨迹同步
-#   独立组: 各3个独立种子（初始化与数据流均独立）→ 最终去噪MSE分布应不可区分
+#           VLB与匹配DSM的每步损失逐点相等、梯度相同、参数轨迹同步
+#           注意：匹配λ是由w_t反解出来的，两个目标是同一标量函数的两种写法，
+#           因此这组重合是代数必然（它检验的是代码两条分支确实等价），
+#           不能单独作为"两目标等价"的经验证据
+#   负对照: 第三个网络，同初始化、同数据流，改用简化目标（λ(σ)=σ²，权重恒1/2，
+#           即不匹配的原始DSM）→ 若权重不匹配时轨迹必须分开，则说明上面的
+#           "重合"不是因为所有网络都会重合，同步组具备判别力
+#   独立组: VLB/匹配DSM/简化目标各3个独立种子（初始化与数据流均独立）
+#           → 最终去噪MSE：前两者应一致（同一目标），简化目标给出可比的参照
 #   全流程float64（小网络+一维数据，CPU可承受；与步骤1的浮点级验证口径一致）
 print(f"\n{'='*60}")
 print("步骤4：训练目标等价性的一维双网络对照（12.4节一维示例）")
@@ -408,7 +417,14 @@ def loss4(model, x0, eps, t, kind):
     xt = ab_t.sqrt() * x0 + (1 - ab_t).sqrt() * eps
     eps_hat = model(xt, t)
     per = ((eps - eps_hat) ** 2).sum(dim=1)
-    coef = w4[t] if kind == 'vlb' else dsm_c4[t]
+    if kind == 'vlb':
+        coef = w4[t]                    # 完整VLB权重
+    elif kind == 'dsm':
+        coef = dsm_c4[t]                # 匹配λ的DSM权重（与w4数值相同）
+    elif kind == 'simple':
+        coef = torch.full_like(t, 0.5, dtype=torch.float64)  # λ(σ)=σ² ⇒ 常数权重1/2
+    else:
+        raise ValueError(kind)
     return (coef * per).mean()
 
 
@@ -440,44 +456,87 @@ N_SYNC = 2000
 LR4 = 1e-3
 m_vlb = build_model4(42)
 m_dsm = TinyEpsNet()
-m_dsm.load_state_dict(copy.deepcopy(m_vlb.state_dict()))  # 强制同一初始化
+m_simple = TinyEpsNet()
+m_dsm.load_state_dict(copy.deepcopy(m_vlb.state_dict()))     # 强制同一初始化
+m_simple.load_state_dict(copy.deepcopy(m_vlb.state_dict()))  # 负对照：同初始化
 opt_v = torch.optim.Adam(m_vlb.parameters(), lr=LR4)
 opt_d = torch.optim.Adam(m_dsm.parameters(), lr=LR4)
+opt_s = torch.optim.Adam(m_simple.parameters(), lr=LR4)
 gen_sync = torch.Generator().manual_seed(2026)
+
+# ---- 固定验证集：用于“目标是否在下降”的判断与绘图 ----
+# 训练 batch 损失每步都在换数据，且 t~U{1,99} 而 w_t 跨越两个数量级，单次 batch
+# 损失方差很大（实测在 0.017~0.038 间震荡，看不出趋势）。因此曲线改为在固定
+# 验证集（固定样本 + 固定 33 个时间步）上重算完整目标值。
+N_VAL4 = 4096
+_gen_val4 = torch.Generator().manual_seed(7777)
+_comp_v4 = (torch.randint(0, 2, (N_VAL4, 1), generator=_gen_val4).double() * 2 - 1)
+X0_VAL4 = 3.0 * _comp_v4 + torch.randn(N_VAL4, 1, generator=_gen_val4).double()
+EPS_VAL4 = torch.randn(N_VAL4, 1, generator=_gen_val4).double()
+T_GRID4 = sorted(set(np.linspace(1, T4 - 1, 33).round().astype(int).tolist()))
+
+
+@torch.no_grad()
+def val_loss4(model, kind):
+    """固定验证集 + 固定 33 个时间步上的目标值 E_t[coef_t·||ε-ε̂||²]。"""
+    vals = []
+    for tv in T_GRID4:
+        t = torch.full((N_VAL4,), int(tv), dtype=torch.long)
+        vals.append(loss4(model, X0_VAL4, EPS_VAL4, t, kind).item())
+    return float(np.mean(vals))
+
 
 # 训练前基线（同一初始化、尚未更新参数时的去噪MSE），用于证明训练确实有效
 mse_baseline, mse_baseline_each = denoise_mse4(m_vlb)
+val_v_init = val_loss4(m_vlb, 'vlb')
 
-rec_steps, rec_lv, rec_ld, rec_param_diff = [], [], [], []
+rec_steps, rec_lv, rec_ld, rec_ls, rec_param_diff = [], [], [], [], []
+rec_val_steps, rec_valv, rec_vald, rec_vals = [], [], [], []
 max_loss_diff = 0.0
 _t0 = _time.time()
 for step in range(N_SYNC):
-    x0, eps, t = sample_batch4(BATCH4, gen_sync)  # 同一批数据喂两个网络
+    x0, eps, t = sample_batch4(BATCH4, gen_sync)  # 同一批数据喂三个网络
     lv = loss4(m_vlb, x0, eps, t, 'vlb')
     ld = loss4(m_dsm, x0, eps, t, 'dsm')
+    ls = loss4(m_simple, x0, eps, t, 'simple')
     opt_v.zero_grad(); lv.backward(); opt_v.step()
     opt_d.zero_grad(); ld.backward(); opt_d.step()
+    opt_s.zero_grad(); ls.backward(); opt_s.step()
     d_l = abs(lv.item() - ld.item())
     max_loss_diff = max(max_loss_diff, d_l)
     if step % 25 == 0:
         rec_steps.append(step)
-        rec_lv.append(lv.item()); rec_ld.append(ld.item())
+        rec_lv.append(lv.item()); rec_ld.append(ld.item()); rec_ls.append(ls.item())
+    if step % 50 == 0 or step == N_SYNC - 1:
+        rec_val_steps.append(step)
+        rec_valv.append(val_loss4(m_vlb, 'vlb'))
+        rec_vald.append(val_loss4(m_dsm, 'dsm'))
+        rec_vals.append(val_loss4(m_simple, 'simple'))
     if step % 500 == 0 or step == N_SYNC - 1:
         pd_ = max((p1 - p2).abs().max().item()
                   for p1, p2 in zip(m_vlb.parameters(), m_dsm.parameters()))
-        rec_param_diff.append((step, pd_))
+        pd_s = max((p1 - p3).abs().max().item()
+                   for p1, p3 in zip(m_vlb.parameters(), m_simple.parameters()))
+        rec_param_diff.append((step, pd_, pd_s))
 _sync_secs = _time.time() - _t0
 
 mse_v_sync, mse_v_sync_each = denoise_mse4(m_vlb)
 mse_d_sync, mse_d_sync_each = denoise_mse4(m_dsm)
+mse_s_sync, mse_s_sync_each = denoise_mse4(m_simple)
 final_param_diff = rec_param_diff[-1][1]
+final_param_diff_simple = rec_param_diff[-1][2]
+max_rel_val = max(abs(a - b) / max(abs(a), 1e-12) for a, b in zip(rec_valv, rec_vald))
 
 print(f"[4A 同步组] {N_SYNC}步, batch={BATCH4}, 耗时{_sync_secs:.1f}s")
 print(f"  训练前去噪MSE基线: {mse_baseline:.6f}（证明训练有效，非两条线空转）")
 print(f"  全程 |L_VLB - L_DSM| 最大值: {max_loss_diff:.2e}")
-print(f"  训练后两网络参数最大绝对偏差: {final_param_diff:.2e}")
+print(f"  固定验证集目标值: {val_v_init:.6f}(未训练) → {rec_valv[-1]:.6f}（{N_SYNC}步后）")
+print(f"  验证集上 |VLB-DSM| 最大相对差: {max_rel_val:.2e}")
+print(f"  训练后参数最大绝对偏差: |VLB-DSM|={final_param_diff:.2e}（同一目标，代数必然）")
+print(f"                           |VLB-简化|={final_param_diff_simple:.2e}（负对照，应显著非零）")
 print(f"  固定测试集去噪MSE: VLB网络={mse_v_sync:.8f}  DSM网络={mse_d_sync:.8f}  "
       f"差={abs(mse_v_sync-mse_d_sync):.2e}")
+print(f"                     简化目标负对照={mse_s_sync:.8f}")
 
 # ---- 4B. 独立组：各3个独立种子（初始化、数据流均独立） ----
 N_INDEP = 1200
@@ -498,52 +557,77 @@ def train_indep4(kind, seed):
 _t0 = _time.time()
 vlb_mse_indep = [train_indep4('vlb', s) for s in (101, 102, 103)]
 dsm_mse_indep = [train_indep4('dsm', s) for s in (201, 202, 203)]
+simple_mse_indep = [train_indep4('simple', s) for s in (301, 302, 303)]
 _indep_secs = _time.time() - _t0
 v_mean, d_mean = float(np.mean(vlb_mse_indep)), float(np.mean(dsm_mse_indep))
+s_mean = float(np.mean(simple_mse_indep))
 v_std, d_std = float(np.std(vlb_mse_indep, ddof=1)), float(np.std(dsm_mse_indep, ddof=1))
+s_std = float(np.std(simple_mse_indep, ddof=1))
 rel_mse_diff = abs(v_mean - d_mean) / max(v_mean, d_mean)
+rel_simple_diff = abs(s_mean - v_mean) / max(v_mean, s_mean)
 
-print(f"[4B 独立组] 每边3种子×{N_INDEP}步, 耗时{_indep_secs:.1f}s")
+print(f"[4B 独立组] 每组3种子×{N_INDEP}步, 耗时{_indep_secs:.1f}s")
 print(f"  VLB目标 去噪MSE: {['%.6f' % x for x in vlb_mse_indep]} 均值={v_mean:.6f}±{v_std:.6f}")
-print(f"  DSM目标 去噪MSE: {['%.6f' % x for x in dsm_mse_indep]} 均值={d_mean:.6f}±{d_std:.6f}")
-print(f"  均值相对差异: {rel_mse_diff:.2%}（远小于组内种子间波动，经验上两目标不可区分）")
+print(f"  匹配DSM目标 去噪MSE: {['%.6f' % x for x in dsm_mse_indep]} 均值={d_mean:.6f}±{d_std:.6f}")
+print(f"  简化目标负对照 去噪MSE: {['%.6f' % x for x in simple_mse_indep]} "
+      f"均值={s_mean:.6f}±{s_std:.6f}")
+print(f"  VLB vs 匹配DSM 均值相对差异: {rel_mse_diff:.2%}（同一目标，差异仅来自种子）")
+print(f"  VLB vs 简化目标 均值相对差异: {rel_simple_diff:.2%}（不同权重，负对照）")
 
 # ---- 步骤4可视化 ----
-# EMA平滑（逐步损失受batch内时间步采样影响方差大，EMA用于展示期望损失的下降趋势）
-_ema_alpha = 0.1
-ema_lv, ema_ld = [], []
-_e1 = _e2 = rec_lv[0]
-for v1, v2 in zip(rec_lv, rec_ld):
-    _e1 = _ema_alpha * v1 + (1 - _ema_alpha) * _e1
-    _e2 = _ema_alpha * v2 + (1 - _ema_alpha) * _e2
-    ema_lv.append(_e1); ema_ld.append(_e2)
-
-fig4, (ax4a, ax4b) = plt.subplots(1, 2, figsize=(14, 5.5))
-ax4a.plot(rec_steps, rec_lv, color='b', linewidth=1, alpha=0.30, label='VLB 逐步损失')
-ax4a.plot(rec_steps, rec_ld, color='r', linewidth=1, linestyle='--', alpha=0.30, label='DSM 逐步损失')
-ax4a.plot(rec_steps, ema_lv, 'b-', linewidth=2.5, label='VLB 损失EMA')
-ax4a.plot(rec_steps, ema_ld, 'r--', linewidth=2.5, label='DSM 损失EMA')
+# (a) 不平滑训练 batch 损失（batch 内 t 随机，方差极大），直接画固定验证集上的目标值
+fig4, (ax4a, ax4b, ax4c) = plt.subplots(1, 3, figsize=(19, 5.2))
+ax4a.plot(rec_val_steps, rec_valv, 'b-', linewidth=3.0, label='VLB 验证目标')
+ax4a.plot(rec_val_steps, rec_vald, 'r--', linewidth=1.6, label='匹配DSM 验证目标（与VLB重合）')
+ax4a.axhline(val_v_init, color='b', linestyle=':', linewidth=1.4, alpha=0.7,
+             label=f'训练前={val_v_init:.4f}')
 ax4a.set_xlabel('训练步', fontsize=12)
-ax4a.set_ylabel('每步训练损失（核心项）', fontsize=12)
-ax4a.set_title(f'(a) 同步组：两目标损失逐点重合（细线逐步值，粗线EMA）\n'
-               f'最大|差值|={max_loss_diff:.1e}，参数偏差={final_param_diff:.1e}；'
-               f'去噪MSE {mse_baseline:.3f}(未训练)→{mse_v_sync:.3f}',
-               fontsize=12)
-ax4a.legend(fontsize=9, loc='upper right')
+ax4a.set_ylabel('固定验证集目标值（左轴）', fontsize=12)
+ax4a.set_title(f'(a) 固定验证集：目标快速下降后走平，两目标重合\n'
+               f'{val_v_init:.4f}→{rec_valv[-1]:.4f}，最大相对差={max_rel_val:.1e}',
+               fontsize=11)
+ax4R = ax4a.twinx()
+ax4R.plot(rec_val_steps, rec_vals, color='0.35', linestyle=':', linewidth=2.2,
+          label='简化目标（右轴，负对照）')
+ax4R.set_ylabel('简化目标值（右轴）', fontsize=12)
+ax4R.tick_params(axis='y', colors='0.35')
+_h1, _l1 = ax4a.get_legend_handles_labels()
+_h2, _l2 = ax4R.get_legend_handles_labels()
+ax4a.legend(_h1 + _h2, _l1 + _l2, fontsize=8, loc='center right')
 ax4a.grid(True, alpha=0.3)
 
-ax4b.scatter([0]*len(vlb_mse_indep), vlb_mse_indep, s=90, c='b', zorder=3, label='VLB目标（独立种子）')
-ax4b.scatter([1]*len(dsm_mse_indep), dsm_mse_indep, s=90, c='r', marker='^', zorder=3, label='DSM目标（独立种子）')
-ax4b.hlines(v_mean, -0.08, 0.08, colors='b', linewidths=2)
-ax4b.hlines(d_mean, 0.92, 1.08, colors='r', linewidths=2)
-ax4b.set_xticks([0, 1])
-ax4b.set_xticklabels(['完整VLB目标', '匹配DSM目标'], fontsize=12)
-ax4b.set_ylabel('固定测试集去噪MSE（4个噪声级平均）', fontsize=12)
-ax4b.set_title(f'(b) 独立种子组：最终去噪性能分布重叠\n'
+# (b) 参数轨迹偏差：匹配λ → 逐位同步；非匹配权重（简化目标）→ 显著分离
+_pd_steps = [r[0] for r in rec_param_diff]
+_pd_vd = [max(r[1], 1e-18) for r in rec_param_diff]
+_pd_vs = [max(r[2], 1e-18) for r in rec_param_diff]
+ax4b.semilogy(_pd_steps, _pd_vd, 'o-', color='r', linewidth=2,
+              label='|VLB − 匹配DSM|（λ匹配）')
+ax4b.semilogy(_pd_steps, _pd_vs, 's--', color='0.35', linewidth=2,
+              label='|VLB − 简化目标|（λ不匹配）')
+ax4b.set_xlabel('训练步', fontsize=12)
+ax4b.set_ylabel('两网络参数最大绝对偏差', fontsize=12)
+ax4b.set_title(f'(b) 负对照：权重不匹配时轨迹必须分开\n'
+               f'匹配λ: {final_param_diff:.1e}；简化目标: {final_param_diff_simple:.1e}',
+               fontsize=11)
+ax4b.legend(fontsize=9, loc='center right')
+ax4b.grid(True, alpha=0.3, which='both')
+
+ax4c.scatter([0]*len(vlb_mse_indep), vlb_mse_indep, s=90, c='b', zorder=3, label='VLB（独立种子）')
+ax4c.scatter([1]*len(dsm_mse_indep), dsm_mse_indep, s=90, c='r', marker='^', zorder=3, label='匹配DSM（独立种子）')
+ax4c.scatter([2]*len(simple_mse_indep), simple_mse_indep, s=90, c='0.35', marker='s', zorder=3, label='简化目标（负对照）')
+ax4c.hlines(v_mean, -0.18, 0.18, colors='b', linewidths=2)
+ax4c.hlines(d_mean, 0.82, 1.18, colors='r', linewidths=2)
+ax4c.hlines(s_mean, 1.82, 2.18, colors='0.35', linewidths=2)
+ax4c.errorbar([0, 1, 2], [v_mean, d_mean, s_mean], yerr=[v_std, d_std, s_std],
+              fmt='none', ecolor='k', elinewidth=1.2, capsize=5, alpha=0.7, zorder=2)
+ax4c.set_xticks([0, 1, 2])
+ax4c.set_xticklabels(['完整VLB', '匹配DSM', '简化目标'], fontsize=12)
+ax4c.set_ylabel('固定测试集去噪MSE（4个噪声级平均）', fontsize=12)
+ax4c.set_title(f'(c) 独立种子组（各3种子）\n'
                f'VLB {v_mean:.4f}±{v_std:.4f} vs DSM {d_mean:.4f}±{d_std:.4f}，'
-               f'均值相对差{rel_mse_diff:.1%}', fontsize=12)
-ax4b.legend(fontsize=9, loc='upper right')
-ax4b.grid(True, alpha=0.3, axis='y')
+               f'简化 {s_mean:.4f}±{s_std:.4f}', fontsize=11)
+ax4c.legend(fontsize=8, loc='upper right')
+ax4c.grid(True, alpha=0.3, axis='y')
 
 plt.tight_layout()
 fig4_path = os.path.join(SAVE_DIR, '步骤4_训练目标等价性.png')
@@ -584,10 +668,12 @@ print("""
    - 两者差异仅在权重选择，网络结构完全相同
 
 5. 训练目标等价性（12.4节一维数值验证示例，本实验步骤4）
-   - 同步组：同初始化/同数据序列下，VLB与匹配DSM的每步损失逐点相等、
-     参数轨迹同步（偏差浮点级），是"同一优化问题"的直接经验证据
-   - 独立组：两种目标各3个独立种子训出的网络，去噪MSE分布重叠、
-     均值相对差异远小于种子间波动
+   - 同步组：匹配λ由w_t反解，两目标实为同一标量函数，故每步损失逐点相等、
+     参数轨迹同步是代数必然；它检验的是代码两条分支确实等价
+   - 负对照：同初始化、同数据下改用简化目标（权重恒1/2）→ 参数轨迹显著分开、
+     去噪MSE不同，证明同步组的重合并非“所有网络都会重合”
+   - 独立组：VLB与匹配DSM各3个独立种子，去噪MSE均值差异只反映种子噪声；
+     简化目标同时作为该指标判别力的参照
 """)
 
 print(f"{'='*60}")
@@ -647,23 +733,48 @@ results_summary = {
             'init_seed': 42, 'data_seed': 2026,
             'max_abs_step_loss_diff': max_loss_diff,
             'final_param_max_abs_diff': final_param_diff,
+            'final_param_max_abs_diff_vs_simple': final_param_diff_simple,
             'denoise_mse_untrained_baseline': mse_baseline,
             'denoise_mse_vlb': mse_v_sync,
             'denoise_mse_dsm': mse_d_sync,
+            'denoise_mse_simple_negative_control': mse_s_sync,
             'denoise_mse_per_t': {
                 'vlb': mse_v_sync_each,
                 'dsm': mse_d_sync_each,
+                'simple': mse_s_sync_each,
             },
+            'note': ('匹配λ由w_t反解，VLB与DSM是同一标量函数：损失逐点重合、参数逐位同步是代数必然；'
+                     '简化目标（λ(σ)=σ²，权重恒1/2）为负对照，用于证明该对照具有判别力'),
+        },
+        'validation_curve': {
+            'n_samples': N_VAL4,
+            'sample_seed': 7777,
+            't_grid': T_GRID4,
+            'eval_every': 50,
+            'steps': rec_val_steps,
+            'vlb': rec_valv,
+            'dsm': rec_vald,
+            'simple_negative_control': rec_vals,
+            'vlb_untrained': val_v_init,
+            'max_rel_diff_vlb_vs_dsm': max_rel_val,
+            'note': ('训练 batch 损失（单步）在 0.017~0.038 间震荡，看不出趋势；'
+                     '图 (a) 改为固定验证集（固定样本 + 固定 33 个时间步）上重算的完整目标值'),
         },
         'independent_seeds': {
             'steps_per_run': N_INDEP,
             'vlb_seeds': [101, 102, 103],
             'dsm_seeds': [201, 202, 203],
+            'simple_seeds': [301, 302, 303],
             'vlb_denoise_mse': vlb_mse_indep,
             'dsm_denoise_mse': dsm_mse_indep,
+            'simple_denoise_mse': simple_mse_indep,
             'vlb_mean': v_mean, 'vlb_std_ddof1': v_std,
             'dsm_mean': d_mean, 'dsm_std_ddof1': d_std,
+            'simple_mean': s_mean, 'simple_std_ddof1': s_std,
             'relative_mean_diff': rel_mse_diff,
+            'relative_mean_diff_simple_vs_vlb': rel_simple_diff,
+            'note': ('VLB与匹配DSM为同一目标，均值差异只能反映种子噪声；'
+                     '简化目标为不同的加权方式，其均值差异用于衡量该指标的判别力'),
         },
     },
 }

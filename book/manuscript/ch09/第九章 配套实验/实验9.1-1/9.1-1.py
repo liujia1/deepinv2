@@ -186,7 +186,9 @@ def train_model(beta, checkpoint_path, train_loader, num_epochs=20, model_name='
     quick = os.environ.get('QUICK_TEST', '') == '1'
     if quick:
         num_epochs = 3
-        print(f"\n[快速验证模式] 仅训练 {num_epochs} 轮")
+        # 快速验证写到独立文件，避免 3 轮成品覆盖正式训练好的 checkpoint
+        checkpoint_path = checkpoint_path.replace('.pth', '_quick.pth')
+        print(f"\n[快速验证模式] 仅训练 {num_epochs} 轮 -> {os.path.basename(checkpoint_path)}")
 
     # Checkpoint加载逻辑
     # weights_only=False用于加载optimizer state等非tensor对象
@@ -220,9 +222,19 @@ def train_model(beta, checkpoint_path, train_loader, num_epochs=20, model_name='
                 train_losses = ckpt.get('train_losses', [])
                 start_epoch = ckpt_epochs
             else:
-                # 最终模型但轮数/β/快速模式不匹配，或断点配置不一致 → 重新训练
+                # 最终模型但轮数/β/快速模式不匹配，或断点配置不一致 → 重新训练。
+                # 注意：权重在上面的 load_state_dict 中已被载入，必须显式丢弃，
+                # 否则“重新训练”会从旧权重热启动，仍带着不匹配配置的痕迹。
                 print(f"  checkpoint配置不匹配 (已训练{ckpt_epochs}轮, 目标{num_epochs}轮, "
-                      f"quick={ckpt.get('quick', False)}→{quick}), 重新训练")
+                      f"quick={ckpt.get('quick', False)}→{quick}), 丢弃旧权重重新训练")
+                encoder = Encoder().to(device)
+                decoder = Decoder().to(device)
+                optimizer = torch.optim.Adam(
+                    list(encoder.parameters()) + list(decoder.parameters()), lr=1e-3
+                )
+                start_epoch = 0
+                train_losses = []
+                is_final = False
 
     # 训练循环（start_epoch>=num_epochs时range为空，循环结束后会补存最终checkpoint）
     if not is_final:

@@ -7,7 +7,7 @@
 
 实验目的：理解MRI正向模型（k-space = 图像的傅里叶变换），
           验证欠采样导致混叠伪影，对比三种采样策略，
-          实现CS-MRI的ISTA重建
+          实现CS-MRI的"DC + TV"迭代重建（ISTA的简化变体）
 
 素材来源：全部原创
 运行前提：CPU可运行
@@ -264,21 +264,27 @@ print(f"  可变密度零填充: PSNR={p_vd:.1f}dB")
 
 
 # ========================================================================
-# 步骤4：压缩感知MRI——ISTA算法（16.3.4节）
+# 步骤4：压缩感知MRI——"DC + TV"迭代重建（16.3.4节）
 # ========================================================================
 print("\n" + "=" * 60)
-print("步骤4：压缩感知MRI——ISTA算法（16.3.4节）")
+print("步骤4：压缩感知MRI——\"DC + TV\"迭代重建（16.3.4节）")
 print("=" * 60)
 
-def cs_mri_ista(y, mask, n_iter=50, lam=0.01, psnr_ref=None):
+def cs_mri_dc_tv(y, mask, n_iter=50, lam=0.01, psnr_ref=None):
     """
-    CS-MRI迭代重建（数据一致性+TV正则化梯度下降）
+    CS-MRI 迭代重建：硬数据一致性（DC）+ TV 梯度下降
     min_x ||M_Ω * F * x - y||^2 + lambda * TV(x)
 
-    由于MRI算子的特殊结构（F^H F = I），数据一致性步可高效实现：
-    - 已采样k-space位置：用测量值替换
-    - 未采样k-space位置：保持当前预测
-    然后施加TV正则化作为投影/梯度步骤
+    与标准 ISTA 的关系（命名说明，勿混用）：
+    - 标准 ISTA：x_{k+1} = prox_{t*lam*TV}( x_k - t*∇f(x_k) )，其中 TV 的近端
+      算子需要单独求解一个去噪子问题（如 Chambolle 算法）；
+    - 本实现：因为 F 是正交变换、M_Ω 是 0/1 对角掩码、F^H F = I，
+      数据保真项的梯度步在 t=1 时恰好等于“把已采样位置替换为测量值”，
+      所以 DC 步是精确投影；但 TV 的近端算子被一步梯度下降（步长 lam）
+      代替，因此它属于临近梯度法（PGD）的简化变体（常被笼统归入
+      “ISTA 类”），不保证目标函数单调下降。
+    - 末尾必须再补一次 DC：最后一步 TV 更新会把解推离已采样 k-space 的
+      测量值（实测 DC 残差 6.6e-2 → 4.5e-2，PSNR +0.17 dB）。
 
     psnr_ref: 给定参考图像时，逐迭代记录PSNR（供收敛曲线使用）
     """
@@ -286,7 +292,7 @@ def cs_mri_ista(y, mask, n_iter=50, lam=0.01, psnr_ref=None):
     x = torch.abs(torch.fft.ifft2(torch.fft.ifftshift(y * mask_2d, dim=(-2, -1))))
     psnr_curve = []
 
-    for k in tqdm(range(n_iter), desc='  CS-MRI ISTA', leave=False):
+    for k in tqdm(range(n_iter), desc='  CS-MRI DC+TV', leave=False):
         kspace_x = torch.fft.fftshift(torch.fft.fft2(x), dim=(-2, -1))
         kspace_dc = mask_2d * y + (1 - mask_2d) * kspace_x
         x_dc = torch.abs(torch.fft.ifft2(torch.fft.ifftshift(kspace_dc, dim=(-2, -1))))
@@ -304,6 +310,15 @@ def cs_mri_ista(y, mask, n_iter=50, lam=0.01, psnr_ref=None):
         if psnr_ref is not None:
             psnr_curve.append(psnr(psnr_ref, x.numpy(), data_range=1.0))
 
+    # 收尾 DC：上面最后一步是 TV 更新，会把解推离已采样位置的测量值。
+    # 把已采样 k-space 重新替换为 y 再变回图像，保证最终解满足数据一致性。
+    kspace_x = torch.fft.fftshift(torch.fft.fft2(x), dim=(-2, -1))
+    kspace_dc = mask_2d * y + (1 - mask_2d) * kspace_x
+    x = torch.abs(torch.fft.ifft2(torch.fft.ifftshift(kspace_dc, dim=(-2, -1))))
+    x = torch.clamp(x, 0, None)
+    if psnr_ref is not None:
+        psnr_curve.append(psnr(psnr_ref, x.numpy(), data_range=1.0))
+
     if psnr_ref is not None:
         return x, psnr_curve
     return x
@@ -311,8 +326,8 @@ def cs_mri_ista(y, mask, n_iter=50, lam=0.01, psnr_ref=None):
 y_vd = mri_forward(x_true, mask_vd)
 lam_cs = 0.01  # TV正则化权重（图题中的λ与此处保持一致）
 
-print("  正在执行CS-MRI ISTA重建...")
-recon_cs, psnr_curve = cs_mri_ista(y_vd, mask_vd, n_iter=50, lam=lam_cs, psnr_ref=phantom)
+print("  正在执行CS-MRI DC+TV 重建...")
+recon_cs, psnr_curve = cs_mri_dc_tv(y_vd, mask_vd, n_iter=50, lam=lam_cs, psnr_ref=phantom)
 p_cs = psnr(phantom, recon_cs.numpy(), data_range=1.0)
 
 fig, axes = plt.subplots(1, 4, figsize=(18, 4.5))
@@ -326,22 +341,22 @@ axes[1].set_title(f'零填充重建 (R={R})\nPSNR={p_vd:.1f}dB')
 axes[1].axis('off')
 
 axes[2].imshow(recon_cs.numpy(), cmap='gray')
-axes[2].set_title(f'CS-MRI ISTA (R={R}, $\\lambda$={lam_cs})\nPSNR={p_cs:.1f}dB\nTV稀疏性抑制伪影')
+axes[2].set_title(f'CS-MRI DC+TV (R={R}, $\\lambda$={lam_cs})\nPSNR={p_cs:.1f}dB\nTV稀疏性抑制伪影')
 axes[2].axis('off')
 
 axes[3].plot(range(len(psnr_curve)), psnr_curve, 'bo-')
-axes[3].set_xlabel('ISTA迭代次数')
+axes[3].set_xlabel('迭代次数')
 axes[3].set_ylabel('PSNR (dB)')
-axes[3].set_title('ISTA收敛曲线')
+axes[3].set_title('收敛曲线（末点已补 DC）')
 axes[3].grid(True)
 
-plt.suptitle('步骤4：压缩感知MRI——零填充 vs CS-ISTA（16.3.4节）', fontsize=13)
+plt.suptitle('步骤4：压缩感知MRI——零填充 vs CS（DC+TV）（16.3.4节）', fontsize=13)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, '步骤4_CS_MRI.png'), dpi=150, bbox_inches='tight')
 plt.show()
 
 print(f"  零填充:   PSNR={p_vd:.1f}dB")
-print(f"  CS-ISTA:  PSNR={p_cs:.1f}dB")
+print(f"  CS-DC+TV: PSNR={p_cs:.1f}dB")
 
 
 # ========================================================================
@@ -363,15 +378,15 @@ for R_val in tqdm(R_list, desc='  加速因子扫描'):
     p_zf = psnr(phantom, recon_zf.numpy(), data_range=1.0)
     results_zf.append(p_zf)
 
-    recon_cs_R = cs_mri_ista(y_R, mask_vd_R, n_iter=50, lam=0.01)
+    recon_cs_R = cs_mri_dc_tv(y_R, mask_vd_R, n_iter=50, lam=0.01)
     p_cs_R = psnr(phantom, recon_cs_R.numpy(), data_range=1.0)
     results_cs.append(p_cs_R)
 
-    print(f"  R={R_val}: 保留{mask_vd_R.sum():.0f}条相位编码线, 零填充={p_zf:.1f}dB, CS-ISTA={p_cs_R:.1f}dB")
+    print(f"  R={R_val}: 保留{mask_vd_R.sum():.0f}条相位编码线, 零填充={p_zf:.1f}dB, CS-DC+TV={p_cs_R:.1f}dB")
 
 fig, ax = plt.subplots(figsize=(8, 5))
 ax.plot(R_list, results_zf, 'ro-', label='零填充重建')
-ax.plot(R_list, results_cs, 'bs-', label='CS-MRI ISTA')
+ax.plot(R_list, results_cs, 'bs-', label='CS-MRI（DC+TV）')
 ax.set_xlabel('加速因子 R')
 ax.set_ylabel('PSNR (dB)')
 ax.set_title('MRI重建质量 vs 加速因子\nR越大→欠采样越严重→需要更强的先验')
@@ -407,11 +422,11 @@ results_summary = {
         "随机": round(float(p_rand), 2),
         "可变密度": round(float(p_vd), 2),
     },
-    "步骤4_CS_MRI_ISTA_PSNR_dB": round(float(p_cs), 2),
+    "步骤4_CS_MRI_DC_TV_PSNR_dB": round(float(p_cs), 2),
     "步骤5_加速因子对比": {
         "加速因子R": R_list,
         "零填充_PSNR_dB": [round(float(v), 2) for v in results_zf],
-        "CS_ISTA_PSNR_dB": [round(float(v), 2) for v in results_cs],
+        "CS_DC_TV_PSNR_dB": [round(float(v), 2) for v in results_cs],
     },
 }
 results_summary = _to_native(results_summary)

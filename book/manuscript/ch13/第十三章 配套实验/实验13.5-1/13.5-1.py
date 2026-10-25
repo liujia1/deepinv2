@@ -643,23 +643,14 @@ axes[0, 0].set_title('轨迹对比：DOC vs DPS（最后一次试验示例）')
 axes[0, 0].legend(fontsize=9)
 axes[0, 0].grid(True, alpha=0.3)
 
-# 子图2：控制输入（横轴与子图1同向：0=高噪声端 x_T，T-1=末端 x_0 前一步）
-# ★ control_sequence 按 t_idx 索引：t_idx=T-1 是首个逆向步（高噪声端），t_idx=0 是末步。
-#   必须把数组倒过来画，否则末步会落在横轴 0 上、与子图1"左=高噪声"的方向相反
-#   （旧版直接用 range(T) 配原数组，横轴标签与曲线方向互相矛盾）。
-axes[0, 1].plot(range(T), doc_controls.flip(0).cpu().numpy(), 'o-',
-                label='DOC控制变量 raw_u（实际施加 0.5·tanh(raw_u)）',
+# 子图2：控制输入（索引按逆向顺序：0=最早的高噪声步控制）
+axes[0, 1].plot(range(T), doc_controls.cpu().numpy(), 'o-', label='DOC控制变量 raw_u（实际施加 0.5·tanh(raw_u)）',
                 linewidth=2, markersize=5)
 axes[0, 1].axhline(y=0, color='gray', linewidth=0.8)
-axes[0, 1].set_xlabel(f'逆向步序号（0=高噪声端 $x_T$，{T-1}=末端 $x_0$ 前一步）')
-axes[0, 1].set_ylabel('控制输入 raw $u_t$（施加量为 0.5·tanh）')
-_b_title = 'DOC控制输入（全轨迹协调，PF-ODE）'
-if not IS_MAIN_T:
-    # 补充对照固定 300 次迭代，对 T 维控制序列欠收敛：终端点已收敛，但控制形状不唯一，
-    # 不能读成"最优控制的时间分布"（一阶条件 u_t* ∝ ∂x_0/∂u_t 单调递减，见正文步骤4b）
-    _b_title += f'\n（T={T}：300 次迭代对 {T} 维序列欠收敛，控制形状非唯一；终端点已收敛）'
-axes[0, 1].set_title(_b_title, fontsize=(10 if not IS_MAIN_T else 12))
-axes[0, 1].legend(fontsize=(8 if not IS_MAIN_T else 10))
+axes[0, 1].set_xlabel(f'逆向步序号（0=高噪声端，{T-1}=末端）')
+axes[0, 1].set_ylabel('控制输入 $u_t$')
+axes[0, 1].set_title('DOC控制输入（全轨迹协调，PF-ODE）')
+axes[0, 1].legend()
 axes[0, 1].grid(True, alpha=0.3)
 
 # 子图3：n次试验的平均终端误差（总体统计，带标准差棒）
@@ -669,37 +660,15 @@ stds = [doc_std_error, dps_std_error, np.std(yA_errors), np.std(postmean_errors)
 colors = ['steelblue', 'coral', 'purple', 'saddlebrown']
 bars = axes[1, 0].bar(methods, means, yerr=stds, color=colors, alpha=0.75,
                       capsize=5, edgecolor='black', linewidth=0.6)
-# ★ 注意：max(means + stds) 是**列表拼接**、不是逐元素求和，旧版据此定轴高，结果只按
-#   "最大均值"取上限，DOC 与 DPS 的误差棒上须都被裁掉。逐元素求和后再留 15% 余量。
-_y_top = float(np.max(np.asarray(means) + np.asarray(stds))) * 1.15
 for bar, m in zip(bars, means):
-    # 标签偏移按坐标轴量程取并加白底，避免被误差棒的竖线/帽线穿过（旧版固定 +0.004 会压字）
-    axes[1, 0].text(bar.get_x() + bar.get_width()/2, m + 0.035 * _y_top, f'{m:.4f}',
-                    ha='center', va='bottom', fontsize=9,
-                    bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='none', alpha=0.8))
+    axes[1, 0].text(bar.get_x() + bar.get_width()/2, m + 0.004, f'{m:.4f}',
+                    ha='center', va='bottom', fontsize=9)
 axes[1, 0].set_ylabel('$|x_0 - x^*|$ 平均终端误差')
-# ★ 口径：T≠20 时"主报 ζ"是按 ζ∝T 外推选的，可能已越界（本实验 T=200 的 ζ=0.3 方差比≈40、
-#   单条链过冲到 -6.6）。用"主报 ζ"的分母算改进率等于挑最有利的对照，故标题改用 ζ 扫描里
-#   最有利于 DPS 的那一档，并把主报 ζ 越界这件事写进标题。
-_zeta_ok = [k for k, v in dps_errors_by_zeta.items() if len(v)]
-_best_zeta = min(_zeta_ok, key=lambda k: float(np.mean(dps_errors_by_zeta[k])))
-_best_dps_err = float(np.mean(dps_errors_by_zeta[_best_zeta]))
-if IS_MAIN_T or _best_dps_err <= 0:
-    _c_line2 = (f'DOC相对DPS改进 {(dps_mean_error-doc_mean_error)/dps_mean_error*100:.1f}%，'
-                f'DOC胜出 {doc_win_count}/{n_trials} 次')
-else:
-    _c_line2 = (f'DOC 胜出 {doc_win_count}/{n_trials} 次；对 DPS 最优 ζ={_best_zeta:g} 仍低 '
-                f'{(_best_dps_err - doc_mean_error)/_best_dps_err*100:.1f}%'
-                f'（主报 ζ={DPS_ZETA_MAIN:g} 已越界，见正文）')
-axes[1, 0].set_title(f'终端误差对比（n={n_trials}配对试验，误差棒为±1标准差）\n{_c_line2}',
-                     fontsize=(10 if not IS_MAIN_T else 12))
+axes[1, 0].set_title(f'终端误差对比（n={n_trials}配对试验，误差棒为±1标准差）\n'
+                     f'DOC相对DPS改进 {(dps_mean_error-doc_mean_error)/dps_mean_error*100:.1f}%，'
+                     f'DOC胜出 {doc_win_count}/{n_trials} 次')
 axes[1, 0].grid(True, alpha=0.3, axis='y')
-axes[1, 0].set_ylim(0, _y_top)
-# 标准差远大于均值时上须会超出轴范围：标注被裁剪的上界，避免读者把"截断"当数据
-if dps_mean_error + dps_std_error > 0.98 * _y_top:
-    axes[1, 0].text(bars[1].get_x() + bars[1].get_width() / 2, 0.97 * _y_top,
-                    f'DPS 误差棒上界 {dps_mean_error + dps_std_error:.2f}（超出轴范围，已裁剪）',
-                    ha='center', va='top', fontsize=8, color='0.35')
+axes[1, 0].set_ylim(0, max(means + stds) * 1.25)
 
 # 子图4：优化历史（同时展示终端代价和终端状态x0的收敛）
 iter_costs_history = []

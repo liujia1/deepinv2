@@ -244,7 +244,10 @@ def flow_ode_sample(model, shape, n_steps=50, x_init=None):
 
     for step in range(n_steps):
         t_val = step / n_steps
-        t_int = torch.full((shape[0],), int((1 - t_val) * (T - 1)), device=device, dtype=torch.long)
+        # 与训练端完全同一映射（见 train_model 内注释）：floor((1-t)*T) 再截断到 T-1。
+        # 原写法 floor((1-t)*(T-1)) 会让 t=0 对应的索引 T-1 在训练中几乎取不到。
+        t_idx = min(int((1 - t_val) * T), T - 1)
+        t_int = torch.full((shape[0],), t_idx, device=device, dtype=torch.long)
         v = model(x, t_int)
         x = x + v * dt
 
@@ -341,9 +344,12 @@ def train_model(model, optimizer, train_loader, time_sampling='uniform',
                 t_continuous = logit_normal_sample(batch, m=ln_m, s=ln_s, device=device)
 
             # 映射到整数时间步（正弦嵌入）
-            # 反向映射 t_int = (1-t)*(T-1)：物理时间t=0(噪声端)对应t_int=T-1(最大)，t=1(数据端)对应t_int=0
-            # 这与扩散模型惯例一致：t_int大=噪声大，t_int小=噪声小
-            t_int = ((1 - t_continuous) * (T - 1)).long()
+            # 反向映射：物理时间 t=0(噪声端) 对应 t_int=T-1(最大)，t=1(数据端) 对应 t_int=0，
+            # 与扩散模型惯例一致（t_int 大 = 噪声大）。
+            # 用 floor((1-t)*T) 再截断到 T-1，而不是 floor((1-t)*(T-1))：
+            # 后者使索引 T-1 只能由 t 恰为 0 取到（概率为 0），而采样首步必定查询 T-1，
+            # 于是 T-1 成为训练从未覆盖的“盲区”；改后每个索引的覆盖宽度均为 1/T。
+            t_int = torch.clamp(((1 - t_continuous) * T).long(), max=T - 1)
             t_4d = t_continuous[:, None, None, None]
 
             # 线性插值: x_t = (1-t)z + t*x_0
@@ -596,15 +602,11 @@ print("\n少步采样对比...")
 print(f"  量化指标样本数: {n_samples_quant}")
 print(f"  可视化样本数: {n_samples_vis}")
 
-# 为量化指标生成样本
+# 为量化指标生成样本：先定形状，实际采样放在 compute_nn_distance 定义之后，
+# 按“多种子 + 两模型共享初始噪声”的方式循环（见下方）。
+n_repeat = 5
+seeds = list(range(n_repeat))
 sample_shape_quant = (n_samples_quant, 1, 28, 28)
-x_init_shared_quant = torch.randn(sample_shape_quant, device=device)
-
-samples_uniform_quant = {}
-samples_logit_quant = {}
-for n_steps in step_counts:
-    samples_uniform_quant[n_steps] = flow_ode_sample(model_uniform, sample_shape_quant, n_steps=n_steps, x_init=x_init_shared_quant)
-    samples_logit_quant[n_steps]   = flow_ode_sample(model_logit,   sample_shape_quant, n_steps=n_steps, x_init=x_init_shared_quant)
 
 # 为可视化单独生成样本（独立噪声，避免与量化指标共享）
 sample_shape_vis = (n_samples_vis, 1, 28, 28)
@@ -641,21 +643,44 @@ def compute_nn_distance(generated, reference):
     return min_distances.mean().item()
 
 
-dist_uniform = {}
-dist_logit = {}
+# 多种子重复：每个种子下两个模型从同一批初始噪声出发（CRN），
+# 于是每个种子给出的是配对差，方差远低于“两组独立采样”；同时能报出标准差。
+dist_by_seed = {n_steps: {'uniform': [], 'logit': [], 'improvement': []} for n_steps in step_counts}
+for sd in seeds:
+    torch.manual_seed(sd)
+    x_init_shared = torch.randn(sample_shape_quant, device=device)
+    for n_steps in step_counts:
+        s_u = flow_ode_sample(model_uniform, sample_shape_quant, n_steps=n_steps, x_init=x_init_shared)
+        s_l = flow_ode_sample(model_logit, sample_shape_quant, n_steps=n_steps, x_init=x_init_shared)
+        d_u = compute_nn_distance(s_u, test_samples)
+        d_l = compute_nn_distance(s_l, test_samples)
+        dist_by_seed[n_steps]['uniform'].append(d_u)
+        dist_by_seed[n_steps]['logit'].append(d_l)
+        dist_by_seed[n_steps]['improvement'].append((d_u - d_l) / d_u * 100)
 
+print(f"  多种子统计: {n_repeat} 个种子 × {n_samples_quant} 个样本，两模型共享初始噪声（配对比较）")
+dist_uniform, dist_logit = {}, {}
+dist_std_uniform, dist_std_logit = {}, {}
+imp_mean, imp_std = {}, {}
 for n_steps in step_counts:
-    dist_uniform[n_steps] = compute_nn_distance(samples_uniform_quant[n_steps], test_samples)
-    dist_logit[n_steps] = compute_nn_distance(samples_logit_quant[n_steps], test_samples)
-    improvement = (dist_uniform[n_steps] - dist_logit[n_steps]) / dist_uniform[n_steps] * 100
-    print(f"  {n_steps:3d}步: 均匀={dist_uniform[n_steps]:.4f}, "
-          f"Logit-Normal={dist_logit[n_steps]:.4f}, "
-          f"改善={improvement:+.1f}%")
+    u = np.asarray(dist_by_seed[n_steps]['uniform'])
+    l = np.asarray(dist_by_seed[n_steps]['logit'])
+    im = np.asarray(dist_by_seed[n_steps]['improvement'])
+    ddof = 1 if n_repeat > 1 else 0
+    dist_uniform[n_steps] = float(u.mean())
+    dist_logit[n_steps] = float(l.mean())
+    dist_std_uniform[n_steps] = float(u.std(ddof=ddof))
+    dist_std_logit[n_steps] = float(l.std(ddof=ddof))
+    imp_mean[n_steps] = float(im.mean())
+    imp_std[n_steps] = float(im.std(ddof=ddof))
+    print(f"  {n_steps:3d}步: 均匀={dist_uniform[n_steps]:.4f}±{dist_std_uniform[n_steps]:.4f}, "
+          f"Logit-Normal={dist_logit[n_steps]:.4f}±{dist_std_logit[n_steps]:.4f}, "
+          f"配对改善={imp_mean[n_steps]:+.1f}±{imp_std[n_steps]:.1f}%")
 
 print("\n专家提醒:")
 print("  1. 上述指标仅是像素级L2距离代理，不等价于FID")
 print("  2. 建议肉眼观察图3(步骤3_少步采样对比.png)，特别关注1步那一行")
-print("  3. 判断是否真的Logit-Normal更差，而非仅依赖代理指标数字")
+print("  3. 改善%与其标准差同量级时，只能视为“无法分辨”，不能当作优势证据")
 
 # ============================================================
 # 可视化
@@ -719,25 +744,29 @@ x_pos = np.arange(len(step_counts))
 width = 0.35
 
 bars1 = ax.bar(x_pos - width/2, [dist_uniform[s] for s in step_counts],
-               width, label=r'均匀采样', color='steelblue', alpha=0.8)
+               width, yerr=[dist_std_uniform[s] for s in step_counts], capsize=4,
+               label=r'均匀采样', color='steelblue', alpha=0.8)
 bars2 = ax.bar(x_pos + width/2, [dist_logit[s] for s in step_counts],
-               width, label=r'Logit-Normal采样', color='forestgreen', alpha=0.8)
+               width, yerr=[dist_std_logit[s] for s in step_counts], capsize=4,
+               label=r'Logit-Normal采样', color='forestgreen', alpha=0.8)
 
-# 添加数值标注
-for bar_group in [bars1, bars2]:
-    for bar in bar_group:
+# 添加数值标注（放在误差棒顶端之上，避免被误差棒穿过）
+for bar_group, errs in [(bars1, dist_std_uniform), (bars2, dist_std_logit)]:
+    for bar, s in zip(bar_group, step_counts):
         height = bar.get_height()
         ax.annotate(f'{height:.3f}',
-                    xy=(bar.get_x() + bar.get_width() / 2, height),
+                    xy=(bar.get_x() + bar.get_width() / 2, height + errs[s]),
                     xytext=(0, 3), textcoords="offset points",
                     ha='center', va='bottom', fontsize=9)
 
 ax.set_xlabel(r'采样步数', fontsize=12)
 ax.set_ylabel(r'平均最近邻距离', fontsize=12)
-ax.set_title(r'实验14.5-1：采样质量量化对比（14.5.1节）', fontsize=14)
+ax.set_title(r'实验14.5-1：采样质量量化对比（误差棒为 %d 个种子的标准差）' % n_repeat, fontsize=12)
 ax.set_xticks(x_pos)
 ax.set_xticklabels([f'{s}步' for s in step_counts])
-ax.set_ylim(0, max(list(dist_uniform.values()) + list(dist_logit.values())) * 1.28)  # 顶部留白，避免图例遮挡柱顶数值
+_tops = [dist_uniform[s] + dist_std_uniform[s] for s in step_counts] + \
+        [dist_logit[s] + dist_std_logit[s] for s in step_counts]
+ax.set_ylim(0, max(_tops) * 1.25)  # 顶部留白，避免图例遮挡柱顶数值
 ax.legend(fontsize=11, loc='upper left')
 ax.grid(alpha=0.3, axis='y')
 
@@ -766,39 +795,42 @@ print(f"""
    - Logit-Normal最终Loss: {losses_logit[-1]:.6f}
    - Logit-Normal可能收敛更快（中间时间步对训练更关键）
 
-3. 少步采样质量对比
-   采样步数 | 均匀采样距离 | Logit-Normal距离 | 改善
-   {'-'*55}""")
+3. 少步采样质量对比（{n_repeat} 个种子，两模型共享初始噪声的配对统计）
+   采样步数 | 均匀采样距离        | Logit-Normal距离    | 配对改善
+   {'-'*62}""")
 
 for n_steps in step_counts:
-    improvement = (dist_uniform[n_steps] - dist_logit[n_steps]) / dist_uniform[n_steps] * 100
-    print(f"   {n_steps:5d}步  |  {dist_uniform[n_steps]:.4f}     |  {dist_logit[n_steps]:.4f}          | {improvement:+.1f}%")
+    print(f"   {n_steps:5d}步  |  {dist_uniform[n_steps]:.4f}±{dist_std_uniform[n_steps]:.4f}  |  "
+          f"{dist_logit[n_steps]:.4f}±{dist_std_logit[n_steps]:.4f}  | {imp_mean[n_steps]:+.1f}±{imp_std[n_steps]:.1f}%")
 
 # 根据实际改善数据动态生成结论
-improvements = {s: (dist_uniform[s] - dist_logit[s]) / dist_uniform[s] * 100 for s in step_counts}
+improvements = imp_mean            # 逐 seed 配对差的均值
 best_step = max(step_counts, key=lambda s: improvements[s])
 best_imp = improvements[best_step]
 
 # 统计改善为正的步数（避免暗示单调阈值，直接列出具体步数）
 positive_steps = [s for s in step_counts if improvements[s] > 0]
+# 只有 |均值改善| 超过 1 个种子间标准差，才谈得上“可分辨”
+resolved_steps = [s for s in step_counts if abs(imp_mean[s]) > imp_std[s]]
 
 print(f"""
 4. SD3实践启示（14.5.1节）
    - SD3在60种轨迹对比中，Rectified Flow + Logit-Normal采样最优
    - 本实验观察到的现象：
-     * 1步采样时Logit-Normal明显更差（改善={improvements[1]:+.1f}%）
-     * 在测试的步数{step_counts}中，{positive_steps}改善为正
+     * 1步采样 Logit-Normal {'更差' if imp_mean[1] < 0 else '更好'}（配对改善={imp_mean[1]:+.1f}±{imp_std[1]:.1f}%）
+     * 在测试的步数{step_counts}中，改善均值为正的是 {positive_steps}
      * 改善幅度并非单调：{best_step}步改善最大（{best_imp:+.1f}%）
+     * |改善| 超过 1 个种子间标准差（可分辨）的步数：{resolved_steps}
    - 需注意的实验局限性：
      * 量化指标(n_samples={n_samples_quant})是像素级L2代理，不等价于FID，且对'糊成平均脸'的
-       低方差输出有系统性偏好，故5/10/50步的个位数'改善%'不宜过度解读
-     * 本脚本为单种子(seed=42)单次运行，上述所有改善%均来自本次数据，未做多种子统计：
-       5/10/50步的个位数改善处于像素L2代理指标的噪声量级，本规模(MNIST+小UNet+30轮)
-       不足以稳定复现SD3报告的'少步FID显著优势'
-     * 1步采样Logit-Normal明显更差（改善={improvements[1]:+.1f}%）的定性结论可由图3目视
-       独立佐证（其1步输出呈噪声主导）：根因是端点(t≈0/t≈1)采样稀缺导致端点速度场欠拟合
-       ——这是Logit-Normal的固有属性（其密度在t→0/1处衰减到0，见诊断图），
-       但具体幅度受整数时间步离散化影响（采样首步查询的t_int={T-1}在训练中两个模型均未见）
+       低方差输出有系统性偏好，故个位数'改善%'不宜过度解读
+     * 本实验为 {n_repeat} 种子配对统计，种子间标准差已随结果一并给出；与标准差同量级的改善
+       只能读作“本规模(MNIST+小UNet+{num_epochs}轮)无法分辨”，不足以复现SD3报告的'少步FID显著优势'
+     * 1步采样 Logit-Normal 更差的定性结论可由图3目视独立佐证（其1步输出呈噪声主导）：
+       根因是端点(t≈0/t≈1)采样稀缺使端点速度场欠拟合——这是 Logit-Normal 的固有属性
+       （其密度在t→0/1处衰减到0，见诊断图）。
+       注：时间索引映射已统一为 floor((1-t)*{T}) 再截断到 {T-1}，训练覆盖全部 {T} 个索引
+       （含采样首步查询的 t_int={T-1}），故此处不再有“端点索引未被训练”的混淆。
    - SD3论文在5/50步评估中对比各时间采样分布（最优为rf/lognorm(0.00, 1.00)），
      未声称Logit-Normal改善1步采样，故本实验的1步结果与文献不矛盾
 """)
@@ -823,11 +855,17 @@ def _to_native(obj):
 results_summary = {
     'final_loss_uniform': round(float(losses_uniform[-1]), 6) if losses_uniform else None,
     'final_loss_logit': round(float(losses_logit[-1]), 6) if losses_logit else None,
+    'n_repeat': n_repeat,
+    'seeds': seeds,
+    'time_index_map': f'floor((1-t)*{T}) 再截断到 {T-1}（训练与采样同一映射）',
     'dist_by_step': {
         f'{n_steps}_step': {
             'uniform': round(float(dist_uniform[n_steps]), 4),
+            'uniform_std': round(float(dist_std_uniform[n_steps]), 4),
             'logit_normal': round(float(dist_logit[n_steps]), 4),
-            'improvement_pct': round(float((dist_uniform[n_steps] - dist_logit[n_steps]) / dist_uniform[n_steps] * 100), 1),
+            'logit_normal_std': round(float(dist_std_logit[n_steps]), 4),
+            'improvement_pct': round(float(imp_mean[n_steps]), 1),
+            'improvement_pct_std': round(float(imp_std[n_steps]), 1),
         } for n_steps in step_counts
     },
 }

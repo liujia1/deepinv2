@@ -1,5 +1,24 @@
 {
-  "cost_indep": 15.5402,
-  "cost_ot": 13.7608,
-  "cost_ratio_ot_over_indep": 0.8855
+  "cost_indep": 15.7925,
+  "cost_ot": 11.5988,
+  "cost_ratio_ot_over_indep": 0.7345,
+  "mean_len_indep": 3.9052,
+  "mean_len_ot": 3.3968,
+  "len_ratio_ot_over_indep": 0.8698,
+  "crossings_indep": 256,
+  "crossings_ot": 64,
+  "macro_crossings_indep": 99,
+  "macro_crossings_ot": 0,
+  "coupling_margin_mean": 0.9151,
+  "coupling_margin_min": 0.0682,
+  "target_centers": [
+    [
+      3.2,
+      1.0
+    ],
+    [
+      -2.4,
+      -1.6
+    ]
+  ]
 }

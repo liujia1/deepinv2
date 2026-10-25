@@ -103,10 +103,14 @@ CHECKPOINT_PATH = os.path.join(SAVE_DIR, 'ncsn_mnist_checkpoint.pth')
 L = 10  # 噪声水平数量
 sigma_min = 0.01
 sigma_max = 1.0
+# 注意: 内部按噪声"升序"存储, sigmas[0]=σ_min(最小), sigmas[-1]=σ_max(最大)。
+# 教材/论文采用降序记号 σ₁>σ₂>…>σ_L (σ₁ 最大、σ_L 最小), 两者只是索引方向相反。
+# 采样时从 sigmas[-1] (最大噪声) 倒序遍历到 sigmas[0] (最小噪声)。
 sigmas = torch.tensor([sigma_min * (sigma_max / sigma_min) ** (i / (L - 1))
                        for i in range(L)])
 sigmas_dev = sigmas.to(device)
-print(f"\n噪声调度 (L={L}): σ = {[f'{s:.4f}' for s in sigmas.tolist()]}")
+print(f"\n噪声调度 (L={L}, 升序存储): σ = {[f'{s:.4f}' for s in sigmas.tolist()]}")
+print(f"  即 σ_min={sigmas[0]:.4f} → σ_max={sigmas[-1]:.4f} (对应论文记号 σ_L → σ_1)")
 
 
 # ============================================================
@@ -201,11 +205,52 @@ class NCSN_MNIST(torch.nn.Module):
 # ============================================================
 # 步骤1: NCSN训练 (MNIST)
 # ============================================================
+
+
+def annealed_langevin_sample(model, sigmas, n_samples=16, T=100, eps=2e-5):
+    """退火Langevin采样
+
+    参数:
+        model: NCSN得分网络
+        sigmas: 噪声调度张量 (L,)
+        n_samples: 生成样本数
+        T: 每个噪声水平的Langevin步数
+        eps: 基础步长
+
+    返回:
+        生成的图像张量 (n_samples, 1, 28, 28)
+
+    注意: 本函数定义在训练循环之前, 因为训练中途的"中间采样"监控(每 50 轮)
+    就要调用它; 若仍留在步骤2 定义, 第 50 轮会抛 NameError: name
+    'annealed_langevin_sample' is not defined, 脚本无法跑完。
+    """
+    # NCSN 采样时使用 eval 模式: 使用 running statistics 而非 batch statistics,
+    # 避免小 batch (n_samples=16) 下 BatchNorm 统计量噪声过大导致采样不稳定
+    model.eval()
+    x = torch.randn(n_samples, 1, 28, 28, device=device) * sigmas[-1]  # 从最大噪声初始化
+    L_local = len(sigmas)
+
+    with torch.no_grad():
+        for i in range(L_local - 1, -1, -1):
+            # 步长 α_i = ε · σ_i² / σ_min²  (NCSN论文公式, 分母为最小σ)
+            # 注意: sigmas[0] 是最小σ(0.01), sigmas[-1] 是最大σ(1.0)
+            # 此处必须除以最小σ, 否则步长会偏小 (σ_max/σ_min)²=10⁴ 倍, 样本无法收敛
+            alpha = eps * (sigmas[i] / sigmas[0]) ** 2
+            alpha = torch.clamp(alpha, min=0)  # 数值保护
+            sigma_idx = torch.full((n_samples,), i, dtype=torch.long, device=device)
+            for t in range(T):
+                score = model(x, sigma_idx)
+                z = torch.randn_like(x)
+                x = x + alpha / 2 * score + torch.sqrt(alpha) * z
+
+    return torch.clamp(x, 0, 1)
+
+
 print(f"\n{'='*60}")
 print("步骤1: NCSN训练 (MNIST)")
 print(f"{'='*60}")
 print("\n[核心思想]")
-print("  使用 L 个噪声水平 σ₁ > σ₂ > ... > σ_L 训练NCSN,")
+print("  使用 L 个噪声水平 (论文记号 σ₁ > σ₂ > ... > σ_L, σ₁ 为最大噪声) 训练NCSN,")
 print("  大噪声'填满'低密度区域, 小噪声保留分布细节.")
 print("  DSM目标: σ² · ||s_θ(x̃, σ) + z/σ||²")
 print("  λ(σ) = σ² 加权使各噪声水平贡献均匀.")
@@ -276,9 +321,11 @@ if os.path.exists(CHECKPOINT_PATH):
 
 # 训练循环
 if not is_final:
-    num_epochs = 200  # 训练轮数 (NCSN论文中训练数百轮, 80轮通常不够)
-    # 快速验证模式: 设置环境变量 QUICK_TEST=1 可仅训练3轮
     import os as _os
+    # 训练轮数: 默认 200 (NCSN 论文用数百轮)。仓库中的 3 张示例图来自 80 轮版本,
+    # 设 NCSN_EPOCHS=80 可复现该设置 (种子已固定为 42, 不同硬件仍有浮点级差异)。
+    num_epochs = int(_os.environ.get('NCSN_EPOCHS', '200'))
+    # 快速验证模式: 设置环境变量 QUICK_TEST=1 可仅训练3轮
     if _os.environ.get('QUICK_TEST', '') == '1':
         num_epochs = 3
         print(f"\n[快速验证模式] 仅训练 {num_epochs} 轮")
@@ -386,6 +433,25 @@ if train_losses:
     ax_loss.set_title('NCSN 训练损失曲线')
     ax_loss.grid(alpha=0.3)
     ax_loss.set_yscale('log')
+    # 对数轴刻度修复: 默认的 LogFormatterSciNotation 生成形如 $\mathdefault{10^{-1}}$ 的标签,
+    # 而 \mathdefault 会绕过 mathtext.fontset、改用 font.sans-serif[0]=SimHei; SimHei 缺
+    # U+2212(上标负号), 负指数于是被渲染成 "10m1" (axes.unicode_minus 只管普通文本,
+    # 管不到 mathtext)。这里用 ASCII 连字符手写 mathtext, 并对 major/minor 两级同时生效。
+    from matplotlib.ticker import FuncFormatter as _FuncFormatter
+
+    def _log_tick(v, _pos):
+        if v <= 0:
+            return ''
+        e = int(np.floor(np.log10(v) + 1e-9))
+        m = v / 10.0 ** e
+        if m > 10.0 - 1e-6:      # 浮点误差导致 m≈10 时归一到 1×10^(e+1)
+            e, m = e + 1, 1.0
+        return (r'$10^{%d}$' % e if abs(m - 1.0) < 1e-9
+                else r'$%g\times 10^{%d}$' % (m, e))
+
+    _log_fmt = _FuncFormatter(_log_tick)
+    ax_loss.yaxis.set_major_formatter(_log_fmt)
+    ax_loss.yaxis.set_minor_formatter(_log_fmt)
     plt.tight_layout()
     plt.savefig(os.path.join(SAVE_DIR, '步骤1_NCSN训练损失.png'), dpi=150, bbox_inches='tight')
     plt.close()
@@ -403,40 +469,8 @@ print("  从纯噪声开始, 从大噪声到小噪声逐步采样:")
 print("  x_{t+1} = x_t + (α_i/2) · s_θ(x_t, σ_i) + √α_i · z")
 print("  步长 α_i = ε · σ_i² / σ_L² 随噪声水平自适应调整.")
 
-
-def annealed_langevin_sample(model, sigmas, n_samples=16, T=100, eps=2e-5):
-    """退火Langevin采样
-
-    参数:
-        model: NCSN得分网络
-        sigmas: 噪声调度张量 (L,)
-        n_samples: 生成样本数
-        T: 每个噪声水平的Langevin步数
-        eps: 基础步长
-
-    返回:
-        生成的图像张量 (n_samples, 1, 28, 28)
-    """
-    # NCSN 采样时使用 eval 模式: 使用 running statistics 而非 batch statistics,
-    # 避免小 batch (n_samples=16) 下 BatchNorm 统计量噪声过大导致采样不稳定
-    model.eval()
-    x = torch.randn(n_samples, 1, 28, 28, device=device) * sigmas[-1]  # 从最大噪声初始化
-    L_local = len(sigmas)
-
-    with torch.no_grad():
-        for i in range(L_local - 1, -1, -1):
-            # 步长 α_i = ε · σ_i² / σ_min²  (NCSN论文公式, 分母为最小σ)
-            # 注意: sigmas[0] 是最小σ(0.01), sigmas[-1] 是最大σ(1.0)
-            # 此处必须除以最小σ, 否则步长会偏小 (σ_max/σ_min)²=10⁴ 倍, 样本无法收敛
-            alpha = eps * (sigmas[i] / sigmas[0]) ** 2
-            alpha = torch.clamp(alpha, min=0)  # 数值保护
-            sigma_idx = torch.full((n_samples,), i, dtype=torch.long, device=device)
-            for t in range(T):
-                score = model(x, sigma_idx)
-                z = torch.randn_like(x)
-                x = x + alpha / 2 * score + torch.sqrt(alpha) * z
-
-    return torch.clamp(x, 0, 1)
+# annealed_langevin_sample 已上移到步骤1 之前定义: 训练中途的"中间采样"监控
+# (每 50 轮, 见步骤1 训练循环) 也要调用它, 否则第 50 轮会 NameError。
 
 
 n_samples = 16  # 生成样本数
@@ -522,14 +556,15 @@ print(f"\n{'='*60}")
 print("实验6.7-1 总结")
 print(f"{'='*60}")
 print("\n1. NCSN训练 (步骤1):")
-print(f"   - 噪声调度: σ₁={sigmas[0]:.2f} → σ_L={sigmas[-1]:.4f}, 几何级数排列")
+print(f"   - 噪声调度: σ_max={sigmas[-1]:.2f} → σ_min={sigmas[0]:.4f}, 几何级数排列")
+print(f"     (数组按升序存储, 对应论文记号 σ₁={sigmas[-1]:.2f} → σ_L={sigmas[0]:.4f})")
 print("   - ConditionalBatchNorm2d: 将噪声水平编码后注入每个残差块")
 print("   - DSM目标: σ² · ||s_θ(x̃, σ) + z/σ||²")
 if train_losses:
     print(f"   - 最终训练损失: {train_losses[-1]:.6f}")
 print("\n2. 退火Langevin采样 (步骤2):")
 print("   - 从纯噪声开始, 从大噪声到小噪声逐步采样")
-print("   - 步长 α_i = ε · σ_i² / σ_L² 自适应调整")
+print("   - 步长 α_i = ε · σ_i² / σ_L² 自适应调整 (σ_L 为最小噪声, 代码中即 sigmas[0])")
 print("   - 生成结果: MNIST风格的手写数字图像")
 print("\n3. 采样轨迹 (步骤3):")
 print("   - 大噪声阶段: 粗粒度结构出现")

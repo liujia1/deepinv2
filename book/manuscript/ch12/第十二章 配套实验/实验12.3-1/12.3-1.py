@@ -8,6 +8,7 @@
   - 含噪输入的形式差异与Karras统一参数化
   - 权重匹配：简化VLB ≡ 简化DSM，加权DSM ≡ 完整VLB
   - VLB权重与简化目标权重的量级差异
+  - 从噪声调度到权重的因果链：β_i → ᾱ_i → SNR_i → w_i
 
 约定说明:
   本实验为了直观展示权重匹配关系，定义DSM权重为λ(σ)/σ²(不含1/2系数)
@@ -245,6 +246,22 @@ print(f"→ 说明: 匹配λ(t)本就是从w_t反解得到的，比值=2是与�
 print(f"  (换成任意调度仍精确为2)；此处自检的是代码实现与12.4节公式严格一致，")
 print(f"  而非对一条经验规律的验证。严格证明见12.4节(其标准约定下比值为1)。")
 
+# 复核：换成一个随机非均匀调度（排序后单调递增），比值应仍然精确为 2
+# 用局部 generator，避免扰动全局 RNG（后续绘图的可复现性不受影响）
+_gen_rand = torch.Generator().manual_seed(2026)
+betas_rand, _ = torch.sort(torch.rand(T, generator=_gen_rand, dtype=torch.float64) * 0.02 + 1e-4)
+alphas_rand = 1 - betas_rand
+ab_rand = torch.cumprod(alphas_rand, dim=0)
+abp_rand = torch.cat([torch.ones(1, dtype=torch.float64), ab_rand[:-1]])
+pv_rand = betas_rand * (1 - abp_rand) / (1 - ab_rand)
+w_rand = betas_rand**2 / (2 * pv_rand * alphas_rand * (1 - ab_rand))
+lam_rand = betas_rand[1:] * (1 - ab_rand[1:]) / ((1 - abp_rand[1:]) * alphas_rand[1:])
+dsm_rand = lam_rand / (1 - ab_rand[1:])
+ratio_rand = (dsm_rand / w_rand[1:]).numpy()
+ratio_rand_max_dev = float(np.max(np.abs(ratio_rand - 2.0)))
+print(f"随机非均匀调度复核: 比值均值 {ratio_rand.mean():.6f}，"
+      f"与 2 的最大偏差 {ratio_rand_max_dev:.2e}")
+
 # 可视化：同一图上对比
 fig, ax = plt.subplots(1, 1, figsize=(10, 6))
 t_range = np.arange(1, T)
@@ -273,6 +290,113 @@ print(f"\n图表已保存: {fig_path}")
 print("\n→ 蓝色实线（DSM权重/2）与红色虚线（VLB权重）完全重合")
 print("  自检匹配公式的代码实现: λ(t) = β_t(1-ᾱ_t) / [(1-ᾱ_{t-1})·α_t]")
 print("  （该重合是代数恒等性的体现，对任意噪声调度均成立；严格证明见12.4节）")
+
+
+# ============================================================
+# 步骤3：从噪声调度到权重——w_t 的形状从哪儿来
+# ============================================================
+# 上一张图把 DSM 与 VLB 曲线叠在一起，验证了"两者重合"，但曲线完全遮住，
+# 反而看不清 w_t 自己的形状。本步把 β_i → ᾱ_i → SNR_i → w_i 的因果链拆开画。
+print(f"\n{'='*60}")
+print("步骤3：从噪声调度到权重——w_t 的形状从哪儿来")
+print(f"{'='*60}")
+
+snr_all = alpha_bars / (1 - alpha_bars)
+i_snr1 = int(torch.argmin((snr_all - 1.0).abs()).item())
+i_wmax = int(torch.argmax(wt_vlb[1:]).item()) + 1   # 换回 0 起下标
+# wt_vlb[0] 为 inf（ᾱ_0 处的构造），故最小值只在 i>=1 上取
+i_wmin = int(torch.argmin(wt_vlb[1:]).item()) + 1
+w_tail = wt_vlb[1:]
+snr_decades = np.log10(snr_all[0].item() / snr_all[-1].item())
+w_decades = np.log10(w_tail.max().item() / w_tail.min().item())
+
+print(f"β:  {betas[0].item():.2e} → {betas[-1].item():.2e}（线性增长 {betas[-1].item()/betas[0].item():.0f} 倍）")
+print(f"ᾱ:  {alpha_bars[0].item():.6f} → {alpha_bars[-1].item():.2e}（终端 √ᾱ_T = {np.sqrt(alpha_bars[-1].item()):.4f}）")
+print(f"SNR: {snr_all[0].item():.1f} → {snr_all[-1].item():.2e}（跨越 {snr_decades:.1f} 个数量级），"
+      f"SNR=1 出现在下标 i={i_snr1}（论文第 {i_snr1 + 1} 步）")
+print(f"w:   最大 {w_tail.max().item():.4f} @ i={i_wmax}，最小 {w_tail.min().item():.4f} @ i={i_wmin}，"
+      f"末端 {w_tail[-1].item():.4f}（跨 {w_decades:.2f} 个数量级）")
+print("→ w_t 呈 'L 形 + 末端回升'：低噪声端 β 小但 1-ᾱ 更小，比值反而最大；")
+print("  中段 1-ᾱ 追上 β，比值触底；末端 1-ᾱ→1 饱和，w_t 只剩 β_t/[2α_t] 的缓慢增长")
+
+fig, axes = plt.subplots(2, 2, figsize=(14, 8.6))
+fig.suptitle('线性调度 $T=1000$：从调度 $\\beta_i$ 到权重 $w_i$ 的因果链', fontsize=15)
+tt = np.arange(T)
+
+# (a) β_i 本身
+ax = axes[0, 0]
+ax.plot(tt, betas.numpy(), color='C0', lw=1.8)
+ax.set_xlabel('时间步下标 $i$', fontsize=12)
+ax.set_ylabel(r'$\beta_i$', fontsize=12)
+ax.set_title(r'(a) 调度本身：$\beta_i$ 从 $10^{-4}$ 线性涨到 $0.02$', fontsize=12)
+ax.text(0.03, 0.92,
+        f'$\\beta_1$ = {betas[0].item():.1e}\n$\\beta_T$ = {betas[-1].item():.3f}\n'
+        f'两端相差 {betas[-1].item()/betas[0].item():.0f} 倍',
+        transform=ax.transAxes, va='top', fontsize=9.5)
+ax.grid(True, alpha=0.3)
+ax.set_ylim(-0.001, 0.023)
+
+# (b) 累计效应
+ax = axes[0, 1]
+ax.semilogy(tt, alpha_bars.numpy(), color='C0', lw=1.8,
+            label=r'$\bar\alpha_i$（信号保留比例）')
+ax.semilogy(tt, (1 - alpha_bars).numpy(), color='C3', lw=1.6, ls='--',
+            label=r'$1-\bar\alpha_i$（噪声方差比例）')
+ax.set_xlabel('时间步下标 $i$', fontsize=12)
+ax.set_ylabel('比例（log）', fontsize=12)
+ax.set_title(r'(b) 累计效应：$\bar\alpha_i$ 从 0.9999 衰减到 $4\times10^{-5}$', fontsize=12)
+ax.legend(fontsize=9, loc='lower left')
+ax.grid(True, alpha=0.3, which='both')
+
+# (c) 信噪比
+ax = axes[1, 0]
+ax.semilogy(tt, snr_all.numpy(), color='C2', lw=1.8,
+            label=r'$\mathrm{SNR}_i=\bar\alpha_i/(1-\bar\alpha_i)$')
+ax.axhline(1.0, color='k', ls=':', lw=1.2, label='SNR = 1')
+ax.axvline(i_snr1, color='gray', ls=':', lw=1.0)
+ax.plot([i_snr1], [1.0], 'ko', ms=5)
+ax.text(0.40, 0.80, f'SNR=1 @ i={i_snr1}\n（论文第 {i_snr1 + 1} 步）',
+        transform=ax.transAxes, fontsize=9.5,
+        bbox=dict(boxstyle='round,pad=0.3', fc='white', ec='none', alpha=0.85))
+ax.set_xlabel('时间步下标 $i$', fontsize=12)
+ax.set_ylabel(r'$\mathrm{SNR}_i$（log）', fontsize=12)
+ax.set_title(f'(c) 信噪比单调跨越 {snr_decades:.1f} 个数量级', fontsize=12)
+ax.legend(fontsize=9, loc='lower left')
+ax.grid(True, alpha=0.3, which='both')
+ax.set_ylim(2e-5, 3e4)
+
+# (d) 权重本身
+ax = axes[1, 1]
+idx = np.arange(1, T)
+ax.semilogy(idx, w_tail.numpy(), color='C1', lw=2.0,
+            label=r'完整 VLB 权重 $w_i=\beta_i/[2(1-\bar\alpha_{i-1})\alpha_i]$')
+ax.axhline(1.0, color='C0', ls='--', lw=1.2, label=r'简化目标权重 $c=1$')
+ax.plot([i_wmax], [w_tail.max().item()], 'o', color='C1', ms=5)
+ax.plot([i_wmin], [w_tail.min().item()], 'o', color='C1', ms=5)
+ax.annotate(f'max {w_tail.max().item():.4f} @ i={i_wmax}',
+            xy=(i_wmax, w_tail.max().item()), xytext=(i_wmax + 60, 0.30),
+            fontsize=9, arrowprops=dict(arrowstyle='->', color='gray'))
+ax.annotate(f'min {w_tail.min().item():.4f} @ i={i_wmin}',
+            xy=(i_wmin, w_tail.min().item()), xytext=(i_wmin + 120, 0.030),
+            fontsize=9, arrowprops=dict(arrowstyle='->', color='gray'))
+ax.set_xlabel('时间步下标 $i$', fontsize=12)
+ax.set_ylabel(r'$w_i$（log）', fontsize=12)
+ax.set_title(f'(d) 权重：低噪声端高、中段触底、末端小幅回升（跨 {w_decades:.1f} 个数量级）',
+             fontsize=12)
+ax.legend(fontsize=8.5, loc='upper right')
+ax.grid(True, alpha=0.3, which='both')
+ax.set_ylim(0.0035, 3.0)
+
+fig.text(0.5, -0.055,
+         '注：$(a)\\to(b)\\to(c)\\to(d)$ 是一条因果链——$(a)$ 的 $\\beta_i$ 累乘得 $(b)$ 的 $\\bar\\alpha_i$，'
+         '二者之比得 $(c)$ 的 SNR，而 $(d)$ 的 $w_i$ 由 $\\beta_i$ 与 $1-\\bar\\alpha_i$ 的相对大小决定。\n'
+         '线性 $T=1000$ 下 $w_i$ 是“L 形 + 末端回升”（最大/最小约 120 倍）；换成 cosine $T=200$ 时形状会变成 U 形（见 12.6）。',
+         ha='center', fontsize=9, color='dimgray')
+plt.tight_layout()
+fig_path2 = os.path.join(SAVE_DIR, '调度与权重演化.png')
+plt.savefig(fig_path2, dpi=150, bbox_inches='tight')
+plt.close()
+print(f"\n图表已保存: {fig_path2}")
 
 
 # ============================================================
@@ -306,6 +430,12 @@ print("""
    - VE-SDE: s(t)=1, σ(t)为原生加性噪声标准差（sσ=σ，两列退化）
    - VP-SDE: s(t)=√ᾱ_t, σ(t)=√((1-ᾱ_t)/ᾱ_t)，实际边际噪声s(t)σ(t)=√(1-ᾱ_t)
    - Karras噪声水平σ(t)与VP边际噪声s(t)σ(t)勿混（见附录12B）
+
+5. 从调度到权重的因果链（调度与权重演化.png）
+   - β_i 线性增长 → ᾱ_i 累乘衰减 → SNR_i=ᾱ_i/(1-ᾱ_i) 单调跨 8.4 个数量级
+   - w_i 的形状由 β_i 与 1-ᾱ_i 的相对大小决定：低噪声端 β 小但 1-ᾱ 更小，比值最大；
+     中段 1-ᾱ 追上 β，比值触底（i=349）；末端 1-ᾱ→1 饱和，w_i 只剩 β/(2α) 的缓慢增长
+   - 形状为“L 形 + 末端回升”（最大/最小约 120 倍），与 cosine T=200 的 U 形形成对照（见12.6）
 """)
 
 print(f"{'='*60}")
@@ -338,11 +468,33 @@ results_summary = {
         'ratio_mean': ratio_mean,
         'ratio_std': ratio_std,
         'ratio_max_dev_from_2': ratio_max_dev,
+        'random_schedule_ratio_mean': float(ratio_rand.mean()),
+        'random_schedule_max_dev_from_2': ratio_rand_max_dev,
         'note': 'DSM权重 = 2 × VLB权重；匹配公式的代数恒等性自检（与噪声调度无关，任意调度下恒为2）',
     },
     'VLB_weights_sampled': {
         f't_{t}': wt_vlb[t].item()
         for t in [1, 10, 50, 100, 250, 500, 750, 999]
+    },
+    'schedule_profile': {
+        'beta_first': betas[0].item(),
+        'beta_last': betas[-1].item(),
+        'beta_ratio': betas[-1].item() / betas[0].item(),
+        'alpha_bar_first': alpha_bars[0].item(),
+        'alpha_bar_last': alpha_bars[-1].item(),
+        'sqrt_alpha_bar_T': float(np.sqrt(alpha_bars[-1].item())),
+        'snr_first': snr_all[0].item(),
+        'snr_last': snr_all[-1].item(),
+        'snr_decades': float(snr_decades),
+        'snr1_index': i_snr1,
+        'snr1_step': i_snr1 + 1,
+        'w_max': w_tail.max().item(),
+        'w_max_index': i_wmax,
+        'w_min': w_tail.min().item(),
+        'w_min_index': i_wmin,
+        'w_last': w_tail[-1].item(),
+        'w_decades': float(w_decades),
+        'note': '下标为 0 起数组下标（与 VLB_weights_sampled 的 t_* 键同口径，即论文第 i+1 步）；w 的 max/min 只在 i>=1 上取',
     },
 }
 results_summary = _to_native(results_summary)

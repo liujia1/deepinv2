@@ -84,8 +84,11 @@ torch.manual_seed(42)  # random_ellipses用torch.rand生成椭圆灰度，未播
 def random_ellipses(num_of_ellipses, size):
     """生成随机椭圆幻影（用于ASTRA版本）"""
     ellipses = torch.zeros((num_of_ellipses, size[0], size[1]))
-    x = torch.linspace(-size[0], size[1], size[1])
-    y = torch.linspace(-size[0], size[1], size[0])[:, None]
+    # 归一化坐标与椭圆中心/半径同量纲（中心 ∈ ±size/2，半径 ∈ [size/8, size/2]）。
+    # 旧实现写成 linspace(-size[0], size[1], ...)，把视场拉成 2 倍宽，
+    # 椭圆只占据中心 1/4 面积，生成了一堆“小图钉”般的幻影。
+    x = torch.linspace(-size[1] / 2, size[1] / 2, size[1])
+    y = torch.linspace(-size[0] / 2, size[0] / 2, size[0])[:, None]
 
     for k in range(num_of_ellipses):
         x0 = np.random.randint(-size[0] // 2, size[0] // 2)
@@ -238,12 +241,12 @@ print("  幻影已生成并保存。")
 n_data = (512, 512)  # 数据生成分辨率（2倍）
 
 # 高分辨率phantom（用于数据生成）
-if ASTRA_AVAILABLE:
-    phantom_fine = random_ellipses(50, n_data)
-else:
-    from skimage.transform import resize as sk_resize
-    phantom_fine = sk_resize(phantom, n_data, order=1, preserve_range=True, anti_aliasing=True)
-    phantom_fine = phantom_fine / phantom_fine.max()
+# 关键：必须与 phantom 是同一物体，否则 PSNR 对比的是错误真值。
+# 旧实现 ASTRA 分支里又调了一次 random_ellipses(50, n_data)，生成的是另一个
+# 随机物体，使 phantom_fine 完全不可用。这里统一为“同一物体上采样”。
+from skimage.transform import resize as sk_resize
+phantom_fine = sk_resize(phantom, n_data, order=1, preserve_range=True, anti_aliasing=True)
+phantom_fine = phantom_fine / phantom_fine.max()
 
 def generate_sinogram_ic_free(phantom_fine, theta, n_recon_size):
     """避免inverse crime的sinogram生成（skimage路径）：
@@ -252,8 +255,13 @@ def generate_sinogram_ic_free(phantom_fine, theta, n_recon_size):
     sinogram_fine = radon(phantom_fine, theta=theta, circle=True)
     # circle=True时探测器尺寸=图像尺寸
     target_det = n_recon_size[0]
+    n_fine = phantom_fine.shape[0]
     from skimage.transform import resize as sk_resize
     sinogram_recon = sk_resize(sinogram_fine, (target_det, len(theta)), order=1, preserve_range=True, anti_aliasing=True)
+    # 探测器尺度归一化（缺了它 IC-free 名不符实）：radon 的线积分以像素为单位，
+    # 512 网格上的积分长度是 256 网格的 2 倍，不同步缩放会让重建整体亮 2 倍。
+    # 姊妹实验 16.2-1 有这一行并附详细注释，本脚本之前漏掉了。
+    sinogram_recon = sinogram_recon * (target_det / n_fine)
     return sinogram_recon
 
 
@@ -358,6 +366,17 @@ else:
             'angle_info': cfg['angle_info'],
             'name_en': cfg['name_en'],
         }
+
+    # ---- 同模型基线（inverse crime 对照）：同一 256 网格生成 + 反演 ----
+    # 正文引用"同模型基线约 27.8 dB"即出自此处，用于把双分辨率失配代价单独量化。
+    theta_full_cfg = [c['theta'] for c in configs if c['name'] == '全角CT'][0]
+    sino_same = radon(phantom, theta=theta_full_cfg, circle=True)
+    _, recon_same = skimage_parallel_reconstruct(
+        phantom, theta_full_cfg, filter_name='ramp', sinogram=sino_same)
+    same_psnr = compute_psnr(phantom, recon_same)
+    print(f"  [同模型基线] 同网格(256→256)全角 FBP PSNR={same_psnr:.2f} dB "
+          f"→ IC-free {results['全角CT']['psnr']:.2f} dB，"
+          f"失配代价 {same_psnr - results['全角CT']['psnr']:.2f} dB")
 
 
 # ========================================================================
@@ -623,6 +642,13 @@ results_summary = {
         "PSNR_dB": [round(float(v), 2) for v in psnr_limited_curve],
     },
 }
+if not ASTRA_AVAILABLE:
+    results_summary["同模型基线"] = {
+        "同网格FBP_PSNR_dB": round(float(same_psnr), 2),
+        "IC_free_FBP_PSNR_dB": round(float(results['全角CT']['psnr']), 2),
+        "失配代价_dB": round(float(same_psnr - results['全角CT']['psnr']), 2),
+        "说明": "同网格(256→256)全角生成+反演，即 inverse crime 情形，仅用于量化双分辨率失配的代价",
+    }
 results_summary = _to_native(results_summary)
 with open(os.path.join(SAVE_DIR, 'results_summary.json'), 'w', encoding='utf-8') as f:
     json.dump(results_summary, f, ensure_ascii=False, indent=2)

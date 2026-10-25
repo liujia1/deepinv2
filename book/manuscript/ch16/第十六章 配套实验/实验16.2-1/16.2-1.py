@@ -107,6 +107,15 @@ recon_fbp_full = iradon(sinogram_full, theta=theta_full, circle=True, filter_nam
 psnr_fbp_full = psnr(phantom, recon_fbp_full, data_range=1.0)
 noise_level = 0.05  # 相对噪声水平（占sinogram峰值的5%）
 
+# ---- 同模型基线（inverse crime 对照）：同一 128 网格生成 + 反演 ----
+# 正文引用"同模型基线实测 29.3 dB"即出自此处，用来把 IC-free 双分辨率的
+# 失配代价单独量化出来（否则会把模型失配误当成"不适定性"的效果）。
+sinogram_full_same = radon(phantom, theta=theta_full, circle=True)
+recon_fbp_full_same = iradon(sinogram_full_same, theta=theta_full, circle=True, filter_name='ramp')
+psnr_fbp_full_same = psnr(phantom, recon_fbp_full_same, data_range=1.0)
+print(f"[同模型基线] 同网格全角 FBP PSNR={psnr_fbp_full_same:.2f}dB "
+      f"(IC-free {psnr_fbp_full:.2f}dB, 失配代价 {psnr_fbp_full_same - psnr_fbp_full:.2f}dB)")
+
 
 # ========================================================================
 # 步骤1：稀疏角度与有限角度CT——两种不同的不适定性
@@ -167,6 +176,45 @@ plt.show()
 print(f"  全角 FBP:     PSNR={psnr_fbp_full:.1f}dB")
 print(f"  稀疏30角度:   PSNR={p_sparse:.1f}dB, SSIM={s_sparse:.3f}")
 print(f"  有限角0-120°: PSNR={p_limited:.1f}dB, SSIM={s_limited:.3f}")
+
+# ---- 步骤1b：有限角误差的“边缘集中”与“方向选择性”定量诊断 ----
+# 文档需要回答两个问题：有限角的误差是否真的集中在边缘？缺失方向的边缘是否
+# 真的丢失？这里用真值梯度定义边缘掩码，算三个可复现的数字：
+#   ① 边缘/内部平均绝对误差之比（误差的空间集中度）
+#   ② 边缘梯度能量比（边缘幅度保留度，相对真值与相对全角重建两种口径）
+#   ③ 水平/垂直边缘的梯度保留度（方向选择性；有限角只应丢失缺失方向的高频）
+print("\n  [边缘诊断] 量化有限角的误差集中与方向选择性")
+_gy, _gx = np.gradient(phantom)
+_gmag = np.hypot(_gy, _gx)
+_edge = _gmag > 0.15 * _gmag.max()   # 强度跳变处的强边缘
+_inner = _gmag < 0.01 * _gmag.max()  # 平坦区域
+
+_err_lim = np.abs(recon_limited - phantom)
+edge_err_ratio_inner = float(_err_lim[_edge].mean() / _err_lim[_inner].mean())
+edge_err_ratio_all = float(_err_lim[_edge].mean() / _err_lim.mean())
+
+def _gmag_of(a):
+    gy_, gx_ = np.gradient(a)
+    return np.hypot(gy_, gx_)
+
+_gm_limited = _gmag_of(recon_limited)
+_gm_full = _gmag_of(recon_fbp_full)
+edge_amp_vs_true = float(np.median(_gm_limited[_edge]) / np.median(_gmag[_edge]))
+edge_amp_vs_full = float(np.median(_gm_limited[_edge]) / np.median(_gm_full[_edge]))
+
+# 方向拆分：水平边缘的灰度沿 y 跳变（|gy|>|gx|），垂直边缘沿 x 跳变
+_hor = _edge & (np.abs(_gy) > np.abs(_gx))
+_ver = _edge & (np.abs(_gx) >= np.abs(_gy))
+_gm_gy, _gm_gx = np.gradient(recon_limited)
+ret_h = float(np.median(np.abs(_gm_gy[_hor])) / np.median(np.abs(_gy[_hor])))
+ret_v = float(np.median(np.abs(_gm_gx[_ver])) / np.median(np.abs(_gx[_ver])))
+
+print(f"    边缘 {int(_edge.sum())} 像素；边缘/内部误差比 = {edge_err_ratio_inner:.2f}×"
+      f"（边缘/全图 = {edge_err_ratio_all:.2f}×）")
+print(f"    边缘梯度幅度保留（相对真值）= {edge_amp_vs_true:.3f}，"
+      f"（相对全角重建）= {edge_amp_vs_full:.3f}")
+print(f"    方向选择性：水平边保留 {ret_h:.3f}，垂直边保留 {ret_v:.3f}"
+      f"（缺失 120°-180° 投影，垂直方向高频应显著丢失）")
 
 
 # ========================================================================
@@ -340,10 +388,26 @@ results_summary = {
     "experiment": "实验16.2-1 CT不适定性与正则化重建",
     "相对噪声水平": noise_level,
     "噪声说明": "占sinogram峰值的比例（相对噪声）",
+    "同模型基线": {
+        "同网格FBP_PSNR_dB": round(psnr_fbp_full_same, 2),
+        "IC_free_FBP_PSNR_dB": round(psnr_fbp_full, 2),
+        "失配代价_dB": round(psnr_fbp_full_same - psnr_fbp_full, 2),
+        "说明": "同网格(128→128)生成+反演，即 inverse crime 情形，仅用于量化双分辨率失配的代价",
+    },
     "步骤1_稀疏vs有限角": {
         "全角FBP_PSNR_dB": round(psnr_fbp_full, 2),
         "稀疏30角度": {"PSNR_dB": round(p_sparse, 2), "SSIM": round(s_sparse, 4)},
         "有限角0_120": {"PSNR_dB": round(p_limited, 2), "SSIM": round(s_limited, 4)},
+    },
+    "步骤1b_边缘诊断": {
+        "边缘像素数": int(_edge.sum()),
+        "边缘/内部_误差比": round(edge_err_ratio_inner, 2),
+        "边缘/全图_误差比": round(edge_err_ratio_all, 2),
+        "边缘幅度保留_相对真值": round(edge_amp_vs_true, 4),
+        "边缘幅度保留_相对全角": round(edge_amp_vs_full, 4),
+        "水平边保留度": round(ret_h, 4),
+        "垂直边保留度": round(ret_v, 4),
+        "说明": "边缘掩码=真值梯度>15%最大；方向拆分按|gy|与|gx|大小",
     },
     "步骤2_正则化对比": {
         "FBP_PSNR_dB": round(p_fbp, 2),

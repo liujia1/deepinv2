@@ -343,17 +343,24 @@ if HAS_MODEL:
     x_true = torch.tensor(img, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)
 
     # 构造正向模型: 高斯模糊
-    # 注意: gaussian_blur 内部会进行 GPU→CPU→numpy→GPU 转换
-    # 这是为了使用 scipy.ndimage.gaussian_filter (更精确)
-    # 性能上不是最优, 但保证了算子的正确性和自共轭性
+    # 注意: gaussian_blur 内部会进行 GPU→CPU→numpy→GPU 转换,
+    # 只是为了调用 scipy.ndimage.gaussian_filter (边界处理更精确);
+    # 自共轭性并不来自这次转换, 而是来自"高斯核空间对称 + mode='reflect' 边界"
+    # (可数值验证 <Ax,y> == <x,Ay>, 误差在 1e-15 量级)。
+    # 若改用 mode='nearest'/'mirror', 伴随不再是 A 本身, 必须显式实现 A^T。
     def gaussian_blur(image, sigma_blur=3.0):
-        """高斯模糊算子 (自共轭线性算子)"""
+        """高斯模糊算子
+
+        scipy 分支使用默认的 mode='reflect', 此时算子自共轭, 可令 A^T = A;
+        无 scipy 时的均值滤波兜底用零填充卷积, 不严格自共轭, 仅供演示。
+        """
         img_np = image.squeeze().cpu().numpy()
         if HAS_SCIPY:
             blurred = _gaussian_filter(img_np, sigma=sigma_blur)
         else:
             # PyTorch近似: 用多次均值滤波替代高斯滤波
             # 注意: 这是粗略近似, 仅用于无scipy时的兜底演示
+            # 且零填充的 conv2d 不满足自共轭, 此时又用同一算子当 A^T 会有偏差
             # 核大小 k=6σ+1 是高斯核经验法则, 用于均值滤波理论依据较弱
             # 实际科研中应使用精确的高斯核, 避免用此近似做定量分析
             import torch.nn.functional as F
@@ -381,6 +388,8 @@ if HAS_MODEL:
     def likelihood_grad(x):
         """返回数据项梯度 $\\nabla f(x) = A^T(Ax - y) / \\sigma^2$
 
+        因为 A (高斯模糊, mode='reflect') 自共轭, 所以 A^T 直接复用 gaussian_blur;
+        若换边界模式或换其他模糊核, 这里必须改成真正的伴随算子。
         ULA 递推式中以"减梯度"形式使用: x - delta * grad_f
         """
         Ax_current = gaussian_blur(x, sigma_blur)
@@ -404,7 +413,7 @@ if HAS_MODEL:
     # 步长delta需满足PnP-ULA收敛条件: δ < 2/L, 其中L是∇f + ∇(-log p)的Lipschitz常数
     # 此处 sigma_noise=0.05 => 1/σ²=400 较大, 故需小步长 (delta=0.0001)
     delta = 0.0001  # 步长 (适配 σ_noise=0.05 的似然项尺度)
-    # 注意: n_iter=200, burn_in=100 是教学简化版本
+    # 注意: n_iter=500, burn_in=250 是教学简化版本
     # 实际PnP-ULA论文中迭代次数通常是上万步(burn-in也是几千步起步)
     # 这里仅为演示算法流程, 实际科研中需要远多于此的迭代数
     n_iter = 500  # 迭代次数(教学简化)
@@ -429,7 +438,9 @@ if HAS_MODEL:
         # ULA更新
         x_chain = x_chain - delta * grad_f + delta * score_prior + np.sqrt(2 * delta) * torch.randn_like(x_chain)
 
-        # 裁剪到[0,1]
+        # 投影到可行域 [0,1]。注意: 投影会破坏标准 ULA 的不变分布
+        # (链收敛到的是"投影后的近似后验", 不是严格后验); 严格做法是
+        # 用投影 ULA (PG-ULA) 的理论与更小的步长。此处为教学简化。
         x_chain = torch.clamp(x_chain, 0, 1)
 
         current_psnr = psnr(x_chain, x_true)
@@ -464,9 +475,10 @@ if HAS_MODEL:
     print(f"  平均后验方差: {mean_var:.6f}")
 
 else:
-    # 无预训练模型时, 使用模拟结果
-    print("\n无预训练模型, 展示6.7节的典型结果（引用）:")
-    print(f"\n去卷积实验典型结果 (6.7节表):")
+    # 无预训练模型时, 只打印 6.7 节的文献参考值。
+    # 这些数字并非本脚本实测, 仅便于读者对照; 真实结果必须加载模型权重。
+    print("\n无预训练模型, 展示6.7节文献参考值 (本脚本未实测, 不能作为实验结论):")
+    print(f"\n去卷积实验参考值 (非本脚本实测):")
     print(f"{'方法':<20s} | {'PSNR(dB)':>8s} | {'SSIM':>6s} | {'不确定性量化':>10s}")
     print("-" * 55)
     print(f"{'逆滤波':<20s} | {'15.2':>8s} | {'0.35':>6s} | {'无':>10s}")
@@ -475,10 +487,8 @@ else:
     print(f"{'MYULA+TV':<20s} | {'24.3':>8s} | {'0.76':>6s} | {'有':>10s}")
     print(f"{'PnP-ULA+DRUNet':<20s} | {'27.1':>8s} | {'0.88':>8s} | {'有':>10s}")
 
-    # 模拟PSNR历史
-    psnr_init = 15.2
-    psnr_mmse = 27.1
-    mean_var = 0.003
+    # 注意: 无模型分支不做任何计算, 不设置 psnr_init/psnr_mmse 等变量,
+    # 以免与真实运行结果混淆; 下方绘图也只输出占位图。
 
 
 # ============================================================
@@ -523,6 +533,7 @@ print("生成可视化图表...")
 print(f"{'='*60}")
 
 fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+fig_fname = '步骤1_学习得分PnPULA.png'  # 仅真实运行时使用此文件名
 
 if HAS_MODEL:
     # 真实图像
@@ -550,12 +561,13 @@ if HAS_MODEL:
         axes[3].set_title('不确定性图')
     axes[3].axis('off')
 else:
-    # 无模型时的示意图
+    # 无模型时只出占位图。必须用不同文件名, 避免覆盖真实运行产生的结果图。
+    fig_fname = '步骤1_占位_未运行(需预训练模型).png'
     for i, (title, desc) in enumerate([
         ('真实图像', '(需预训练模型)'),
         (r'观测 $y=Ax+\eta$', '(需预训练模型)'),
-        ('PnP-ULA重建', r'$\mathrm{PSNR}\approx27.1$dB'),
-        ('后验方差', '不确定性图')
+        ('PnP-ULA重建', '未运行\n(需预训练模型)'),
+        ('后验方差', '未运行\n(需预训练模型)')
     ]):
         axes[i].text(0.5, 0.5, desc, ha='center', va='center', fontsize=12,
                      transform=axes[i].transAxes)
@@ -564,9 +576,9 @@ else:
 
 plt.suptitle('学习得分驱动的PnP-ULA采样', fontsize=14)
 plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, '步骤1_学习得分PnPULA.png'), dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(SAVE_DIR, fig_fname), dpi=150, bbox_inches='tight')
 plt.close()
-print(f"图表已保存: 步骤1_学习得分PnPULA.png")
+print(f"图表已保存: {fig_fname}")
 
 # PSNR收敛曲线
 if HAS_MODEL:
@@ -602,8 +614,8 @@ print("   三步解读: 似然梯度步(数据) + 先验得分步(知识) + 探�
 if HAS_MODEL:
     print(f"   去卷积PSNR: {psnr_init:.1f} → {psnr_mmse:.1f} dB")
 else:
-    print("   去卷积PSNR: 15.2 → 27.1 dB (引用6.7节数据)")
-print("\n3. 学习先验 vs 手工先验:")
+    print("   去卷积PSNR: 未运行 (缺预训练权重); 6.7 节参考值为 15.2 → 27.1 dB")
+print("\n3. 学习先验 vs 手工先验 (以下为参考表, 非本脚本实测):")
 print("   - TV先验: 手工设计, staircase效应, PSNR≈24.8dB")
 print("   - 学习先验: 数据驱动, 自然重建, PSNR≈27.1dB")
 print("   - 得分匹配训练使得数据驱动的先验得分成为可能")

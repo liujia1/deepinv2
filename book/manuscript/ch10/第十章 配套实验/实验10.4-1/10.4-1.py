@@ -214,30 +214,24 @@ print("="*60)
 
 fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
-# (a) 不同L下的离散ab vs 连续极限
+# (a) 收敛率：相对误差 vs L（双对数），直接检验 O(1/L)
 ax = axes[0, 0]
-for L in [5, 10, 50, 100, 1000]:
-    beta_total = 1.0
-    dt = beta_total / L
-    alpha_per_step = 1 - dt
-    alpha_bar_L = torch.cumprod(torch.full((L,), alpha_per_step), dim=0)
-    t_norm = torch.linspace(1/L, 1, L)  # 归一化时间
-    ax.plot(t_norm.numpy(), alpha_bar_L.numpy(), linewidth=1.5 if L >= 50 else 1,
-            label='$L=' + str(L) + '$')
+beta_total = 1.0
+L_list = np.array([5, 10, 50, 100, 500, 1000])
+ab_cont = np.exp(-beta_total)
+rel_errs = np.array([abs((1 - beta_total / L) ** L - ab_cont) / ab_cont for L in L_list])
 
-# 连续极限: ab(t) = exp(-beta_total · t)
-t_cont = torch.linspace(0, 1, 200)
-alpha_bar_cont = torch.exp(-beta_total * t_cont)
-ax.plot(t_cont.numpy(), alpha_bar_cont.numpy(), 'k--', linewidth=2, label='连续极限: $\\exp(-\\beta t)$')
-
-ax.set_xlabel('归一化时间 $t/T$', fontsize=12)
-ax.set_ylabel(r'$\bar{\alpha}(t)$', fontsize=12)
-ax.set_title('(a) $L\\to\\infty$: 离散乘积→连续指数', fontsize=13)
-ax.legend(fontsize=9)
-ax.grid(True, alpha=0.3)
-ax.annotate('$L\\to\\infty$', xy=(0.35, 0.5), xycoords='axes fraction',
-            fontsize=10, color='black', fontweight='bold',
-            bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffeaa7', alpha=0.8))
+ax.loglog(L_list, rel_errs, 'o-', color='#0984e3', linewidth=1.8, markersize=6,
+          label='实测相对误差')
+ax.loglog(L_list, (beta_total ** 2 / 2) / L_list, 'k--', linewidth=1.5,
+          label=r'理论渐近 $\beta^2/(2L)$')
+ax.set_xlabel('层级数 $L$（对数轴）', fontsize=12)
+ax.set_ylabel(r'相对误差 $|\bar\alpha_L-e^{-\beta}|/e^{-\beta}$（对数轴）', fontsize=12)
+ax.set_title('(a) $L\\to\\infty$ 收敛率：$\\varepsilon_L\\propto 1/L$', fontsize=13)
+ax.legend(fontsize=10)
+ax.grid(True, alpha=0.3, which='both')
+for L, e in zip(L_list, rel_errs):
+    ax.annotate('{:.3g}'.format(e), (L, e), textcoords='offset points', xytext=(5, -13), fontsize=8)
 
 # (b) VP-SDE的边际分布演化
 ax = axes[0, 1]

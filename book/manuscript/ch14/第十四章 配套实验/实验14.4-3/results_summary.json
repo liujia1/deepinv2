@@ -1,6 +1,37 @@
 {
   "curvature_1rf": 0.071059,
-  "curvature_2rf": 8.9e-05,
+  "curvature_2rf": 8.7e-05,
   "curvature_3rf": 4e-05,
-  "monotonic": true
+  "monotonic": true,
+  "final_loss_1rf": 1.865457,
+  "final_loss_2rf": 0.000981,
+  "final_loss_3rf": 0.000649,
+  "loss_curve_1rf": [
+    4.325381,
+    2.074359,
+    2.088036,
+    1.931037,
+    1.979408,
+    2.049109,
+    1.865457
+  ],
+  "loss_curve_2rf": [
+    1.722944,
+    0.012264,
+    0.007757,
+    0.002909,
+    0.003363,
+    0.001304,
+    0.000981
+  ],
+  "loss_curve_3rf": [
+    1.643256,
+    0.010599,
+    0.005425,
+    0.002397,
+    0.001017,
+    0.001013,
+    0.000649
+  ],
+  "loss_note": "final_loss_* = 最后一个 epoch 的样本加权 MSE；loss_curve_* = 每 50 epoch 抽 1 点（含首末）；device=cpu"
 }

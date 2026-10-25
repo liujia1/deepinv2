@@ -169,6 +169,15 @@ print(f"训练集: {len(train_dataset)} 样本, 测试集: {len(test_dataset)} �
 # ============================================================
 def train_vae_with_checkpoint(beta, train_loader, num_epochs=15, latent_dim=20, ckpt_path=None):
     """训练一个VAE模型，支持checkpoint保存和加载；ckpt_path可覆盖默认文件名（供d_z=2对照用）"""
+    # 快速验证模式必须在加载 checkpoint 之前判定，并写入独立文件：
+    # 否则 3 轮速成模型会被 is_final 标记为成品，正式运行会静默跳过训练。
+    quick = os.environ.get('QUICK_TEST', '') == '1'
+    if quick:
+        num_epochs = min(num_epochs, 3)
+        base = ckpt_path if ckpt_path is not None else CHECKPOINT_TEMPLATE.format(beta=beta)
+        ckpt_path = base.replace('.pth', '_quick.pth')
+        print(f"\n[快速验证模式] 仅训练 {num_epochs} 轮 -> {os.path.basename(ckpt_path)}")
+
     checkpoint_path = ckpt_path if ckpt_path is not None else CHECKPOINT_TEMPLATE.format(beta=beta)
     
     encoder = Encoder(latent_dim=latent_dim).to(device)
@@ -177,7 +186,7 @@ def train_vae_with_checkpoint(beta, train_loader, num_epochs=15, latent_dim=20, 
         list(encoder.parameters()) + list(decoder.parameters()), lr=1e-3
     )
     
-    history = {'loss': [], 'bce': [], 'kld': [], 'active': []}
+    history = {'loss': [], 'bce': [], 'kld': [], 'active': [], 'latent_dim': latent_dim}
     start_epoch = 0
     is_final = False
     
@@ -186,7 +195,12 @@ def train_vae_with_checkpoint(beta, train_loader, num_epochs=15, latent_dim=20, 
         print(f"\n检测到已保存的模型 (β={beta}): {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
         
-        if checkpoint.get('is_final', False):
+        saved_epochs = int(checkpoint.get('num_epochs', checkpoint['epoch'] + 1))
+        saved_quick = bool(checkpoint.get('quick', False))
+        if saved_quick != quick or saved_epochs < num_epochs:
+            print(f"  注意: checkpoint配置不符 (quick={saved_quick}→{quick}, "
+                  f"轮数={saved_epochs}→目标{num_epochs}), 重新训练")
+        elif checkpoint.get('is_final', False):
             print(f"✓ 这是最终训练完成的模型, 直接加载, 跳过训练过程")
             print(f"  训练轮数: {checkpoint['epoch']+1}")
             print(f"  最终损失: {checkpoint['loss']:.6f}")
@@ -202,6 +216,7 @@ def train_vae_with_checkpoint(beta, train_loader, num_epochs=15, latent_dim=20, 
             else:
                 optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
                 history = checkpoint.get('history', {'loss': [], 'bce': [], 'kld': [], 'active': []})
+                history.setdefault('latent_dim', latent_dim)
                 start_epoch = checkpoint['epoch'] + 1
                 is_final = True
         else:
@@ -218,15 +233,11 @@ def train_vae_with_checkpoint(beta, train_loader, num_epochs=15, latent_dim=20, 
             else:
                 optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
                 history = checkpoint.get('history', {'loss': [], 'bce': [], 'kld': [], 'active': []})
+                history.setdefault('latent_dim', latent_dim)
                 start_epoch = checkpoint['epoch'] + 1
     
     # 训练循环
     if not is_final:
-        # 快速验证模式
-        if os.environ.get('QUICK_TEST', '') == '1':
-            num_epochs = 3
-            print(f"\n[快速验证模式] 仅训练 {num_epochs} 轮")
-        
         # 边界保护
         if start_epoch >= num_epochs:
             print(f"  注意: start_epoch({start_epoch}) >= num_epochs({num_epochs}), 无需继续训练")
@@ -280,7 +291,7 @@ def train_vae_with_checkpoint(beta, train_loader, num_epochs=15, latent_dim=20, 
                       f"Loss={history['loss'][-1]:.2f}  "
                       f"BCE={history['bce'][-1]:.2f}  "
                       f"KL={history['kld'][-1]:.2f}  "
-                      f"Active={active}/20")
+                      f"Active={active}/{latent_dim}")
                 
                 torch.save({
                     'epoch': epoch,
@@ -290,6 +301,8 @@ def train_vae_with_checkpoint(beta, train_loader, num_epochs=15, latent_dim=20, 
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': history['loss'][-1],
                     'history': history,
+                    'num_epochs': num_epochs,
+                    'quick': quick,
                     'is_final': False
                 }, checkpoint_path)
             
@@ -307,6 +320,8 @@ def train_vae_with_checkpoint(beta, train_loader, num_epochs=15, latent_dim=20, 
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': history['loss'][-1],
                     'history': history,
+                    'num_epochs': num_epochs,
+                    'quick': quick,
                     'is_final': True
                 }, checkpoint_path)
                 print(f"✓ 训练完成, 模型已保存: {checkpoint_path}")
@@ -343,7 +358,7 @@ for beta, name, name_print in zip(betas, beta_names, beta_names_print):
     print(f"  最终: Loss={history['loss'][-1]:.2f}, "
           f"BCE={history['bce'][-1]:.2f}, "
           f"KL={history['kld'][-1]:.2f}, "
-          f"Active={history['active'][-1]}/20")
+          f"Active={history['active'][-1]}/{history['latent_dim']}")
 
 
 # ============================================================
@@ -392,7 +407,7 @@ if has_tsne:
         
         # 活跃维度标注（通过print而非子图文字）
         active = models[beta]['history']['active'][-1]
-        print(f"{name_print}: 活跃维度 {active}/20")
+        print(f"{name_print}: 活跃维度 {active}/{models[beta]['history']['latent_dim']}")
     
     plt.colorbar(scatter, ax=axes[-1], label='数字类别')
     plt.suptitle('隐空间 t-SNE: $\\beta$ 的影响', fontsize=15, y=1.02)
@@ -530,7 +545,7 @@ print(f"{'='*60}")
 print("\n[核心验证]")
 print("  后验坍缩检测（对应9.3节核心结论）：")
 print("  - β=0: 无KL惩罚，隐空间不受约束（实际KL可能很大，仅未被优化）")
-print("  - β=1: KL适中，20/20活跃，隐空间有规律")
+print("  - β=1: KL适中，20/20活跃（d_z=20），隐空间有规律")
 print("  - β=4: KL被强力压制，活跃维度减少（后验坍缩）")
 
 fig, axes = plt.subplots(2, 3, figsize=(18, 10))
@@ -589,12 +604,12 @@ for idx, (beta, name) in enumerate(zip(betas, beta_names)):
     _, kl_per_dim = compute_active_dims(all_mu, all_logvar)
     
     colors = ['#e74c3c' if v > 0.01 else '#bdc3c7' for v in kl_per_dim]
-    ax.bar(range(20), kl_per_dim, color=colors, edgecolor='black', alpha=0.8)
+    ax.bar(range(len(kl_per_dim)), kl_per_dim, color=colors, edgecolor='black', alpha=0.8)
     ax.axhline(0.01, color='red', linestyle='--', alpha=0.5, label='阈值=0.01')
     active = sum(v > 0.01 for v in kl_per_dim)
     ax.set_xlabel('维度 $j$', fontsize=12)
     ax.set_ylabel('$KL(q(z_j|x) \\|\\| p(z_j))$', fontsize=12)
-    ax.set_title(f'({chr(100+idx)}) {name}: {active}/20 活跃', fontsize=13)
+    ax.set_title(f'({chr(100+idx)}) {name}: {active}/{len(kl_per_dim)} 活跃', fontsize=13)
     ax.legend(fontsize=9)
 
 plt.tight_layout()
@@ -612,11 +627,16 @@ for beta, name_print in zip(betas, beta_names_print):
     enc_q.eval(); dec_q.eval()
     torch.manual_seed(0)  # 每个模型用同一组固定采样噪声，公平且可复现
     bce_sum = 0
+    kl_sum = 0
+    kl_dim_sum = 0
     mse_list = []
     with torch.no_grad():
         for x, _ in test_loader:
             x = x.view(-1, 784).to(device)
             mu, logvar = enc_q(x)
+            kl_dim = 0.5 * (mu.pow(2) + logvar.exp() - logvar - 1)
+            kl_sum += kl_dim.sum().item()
+            kl_dim_sum = kl_dim_sum + kl_dim.sum(dim=0)
             z = reparameterize(mu, logvar)
             x_recon = dec_q(z)
             bce_sum += F.binary_cross_entropy(x_recon, x, reduction='sum').item()
@@ -624,8 +644,12 @@ for beta, name_print in zip(betas, beta_names_print):
     mse_all = torch.cat(mse_list)
     psnr = (10 * torch.log10(1.0 / mse_all.clamp(min=1e-12))).mean().item()
     test_bce = bce_sum / len(test_loader.dataset)
-    test_metrics[beta] = {'test_bce': test_bce, 'test_psnr_db': float(psnr)}
-    print(f"  {name_print}: 测试BCE={test_bce:.2f}, PSNR={psnr:.1f} dB")
+    test_kld = kl_sum / len(test_loader.dataset)
+    test_active = int((kl_dim_sum / len(test_loader.dataset) > 0.01).sum())
+    test_metrics[beta] = {'test_bce': test_bce, 'test_psnr_db': float(psnr),
+                          'test_kld': test_kld, 'test_active': test_active}
+    print(f"  {name_print}: 测试BCE={test_bce:.2f}, PSNR={psnr:.1f} dB, "
+          f"测试KL={test_kld:.2f} nats, 活跃={test_active}/{models[beta]['history']['latent_dim']}")
 
 
 # ============================================================
@@ -789,7 +813,7 @@ for beta, name_print in zip(betas, beta_names_print):
     h = models[beta]['history']
     print(f"\n{name_print}:")
     print(f"  最终Loss={h['loss'][-1]:.2f}, BCE={h['bce'][-1]:.2f}, "
-          f"KL={h['kld'][-1]:.2f}, Active={h['active'][-1]}/20")
+          f"KL={h['kld'][-1]:.2f}, Active={h['active'][-1]}/{h['latent_dim']}")
 
 print("\n核心验证点（对应9.3节和9.5节）：")
 print("\n1. β-VAE的权衡（9.3节核心观点）：")
@@ -844,6 +868,8 @@ for beta in betas:
         # 测试集重建质量（采样z评测，口径同9.3-1）；插值实验仅对比β=0/1，β=4为null
         'test_bce': test_metrics[beta]['test_bce'],
         'test_psnr_db': test_metrics[beta]['test_psnr_db'],
+        'test_kld': test_metrics[beta].get('test_kld'),
+        'test_active': test_metrics[beta].get('test_active'),
         'interp_mid_dist_ratio': midpoint_ratios.get(beta),
     }
 results_summary = _to_native(results_summary)

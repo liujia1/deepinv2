@@ -61,7 +61,7 @@ $$= \int p_{\text{data}}(\mathbf{x}_0)\,p_t(\mathbf{x}|\mathbf{x}_0)\,v_t(\mathb
 | 不可计算目标 | $\mathcal{L}_{\text{ESM}}$（显式得分匹配） | $\mathcal{L}_{\text{FM}}$（Flow Matching） |
 | 可计算替代 | $\mathcal{L}_{\text{DSM}}$（去噪得分匹配） | $\mathcal{L}_{\text{CFM}}$（条件FM） |
 | 不可计算项 | $\nabla\log p_t(\mathbf{x})$（真实得分） | $v_t^*(\mathbf{x})$（边际向量场） |
-| 可计算项 | $\nabla\log p_t(\mathbf{x}\|\mathbf{x}_0)$（条件得分） | $v_t(\mathbf{x}\|\mathbf{x}_0)$（条件向量场） |
+| 可计算项 | $\nabla\log p_t(\mathbf{x}\mid\mathbf{x}_0)$（条件得分） | $v_t(\mathbf{x}\mid\mathbf{x}_0)$（条件向量场） |
 | 消去机制 | 分部积分 + 塔性质 | 塔性质 |
 | 结论 | 梯度相等 | 梯度相等 |
 

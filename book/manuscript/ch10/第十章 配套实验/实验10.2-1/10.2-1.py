@@ -121,12 +121,19 @@ print("  → q(x_t|x_0) = N(x_t; sqrt(ab_t) x_0, (1-ab_t)I)")
 # 数值验证：直接采样 vs 逐步加噪 (两条独立采样链)
 N = 5000  # 大样本量确保统计显著性
 torch.manual_seed(42)
-x0 = torch.randn(N, 2)  # N个2D样本
+# 关键设计：x0 必须取方差 ≠ 1 的分布，否则本检验没有判别力。
+# 若 x0 ~ N(0,I)，则 Var(x_t) = ab_t*1 + (1-ab_t)*1 ≡ 1 与 ab_t 无关，
+# 任何满足 ab_t + (1-ab_t) = 1 的系数写法（哪怕把两个根号写反）都会通过，检验力为零。
+# 这里用与图(d)一致的对称双峰高斯混合：E[x0]=0，Var(x0)=μ^2+σ^2=1.25。
+DATA_MU, DATA_SIGMA = 1.0, 0.5
+_sgn = torch.sign(torch.randn(N, 1))                       # ±1 等概率
+x0 = DATA_MU * _sgn + DATA_SIGMA * torch.randn(N, 2)       # 2 维双峰高斯混合
 n_steps_list = [1, 50, 200, 500, 1000]  # 1-indexed 时间步 (与步骤3、JSON 的 t 记法一致; t=T 即 x_T)
 
-print("\n直接采样 vs 逐步加噪 (" + str(N) + "个样本, 2维):")
-print("    t      均值差(max)    标准差差(max)    MC误差尺度    条件期望    理论标准差")
-print("-" * 90)
+print("\n直接采样 vs 逐步加噪 (" + str(N) + "个样本, 2维双峰混合, E[x0^2]=" +
+      str(round(float((x0 ** 2).mean()), 4)) + "):")
+print("    t      均值差(max)    标准差差(max)    MC误差尺度    边际理论std   条件理论std")
+print("-" * 100)
 
 step1_stats = {}  # 步骤1统计量 (写入 results_summary.json)
 
@@ -138,9 +145,11 @@ for t_1idx in n_steps_list:
     sqrt_ab = torch.sqrt(alpha_bars[t])
     sqrt_1mab = torch.sqrt(1 - alpha_bars[t])
 
-    # 均值差的蒙特卡洛误差尺度: Var(mean_direct - mean_step) = 2(1-ab_t)/N (每维; 两链噪声独立)
+    # 均值差的蒙特卡洛误差尺度: Var(mean_direct - mean_step) = 2*Var(x_t)/N (每维; 两链噪声独立)
     # mean_diff 与 mc_scale 同量级即说明两过程统计不可区分
-    mc_scale = float(torch.sqrt(2 * (1 - alpha_bars[t]) / N))
+    var_x0 = float(x0.var(dim=0, unbiased=False).mean())      # 数据方差(双峰混合 ≈ 1.25)
+    var_xt = alpha_bars[t] * var_x0 + (1 - alpha_bars[t])     # Var(x_t) = ab*Var(x0) + (1-ab)
+    mc_scale = float(torch.sqrt(2 * var_xt / N))
 
     # 为当前t创建两个独立的Generator
     g_direct = torch.Generator().manual_seed(base_seed + t_1idx * 1000)
@@ -165,27 +174,45 @@ for t_1idx in n_steps_list:
     mean_diff = (mean_direct - mean_step).abs().max().item()
     std_diff = (std_direct - std_step).abs().max().item()
 
+    # 边际理论标准差: sqrt(ab*Var(x0)+(1-ab))；条件理论标准差: sqrt(1-ab)
+    std_theory_marg = float(torch.sqrt(var_xt))
+    std_theory_cond = float(sqrt_1mab)
+    # 标准差口径的 MC 尺度: 两条独立链的样本 std 各含 SE=σ/sqrt(2N)，故之差 SE=σ/sqrt(N)
+    mc_scale_std = std_theory_marg / float(np.sqrt(N))
+    z_mean = mean_diff / mc_scale if mc_scale > 0 else 0.0
+    z_std = std_diff / mc_scale_std if mc_scale_std > 0 else 0.0
+
     step1_stats["t_" + str(t_1idx)] = {
         'mean_diff_max': mean_diff,
         'std_diff_max': std_diff,
         'mc_error_scale': mc_scale,
+        'mc_error_scale_std': mc_scale_std,
+        'z_mean': z_mean,
+        'z_std': z_std,
+        'var_x0': var_x0,
+        'std_theory_marginal': std_theory_marg,
+        'std_theory_conditional': std_theory_cond,
     }
 
     # 条件期望值 (以当前x0样本为条件，而非绝对理论期望0)
     mean_conditional = sqrt_ab * x0.mean(dim=0)
-    std_theory = sqrt_1mab
 
     print(str(t_1idx).rjust(5) + "  " + str(round(mean_diff, 6)).rjust(14) + "  " + str(round(std_diff, 6)).rjust(14) +
           "  " + str(round(mc_scale, 6)).rjust(14) +
-          "  " + str(round(mean_conditional[0].item(), 6)).rjust(14) + "  " + str(round(std_theory.item(), 6)).rjust(14))
+          "  " + str(round(std_theory_marg, 6)).rjust(14) + "  " + str(round(std_theory_cond, 6)).rjust(14) +
+          "   z(mean)=" + "{:.2f}".format(z_mean) + " z(std)=" + "{:.2f}".format(z_std))
 
-print("\n→ 各时间步上, 均值差与'MC误差尺度'同量级 → 差异纯属有限样本噪声, 两过程统计不可区分:")
+print("\n→ 各时间步上, z(mean)、z(std) 均 < 2 → 差异与有限样本噪声相容, 两过程统计不可区分:")
+print("  z 定义: z(mean)=|mean_direct-mean_step| / sqrt(2*Var(x_t)/N); z(std)=|std_direct-std_step| / (std_theory*sqrt(1/N))")
 print("  支持闭式边际分布 q(x_t|x_0) = N(sqrt(ab_t)x_0, (1-ab_t)I)")
 print("  注: 该式代数上精确成立; 数值实验受蒙特卡洛精度 O(1/sqrt(N)) 限制, 验证的是统计不可区分性")
 print("  这是10.2节的核心结论：高斯马尔可夫链的闭式边际分布")
-print("\n  注：标准差差异是更强的判别指标——")
-print("     均值本身因 E[x_0]≈0 而趋于0，判别力弱；")
-print("     而方差项 (1-ab_t) 不退化为0，能更好区分两个过程是否等价")
+print("\n  [检验力说明] 为什么 x0 不用标准正态？")
+print("     若 x0 ~ N(0,I)，则 Var(x_t) = ab_t*1 + (1-ab_t)*1 ≡ 1，与 ab_t 无关；")
+print("     此时任何满足 ab_t+(1-ab_t)=1 的系数写法（包括把两个根号写反）都会通过，检验力为零。")
+print("     改用方差 1.25 的双峰混合后，Var(x_t) = 1 + 0.25*ab_t 随 t 单调下降，")
+print("     才能区分 sqrt(ab_t) 与 sqrt(1-ab_t) 的角色是否放对。")
+print("     注意：'边际理论std' 才是与实测 std 同口径的量；'条件理论std'=sqrt(1-ab_t) 是给定 x0 时的标准差。")
 
 
 # ============================================================
@@ -203,7 +230,7 @@ print("  - L_0: 重建项 -E[log p_theta(x_0|x_1)]")
 
 # L_T: 先验匹配项 (两端均为已知高斯, 闭式KL可直接数值计算)
 s2_T = (1 - alpha_bars[-1]).item()            # q 的方差 s^2 = 1-ab_T
-mean_x0_sq = (x0 ** 2).mean().item()          # 经验 E[x_0^2] (标准正态数据 ≈ 1)
+mean_x0_sq = (x0 ** 2).mean().item()          # 经验 E[x_0^2] (双峰混合数据 ≈ 1.25)
 # KL(N(m, s^2·I) || N(0, I)) 每维 = 0.5*[m^2 + s^2 - 1 - ln(s^2)], 其中 m^2 的样本均值 = ab_T·E[x_0^2]
 L_T_per_dim = 0.5 * (alpha_bars[-1].item() * mean_x0_sq + (s2_T - 1 - float(np.log(s2_T))))
 print("\nL_T (先验匹配项):")
@@ -379,8 +406,8 @@ ax = fig.add_subplot(gs_outer[1, 1])
 np.random.seed(42)
 n_pts = 200
 # 两个高斯模式
-mode1 = np.random.randn(n_pts // 2, 2) * 0.3 + np.array([1.0, 0.0])
-mode2 = np.random.randn(n_pts // 2, 2) * 0.3 + np.array([-1.0, 0.0])
+mode1 = np.random.randn(n_pts // 2, 2) * DATA_SIGMA + np.array([DATA_MU, 0.0])
+mode2 = np.random.randn(n_pts // 2, 2) * DATA_SIGMA + np.array([-DATA_MU, 0.0])
 x0_2d = np.vstack([mode1, mode2])
 
 colors = np.array([0] * (n_pts // 2) + [1] * (n_pts // 2))

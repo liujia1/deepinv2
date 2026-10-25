@@ -700,7 +700,10 @@ if _run_ok:
                 "迭代次数": r['niter'], "烧入": r['burnin'],
                 "报告量": "后验均值" if T > 0 else "最终样本(众数)",
                 "PSNR_dB": round(float(PSNR(x, img)), 4),
-                "平均标准差": round(float(r['std'].mean()), 6),
+                # T>0：后验平均标准差；T=0：确定性链末段漂移 std（应≈0，
+                # 不具"后验不确定性"含义，故单独命名以免被误读为后验σ）
+                ("平均标准差" if T > 0 else "末段漂移std_应约0"):
+                    round(float(r['std'].mean()), 6),
             }
             # 温度链也落盘 PSNR 轨迹（T>0 为后验均值 PSNR；T=0 为烧入后
             # 累计均值对不动点的逼近），可事后核对链是否到达平台

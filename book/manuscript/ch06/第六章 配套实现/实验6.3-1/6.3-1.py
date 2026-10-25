@@ -136,17 +136,28 @@ x_test_t = torch.tensor(x_test, dtype=torch.float32, device=device)
 true_score_noisy = gm1d_score_noisy(x_test, sigma)
 
 # 全批量梯度下降(教学示范,非mini-batch)
-print(f"\n训练DSM得分网络 ($\\sigma={sigma}$)...")
+# 多批 MC 平均: DSM 目标 $\mathcal{L}(\theta)=\mathbb{E}_z[\|s_\theta(x+\sigma z)+z/\sigma\|^2]$
+# 是对噪声 z 的期望,而非单次实现。若每步只采一次 z, 在训练好的模型上实测
+# 单次估计的标准差约 1.1e-2, 与"损失地板到最优值"的间距同量级, 后果有二:
+#   (1) 损失曲线被估计噪声淹没, 看不出收敛趋势;
+#   (2) 单次估计有约 41% 的概率低于理论不可约地板 2C(σ), 造成"突破了理论下界"的假象。
+# 这里每个 epoch 采 n_mc_train 次独立噪声, 梯度与记录的损失都取其平均,
+# 估计标准差降到约 1/sqrt(n_mc_train)。
+n_mc_train = 8
+print(f"\n训练DSM得分网络 ($\\sigma={sigma}$, 每步 {n_mc_train} 次 MC 平均)...")
 for epoch in range(500):
-    # 采样噪声
-    z = torch.randn_like(x_train_t)
-    x_noisy = x_train_t + sigma * z
+    loss_sum = 0.0
+    for _ in range(n_mc_train):
+        # 采样噪声
+        z = torch.randn_like(x_train_t)
+        x_noisy = x_train_t + sigma * z
 
-    # DSM目标: $\\|s_\\theta(\\tilde{x}) - \\nabla\\log q_\\sigma(\\tilde{x}|x)\\|^2$
-    # 其中 $\\nabla\\log q_\\sigma(\\tilde{x}|x) = -(\\tilde{x}-x)/\\sigma^2 = -\\sigma z/\\sigma^2 = -z/\\sigma$
-    pred = model(x_noisy)
-    target = -z / sigma
-    loss = torch.mean((pred - target)**2)
+        # DSM目标: $\\|s_\\theta(\\tilde{x}) - \\nabla\\log q_\\sigma(\\tilde{x}|x)\\|^2$
+        # 其中 $\\nabla\\log q_\\sigma(\\tilde{x}|x) = -(\\tilde{x}-x)/\\sigma^2 = -\\sigma z/\\sigma^2 = -z/\\sigma$
+        pred = model(x_noisy)
+        target = -z / sigma
+        loss_sum = loss_sum + torch.mean((pred - target)**2)
+    loss = loss_sum / n_mc_train
 
     optimizer.zero_grad()
     loss.backward()
@@ -166,7 +177,14 @@ _pdf_grid = 0.5*np.exp(-0.5*(_x_grid+2)**2/(1+sigma**2))/np.sqrt(2*np.pi*(1+sigm
 c_theory = 0.5/sigma**2 - 0.5*_trapz(_score_grid**2*_pdf_grid, _x_grid)
 loss_floor_theory = 2*c_theory
 
-print(f"\n训练完成,最终损失: {train_losses[-1]:.6f}")
+# 结论量取末端窗口平均: 即便每步已做 n_mc_train 次平均, 单点估计仍有残余波动
+# (实测 std ~4e-3, 与末段损失到地板的间距同量级), 窗口平均把残余噪声再降一个量级,
+# 才能可靠地宣称"贴近地板"。单点值另存备查。
+_final_window = 50
+final_loss = float(np.mean(train_losses[-_final_window:]))
+last_epoch_loss = float(train_losses[-1])
+print(f"\n训练完成,最终损失(末 {_final_window} 个 epoch 的平均): {final_loss:.6f}")
+print(f"  参考: 最后一个 epoch 的单点损失 = {last_epoch_loss:.6f}")
 print(f"理论不可约地板 2C(σ) = {loss_floor_theory:.6f} (最终损失在有限样本MC误差内贴近地板, 说明已收敛到最优得分)")
 
 # ============================================================
@@ -213,7 +231,8 @@ axes[2].set_title('DSM训练损失曲线 (平台期≈不可约常数, 并非未
 axes[2].legend(loc='upper right', fontsize=9)
 axes[2].grid(alpha=0.3)
 # 添加最终损失标注(放在子图内部空白处, 不超出图片边界)
-final_loss = train_losses[-1]
+# final_loss 已按末端窗口平均在训练结束时算好(见步骤1), 此处直接复用,
+# 避免用最后一个 epoch 的单点估计去和地板比较。
 # 取 y 轴上限的 90% 位置, 确保在子图内部
 y_max = max(train_losses) * 1.05
 y_text = y_max * 0.90
@@ -275,7 +294,15 @@ c_term2 = c_term1 - c_theory
 
 # 用随机初始化的模型再验证一次: C(σ) 应与 θ 无关
 # 同时记录随机初始化的 ESM 损失 (MC 采样) 作为训练前基线,与 j_esm 测度一致
-model_random = ScoreNet1D().to(device)
+# 注意: 这个对照模型要显式固定初始化种子。否则它的参数取决于此前训练循环
+# 从全局 RNG 消耗了多少次随机数 —— 一改 n_mc_train 或 epoch 数, C(σ) 的
+# "随机基线"就会跟着漂移, "与 θ 无关"的对照就失去意义。
+_rng_state = torch.get_rng_state()
+try:
+    torch.manual_seed(1234)
+    model_random = ScoreNet1D().to(device)
+finally:
+    torch.set_rng_state(_rng_state)
 with torch.no_grad():
     s_random_mc = model_random(x_noisy_mc_t).cpu().numpy()
 j_dsm_r = 0.5 * np.mean((s_random_mc - target_mc)**2)
@@ -342,8 +369,11 @@ print(f"\n图表已保存: 步骤3_Vincent定理验证.png")
 results = {
     'experiment': '实验6.3-1',
     'config': {'sigma': float(sigma), 'N_train': int(N_train), 'N_mc': int(N_mc),
+               'n_mc_train': int(n_mc_train), 'final_loss_window': int(_final_window),
                'epochs': 500, 'lr': 1e-3, 'seed': 42},
-    'step1_final_dsm_loss_no_half_factor': float(train_losses[-1]),
+    # 最终损失: 末 _final_window 个 epoch 的平均(每次已是 n_mc_train 次 MC 平均)
+    'step1_final_dsm_loss_no_half_factor': float(final_loss),
+    'step1_last_epoch_dsm_loss_single': float(last_epoch_loss),
     'step1_loss_floor_theory_2C': float(loss_floor_theory),
     'step2_corr_learned_vs_true_score': float(np.corrcoef(learned_score, true_score_noisy)[0, 1]),
     'step3_j_dsm_trained': float(j_dsm),
