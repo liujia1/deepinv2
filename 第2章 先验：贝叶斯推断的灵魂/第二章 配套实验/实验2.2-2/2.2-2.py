@@ -495,6 +495,11 @@ ax.set_ylabel('相对恢复误差 $\\|\\hat{\\alpha}-\\alpha^*\\| / \\|\\alpha^*
 ax.set_title('IHT 与重加权 $\\ell^1$ 的收敛行为：从 $\\ell^1$ 走向更贴近 $\\ell^0$ 的解')
 ax.legend(fontsize=9)
 ax.grid(alpha=0.3, which='both')
+# 对数轴默认 LogFormatter 的主刻度标签包在 \mathdefault{} 里，其上标负号（U+2212）会
+# 回退到中文字体（SimHei 缺该字形）而渲染成豆腐块；改用纯 mathtext 格式器，
+# 负指数由数学字体（DejaVu）渲染，与本图标题/轴标里的其他 mathtext 风格保持一致
+ax.yaxis.set_major_formatter(FuncFormatter(
+    lambda v, _: f'$10^{{{int(round(np.log10(v)))}}}$'))
 fig.tight_layout()
 fig.savefig(os.path.join(SAVE_DIR, '图5_收敛曲线.png'), dpi=120)
 plt.close(fig)
