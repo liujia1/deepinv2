@@ -1,6 +1,6 @@
 # 附录7A Anderson逆向时间SDE定理的证明概要
 
-> 定位：为7.3节提供Anderson (1982) 逆向时间SDE定理的证明概要。完整证明需要随机分析的工具（Kunita-Watanabe分解等），这里给出核心思路和关键步骤。
+> 定位：为7.3节提供 @anderson1982reverse 逆向时间SDE定理的证明概要。完整证明需要随机分析的工具（Kunita-Watanabe分解等），这里给出核心思路和关键步骤。
 
 ## 先说人话：这个定理在证明什么？
 
@@ -8,7 +8,7 @@
 
 ## 定理陈述
 
-**Anderson (1982) 逆向时间SDE定理**：设正向SDE
+**@anderson1982reverse 逆向时间SDE定理**：设正向SDE
 
 $$dx = f(\mathbf{x},t)\,dt + g(t)\,dw, \quad t \in [0, T]$$
 
@@ -78,4 +78,4 @@ $$dx = \left[\nabla\log p(\mathbf{x}) - 2\nabla\log p(\mathbf{x})\right]\,dt + \
 - 逆向过程需"恢复"信息——得分函数 $\nabla\log p_t(\mathbf{x})$ 指向概率增长方向；
 - $-g(t)^2$ 的系数确保修正强度与正向噪声强度匹配——噪声越强，修正越大。
 
-**来源**：Anderson (1982); Winkler (2021); Risken (1996); Song et al. (2021)
+**来源**：@anderson1982reverse; @winkler2021reverse; @risken1996fokkerplanck; @song2021scoresde

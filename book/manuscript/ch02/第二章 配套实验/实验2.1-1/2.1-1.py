@@ -86,17 +86,17 @@ print("\n" + "=" * 60)
 print("步骤1-2: A != I 模糊逆问题 — 后验能量分解验证")
 print("=" * 60)
 
-# ---- 前向算子：高斯模糊 ----
+# ---- 正向算子：高斯模糊 ----
 blur_sigma = 2.0
 
 def A(u):
-    """高斯模糊前向算子"""
+    """高斯模糊正向算子"""
     return gaussian_filter(u, sigma=blur_sigma, mode='reflect')
 
 def AT(u):
     """高斯模糊的伴随算子
     高斯滤波是自伴随算子（高斯核对称），故 A^T = A。
-    这是高斯核对称性的结果，对一般前向算子不成立。
+    这是高斯核对称性的结果，对一般正向算子不成立。
     """
     return gaussian_filter(u, sigma=blur_sigma, mode='reflect')
 
@@ -243,7 +243,7 @@ print(f"  中心化模型: 插件 lambdac={lambdac:.4f} -> {Tikhc_PSNR:.2f}dB; P
 print("  [理论说明] 贝叶斯插件 lambda=sigma^2/sigma_x^2 是后验 MAP 的超参数，不保证是 PSNR(MSE) 经验最优点:")
 print("   * A=I(纯去噪)时, 标量收缩 x_hat=a*y 的总体最优 lambda*=sigma^2/E[x^2] 只依赖边际二阶矩,")
 print("     与空间相关性无关 —— 故步骤3中自洽插件 lambda 恰好命中经验最优;")
-print("   * A!=I 时, 最优标量 lambda 还依赖信号功率谱与前向算子奇异谱的交互(各频率信噪比不同),")
+print("   * A!=I 时, 最优标量 lambda 还依赖信号功率谱与正向算子奇异谱的交互(各频率信噪比不同),")
 print("     白色 iid 高斯先验对所有频率同等收缩, 先验误设下插件 lambda 系统性偏离 PSNR 最优点。")
 
 # ---- 可视化：步骤1（1×5：原始/纯模糊/含噪/零均值Tikh/中心化Tikh）----

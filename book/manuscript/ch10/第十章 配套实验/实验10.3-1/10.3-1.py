@@ -128,7 +128,7 @@ for t_idx in [10, 100, 500, 900]:
     mu_true = (torch.sqrt(a) * (1 - ab_prev) / (1 - ab)) * x_t + \
               (torch.sqrt(ab_prev) * (1 - a) / (1 - ab)) * x0_test
 
-    # (1) x₀-prediction: 先由(x_t, eps)恢复x0_hat(前向过程一致性)，再代入后验均值公式
+    # (1) x₀-prediction: 先由(x_t, eps)恢复x0_hat(正向过程一致性)，再代入后验均值公式
     x0_hat = (x_t - torch.sqrt(1 - ab) * eps_test) / torch.sqrt(ab)
     err_x0rec = (x0_hat - x0_test).abs().max().item()
     mu_x0 = (torch.sqrt(a) * (1 - ab_prev) / (1 - ab)) * x_t + \

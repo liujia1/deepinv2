@@ -128,7 +128,7 @@ def sample_from_prior(n_samples):
     return samples
 
 def vp_sde_forward(x0, t_idx):
-    """VP-SDE前向过程：x_t = sqrt(alpha_bar_t) * x0 + sqrt(1-alpha_bar_t) * noise"""
+    """VP-SDE正向过程：x_t = sqrt(alpha_bar_t) * x0 + sqrt(1-alpha_bar_t) * noise"""
     alpha_bar_t = alpha_bars[t_idx]
     noise = np.random.randn(*x0.shape)
     x_t = np.sqrt(alpha_bar_t) * x0 + np.sqrt(1.0 - alpha_bar_t) * noise
@@ -140,15 +140,15 @@ def vp_sde_forward(x0, t_idx):
 #   Q1: ᾱ_1 ≈ 1-β_min (因α_1=1-β_min, 累积一步的近似)
 #   Q2: ᾱ_T 残余信号不可忽略 (T=200, Σβ≈2.01 → ᾱ_T≈e^-2.02≈0.13, 比T=1000时大很多)
 #   Q3: ᾱ_t单调递减, 介于(0,1]之间
-#   Q4: VP-SDE前向过程x_t的均值和方差符合理论(无噪声时x_t=√ᾱ·x0)
-print(f"[DDRM自检] VP-SDE调度与前向过程验证(实际运行, 非手算):")
+#   Q4: VP-SDE正向过程x_t的均值和方差符合理论(无噪声时x_t=√ᾱ·x0)
+print(f"[DDRM自检] VP-SDE调度与正向过程验证(实际运行, 非手算):")
 print(f"  Q1: ᾱ_1={alpha_bars[0]:.6f} (应≈1-β_min={1-beta_min:.6f}): "
       f"{'OK' if abs(alpha_bars[0] - (1-beta_min)) < 1e-3 else 'FAIL'}")
 print(f"  Q2: ᾱ_T={alpha_bars[-1]:.6e} (应很小但>0, T=200时仍比T=1000大): "
       f"{'OK' if 0 < alpha_bars[-1] < 0.2 else 'FAIL'}")
 print(f"  Q3: 单调递减: {'OK' if (np.diff(alpha_bars) <= 0).all() else 'FAIL'}, "
       f"范围: [{alpha_bars.min():.4f}, {alpha_bars.max():.4f}] (应∈(0,1])")
-# Q4: 前向过程x_t的理论均值=√ᾱ·x0, 方差=(1-ᾱ) (对x0=0)
+# Q4: 正向过程x_t的理论均值=√ᾱ·x0, 方差=(1-ᾱ) (对x0=0)
 # 注意：自检使用独立的default_rng，不触碰全局np.random状态，保证结果可复现
 _rng = np.random.default_rng(2024)
 _x0 = np.array([1.0, 2.0])

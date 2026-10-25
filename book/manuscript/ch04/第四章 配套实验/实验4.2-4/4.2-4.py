@@ -108,7 +108,7 @@ def log_prior_quad(x, lam):
     return -0.5 / d * np.sum(lam * np.abs(xf) ** 2)
 
 
-# ── 模糊前向算子 B（circulant，低通）──────────────────────────────
+# ── 模糊正向算子 B（circulant，低通）──────────────────────────────
 def blur_envelope(d, sigma_blur):
     """B 在 Fourier 域的乘子：高斯低通。
     频率约定：fftfreq(d)*d 是整数波数 k（每周网格数，而非角频率 2*pi*k/d），

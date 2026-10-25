@@ -6,7 +6,7 @@
 知识点:
   - 高斯编码器=加噪过程 (马尔可夫高斯链的闭式边际分布)
   - VLB三项分解: L_T + ΣL_{t-1} + L_0
-  - 前向过程后验的闭式解
+  - 正向过程后验的闭式解
 
 实验内容:
   步骤1: 高斯编码器=加噪过程验证 (直接采样 vs 逐步加噪)
@@ -241,17 +241,17 @@ print("  闭式KL (每维): L_T = 0.5*[ab_T*E[x_0^2] + (s^2 - 1 - ln s^2)], s^2 
 print("    E[x_0^2]=" + str(round(mean_x0_sq, 4)) + " → L_T ≈ " + "{:.3e}".format(L_T_per_dim) +
       " nats/维 → 确实≈0 (该性质固有于线性调度 ab_T≈e^{-Σβ}≈4e-5, 非近似口号)")
 
-# 前向过程后验 (10.2节闭式解)
+# 正向过程后验 (10.2节闭式解)
 alpha_bars_prev = torch.cat([torch.ones(1), alpha_bars[:-1]])
 
 # 验证后验方差
 posterior_var = betas * (1 - alpha_bars_prev) / (1 - alpha_bars)
-print("\n前向过程后验方差 tilde_beta_t:")
+print("\n正向过程后验方差 tilde_beta_t:")
 print("  t=1:   tilde_beta_1 = " + str(round(posterior_var[0].item(), 6)))
 print("  t=500: tilde_beta_500 = " + str(round(posterior_var[499].item(), 6)))
 print("  t=T:   tilde_beta_T = " + str(round(posterior_var[999].item(), 6)))
 
-# 验证后验方差与前向方差的相对误差 (DDPM简化为tilde_beta_t≈beta_t的关键依据)
+# 验证后验方差与正向方差的相对误差 (DDPM简化为tilde_beta_t≈beta_t的关键依据)
 rel_err = (posterior_var - betas) / betas
 abs_err = (posterior_var - betas).abs()
 # t=1是边界点: alpha_bars_prev[0]=1导致后验方差公式分子为0 (1-ab_0=0)
@@ -298,7 +298,7 @@ for t_idx in [0, 99, 499, 999]:
 # 三项的数值可评估性说明 (为何本实验只直接计算 L_T)
 print("\n三项分解的数值可评估性:")
 print("  - L_T    : 两端均为已知高斯 → 闭式KL直接计算 (见上, ≈" + "{:.1e}".format(L_T_per_dim) + " nats/维)")
-print("  - L_{t-1}: 当 p_theta 取前向真后验时 KL≡0, 验证重点即后验闭式解本身 (已由上方 β̃_t 与均值系数完成)")
+print("  - L_{t-1}: 当 p_theta 取正向真后验时 KL≡0, 验证重点即后验闭式解本身 (已由上方 β̃_t 与均值系数完成)")
 print("  - L_0    : 需要训练好的解码器 p_theta(x_0|x_1), 无模型实验无法数值评估 (固有限制, 留待10.3节训练后评估)")
 
 # L_0: 重建项
@@ -366,13 +366,13 @@ ax.annotate('信号占优', xy=(0.1, 0.8), xycoords='axes fraction',
 ax.annotate('噪声占优', xy=(0.7, 0.2), xycoords='axes fraction',
             fontsize=11, color='red', fontweight='bold')
 
-# (c-上) 前向过程后验方差 vs 前向方差
+# (c-上) 正向过程后验方差 vs 正向方差
 ax = fig.add_subplot(gs_c[0])
 ax.plot(t_range[1:], posterior_var[1:].numpy(), 'b-', linewidth=2, label=r'$\tilde{\beta}_t$ (后验方差)')
-ax.plot(t_range[1:], betas[1:].numpy(), 'r--', linewidth=1.5, label=r'$\beta_t$ (前向方差)')
+ax.plot(t_range[1:], betas[1:].numpy(), 'r--', linewidth=1.5, label=r'$\beta_t$ (正向方差)')
 ax.set_xlabel('时间步 $t$', fontsize=12)
 ax.set_ylabel('方差', fontsize=12)
-ax.set_title(r'(c-上) 前向过程后验方差 vs 前向方差 ($\tilde{\beta}_t \approx \beta_t$)', fontsize=13)
+ax.set_title(r'(c-上) 正向过程后验方差 vs 正向方差 ($\tilde{\beta}_t \approx \beta_t$)', fontsize=13)
 ax.legend(fontsize=10)
 ax.grid(True, alpha=0.3)
 
@@ -426,7 +426,7 @@ for i, t_idx in enumerate(t_show):
     elif i == len(t_show) - 1:
         ax.text(offset_x, 2.8, '$x_T \\approx N(0,I)$', ha='center', fontsize=11, fontweight='bold')
 
-ax.set_xlabel('前向加噪过程 →', fontsize=12)
+ax.set_xlabel('正向加噪过程 →', fontsize=12)
 ax.set_title('(d) 高斯编码器=加噪过程 (2D可视化)', fontsize=13)
 ax.set_ylim(-3, 3.5)
 ax.grid(True, alpha=0.3)
@@ -452,7 +452,7 @@ print("\n2. VLB三项分解 (步骤2)")
 print("   - L_T≈0: 先验匹配项，当ab_T≈0时自动满足 (闭式KL数值验证: ≈" + "{:.1e}".format(L_T_per_dim) + " nats/维)")
 print("   - L_{t-1}: 一致性项，核心优化目标")
 print("   - L_0: 重建项")
-print("\n3. 前向过程后验闭式解 (步骤2)")
+print("\n3. 正向过程后验闭式解 (步骤2)")
 print("   - 后验均值: tilde_mu_t = [sqrt(alpha_t)(1-ab_{t-1})/(1-ab_t)] x_t + [sqrt(ab_{t-1})(1-alpha_t)/(1-ab_t)] x_0")
 print("   - 后验方差: tilde_beta_t = (1-ab_{t-1})/(1-ab_t) * beta_t")
 print("\n4. SNR分析 (步骤3)")

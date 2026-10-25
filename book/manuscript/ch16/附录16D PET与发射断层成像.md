@@ -155,4 +155,4 @@ OSL 为 one-step-late 近似、分母中的先验梯度 $\beta\cdot\text{lap}(\m
 
 ---
 
-**来源**：Siltanen Day3B P1-54；Shepp & Vardi (1982) MLEM；Hudson & Larkin (1994) OSEM
+**来源**：Siltanen Day3B P1-54；@shepp1982mlem MLEM；@hudson1994osem OSEM

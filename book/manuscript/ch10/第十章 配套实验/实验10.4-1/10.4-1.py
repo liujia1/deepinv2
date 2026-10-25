@@ -116,7 +116,7 @@ print("\n" + "="*60)
 print("步骤2：VP-SDE形式推导")
 print("="*60)
 print("\n[VP-SDE的定义]")
-print("  前向SDE: dx = -beta(t)/2 · x dt + sqrt(beta(t)) dW")
+print("  正向SDE: dx = -beta(t)/2 · x dt + sqrt(beta(t)) dW")
 print("  边际分布: q(x_t|x_0) = N(x_t; sqrt(ab(t)) x_0, (1-ab(t))I)")
 print("  其中 ab(t) = exp(-int_0^t beta(s) ds)")
 
@@ -141,7 +141,7 @@ print("\n[对应关系表]")
 print("""
 层级VAE概念            →  扩散模型概念
 ────────────────────────────────────
-编码器 q(z_l|z_{l-1})  →  前向加噪 q(x_t|x_{t-1})
+编码器 q(z_l|z_{l-1})  →  正向加噪 q(x_t|x_{t-1})
 解码器 p(z_{l-1}|z_l)  →  反向去噪 p_theta(x_{t-1}|x_t)
 隐变量 z_l             →  噪声状态 x_t
 先验 p(z_L)            →  先验 p(x_T) = N(0,I)
@@ -294,7 +294,7 @@ ax.grid(True, alpha=0.3)
 
 # (d) VP-SDE示意图
 ax = axes[1, 1]
-# 绘制VP-SDE的前向过程示意图
+# 绘制VP-SDE的正向过程示意图
 np.random.seed(42)
 n_pts = 50
 x0_pts = np.random.randn(n_pts) * 0.5
@@ -310,9 +310,9 @@ for i, t_val in enumerate(t_steps):
     ax.scatter([offset] * n_pts, x_t, c=[colors[i]], s=30, alpha=0.7, label='$t=' + str(round(t_val, 1)) + '$')
     ax.text(offset, 3, '$t=' + str(round(t_val, 1)) + '$', ha='center', fontsize=9)
 
-ax.set_xlabel('VP-SDE前向过程 →', fontsize=12)
+ax.set_xlabel('VP-SDE正向过程 →', fontsize=12)
 ax.set_ylabel('$x_t$', fontsize=12)
-ax.set_title('(d) VP-SDE前向过程演化', fontsize=13)
+ax.set_title('(d) VP-SDE正向过程演化', fontsize=13)
 ax.set_ylim(-3, 3.5)
 ax.grid(True, alpha=0.3)
 ax.legend(fontsize=8, loc='upper right')
@@ -335,7 +335,7 @@ print("\n1. 离散→连续极限 (步骤1)")
 print("   - 当L→∞时: prod_{i=1}^L (1 - beta/L) → exp(-beta t)")
 print("   - 这是VP-SDE的理论基础")
 print("\n2. VP-SDE形式 (步骤2)")
-print("   - 前向SDE: dx = -beta(t)/2 · x dt + sqrt(beta(t)) dW")
+print("   - 正向SDE: dx = -beta(t)/2 · x dt + sqrt(beta(t)) dW")
 print("   - 边际分布: ab(t) = exp(-int_0^t beta(s) ds)")
 print("   - 逆向SDE: 由得分函数或eps-prediction驱动")
 print("\n3. 边际分布演化与连续极限 (步骤3)")

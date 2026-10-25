@@ -405,7 +405,7 @@ print("\n加载MNIST数据集...")
 data_dir = os.path.join(SAVE_DIR, 'data')
 os.makedirs(data_dir, exist_ok=True)
 # MNIST数据归一化到[-1,1] (与11.4-1、13.3-2修复一致):
-# 训练时网络看到的 x_T 分布(由 [-1,1] 数据前向扩散得到)与采样起点
+# 训练时网络看到的 x_T 分布(由 [-1,1] 数据正向扩散得到)与采样起点
 # torch.randn(标准高斯) 在统计意义上更匹配,避免系统性均值偏移拖累重建质量。
 # 采样函数末尾的 clamp 同步改为 [-1,1];PSNR 与可视化在转换回 [0,1] 空间后计算。
 transform = transforms.Compose([

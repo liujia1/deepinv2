@@ -198,7 +198,7 @@ strength参数效应（13.6节）:
   strength=0.95: 几乎重新生成，多样性高
 
   加噪起点对应扩散时间步:
-    t_start ≈ int(strength * T)（前向过程加噪到的噪声水平）
+    t_start ≈ int(strength * T)（正向过程加噪到的噪声水平）
     注意这是img2img自身的机制，与DPS无关（DPS从纯噪声起步、靠似然梯度引导）
     t_start大 -> 起始噪声大 -> 多样性高、与初始图一致性低
 """)

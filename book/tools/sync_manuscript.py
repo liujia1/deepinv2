@@ -18,7 +18,8 @@ sync_manuscript.py —— 把写作源同步为"成书树"（book/）。
 输出：
     book/manuscript/ch00/         绪论
     book/manuscript/ch01..ch18/   各章正文（md + 章根图片 + 配套实验）
-    book/meta/sync_report.md      同步统计报告
+    book/meta/sync_report.md      同步统计报告（全量）
+    book/meta/sync_report_chNN.md 单章模式报告（不覆盖全量报告）
 """
 import argparse
 import json
@@ -135,15 +136,19 @@ def main():
             sys.exit(1)
 
     total = 0
+    partial = args.ch is not None
     report = ["# 成书树同步报告", "",
               f"- 模式：{'DRY RUN（未写入）' if args.dry else '实际同步'}",
-              f"- 章数：{len(chapters)}（绪论另计）", ""]
+              (f"- 范围：仅第 {args.ch} 章（绪论不参与）" if partial
+               else f"- 范围：全书（{len(chapters)} 章 + 绪论）"), ""]
 
-    n = sync_intro(args.dry)
-    total += n
-    report.append(f"| 章节 | 同步文件数 |")
-    report.append(f"|---|---|")
-    report.append(f"| ch00 绪论 | {n} |")
+    report.append("| 章节 | 同步文件数 |")
+    report.append("|---|---|")
+
+    if not partial:
+        n = sync_intro(args.dry)
+        total += n
+        report.append(f"| ch00 绪论 | {n} |")
 
     for no, src, lab in chapters:
         n = sync_chapter(no, src, lab, args.dry)
@@ -156,13 +161,18 @@ def main():
     report.append("> 说明：成书树 `book/manuscript/` 为同步产物，可删除后用本脚本重建；")
     report.append("> 写作源仍是仓库根下的各章目录。数据集、checkpoint、审计备份均不同步。")
 
+    # 单章模式写入独立报告，避免覆盖全量报告
+    path = META / (f"sync_report_ch{args.ch:02d}.md" if partial else "sync_report.md")
     if not args.dry:
         META.mkdir(parents=True, exist_ok=True)
-        (META / "sync_report.md").write_text("\n".join(report), encoding="utf-8")
+        path.write_text("\n".join(report), encoding="utf-8")
 
-    print(f"[{'DRY' if args.dry else 'OK'}] 共 {len(chapters)} 章 + 绪论，同步 {total} 个文件")
+    scope = f"第 {args.ch} 章" if partial else f"{len(chapters)} 章 + 绪论"
+    print(f"[{'DRY' if args.dry else 'OK'}] {scope}，同步 {total} 个文件")
     if not args.dry:
-        print(f"报告已写入: {META / 'sync_report.md'}")
+        print(f"报告已写入: {path}")
+        if partial:
+            print("（单章报告，不覆盖 book/meta/sync_report.md）")
 
 
 if __name__ == "__main__":

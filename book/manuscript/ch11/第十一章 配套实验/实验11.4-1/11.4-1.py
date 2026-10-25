@@ -114,7 +114,7 @@ beta_over_sqrt_1m_ab = betas / sqrt_one_minus_alpha_bars
 
 
 # ============================================================
-# 前向过程: q(x_t|x_0)
+# 正向过程: q(x_t|x_0)
 # ============================================================
 def q_sample(x_0, t, noise=None):
     """x_t = √ᾱ_t·x_0 + √(1-ᾱ_t)·ε, 输入为[B,1,28,28]图像"""
@@ -362,7 +362,7 @@ def train_ddpm(checkpoint_path, pred_type='epsilon', num_epochs=50):
                     # 随机采样时间步
                     t = torch.randint(0, T, (batch,), device=device)
 
-                    # 前向过程: x_t = √ᾱ_t·x_0 + √(1-ᾱ_t)·ε
+                    # 正向过程: x_t = √ᾱ_t·x_0 + √(1-ᾱ_t)·ε
                     noise = torch.randn_like(x)
                     x_t = q_sample(x, t, noise)
 
@@ -560,7 +560,7 @@ plt.savefig(fig_path1a, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"图1a已保存: {fig_path1a}")
 
-# (b) 前向加噪过程可视化
+# (b) 正向加噪过程可视化
 test_imgs, _ = next(iter(test_loader))
 t_show = [1, 21, 51, 101, 151, 200]   # 物理时间步(1-based)：t=1 即 ᾱ₁，t=200 即 ᾱ_T
 
@@ -580,9 +580,9 @@ for i, t_phys in enumerate(t_show):
     else:
         axes_sub[row, col].set_title(f't={t_phys}', fontsize=11)
     axes_sub[row, col].axis('off')
-plt.suptitle('(b) 前向加噪过程', fontsize=13)
+plt.suptitle('(b) 正向加噪过程', fontsize=13)
 plt.tight_layout()
-fig_path1b = os.path.join(SAVE_DIR, '步骤1b_前向加噪.png')
+fig_path1b = os.path.join(SAVE_DIR, '步骤1b_正向加噪.png')
 plt.savefig(fig_path1b, dpi=150, bbox_inches='tight')
 plt.close()
 print(f"图1b已保存: {fig_path1b}")
@@ -595,7 +595,7 @@ print(f"  - 换算到统一尺度后(右图)才能公平比较：最低噪声分
 print("  - 注意：'两种参数化刻画同一后验均值'是代数恒等式，与网络权重无关；")
 print("    实验结果只能说明二者在本设置下的重建能力相近，不能用来'证明'数学等价")
 print("  - ε-prediction是DDPM的标准选择(文献经验，Ho et al. 2020)；本实验两种方案均训练稳定")
-print("  - 前向加噪过程展示: 随着t增大，信号系数√ᾱ_t衰减，图像信息逐步被噪声淹没")
+print("  - 正向加噪过程展示: 随着t增大，信号系数√ᾱ_t衰减，图像信息逐步被噪声淹没")
 
 
 # ============================================================
@@ -731,7 +731,7 @@ print(f"""
    - 从$x_T$~N(0,I)开始，逐步去噪: $x_{{t-1}} = μ_θ(x_t,t) + σ_t·z$
    - 去噪过程从纯噪声逐步恢复结构
 
-4. 前向加噪=固定编码器（11.1节联系）
+4. 正向加噪=固定编码器（11.1节联系）
    - $x_t = √ᾱ_t·x_0 + √(1-ᾱ_t)·ε$ 精确实现固定高斯编码器
    - 无需训练编码器，只需训练去噪网络
 

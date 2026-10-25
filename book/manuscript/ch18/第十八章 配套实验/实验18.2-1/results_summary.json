@@ -1,5 +1,5 @@
 {
-  "experiment": "实验18.2-1 自定义前向算子与伴随验证",
+  "experiment": "实验18.2-1 自定义正向算子与伴随验证",
   "environment": {
     "device": "cpu",
     "torch_version": "2.11.0+cpu",

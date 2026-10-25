@@ -129,7 +129,7 @@ GM_STDS = [0.5, 0.5]
 
 # VP-SDE参数（默认 T=20 步少步采样）
 # 连续VP-SDE(β(t)恒定)的离散化：令累积噪声 bbar(t)=-log ᾱ_t 从0线性增到4.6，
-# 则 ᾱ_T=e^{-4.6}≈0.01，前向末端边际 p_T≈N(0,1)，与 x_T~N(0,1) 初始分布匹配。
+# 则 ᾱ_T=e^{-4.6}≈0.01，正向末端边际 p_T≈N(0,1)，与 x_T~N(0,1) 初始分布匹配。
 # 反推每步系数 α_t=ᾱ_t/ᾱ_{t-1}, β_t=1-α_t（T=20 时 β≈0.215/步，属少步大步长设定）。
 #
 # ★ T 可由环境变量 DEEPINV_DOC_T 覆盖，用于"步数 T 对 DOC/DPS 对比的影响"补充对照：
@@ -167,7 +167,7 @@ def sample_from_prior(n_samples):
 def gaussian_mixture_score(x_t, t_idx):
     """混合高斯先验在VP-SDE下的边际得分函数（Torch可导版本）
 
-    VP-SDE前向边际：x_t = √ᾱ_t·x_0 + √(1-ᾱ_t)·z，故
+    VP-SDE正向边际：x_t = √ᾱ_t·x_0 + √(1-ᾱ_t)·z，故
     p(x_t) = sum_i w_i * N(x_t; √ᾱ_t·mu_i, ᾱ_t·sigma_i^2 + 1 - ᾱ_t)
 
     得分函数：s(x_t) = nabla log p(x_t)
@@ -226,7 +226,7 @@ dx = [f(x,t) - g(t)^2 · s_theta(x,t)] dt + g(t) dw
 dx = f(x,t) dt + g(t) dw + u_t dt
 
 其中：
-- f(x,t)：固有漂移（前向SDE的逆向）
+- f(x,t)：固有漂移（正向SDE的逆向）
 - g(t)dw：固有扩散
 - u_t：控制输入（引导轨迹）
 
@@ -355,7 +355,7 @@ class SimpleDOC:
         for iter_idx in range(n_iters):
             optimizer.zero_grad()
 
-            # 前向采样
+            # 正向采样
             trajectory = self.forward_sample_with_control(control_sequence, x_T)
             x0 = trajectory[-1]
 
@@ -538,7 +538,7 @@ for trial_idx in range(start_trial, n_trials):
     sigma_obs = 0.1
     y_obs = A_obs * x0_star + np.random.randn() * sigma_obs
 
-    # 初始噪声状态：新调度下 ᾱ_T≈0.01，前向末端边际 p_T≈N(0,1)，直接取标准正态
+    # 初始噪声状态：新调度下 ᾱ_T≈0.01，正向末端边际 p_T≈N(0,1)，直接取标准正态
     x_T = torch.randn(1, device=device)
 
     # DOC采样（确定性PF-ODE轨迹优化）

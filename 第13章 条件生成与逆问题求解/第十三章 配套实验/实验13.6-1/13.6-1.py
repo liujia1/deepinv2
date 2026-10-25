@@ -159,7 +159,7 @@ def dps_posterior_sample(y_obs, A_func, A_prime_func, sigma_y, zeta=0.5, N_parti
 
     参数:
         y_obs: 观测值
-        A_func: 前向退化算子 A(x)
+        A_func: 正向退化算子 A(x)
         A_prime_func: A的导数 A'(x)（关键：缺失此项会导致链式法则不完整）
         sigma_y: 观测噪声标准差
         zeta: 似然项权重（推荐0.5）
@@ -296,7 +296,7 @@ def marginalized_posterior_sample(y_obs, A_func, sigma_y, zeta=1.0,
 
 # ---- 任务1：去噪 (A=I) ----
 print("\n任务1：去噪 (A=I)")
-print("  前向算子: A(x) = x")
+print("  正向算子: A(x) = x")
 print("  导数: A'(x) = 1 (恒等算子导数恒为1)")
 print("  zeta=0.5 (数值稳定性推荐值)")
 y_denoise = 0.5
@@ -307,7 +307,7 @@ print(f"  后验采样: 均值={np.mean(samples_denoise):.3f}, 标准差={np.std
 
 # ---- 任务2：线性缩放观测 (A=0.7I) ----
 print("\n任务2：线性缩放观测 (A=0.7x)")
-print("  前向算子: A(x) = 0.7x（信号衰减，非卷积模糊/下采样）")
+print("  正向算子: A(x) = 0.7x（信号衰减，非卷积模糊/下采样）")
 print("  导数: A'(x) = 0.7 (常数)")
 print("  说明: A'=0.7<1 使似然对 x 的约束减弱，后验应比去噪任务更宽")
 print("  zeta=0.5 (数值稳定性推荐值)")
@@ -319,7 +319,7 @@ print(f"  后验采样: 均值={np.mean(samples_blur):.3f}, 标准差={np.std(sa
 
 # ---- 任务3：非线性退化 (A=tanh(2x)) ----
 print("\n任务3：非线性退化 (A=tanh(2x))")
-print("  前向算子: A(x) = tanh(2x)")
+print("  正向算子: A(x) = tanh(2x)")
 print("  导数: A'(x) = 2·sech²(2x) = 2*(1-tanh²(2x)) (随x变化！)")
 print("  原bug严重影响: tanh饱和区A'→0，观测y应无约束力，但原代码仍强行修正")
 print("  修正后效果: 当|x|较大时，A'趋近0，似然梯度自动衰减，反映信息量趋零特性")

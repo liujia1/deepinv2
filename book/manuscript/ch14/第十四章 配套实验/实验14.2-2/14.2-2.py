@@ -121,7 +121,7 @@ def forward_obs(x):
 # ══════════════════════════════════════════════════════════
 # cINN: 2D 条件自回归流（MAF）
 # ══════════════════════════════════════════════════════════
-# 前向 z = f(x; y):
+# 正向 z = f(x; y):
 #   层1: z1 = (x1 - t1(y)) * exp(-s1(y))            # 先变换 x1
 #   层2: z2 = (x2 - t2(y, z1)) * exp(-s2(y, z1))    # 以 z1 为条件变换 x2
 # log|det J| = -(s1(y) + s2(y,z1))
@@ -171,7 +171,7 @@ class CINN(torch.nn.Module):
         self.net2 = Net2()
 
     def forward(self, x, y, need_logdet=True):
-        """前向: z = f(x; y)，返回 z 与 log|det J|。"""
+        """正向: z = f(x; y)，返回 z 与 log|det J|。"""
         x1, x2 = x[:, 0:1], x[:, 1:2]
         s1, t1 = self.net1(y)
         z1 = (x1 - t1) * torch.exp(-s1)           # 层1：变换 x1
@@ -197,7 +197,7 @@ class CINN(torch.nn.Module):
         return log_pz + logdet
 
 print("\n  cINN 结构: 2D 条件自回归流（MAF）")
-print("  前向   z = f(x; y):  x1 ← 仿射(x1 | y)，x2 ← 仿射(x2 | y, z1)")
+print("  正向   z = f(x; y):  x1 ← 仿射(x1 | y)，x2 ← 仿射(x2 | y, z1)")
 print("  采样   x = f^{-1}(z; y):  z ~ N(0,I) 一次前向得到后验样本（摊销推断）")
 
 # ══════════════════════════════════════════════════════════

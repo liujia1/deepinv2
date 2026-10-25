@@ -20,7 +20,7 @@
     sampling_results.npz；找不到该文件或字段缺失会硬失败并提示先运行5.5-1，
     不使用合成数据兜底——与5.6-1/5.6-2严格同源，可直接横向比较。
   - MAP 求解与步骤6 的扫描链通过实验5.5-1/pnp_ula_common.py 共享的
-    build_problem()/run_pnp_ula() 完成（同一前向算子、同一去噪器、同一RNG口径），
+    build_problem()/run_pnp_ula() 完成（同一正向算子、同一去噪器、同一RNG口径），
     本文件不复制问题构建与采样循环代码；去噪器权重缺失时由共享模块自动定位/下载。
   - 运行顺序：先跑 5.5-1（maxit=10000 主链，GPU/Colab 约十分钟量级）生成 npz，
     再跑本实验；步骤6 共 10 条 2000 步扫描链，建议 GPU/Colab，CPU 很慢。
@@ -29,7 +29,7 @@
     仅 IAT/闸门等诊断改动不使缓存失效）。
 
 素材来源：
-  - 实验5.5-1/pnp_ula_common.py（前向算子/去噪器/PnP-ULA 设定的唯一事实源）
+  - 实验5.5-1/pnp_ula_common.py（正向算子/去噪器/PnP-ULA 设定的唯一事实源）
   - Terris et al. (2022); Laumont et al. (2021)
 """
 
@@ -331,7 +331,7 @@ last_quarter_gain = src_extras['gain_db']
 _plateau_ok = (last_quarter_gain is not None
                and not math.isnan(last_quarter_gain) and last_quarter_gain < 0.2)
 
-# 2) MAP 求解与步骤6 扫描链需要前向算子/去噪器：由共享模块按 5.5-1 同配置
+# 2) MAP 求解与步骤6 扫描链需要正向算子/去噪器：由共享模块按 5.5-1 同配置
 #    构建（同种子、同参数，prob.y 即 npz 中的 y_obs；权重缺失自动定位/下载）。
 prob = build_problem(device=device)
 eps0 = prob.eps0
@@ -360,7 +360,7 @@ x_mmse = post_mean
 def pnp_map(maxit=3000, delta_frac=0.99, momentum=0.9, tol=1e-6):
     """确定性PnP不动点迭代（去掉朗之万噪声项）求平滑后验的MAP。
     收敛点满足 ∇f(x) = (α/ε)(D_ε(x)-x) = -α∇g_ε(x)，即 f+α·g_ε 的驻点——
-    与PnP-ULA采样的是同一个后验（前向算子/去噪器均取自共享模块构建的 prob，
+    与PnP-ULA采样的是同一个后验（正向算子/去噪器均取自共享模块构建的 prob，
     即5.5-1同一问题），因此这是与MMSE(后验均值)严格对应的后验众数。
     该去模糊后验非常刚性(L_y~1e5)，纯不动点步长δ~6e-6需上万步，
     故用重球动量(heavy-ball)加速并用相对变化早停。"""

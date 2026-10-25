@@ -12,7 +12,7 @@ $$L_\text{VLB} = \underbrace{D_{\text{KL}}(q(\mathbf{x}_T|\mathbf{x}_0) \| p(\ma
 
 当 $T\to\infty$、$\Delta t=1/T\to 0$，求和趋于积分。在连续时间 $t\in[0,1]$ 下：
 
-$$L_\text{VLB}^\text{cont} = \underbrace{D_{\text{KL}}(q(\mathbf{x}_1|\mathbf{x}_0) \| p(\mathbf{x}_1))}_{L_1} + \int_0^1 \mathbb{E}_q\left[\frac{1}{2}\left\|\frac{\mu_\theta(\mathbf{x}_t,t) - \tilde\mu_t(\mathbf{x}_t,\mathbf{x}_0)}{\sigma_t}\right\|^2\right]dt - \underbrace{\mathbb{E}_q[\log p_\theta(\mathbf{x}_0|x_{\varepsilon})]}_{L_0}$$
+$$L_\text{VLB}^\text{cont} = \underbrace{D_{\text{KL}}(q(\mathbf{x}_1|\mathbf{x}_0) \| p(\mathbf{x}_1))}_{L_1} + \int_0^1 \mathbb{E}_q\left[\frac{1}{2}\left\|\frac{\mu_\theta(\mathbf{x}_t,t) - \tilde{\mu}_t(\mathbf{x}_t,\mathbf{x}_0)}{\sigma_t}\right\|^2\right]dt - \underbrace{\mathbb{E}_q[\log p_\theta(\mathbf{x}_0|x_{\varepsilon})]}_{L_0}$$
 
 其中 $x_\varepsilon$ 是 $t\to 0^+$ 时的含噪状态。形式没变，只是"求和"换成了"沿时间的积分"。这一转变意味着：离散公式里的每一项、每个符号在连续下都有对应物，因此本章所有化简直觉依然成立，只是求和变成了积分、权重由离散点取均匀变成连续权重。
 
@@ -22,7 +22,7 @@ $$L_\text{VLB}^\text{cont} = \underbrace{D_{\text{KL}}(q(\mathbf{x}_1|\mathbf{x}
 
 离散 DDPM 里 $\beta_1,\dots,\beta_T$ 是手动选的（线性或余弦），对效果影响大却要调参。VDM 把 $\beta(t)$ 参数化成可微函数（如单调网络），同时优化 $\theta$ 和 $\beta(t)$。
 
-VDM 发现最优调度高度非线性：更多步分配给"信噪比变化剧烈"的困难区，少步给"变化慢"的容易区——视觉上更接近余弦调度，印证了 Nichol & Dhariwal (2021) 的经验观察。
+VDM 发现最优调度高度非线性：更多步分配给"信噪比变化剧烈"的困难区，少步给"变化慢"的容易区——视觉上更接近余弦调度，印证了 @nichol2021improved 的经验观察。
 
 ## 与 SDE 视角的对照
 
@@ -41,4 +41,4 @@ VDM 发现最优调度高度非线性：更多步分配给"信噪比变化剧烈
 
 **局限**：同时优化 $\theta$ 和调度，计算比固定调度的 DDPM 贵；调度优化可能过拟合，需正则化；连续时间理论分析更复杂。
 
-**来源**：Kingma et al. (2021) VDM; Kingma & Gao (2023) Understanding Diffusion Objectives; 2406.08929v2 Sec 2.3
+**来源**：@kingma2021vdm VDM; @kingma2023vdmobj Understanding Diffusion Objectives; 2406.08929v2 Sec 2.3

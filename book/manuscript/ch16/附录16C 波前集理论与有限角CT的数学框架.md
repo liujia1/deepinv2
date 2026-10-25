@@ -48,7 +48,7 @@ $$WF_{\text{invisible}}(u) = \{(\mathbf{x},\xi) \in WF(u) : \xi/|\xi| \notin \Th
 - 对分片光滑函数 $u$，剪切波系数的衰减率精确刻画了 $WF(u)$
 - 具体地，大系数对应 $WF(u)$ 中的元素，系数的方向和尺度与奇异性位置和方向对应
 
-Bubba et al. (2019) 的核心思路：
+@bubba2019learning 的核心思路：
 1. 把剪切波系数分成"可见"和"不可见"两组（对应 $WF_{\text{visible}}$ 和 $WF_{\text{invisible}}$）
 2. 可见系数从有限角度数据稳定恢复
 3. 不可见系数通过学习（从训练数据建立的统计模型）估计
@@ -58,4 +58,4 @@ Bubba et al. (2019) 的核心思路：
 
 这也正是 16.2.3、16.4、16.5 一脉相承的线索：正向算子决定了哪些波前集信息进入测量（这是数学的硬约束），而先验——无论来自剪切波的统计模型，还是来自学习网络的映射、扩散模型的分布——决定了不可见那部分信息能否被合理地猜回。波前集理论划定了"不可救的边缘"，也反过来指明了"学习型 / 扩散先验"的用武之地。
 
-**来源**：Greenleaf & Uhlmann (1989)；Quinto (1993)；Frikel & Quinto (2013)；Bubba et al. (2019) Inverse Problems；Natterer (1986)
+**来源**：@greenleaf1989visibility；@quinto1993limitedangle；@frikel2013deconv；@bubba2019learning Inverse Problems；@natterer1986ct

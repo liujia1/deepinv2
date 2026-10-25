@@ -76,4 +76,4 @@ $$= \int p_{\text{data}}(\mathbf{x}_0)\,p_t(\mathbf{x}|\mathbf{x}_0)\,v_t(\mathb
 
 这一推广正是 14.3 的 OT-CFM（$\mathbf{z}$ 取数据-噪声对）与 14.5 的条件生成（$\mathbf{z}$ 取文本）能够共用同一套训练逻辑的理论原因：无论条件变量取什么，梯度等价性岿然不动。
 
-**来源**：Lipman et al. (2023) "Flow Matching for Generative Modeling" Theorem 1-2 & Appendix B; Tong et al. (2024) "Conditional Flow Matching" Theorem 2.2
+**来源**：@lipman2023fm "Flow Matching for Generative Modeling" Theorem 1-2 & Appendix B; @tong2024cfm "Conditional Flow Matching" Theorem 2.2

@@ -100,7 +100,7 @@ $$\frac{\nabla_y p_\varepsilon(\mathbf{y})}{p_\varepsilon(\mathbf{y})} = \nabla_
 
 ---
 
-## 推广：标量 Tweedie 等式（Efron, 2011）
+## 推广：标量 Tweedie 等式[@efron2011tweedie]
 
 ### 一维指数族形式
 
@@ -130,8 +130,8 @@ $$\mathbb{E}[X|Y = y] = y + \varepsilon\,\frac{d}{dy}\log p_\varepsilon(y)$$
 
 ### 与经验贝叶斯的联系
 
-Robbins (1956) 最初动机是**经验贝叶斯**：不指定先验 $p(\mathbf{x})$，仅从观测 $\{y_i\}$ 估后验均值 $\mathbb{E}[X|Y=\mathbf{y}]$。Tweedie 把后验均值和边际密度梯度联系起来：$D_\varepsilon^*(\mathbf{y})=\mathbf{y}+\varepsilon\,\nabla\log p_\varepsilon(\mathbf{y})$。若能从数据估 $\nabla\log p_\varepsilon(\mathbf{y})$（这正是得分匹配做的），就能得后验均值——这就是经验贝叶斯思想。
+@robbins1956robayes 最初动机是**经验贝叶斯**：不指定先验 $p(\mathbf{x})$，仅从观测 $\{y_i\}$ 估后验均值 $\mathbb{E}[X|Y=\mathbf{y}]$。Tweedie 把后验均值和边际密度梯度联系起来：$D_\varepsilon^*(\mathbf{y})=\mathbf{y}+\varepsilon\,\nabla\log p_\varepsilon(\mathbf{y})$。若能从数据估 $\nabla\log p_\varepsilon(\mathbf{y})$（这正是得分匹配做的），就能得后验均值——这就是经验贝叶斯思想。
 
 这一转变意味着，Tweedie 等式在统计史上的出身——经验贝叶斯——与它在本书的用途（从去噪器到得分）其实共享同一灵魂：既不写出 $p(\mathbf{x})$，也不计算归一化常数 $Z$，只从"数据或去噪器中能得到的量"出发，反推出后验均值。于是"绕过 $Z$"这句话，既是统计推断的古老智慧，也在现代去噪器身上获得了新的载体。
 
-**来源**：Robbins (1956); Miyasawa (1961); Efron (2011)
+**来源**：@robbins1956robayes; @miyasawa1961empirical; @efron2011tweedie

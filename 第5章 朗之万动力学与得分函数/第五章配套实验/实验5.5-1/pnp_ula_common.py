@@ -7,7 +7,7 @@ PnP-ULA 共享模块（唯一事实源）
 5.5-1 的算法一旦调整，只改本文件，所有下游实验自动跟随。
 
 对外提供：
-  - build_problem()       构建 cman 去模糊问题（图像/前向算子/噪声/去噪器/步长）
+  - build_problem()       构建 cman 去模糊问题（图像/正向算子/噪声/去噪器/步长）
   - run_pnp_ula()         运行一条 PnP-ULA 链（主链或参数扫描链），返回全部统计量
   - iat_geyer()           Geyer 初始正序列 IAT/ESS
   - npz_candidate_paths() / load_sampling_result()

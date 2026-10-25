@@ -74,7 +74,7 @@ $$\text{ELBO} = \mathbb{E}_{q(\mathbf{z})}[\log p(\mathbf{x}|\mathbf{z})] - \tex
 | KL 项 $\text{KL}(q\|p)$ | 码率 $R$（编码代价） |
 | 最大化 ELBO（等价于最小化 $-\text{ELBO}=R+D$） | 率失真优化 $\min(R+\lambda D)$，$\lambda=1$ |
 
-$\beta$-VAE（Higgins et al., 2017）把目标写成 $\mathbb{E}_q[\log p(\mathbf{x}|\mathbf{z})] - \beta\cdot\text{KL}(q\|p)$，$\beta>1$ 加大对码率的惩罚，逼 $\mathbf{z}$ 学更紧凑表示——正是率失真里"加重码率权重"的做法。
+$\beta$-VAE[@higgins2017betavae]把目标写成 $\mathbb{E}_q[\log p(\mathbf{x}|\mathbf{z})] - \beta\cdot\text{KL}(q\|p)$，$\beta>1$ 加大对码率的惩罚，逼 $\mathbf{z}$ 学更紧凑表示——正是率失真里"加重码率权重"的做法。
 
 ### ELBO与互信息
 
@@ -92,4 +92,4 @@ $$\mathbb{E}_{q(\mathbf{x},\mathbf{z})}[\log p(\mathbf{x}|\mathbf{z})] \;\leq\; 
 
 最大化重建项等价于抬高互信息的下界——即 $\mathbf{z}$ 应尽量多携带 $\mathbf{x}$ 的信息。这和第 9 章 VAE"编码器要保留信息"的直觉一致。
 
-**来源**：Cover & Thomas (2006) Elements of Information Theory; Minka (2005) Divergence measures and message passing; Higgins et al. (2017) $\beta$-VAE; Alemi et al. (2017) Fixing a Broken ELBO
+**来源**：@cover2006information Elements of Information Theory; @minka2005divergence Divergence measures and message passing; @higgins2017betavae $\beta$-VAE; @alemi2017vib Fixing a Broken ELBO

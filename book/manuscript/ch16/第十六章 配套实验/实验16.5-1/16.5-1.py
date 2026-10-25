@@ -191,7 +191,7 @@ class MRIFourierOperator:
 
     def AT(self, y):
         """A的伴随算子：AT(y) = real(ifft2(ifftshift(mask * y)))
-        ★ mask不可省略：虽然A的输出y已是masked k-space，前向等价，
+        ★ mask不可省略：虽然A的输出y已是masked k-space，正向等价，
         但autograd时mask会截断未采样位置的梯度，保证梯度只来自采样位置
         """
         B, C, H, W = y.shape
@@ -278,7 +278,7 @@ else:
             # 随机采样时间步
             t = torch.randint(0, T, (B,), device=device)
 
-            # 前向过程: x_t = sqrt(ᾱ_t) * x_0 + sqrt(1-ᾱ_t) * ε
+            # 正向过程: x_t = sqrt(ᾱ_t) * x_0 + sqrt(1-ᾱ_t) * ε
             noise = torch.randn_like(batch_x)
             x_t = (sqrt_alpha_bars[t].view(B, 1, 1, 1) * batch_x +
                    sqrt_one_minus_alpha_bars[t].view(B, 1, 1, 1) * noise)

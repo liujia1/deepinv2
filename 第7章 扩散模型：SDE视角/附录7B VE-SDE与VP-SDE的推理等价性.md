@@ -1,6 +1,6 @@
 # 附录7B VE-SDE与VP-SDE的推理等价性
 
-> 定位：为7.2节的VE-SDE与VP-SDE对比提供补充材料。Kawar et al. 的观察表明，两种SDE在推理（采样）阶段是等价的，差异主要在训练阶段。Karras et al. (2022) 的统一框架进一步消除了两种SDE的表面差异。
+> 定位：为7.2节的VE-SDE与VP-SDE对比提供补充材料。Kawar et al. 的观察表明，两种SDE在推理（采样）阶段是等价的，差异主要在训练阶段。 @karras2022edm 的统一框架进一步消除了两种SDE的表面差异。
 
 ## 一个"长得不一样但其实是一回事"的故事
 
@@ -12,15 +12,15 @@
 
 含噪信号 = 原始信号 + 加性噪声。信号不缩放，噪声方差 $\sigma(t)^2$ 随时间增长。
 
-**VP-SDE**：$\mathbf{x}_t = \sqrt{\bar\alpha_t}\,\mathbf{x}_0 + \sqrt{1-\bar\alpha_t}\,\varepsilon$
+**VP-SDE**：$\mathbf{x}_t = \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0 + \sqrt{1-\bar{\alpha}_t}\,\varepsilon$
 
-含噪信号 = 缩放信号 + 加性噪声。信号被 $\sqrt{\bar\alpha_t}$ 缩放，总方差保持有界。
+含噪信号 = 缩放信号 + 加性噪声。信号被 $\sqrt{\bar{\alpha}_t}$ 缩放，总方差保持有界。
 
-**关键观察**：对 VP-SDE 的含噪信号做重缩放。令 $\hat{x}_t = \mathbf{x}_t / \sqrt{\bar\alpha_t}$：
+**关键观察**：对 VP-SDE 的含噪信号做重缩放。令 $\hat{x}_t = \mathbf{x}_t / \sqrt{\bar{\alpha}_t}$：
 
 $$\hat{x}_t = \mathbf{x}_0 + \hat{\sigma}(t)\,\varepsilon$$
 
-其中 $\hat{\sigma}(t) = \sqrt{(1-\bar\alpha_t)/\bar\alpha_t}$。重缩放后的 VP-SDE 在形式上**完全等同于 VE-SDE**——都是纯加性噪声模型。只是"噪声尺度"换了个名字。
+其中 $\hat{\sigma}(t) = \sqrt{(1-\bar{\alpha}_t)/\bar{\alpha}_t}$。重缩放后的 VP-SDE 在形式上**完全等同于 VE-SDE**——都是纯加性噪声模型。只是"噪声尺度"换了个名字。
 
 ## 推理等价性的形式化
 
@@ -39,23 +39,23 @@ $$\hat{x}_t = \mathbf{x}_0 + \hat{\sigma}(t)\,\varepsilon$$
 
 尽管推理等价，两种 SDE 在**训练**阶段有显著差异：
 
-- **VP-SDE 训练更稳定**：信号缩放 $\sqrt{\bar\alpha_t}$ 让含噪信号 $\mathbf{x}_t$ 的数值范围在不同时间步大致一致，利于梯度稳定；
+- **VP-SDE 训练更稳定**：信号缩放 $\sqrt{\bar{\alpha}_t}$ 让含噪信号 $\mathbf{x}_t$ 的数值范围在不同时间步大致一致，利于梯度稳定；
 - **VE-SDE 训练需多注意**：大方差时 $\mathbf{x}_t$ 数值范围很大，需适当加权函数 $\lambda(t)=\sigma(t)^2$ 来平衡不同时间步的损失。
 
 ### 实践中的选择
 
 - **图像生成**：VP-SDE 更常用（余弦调度稳定性优势）；
 - **逆问题求解**：VE-SDE 更常用（加性噪声模型与逆问题观测模型更一致，便于似然计算）；
-- **统一框架**：Karras et al. (2022) 的 EDM 框架消除了选择的必要性——在统一框架下设计 $s(t)$ 和 $\sigma(t)$。
+- **统一框架**：@karras2022edm 的 EDM 框架消除了选择的必要性——在统一框架下设计 $s(t)$ 和 $\sigma(t)$。
 
-## Karras et al. (2022) 的统一框架：把两种"方言"并成一门口语
+## @karras2022edm 的统一框架：把两种"方言"并成一门口语
 
 > **迁移说明**：VE-SDE 与 VP-SDE 在 Karras 统一框架下的**完整形式化**（统一正向 SDE、转移核、最优设计 $c_{\text{skip}}/c_{\text{out}}/c_{\text{in}}/c_{\text{noise}}$、统一训练目标）已收进第 12 章 附录 12B，与"Score ≡ ELBO"一起呈现，那里也是全书统一记号的主场。本附录只保留结论与直觉，不再重复推导。
 
-Karras et al. (2022) 的 EDM 框架证明：VE-SDE 和 VP-SDE 只是同一框架的两种参数化，区别只在**信号缩放 $s(t)$** 和**噪声调度 $\sigma(t)$** 的选择。其核心洞见是：
+@karras2022edm 的 EDM 框架证明：VE-SDE 和 VP-SDE 只是同一框架的两种参数化，区别只在**信号缩放 $s(t)$** 和**噪声调度 $\sigma(t)$** 的选择。其核心洞见是：
 
 **VE-SDE 和 VP-SDE 不是根本不同的方法——它们只是信号缩放和噪声调度的不同选择。统一框架消除了表面差异，让设计者专注于真正重要的选择：信噪比曲线的形状。**
 
 详细公式与逐项推导见附录 12B（B.5 节）。
 
-**来源**：Kawar et al. (2022); Karras et al. (2022); Song et al. (2021)
+**来源**：@kawar2022ddrm; @karras2022edm; @song2021scoresde

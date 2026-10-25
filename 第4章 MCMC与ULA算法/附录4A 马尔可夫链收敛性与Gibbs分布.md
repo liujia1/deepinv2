@@ -40,7 +40,7 @@ ULA 在强对数凹条件下是几何遍历的，速率 $O(e^{-cm})$。
 4.2 节的细致平衡条件等价于马尔可夫核 $K$ 关于 $\mu$ **可逆**（reversible）：
 $$\int_A K(B|\mathbf{x})\,\mu(dx) = \int_B K(A|\mathbf{x})\,\mu(dx), \quad \forall A,B$$
 可逆性比平稳性更强：
-$$\text{可逆性} \implies \text{平稳性} \implies \text{遍历性（在不可约非周期条件下）$$
+$$\text{可逆性} \implies \text{平稳性} \implies \text{遍历性（在不可约非周期条件下）}$$
 
 ### 不可逆 MCMC
 
@@ -89,7 +89,7 @@ $$z_j\mid (Kx)_j=t \sim \text{GIG}(\lambda^2, t^2, 1/2)$$
 ### GIG 的抽样
 
 - $p=1/2$（TV 的情况）时，GIG 退化成**逆高斯分布**（Inverse Gaussian），有高效抽样法；
-- 一般情形可用接受–拒绝法（Hörmann & Leydold, 2014）。
+- 一般情形可用接受–拒绝法[@hormann2014rejection]。
 
 逆高斯 $\text{IG}(\mu,\lambda)$ 抽样算法：
 1. 生成 $V\sim\chi^2(1)$（标准卡方）

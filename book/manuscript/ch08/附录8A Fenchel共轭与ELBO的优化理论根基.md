@@ -182,4 +182,4 @@ $$\max_p \left[-\frac{1}{2}\|A^*p\|^2 - \frac{1}{2\lambda}\|p - \mathbf{y}/\lamb
 
 两者共享同一套凸分析工具——Fenchel 共轭是统一数学语言。这解释了为何 ELBO 与正则化有相同"数据+正则"结构：**它们是同一个凸优化问题的不同表达**。这一转变意味着，第 2 章的 MAP 正则化作图和本章的 ELBO 变分推断，并不是两条不相干的支流，而是一条凸分析大河的两岸。
 
-**来源**：Benning L2 P23-25; LectureNotes2020_v2 Ch4 (Fenchel conjugate, lines 1832-1979); Rockafellar (1970) Convex Analysis; Borwein & Lewis (2010) Convex Analysis and Nonlinear Optimization
+**来源**：Benning L2 P23-25; LectureNotes2020_v2 Ch4 (Fenchel conjugate, lines 1832-1979); @rockafellar1970convex Convex Analysis; @borwein2010convex Convex Analysis and Nonlinear Optimization

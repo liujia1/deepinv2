@@ -36,7 +36,7 @@ $$v^T A v=(v^T A v)^T=v^T A^T v=v^T A_{\text{sym}}\,v,\qquad A_{\text{sym}}=\tfr
 
 这条恒等式对每个样本逐点成立。也就是说，**反对称部分对 $v^TAv$ 没有任何贡献**——在纯反对称阵上 $v^TAv\equiv0$。因此方差只取决于 $A_{\text{sym}}$，下面的公式对**任意方阵**都成立；而常见教材里写的 $2\|A\|_F^2$ 形式，其实默认了 $A$ 对称。
 
-**高斯** $v\sim\mathcal \mathcal{N}(0,I)$：方差
+**高斯** $v\sim\mathcal{N}(0,I)$：方差
 
 $$\mathrm{Var}(v^T A v)=2\|A_{\text{sym}}\|_F^2=\|A\|_F^2+\mathrm{Tr}(A^2),$$
 
@@ -76,4 +76,4 @@ SSM 里 $A=\nabla_x s_\theta(\mathbf{x})$ 是得分网络的 Jacobian。要估 $
 
 从更深层次看，这一"无偏但略抖、可以靠多次平均补救"的特点，正是随机投射类方法共通的代价与便捷：用可控的方差交换掉高不可攀的精确计算。
 
-**来源**：Hutchinson (1990); Song et al. (2019) Sliced Score Matching
+**来源**：@hutchinson1990stochastic; @song2019ncsn Sliced Score Matching

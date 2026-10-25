@@ -88,4 +88,4 @@ $$h' = h + \text{MHA}(\text{LN}(h)),\quad h'' = h' + \text{MLP}(\text{LN}(h'))$$
     输出 h'' ∈ R^{n×d}                   │
 ```
 
-**来源**：Vaswani et al. (2017) "Attention Is All You Need"; Dosovitskiy et al. (2021) "An Image Is Worth 16x16 Words"; Peebles & Xie (2023) "Scalable Diffusion Models with Transformers"
+**来源**：@vaswani2017attention "Attention Is All You Need"; @dosovitskiy2021vit "An Image Is Worth 16x16 Words"; @peebles2023dit "Scalable Diffusion Models with Transformers"

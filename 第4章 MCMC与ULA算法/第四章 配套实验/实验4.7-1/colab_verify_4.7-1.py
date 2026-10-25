@@ -120,7 +120,7 @@ RUNS = {
                               name=t('C 长链10k·投影PPnP（官方）', 'C long 10k, projected PPnP (official)')),
 }
 
-# ---------- ⑤ 前向模型 A 与含噪观测 y（只构造一次，三组共用） ----------
+# ---------- ⑤ 正向模型 A 与含噪观测 y（只构造一次，三组共用） ----------
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 

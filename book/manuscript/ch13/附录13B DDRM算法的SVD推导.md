@@ -87,7 +87,7 @@ DDRM 核心：在逆向采样每步 `t → t-1`，对每个频谱分量 `x̄_t^i
 
 考虑时刻 `t` 含噪状态 `x_t`。VP-SDE 下与干净图 `x_0` 关系 `x_t = √ᾱ_t x_0 + √(1-ᾱ_t)ε`。变换到频谱域：
 
-$$\bar{x}_t^i = \sqrt{\bar\alpha_t}\,\bar{x}_0^i + \sqrt{1-\bar\alpha_t}\,\bar{\varepsilon}_t^i$$
+$$\bar{x}_t^i = \sqrt{\bar{\alpha}_t}\,\bar{x}_0^i + \sqrt{1-\bar{\alpha}_t}\,\bar{\varepsilon}_t^i$$
 
 `ε̄_t^i ~ N(0, 1)`。频谱域中测量方程 `ȳ_i = s_i x̄_0^i + σ_y ε̄_i`。
 
@@ -256,4 +256,4 @@ DDRM 核心公式总结：
 
 DDRM 局限与 DPS 互补构成第13章方法选择重要维度：算子线性且 SVD 可得时 DDRM 提供更精确条件化；算子非线性或 SVD 不可得时 DPS 提供更灵活近似方案。这一思维主线串起来看，两种方法不过是同一后验得分分解下"精确但受限"与"近似但通用"的两个端点。
 
-**来源**：Kawar et al. (2022) "Denoising Diffusion Restoration Models"；Chung et al. (2209.14687) §3.1；第7章7.2-7.4节VP-SDE与DDIM
+**来源**：@kawar2022ddrm "Denoising Diffusion Restoration Models"；Chung et al. (2209.14687) §3.1；第7章7.2-7.4节VP-SDE与DDIM

@@ -94,8 +94,8 @@ $$f^*(\mathbf{y}) = \mathbf{y} + \sigma^2 \nabla_y \log p_y(\mathbf{y})$$
 
 最后把地基拓宽：Stein 的"翻译"并非高斯独有，指数族噪声都配有各自的版本，散度修正项随之换成对应噪声统计量。
 
-Hudson (1978) 把 Stein 引理推广到指数族噪声。对 Poisson-Gaussian 噪声 $\mathbf{y} \sim \text{Poisson}(\mathbf{x}) + \mathcal{N}(0, \sigma^2 I)$，SURE 形式为：
+@hudson1978sure 把 Stein 引理推广到指数族噪声。对 Poisson-Gaussian 噪声 $\mathbf{y} \sim \text{Poisson}(\mathbf{x}) + \mathcal{N}(0, \sigma^2 I)$，SURE 形式为：
 
 $$\mathcal{L}_{\text{PG-SURE}}(\mathbf{y}, f) = \|\mathbf{y} - f(\mathbf{y})\|^2 + 2\text{Cov}(\mathbf{y}, f(\mathbf{y})) - \text{Var}(\mathbf{y})$$
 
-这里的协方差与方差都是在固定信号 $\mathbf{x}$ 的条件下、对噪声分布取的：散度修正项的位置换成了噪声与网络输出的条件协方差，而 $-\text{Var}(\mathbf{y})$ 承担了原 $-n\sigma^2$ 常数的角色。两项都依赖未知的 $\mathbf{x}$，实践中可用 Monte Carlo 近似。详见 Hudson (1978) 与 Tachella et al. (ICLR 2025)。
+这里的协方差与方差都是在固定信号 $\mathbf{x}$ 的条件下、对噪声分布取的：散度修正项的位置换成了噪声与网络输出的条件协方差，而 $-\text{Var}(\mathbf{y})$ 承担了原 $-n\sigma^2$ 常数的角色。两项都依赖未知的 $\mathbf{x}$，实践中可用 Monte Carlo 近似。详见 @hudson1978sure 与 Tachella et al. (ICLR 2025)。

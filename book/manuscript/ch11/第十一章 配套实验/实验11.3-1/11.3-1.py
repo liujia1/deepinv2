@@ -372,7 +372,7 @@ ax.annotate('$x_0$-pred权重自t=2递减\n$\\varepsilon$-pred权重U形；score
             xy=(0.35, 0.75), xycoords='axes fraction', fontsize=9,
             bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffeaa7', alpha=0.8))
 
-# (c) 前向过程后验均值系数（11.1节）
+# (c) 正向过程后验均值系数（11.1节）
 coeff_x0 = torch.sqrt(alpha_bars_prev) * betas / (1 - alpha_bars)
 coeff_xt = torch.sqrt(alphas) * (1 - alpha_bars_prev) / (1 - alpha_bars)
 coeff_sum = coeff_x0 + coeff_xt

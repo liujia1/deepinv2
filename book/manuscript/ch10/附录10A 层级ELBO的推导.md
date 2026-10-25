@@ -102,4 +102,4 @@ $$\text{ELBO}(\mathbf{x}_0) = \mathbb{E}_{q(\mathbf{x}_1|\mathbf{x}_0)}[\log p_\
 
 收个尾，把这条推导放回全章的位置：我们从"单层 ELBO 除以一个 $q/q=1$"出发，一路走到"扩散版的三项 VLB"，中间没有引入任何新的目标函数，只是把同一套变分工具搬到了更长的链条上。这一转变意味着，扩散模型的可训练目标不是另起炉灶的发明，而是贝叶斯变分推断在层级结构下的忠实翻版——只要愿意把链拉长、把分布设为高斯，扩散的损失就会自动从推导中浮现。
 
-**来源**：Tutorial on Diffusion Models for Imaging and Vision Theorem 2.3-2.4; Ho et al. (2020) DDPM Appendix A
+**来源**：Tutorial on Diffusion Models for Imaging and Vision Theorem 2.3-2.4; @ho2020ddpm DDPM Appendix A

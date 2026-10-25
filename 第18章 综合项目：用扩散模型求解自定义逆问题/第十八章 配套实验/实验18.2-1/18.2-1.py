@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-实验18.2-1 自定义前向算子与伴随验证
-对应知识点：18.2节（定义自定义前向算子）
+实验18.2-1 自定义正向算子与伴随验证
+对应知识点：18.2节（定义自定义正向算子）
 
 实验内容：
 Step 1: 深入理解deepinv Physics类体系 —— 浏览内置算子并理解三原则（配对A/A^T、噪声分离、可组合性）
-Step 2: 实现多视角下采样算子 MultiViewPhysics —— 仿射变换+下采样的复合前向模型
+Step 2: 实现多视角下采样算子 MultiViewPhysics —— 仿射变换+下采样的复合正向模型
 Step 3: 伴随验证与算子范数估计 —— dot product test验证手动伴随，autograd自动伴随对比
 Step 4: 噪声模型对比 —— 高斯/泊松/泊松-高斯复合噪声的视觉效果与统计特性
 Step 5: ★自定义模糊核与MRI掩模算子 —— 将自定义退化集成到deepinv框架中
@@ -133,8 +133,8 @@ print("="*70)
 print("""
 deepinv Physics 类体系的设计三原则：
 1. 配对性: 每个算子 A 必须提供对应的伴随 A_adjoint（或 A^T）
-2. 噪声分离: 前向模型 y = A(x) + ε，噪声独立于算子可组合
-3. 可组合性: 多个算子可通过乘法组合成复合前向模型
+2. 噪声分离: 正向模型 y = A(x) + ε，噪声独立于算子可组合
+3. 可组合性: 多个算子可通过乘法组合成复合正向模型
 
 常用内置 Physics 类：
 - Denoising:        A = I (恒等算子)，加性噪声
@@ -345,7 +345,7 @@ print(f"  输入 x shape:  {x_true.shape}")
 print(f"  输出 y shape:  {y_multi.shape}")
 print(f"  J={y_multi.shape[1]} 个视角, 每个视角 {y_multi.shape[3]}×{y_multi.shape[4]}")
 
-# ★ 演示 update_parameters：动态更换变换矩阵后，前向输出随之更新
+# ★ 演示 update_parameters：动态更换变换矩阵后，正向输出随之更新
 # （保存/恢复全局 RNG 状态，确保后续步骤随机流不受影响、结果可复现）
 _rng_state = torch.get_rng_state()
 transf_new = generate_random_transforms(J=16)
@@ -386,7 +386,7 @@ def detailed_adjointness_test(physics, x, n_tests=5):
     for i in range(n_tests):
         # 每次重设不同种子以测试不同随机向量下的伴随精度
         torch.manual_seed(100 + i)
-        Ax = physics.A(x)  # 使用确定性的前向算子 A(x)，避免 physics(x) 自带噪声的随机性
+        Ax = physics.A(x)  # 使用确定性的正向算子 A(x)，避免 physics(x) 自带噪声的随机性
         y_rand = torch.randn_like(Ax)
         lhs = (Ax * y_rand).sum().item()
         rhs = (x * physics.A_adjoint(y_rand)).sum().item()
@@ -498,7 +498,7 @@ try:
 except Exception as e:
     print(f"  算子范数计算失败: {e}")
 
-# --- Step 2 可视化（多视角前向结果）---
+# --- Step 2 可视化（多视角正向结果）---
 fig, axes = plt.subplots(1, 4, figsize=(16, 4))
 # 原始图像
 axes[0].imshow(x_true[0].cpu().permute(1, 2, 0).clamp(0, 1))
@@ -512,7 +512,7 @@ for i in range(3):
     axes[i+1].set_title(f'视角 {i+1}\n旋转≈{angle_deg:.1f}°', fontsize=11)
     axes[i+1].axis('off')
 
-fig.suptitle('Step 2: 多视角下采样算子的前向结果', fontsize=14)
+fig.suptitle('Step 2: 多视角下采样算子的正向结果', fontsize=14)
 plt.tight_layout()
 plt.savefig(os.path.join(SAVE_DIR, 'step2_multiview_forward.png'), dpi=150, bbox_inches='tight')
 plt.close()
@@ -681,7 +681,7 @@ print("="*70)
 
 print("""
 ★ 本步骤演示deepinv的算子可组合性原则：
-  将自定义模糊核 → 下采样 → MRI子采样 组合为复合前向模型
+  将自定义模糊核 → 下采样 → MRI子采样 组合为复合正向模型
   复合模型 y = M·D·K·x + ε 中每个子算子都有独立的伴随
 """)
 
@@ -982,7 +982,7 @@ print("""
 
 1. Physics类设计三原则 ✓
    - 配对性: A 与 A^T 必须配对
-   - 噪声分离: 前向模型 + 噪声模型独立设置
+   - 噪声分离: 正向模型 + 噪声模型独立设置
    - 可组合性: 算子可通过乘法组合
 
 2. 自定义LinearPhysics子类 ✓
@@ -1042,7 +1042,7 @@ def _to_native(obj):
 
 
 results = {
-    'experiment': '实验18.2-1 自定义前向算子与伴随验证',
+    'experiment': '实验18.2-1 自定义正向算子与伴随验证',
     'environment': {
         'device': str(device),
         'torch_version': torch.__version__,

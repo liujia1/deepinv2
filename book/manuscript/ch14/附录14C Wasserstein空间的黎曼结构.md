@@ -1,6 +1,6 @@
 # 附录14C Wasserstein空间的黎曼结构
 
-> **定位**：对理解 OT 与生成模型的关系有深层价值，但涉及黎曼几何，超出本书主要读者群体的背景。本附录提供概念性介绍，严格数学处理参见 Villani (2008) 和 Ambrosio et al. (2008)。想"看懂主线"的读者可以只读加粗的三句话。
+> **定位**：对理解 OT 与生成模型的关系有深层价值，但涉及黎曼几何，超出本书主要读者群体的背景。本附录提供概念性介绍，严格数学处理参见 @villani2008optimal 和 @ambrosio2008gradient。想"看懂主线"的读者可以只读加粗的三句话。
 
 ## 概率分布空间上的黎曼结构
 
@@ -30,7 +30,7 @@ $$\langle v_1, v_2 \rangle_\mu = \int \langle v_1(\mathbf{x}), v_2(\mathbf{x}) \
 
 ### Otto calculus（白话：在分布空间里做微积分）
 
-Otto (2001) 发展了一套在 Wasserstein 空间上的微分计算，叫 **Otto calculus**——把概率分布空间看成无限维黎曼流形，梯度、Hessian、测地线都有对应版本。Wasserstein 梯度：
+@otto2001geometry 发展了一套在 Wasserstein 空间上的微分计算，叫 **Otto calculus**——把概率分布空间看成无限维黎曼流形，梯度、Hessian、测地线都有对应版本。Wasserstein 梯度：
 
 $$\text{grad}_W \mathcal{F}(\mu) = \nabla \frac{\delta \mathcal{F}}{\delta \mu}$$
 

@@ -150,7 +150,7 @@ def main():
 
     # ---------- 报告 ----------
     lines = ["# 交叉引用审计报告", ""]
-    lines.append(f"- 审计范围：绪论之外的 18 章写作源，共 {sum(len(i['mds']) for i in idx.values())} 个 md 文件")
+    lines.append(f"- 审计范围：绪论之外的 {len(idx)} 章写作源，共 {sum(len(i['mds']) for i in idx.values())} 个 md 文件")
     lines.append("")
     lines.append("## 总体统计")
     lines.append("")
@@ -171,7 +171,14 @@ def main():
             t = md.read_text(encoding="utf-8", errors="replace")
             n_angle += len(RE_IMG.findall(t))
             n_plain += len(RE_IMG_PLAIN.findall(t))
-    lines.append(f"- 图片引用形式：尖括号式 `![](<...>)` {n_angle} 处，普通式 `![](...)` {n_plain} 处，其中 URL 编码路径（`%20`）{stats['img_urlencoded']} 处 —— **三种格式问题并存，Phase 5 排版前需统一并去编码**")
+    lines.append(f"- 图片引用形式：尖括号式 `![](<...>)` {n_angle} 处，普通式 `![](...)` {n_plain} 处，其中 URL 编码路径（`%20`）{stats['img_urlencoded']} 处")
+    kinds = sum(1 for n in (n_angle, n_plain) if n)
+    if kinds <= 1 and not stats['img_urlencoded']:
+        lines.append(f"  - 结论：图片引用已统一为{'尖括号式' if n_angle else '普通式'}，且无 URL 编码路径")
+    elif kinds > 1:
+        lines.append("  - 结论：两种图片引用写法并存，排版前需统一")
+    if stats['img_urlencoded']:
+        lines.append(f"  - 结论：存在 {stats['img_urlencoded']} 处 URL 编码路径（`%20` 等），排版前需去编码")
     lines.append("")
 
     n_prob = sum(len(v) for v in problems.values())

@@ -156,7 +156,7 @@ def vp_beta(t):
 def vp_marginal_params(t):
     """VP-SDE边际分布参数
     
-    前向VP-SDE: dx = -β(t)/2·x dt + √β(t) dW
+    正向VP-SDE: dx = -β(t)/2·x dt + √β(t) dW
     边际分布: p_t(x) = N(x; m(t)·x_0, v(t)·I)
     其中 m(t) 由 β(t) 的积分决定（线性β下可解析求出）：
 

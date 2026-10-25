@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-实验10.4-2 层级VAE的前向与逆向过程 (编码/解码 ↔ 加噪/去噪)
+实验10.4-2 层级VAE的正向与逆向过程 (编码/解码 ↔ 加噪/去噪)
 对应章节: 10.4 层级 VAE → 扩散的极限
 
 知识点:
   - 层级VAE编码器=逐步加噪: q(x_t|x_{t-1}) = N(sqrt(alpha_t)x_{t-1}, beta_t)
   - 层级VAE解码器=逐步去噪: p(x_{t-1}|x_t) 用正向后验均值 tilde_mu 还原上一步
-  - 前向把干净信号逐步埋进噪声，逆向按后验均值逐步去噪
+  - 正向把干净信号逐步埋进噪声，逆向按后验均值逐步去噪
   - 若已知真 x0 (oracle)，t=1 处后验方差为 0（coeff_t=0, coeff_0=1），
     逆链末步等价于把 x0 原样写回 —— 因此点重建误差恒等于 |x0_used - x0_true|，
     这是后验坍缩的恒等式，不是对随机编码链可逆性的检验，也与链长 L 无关
@@ -14,7 +14,7 @@
     这正是去噪网络(10.3)要学的东西：去逼近理想后验均值
 
 实验内容:
-  步骤1: 层级VAE前向过程 (逐层加噪, 观察信号被噪声淹没)
+  步骤1: 层级VAE正向过程 (逐层加噪, 观察信号被噪声淹没)
   步骤2: 理想解码器 = 后验均值 (Oracle 已知 x0) → 误差恒等于 |x0_used-x0_true|（t=1 后验坍缩）
   步骤3: 不完美解码器 (只知 x_t, x0 需估计) → 往返误差非零, 说明需训练去噪器
 
@@ -75,7 +75,7 @@ except ImportError:
 # 注: 本脚本所有随机性均由显式 np.random.default_rng(seed) 控制,
 # 因此无需(也不应)调用顶层 np.random.seed(), 以免误以为它控制全局随机。
 print("\n" + "="*60)
-print("实验10.4-2: 层级VAE的前向与逆向过程")
+print("实验10.4-2: 层级VAE的正向与逆向过程")
 print("="*60)
 print("对应章节: 10.4 层级 VAE → 扩散的极限")
 print("使用设备: CPU (本实验不需要GPU)")
@@ -83,10 +83,10 @@ print("说明: 与实验10.4-1互补——10.4-1看L→∞连续极限, 本实�
 
 
 # ============================================================
-# 工具函数: 层级VAE前向(逐层加噪) 与 逆向(逐层去噪)
+# 工具函数: 层级VAE正向(逐层加噪) 与 逆向(逐层去噪)
 # ============================================================
 def forward_chain(x0, L, beta_total=1.0, rng=None):
-    """层级VAE前向: 从干净 x0 出发逐层加噪。
+    """层级VAE正向: 从干净 x0 出发逐层加噪。
 
     编码器 q(x_t|x_{t-1}) = N(sqrt(alpha_t) x_{t-1}, beta_t):
         x_t = sqrt(alpha) x_{t-1} + sqrt(beta) eps
@@ -195,10 +195,10 @@ def bias_compound_factor(L, eps, beta_total=1.0):
 
 
 # ============================================================
-# 步骤1：层级VAE前向过程 —— 逐层加噪
+# 步骤1：层级VAE正向过程 —— 逐层加噪
 # ============================================================
 print("\n" + "="*60)
-print("步骤1：层级VAE前向过程 (逐层加噪)")
+print("步骤1：层级VAE正向过程 (逐层加噪)")
 print("="*60)
 print("\n[核心思想]")
 print("  层级 VAE 编码器就是逐层加噪:")
@@ -211,10 +211,10 @@ beta_total = 1.0
 
 rng = np.random.default_rng(0)
 states_5, beta_5 = forward_chain(x0, L=5, beta_total=beta_total, rng=rng)
-print("\nL=5 前向链各步:", np.round(states_5, 3))
+print("\nL=5 正向链各步:", np.round(states_5, 3))
 print("末态值 =", round(states_5[-1], 3), "(单条链在 t=L 处的一次噪声态采样)")
 
-print("\n同一 x0=1.5 出发, 不同 L 下前向链的末态(随机种子相同, L=5/50/500):")
+print("\n同一 x0=1.5 出发, 不同 L 下正向链的末态(随机种子相同, L=5/50/500):")
 print("  注意: beta_total=1.0 是固定总量, 只是被切分成 L 层,")
 print("  sqrt(ab_L)=(1-1/L)^{L/2} 随 L→∞ 收敛到 sqrt(e^{-1})≈0.607, 并非 0,")
 print("  即末态分布收敛到终端边际 N(sqrt(e^{-1})x0, 1-e^{-1}), 而不是标准高斯 N(0,1)。")
@@ -240,7 +240,7 @@ print("步骤2：理想解码器 = 后验均值 (Oracle 已知 x0)")
 print("="*60)
 print("\n[核心思想]")
 print("  后验均值 tilde_mu_t 在 t=1 处退化为点质量: coeff_t=0, coeff_0=1,")
-print("  故 recon[0] 恒等于 x0_used —— 与 x_L、与前向链、与 L 全部无关。")
+print("  故 recon[0] 恒等于 x0_used —— 与 x_L、与正向链、与 L 全部无关。")
 print("  因此'误差≈0'只是在说 x0_used 猜对了，并不能检验编码链的可逆性。")
 
 recon_5 = reverse_chain(states_5, beta_5, x0_used=x0)
@@ -249,7 +249,7 @@ print("重建首步 (应为 x0=" + str(x0) + "):", round(recon_5[0], 6))
 
 # 多样本统计: 理想解码的往返误差恒为 0 (t=1 坍缩恒等式，非可逆性检验)
 print("\n多样本统计 (每种 L 做 5000 次随机往返):")
-print("  循环前向加噪 → 理想解码(已知真 x0) → 记录平均绝对误差")
+print("  循环正向加噪 → 理想解码(已知真 x0) → 记录平均绝对误差")
 print("     L      平均往返绝对误差")
 print("-" * 32)
 for L in [5, 20, 100]:
@@ -388,11 +388,11 @@ print("="*60)
 
 fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 
-# (a) 前向链: 干净信号被逐步埋进噪声
+# (a) 正向链: 干净信号被逐步埋进噪声
 ax = axes[0, 0]
 rng_a = np.random.default_rng(0)
 states_a, beta_a = forward_chain(x0, L=100, beta_total=beta_total, rng=rng_a)
-ax.plot(range(len(states_a)), states_a, 'b-', linewidth=1.5, label='前向链 $x_t$')
+ax.plot(range(len(states_a)), states_a, 'b-', linewidth=1.5, label='正向链 $x_t$')
 ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
 ax.axhline(x0, color='red', linestyle='--', alpha=0.6, label='干净信号 $x_0=' + str(x0) + '$')
 ax.annotate('$x_0$', xy=(0, x0), xytext=(8, x0 + 0.25), fontsize=10, color='red')
@@ -402,20 +402,20 @@ ax.annotate('$\\to$ 终端边际 (非 $N(0,1)$)', xy=(0.85, 0.92), xycoords='axe
             bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8, edgecolor='blue'))
 ax.set_xlabel('编码步数 $t$', fontsize=12)
 ax.set_ylabel('$x_t$', fontsize=12)
-ax.set_title('(a) 前向过程: 逐层加噪埋没信号', fontsize=13)
+ax.set_title('(a) 正向过程: 逐层加噪埋没信号', fontsize=13)
 ax.legend(fontsize=10)
 ax.grid(True, alpha=0.3)
 
 # (b) 理想逆向: 后验均值去噪（终点由 t=1 坍缩确定）
 ax = axes[0, 1]
 recon_a = reverse_chain(states_a, beta_a, x0_used=x0)
-ax.plot(range(len(states_a)), states_a, 'b-', linewidth=1.2, alpha=0.5, label='前向 $x_t$')
+ax.plot(range(len(states_a)), states_a, 'b-', linewidth=1.2, alpha=0.5, label='正向 $x_t$')
 ax.plot(range(len(recon_a)), recon_a, 'r-', linewidth=1.8, label='理想逆向重建 $\\tilde{x}_t$')
 ax.axhline(x0, color='gray', linestyle='--', alpha=0.6, label='干净信号 $x_0$')
 ax.annotate('重建终点由 $t=1$ 坍缩直接写入 $x_0$', xy=(0, recon_a[0]), xytext=(0.30, 0.92),
             textcoords='axes fraction', fontsize=10, color='red',
             arrowprops=dict(arrowstyle='->', color='red', alpha=0.6))
-ax.set_xlabel('步数 (前向从左到右, 逆向从右到左)', fontsize=12)
+ax.set_xlabel('步数 (正向从左到右, 逆向从右到左)', fontsize=12)
 ax.set_ylabel('$x$', fontsize=12)
 ax.set_title('(b) 理想解码器: 后验均值去噪（终点为后验坍缩）', fontsize=13)
 ax.legend(fontsize=9)
@@ -440,7 +440,7 @@ mu_ss = np.sqrt(np.exp(-beta_total)) * x0_c
 var_ss = 1.0 - np.exp(-beta_total)
 ax.plot(xs, np.exp(-(xs - mu_ss) ** 2 / (2 * var_ss)) / np.sqrt(2 * np.pi * var_ss),
         'r--', linewidth=2, label='终端边际 $N(\\sqrt{e^{-1}}x_0,\\,1-e^{-1})$')
-ax.set_xlabel('前向末态 $x_L$', fontsize=12)
+ax.set_xlabel('正向末态 $x_L$', fontsize=12)
 ax.set_ylabel('概率密度', fontsize=12)
 ax.set_title('(c) 末态分布: 固定 $\\beta_{total}$ 收敛到终端边际 (非 $N(0,1)$)', fontsize=13)
 ax.legend(fontsize=10)
@@ -532,7 +532,7 @@ print("     而非 N(0,1); 终端边际不是链的平稳分布(固定逐步 bet
 print("     要真正趋于 N(0,1) 需 beta_total→∞ (10.4-1 连续极限范畴)")
 print("\n2. 理想解码器 = 后验均值 → 往返误差恒为 0 是恒等式, 不是可逆性证明 (步骤2)")
 print("   - t=1 处后验方差为 0 (coeff_t=0, coeff_0=1), recon[0] ≡ x0_used")
-print("   - 所以误差恒为 |x0_used-x0_true|=0 与链长 L、与前向噪声全部无关")
+print("   - 所以误差恒为 |x0_used-x0_true|=0 与链长 L、与正向噪声全部无关")
 print("   - 难点不在层数, 而在解码器现实里不知道 x0")
 print("\n3. 不完美解码器需估计 x0 → 往返误差 = x0 估计误差 (步骤3)")
 print("   - t=1 处后验坍缩: 任何 x0_used 在首步都被原样复现")
@@ -542,7 +542,7 @@ print("     而单次有偏误差 = -eps·x0 与 L 无关 (见 步骤3_系统偏
 print("   - 乘性偏差为构造性误差模型: 若真实网络跨步估计非自洽、偏差方向一致,")
 print("     误差才会沿链累积 —— 这即 10.3 学习去噪器的意义")
 print("\n4. 与扩散模型的对应 (10.4 节)")
-print("   - 前向加噪 = 编码器, 逆向去噪 = 解码器")
+print("   - 正向加噪 = 编码器, 逆向去噪 = 解码器")
 print("   - 本实验聚焦离散层级链的机理; 连续极限 (L→∞→SDE) 见实验10.4-1")
 
 print("\n" + "="*60)

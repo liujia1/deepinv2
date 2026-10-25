@@ -162,7 +162,7 @@ $$\boxed{\nabla_{\mathbf{x}_t}\log p(\mathbf{y}|\mathbf{x}_t) \approx \zeta \cdo
 **Jacobian 省略合理性论证**：
 1. **量级吸收**：Jacobian `∇_{x_t}x̂_{0|t}` 本质是把 `x_0` 空间梯度重新缩放到 `x_t` 空间。这重新缩放效果可用标量因子 `ζ` 近似——把 Jacobian"平均缩放效果"吸收进 `ζ`。
 2. **方向保持**：许多情况 `∇_{x_t}x̂_{0|t}` 不显著改变梯度方向——主要影响大小。故省略 Jacobian 保留梯度方向，用 `ζ` 调大小，是合理折中。
-3. **实践经验**：Chung et al. (2023) 实验表明，选适当 `ζ` 后，省略 Jacobian 的 DPS 在多种逆问题上性能与完整算 Jacobian 版本相当——说明 `ζ` 能有效补偿 Jacobian 省略影响。
+3. **实践经验**：@chung2023dps 实验表明，选适当 `ζ` 后，省略 Jacobian 的 DPS 在多种逆问题上性能与完整算 Jacobian 版本相当——说明 `ζ` 能有效补偿 Jacobian 省略影响。
 
 **`ζ` 选择**：`ζ` 是超参数，通常 `ζ ∈ [0.1, 1.0]`（13.4.3节详讨 `ζ` 策略）。`ζ` 过大过拟合测量噪声，`ζ` 过小测量一致性不足——扮演与经典正则化参数 `λ` 相同角色。这里要强调：`ζ` 之所以远小于理论值 `1/(2σ_y²)`，一部分原因是 §4.4 讨论的标量缩放被一并吸收进了 `ζ`，两件事要分开看。
 
@@ -170,10 +170,10 @@ $$\boxed{\nabla_{\mathbf{x}_t}\log p(\mathbf{y}|\mathbf{x}_t) \approx \zeta \cdo
 
 13.3 的正文用的是“左乘转置”形式，这里保持同一记法。完整 Jacobian 可以拆成两个角色不同的部分：
 
-$$\nabla_{\mathbf{x}_t}\hat{x}_{0|t} = \frac{1}{\sqrt{\bar\alpha_t}}\Big[I + (1-\bar\alpha_t)\nabla_{\mathbf{x}_t}s_\theta(\mathbf{x}_t,t)\Big]$$
+$$\nabla_{\mathbf{x}_t}\hat{x}_{0|t} = \frac{1}{\sqrt{\bar{\alpha}_t}}\Big[I + (1-\bar{\alpha}_t)\nabla_{\mathbf{x}_t}s_\theta(\mathbf{x}_t,t)\Big]$$
 
 - 方括号里的 `I`：**各向同性的标量放大**，把 `x_0` 空间的长度单位换成 `x_t` 空间；
-- 方括号里的 `(1-\bar\alpha_t)\nabla_{x_t}s_\theta`：**方向形状**，得分网络的矩阵 Jacobian，负责把不同像素方向混合。
+- 方括号里的 `(1-\bar{\alpha}_t)\nabla_{x_t}s_\theta`：**方向形状**，得分网络的矩阵 Jacobian，负责把不同像素方向混合。
 
 §4.3 把整个 Jacobian 换成常数 1，跳过了中间一档：**把 Jacobian 当成标量 `c_t I`，只丢方向形状**。`c_t` 取什么决定了一切：
 
@@ -185,7 +185,7 @@ $$\nabla_{\mathbf{x}_t}\hat{x}_{0|t} = \frac{1}{\sqrt{\bar\alpha_t}}\Big[I + (1-
 
 **为什么 `mean_t` 是精确的**：设先验 `N(μ, v)`。VP 缩放下 `x_t` 的边缘方差是 `ᾱ_t v + (1-ᾱ_t)`，故 `∇_{x_t}s_θ = -I/(ᾱ_t v+1-ᾱ_t)`，代回上式：
 
-$$\nabla_{\mathbf{x}_t}\hat{x}_{0|t} = \frac{1}{\sqrt{\bar\alpha_t}}\left[1-\frac{1-\bar\alpha_t}{\bar\alpha_t v+1-\bar\alpha_t}\right]I = \frac{\sqrt{\bar\alpha_t}\,v}{\bar\alpha_t v+(1-\bar\alpha_t)}\,I$$
+$$\nabla_{\mathbf{x}_t}\hat{x}_{0|t} = \frac{1}{\sqrt{\bar{\alpha}_t}}\left[1-\frac{1-\bar{\alpha}_t}{\bar{\alpha}_t v+1-\bar{\alpha}_t}\right]I = \frac{\sqrt{\bar{\alpha}_t}\,v}{\bar{\alpha}_t v+(1-\bar{\alpha}_t)}\,I$$
 
 `v=1` 时分母 `ᾱ_t + 1 - ᾱ_t = 1`，结果恰为 `√ᾱ_t = mean_t`；一般 `v` 下它是 `(0, √ᾱ_t]` 上的正标量，量级不变。特别注意：**这个 `√ᾱ_t` 来自两项的相消**——`1/√ᾱ_t` 乘以 `ᾱ_t` 才得到它。单取方括号里的 `I`（即只留第一项）得到的是 `1/√ᾱ_t`，方向刚好相反；这里很容易写错一次。
 
@@ -201,27 +201,27 @@ $$\nabla_{\mathbf{x}_t}\hat{x}_{0|t} = \frac{1}{\sqrt{\bar\alpha_t}}\left[1-\fra
 
 VP-SDE（Variance Preserving SDE，第7章 7.2）正向过程：
 
-$$\mathbf{x}_t = \sqrt{\bar\alpha_t}\,\mathbf{x}_0 + \sqrt{1 - \bar\alpha_t}\,\varepsilon, \quad \varepsilon \sim \mathcal{N}(0, I)$$
+$$\mathbf{x}_t = \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0 + \sqrt{1 - \bar{\alpha}_t}\,\varepsilon, \quad \varepsilon \sim \mathcal{N}(0, I)$$
 
 `ᾱ_t = ∏_{s=1}^{t}(1 - β_s)` 是累积乘积，`β_t` 是噪声调度。正向转移核：
 
-$$p(\mathbf{x}_t|\mathbf{x}_0) = \mathcal{N}(\mathbf{x}_t; \sqrt{\bar\alpha_t}\,\mathbf{x}_0, (1-\bar\alpha_t)I)$$
+$$p(\mathbf{x}_t|\mathbf{x}_0) = \mathcal{N}(\mathbf{x}_t; \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0, (1-\bar{\alpha}_t)I)$$
 
 ### 5.2 VP-SDE 下的 Tweedie 估计
 
 由 Tweedie 等式（13.2.3节），VP-SDE 下后验均值：
 
-$$\hat{x}_{0|t} = \mathbb{E}[\mathbf{x}_0|\mathbf{x}_t] = \frac{\mathbf{x}_t + (1-\bar\alpha_t)\,\nabla_{\mathbf{x}_t}\log p_t(\mathbf{x}_t)}{\sqrt{\bar\alpha_t}}$$
+$$\hat{x}_{0|t} = \mathbb{E}[\mathbf{x}_0|\mathbf{x}_t] = \frac{\mathbf{x}_t + (1-\bar{\alpha}_t)\,\nabla_{\mathbf{x}_t}\log p_t(\mathbf{x}_t)}{\sqrt{\bar{\alpha}_t}}$$
 
 用 ε 预测参数化 `∇_{x_t}log p_t(x_t) = -ε_θ(x_t, t)/√(1-ᾱ_t)`（第11章 11.3），Tweedie 估计等价写成：
 
-$$\boxed{\hat{x}_{0|t} = \frac{\mathbf{x}_t - \sqrt{1-\bar\alpha_t}\,\varepsilon_\theta(\mathbf{x}_t, t)}{\sqrt{\bar\alpha_t}}}$$
+$$\boxed{\hat{x}_{0|t} = \frac{\mathbf{x}_t - \sqrt{1-\bar{\alpha}_t}\,\varepsilon_\theta(\mathbf{x}_t, t)}{\sqrt{\bar{\alpha}_t}}}$$
 
 这是 VP-SDE 下 DPS 算法用的去噪估计公式。
 
 也可用得分函数 `s_θ(x_t, t) ≈ ∇_{x_t}log p_t(x_t)` 直接表达：
 
-$$\hat{x}_{0|t} = \frac{\mathbf{x}_t + (1-\bar\alpha_t)\,s_\theta(\mathbf{x}_t, t)}{\sqrt{\bar\alpha_t}}$$
+$$\hat{x}_{0|t} = \frac{\mathbf{x}_t + (1-\bar{\alpha}_t)\,s_\theta(\mathbf{x}_t, t)}{\sqrt{\bar{\alpha}_t}}$$
 
 两种参数化完全等价——只差网络输出物理含义：`ε_θ` 预测噪声，`s_θ` 预测得分。
 
@@ -233,13 +233,13 @@ $$\nabla_{\mathbf{x}_t}\log p(\mathbf{x}_t|\mathbf{y}) \approx s_\theta(\mathbf{
 
 其中：
 
-$$\hat{x}_{0|t} = \frac{\mathbf{x}_t - \sqrt{1-\bar\alpha_t}\,\varepsilon_\theta(\mathbf{x}_t, t)}{\sqrt{\bar\alpha_t}}$$
+$$\hat{x}_{0|t} = \frac{\mathbf{x}_t - \sqrt{1-\bar{\alpha}_t}\,\varepsilon_\theta(\mathbf{x}_t, t)}{\sqrt{\bar{\alpha}_t}}$$
 
 **VP-SDE 下 DPS 采样步骤**（从 `t = T` 到 `t = 0`）：
 
 **Step 1**：算先验得分和去噪估计
 
-$$\varepsilon_t = \varepsilon_\theta(\mathbf{x}_t, t), \quad \hat{x}_{0|t} = \frac{\mathbf{x}_t - \sqrt{1-\bar\alpha_t}\,\varepsilon_t}{\sqrt{\bar\alpha_t}}$$
+$$\varepsilon_t = \varepsilon_\theta(\mathbf{x}_t, t), \quad \hat{x}_{0|t} = \frac{\mathbf{x}_t - \sqrt{1-\bar{\alpha}_t}\,\varepsilon_t}{\sqrt{\bar{\alpha}_t}}$$
 
 **Step 2**：算似然梯度修正项
 
@@ -247,7 +247,7 @@ $$g_t = \zeta \cdot \frac{A^\top(\mathbf{y} - A\hat{x}_{0|t})}{\sigma_y^2}$$
 
 **Step 3**：执行条件逆向 SDE 一步（以 DDPM 离散化为例）
 
-$$\mathbf{x}_{t-1} = \frac{1}{\sqrt{1-\beta_t}}\left(\mathbf{x}_t - \frac{\beta_t}{\sqrt{1-\bar\alpha_t}}\varepsilon_t\right) + \beta_t\,g_t + \sigma_t\,\varepsilon, \quad \varepsilon \sim \mathcal{N}(0, I)$$
+$$\mathbf{x}_{t-1} = \frac{1}{\sqrt{1-\beta_t}}\left(\mathbf{x}_t - \frac{\beta_t}{\sqrt{1-\bar{\alpha}_t}}\varepsilon_t\right) + \beta_t\,g_t + \sigma_t\,\varepsilon, \quad \varepsilon \sim \mathcal{N}(0, I)$$
 
 `σ_t` 是 DDPM 随机性参数。注意 `g_t` 前的符号是 `+`：逆向 SDE 中条件得分整体为 `s_θ + g_t`，统一进入 `+β_t(·)` 项；无条件的 `−β_t ε_t/√(1−ᾱ_t)` 已经体现在括号内（因为 `s_θ = −ε_t/√(1−ᾱ_t)`）。VE 版本（式 6.3）同理为 `+σ_t² g_t`，两者符号一致。
 
@@ -333,4 +333,4 @@ $$\underbrace{
 
 DPS 简洁性来自这两步近似的大胆简化——用 delta 替代不可解积分，用标量因子替代 Jacobian。这些近似使 DPS 计算极高效（每步仅一次额外前向传播和反传），但也引入理论不严格——这正是 ΠGDM（各向同性高斯近似）和 DOC（精确反传）等改进方法动机。从更深层次看，这两步近似揭示了一条普适的权衡法则：**任何条件扩散方法，都是在"近似精度"与"计算代价"之间选一个落脚点**，DPS 选择站在高效率、低精度的那一端。
 
-**来源**：Chung et al. (2023) "Diffusion Posterior Sampling for General Noisy Inverse Problems"；Chung et al. (2209.14687) §3.2 公式(31)-(33)；第7章7.2-7.3节VP-SDE/VE-SDE与逆向SDE；第5章5.3节Tweedie等式
+**来源**：@chung2023dps "Diffusion Posterior Sampling for General Noisy Inverse Problems"；Chung et al. (2209.14687) §3.2 公式(31)-(33)；第7章7.2-7.3节VP-SDE/VE-SDE与逆向SDE；第5章5.3节Tweedie等式
