@@ -30,9 +30,9 @@ $$s(t) = 1, \quad \sigma(t) = \sigma_{\min}\left(\frac{\sigma_{\max}}{\sigma_{\m
 
 **VP-SDE（DDPM）**：
 
-$$s(t) = \sqrt{\bar{\alpha}(t)}, \quad \sigma(t) = \sqrt{\frac{1-\bar{\alpha}(t)}{\bar{\alpha}(t)}}$$
+$$s(t) = \sqrt{\bar\alpha(t)}, \quad \sigma(t) = \sqrt{\frac{1-\bar\alpha(t)}{\bar\alpha(t)}}$$
 
-加噪过程：$\mathbf{x}_t = \sqrt{\bar{\alpha}(t)}\,\mathbf{x}_0 + \sqrt{1-\bar{\alpha}(t)}\,\varepsilon$——信号逐渐衰减，噪声相对增长。
+加噪过程：$\mathbf{x}_t = \sqrt{\bar\alpha(t)}\,\mathbf{x}_0 + \sqrt{1-\bar\alpha(t)}\,\varepsilon$——信号逐渐衰减，噪声相对增长。
 
 ### 等价的推理过程
 
@@ -62,8 +62,8 @@ $$\nabla_{\mathbf{x}_t}\log p_t(\mathbf{x}_t) = -\frac{\varepsilon_\theta(\mathb
 $s(t)=1$：$\nabla\log p_t(\mathbf{x}_t) = -\varepsilon_\theta/\sigma(t)$
 
 ### VP-SDE 特例
-$s(t)=\sqrt{\bar{\alpha}_t}$，$s(t)\sigma(t)=\sqrt{1-\bar{\alpha}_t}$：
-$$\nabla\log p_t(\mathbf{x}_t) = -\frac{\varepsilon_\theta(\mathbf{x}_t, t)}{\sqrt{1-\bar{\alpha}_t}}$$
+$s(t)=\sqrt{\bar\alpha_t}$，$s(t)\sigma(t)=\sqrt{1-\bar\alpha_t}$：
+$$\nabla\log p_t(\mathbf{x}_t) = -\frac{\varepsilon_\theta(\mathbf{x}_t, t)}{\sqrt{1-\bar\alpha_t}}$$
 
 ---
 
@@ -73,7 +73,7 @@ $$\nabla\log p_t(\mathbf{x}_t) = -\frac{\varepsilon_\theta(\mathbf{x}_t, t)}{\sq
 
 $$\mathcal{J}_\text{DSM}(\theta) = \frac{1}{2}\int \frac{\lambda(t)}{s^2(t)\sigma^2(t)}\,\mathbb{E}_{\mathbf{x}_0,\varepsilon}\left[\|\varepsilon - \varepsilon_\theta(\mathbf{x}_t, t)\|^2\right]dt$$
 
-注意分母 $s^2(t)\sigma^2(t)$ 正是扰动方差（B.1 中 $q(\mathbf{x}_t|\mathbf{x}_0)$ 的方差），它统一了 12.4 里"VE 用 $\sigma^2$、VP 用 $1-\bar{\alpha}$"两种分母——因为 VP 下 $s^2\sigma^2 = \bar{\alpha} \cdot (1-\bar{\alpha})/\bar{\alpha} = 1-\bar{\alpha}$。
+注意分母 $s^2(t)\sigma^2(t)$ 正是扰动方差（B.1 中 $q(\mathbf{x}_t|\mathbf{x}_0)$ 的方差），它统一了 12.4 里"VE 用 $\sigma^2$、VP 用 $1-\bar\alpha$"两种分母——因为 VP 下 $s^2\sigma^2 = \bar\alpha \cdot (1-\bar\alpha)/\bar\alpha = 1-\bar\alpha$。
 
 ### 统一 VLB 目标
 
@@ -95,19 +95,19 @@ $w(t)$ 由 $(s(t), \sigma(t))$ 的动力学方程确定。
 
 给定 VE-SDE 下的权重 $\lambda_\text{VE}(\sigma)$，可通过 SNR 对应映射到 VP-SDE 下的权重：
 
-1. 建立 SNR 对应：$\sigma_\text{VE} \leftrightarrow \sigma_\text{VP}(t) = \sqrt{(1-\bar{\alpha}_t)/\bar{\alpha}_t}$
+1. 建立 SNR 对应：$\sigma_\text{VE} \leftrightarrow \sigma_\text{VP}(t) = \sqrt{(1-\bar\alpha_t)/\bar\alpha_t}$
 2. 把 $\lambda_\text{VE}(\sigma)$ 里的 $\sigma$ 替换成 $\sigma_\text{VP}(t)$
 3. **把信号缩放乘回去**：$\lambda_\text{VE}$ 的自变量是扰动噪声的标准差，在统一记法下它等于 $s(t)\sigma(t)$（B.1 中 $q(\mathbf{x}_t|\mathbf{x}_0)$ 的方差为 $s^2\sigma^2$），因此映射到 VP 后应写成 $\lambda_\text{VP}(t)=s^2(t)\sigma_\text{VP}^2(t)$
 
 第 3 步最容易被漏掉。当 $\lambda_\text{VE}(\sigma)=\sigma^2$（NCSN 默认）时：
 
-$$\lambda_\text{VP}(t) = s^2(t)\sigma_\text{VP}^2(t) = \bar{\alpha}_t\cdot\frac{1-\bar{\alpha}_t}{\bar{\alpha}_t} = 1-\bar{\alpha}_t$$
+$$\lambda_\text{VP}(t) = s^2(t)\sigma_\text{VP}^2(t) = \bar\alpha_t\cdot\frac{1-\bar\alpha_t}{\bar\alpha_t} = 1-\bar\alpha_t$$
 
 此时 DSM 权重（含 B.3 目标前的 $1/2$）为：
 
-$$\frac{1}{2}\cdot\frac{\lambda_\text{VP}(t)}{s^2(t)\sigma_\text{VP}^2(t)} = \frac{1-\bar{\alpha}_t}{2(1-\bar{\alpha}_t)} = \frac{1}{2}$$
+$$\frac{1}{2}\cdot\frac{\lambda_\text{VP}(t)}{s^2(t)\sigma_\text{VP}^2(t)} = \frac{1-\bar\alpha_t}{2(1-\bar\alpha_t)} = \frac{1}{2}$$
 
-**它对任意 $t$ 精确等于 $1/2$**，与 VP-SDE 下简化 VLB 的均匀权重逐点相同（仅差常数因子 2），不是“$\bar{\alpha}_t\approx1$ 时的近似”。若漏掉第 3 步，会得到 $1/\bar{\alpha}_t$，只能靠 $\bar{\alpha}_t\approx1$ 勉强近似——这正是把一个精确恒等式误读成近似的典型来源（参见 12.4 “简化目标下的等价性”）。
+**它对任意 $t$ 精确等于 $1/2$**，与 VP-SDE 下简化 VLB 的均匀权重逐点相同（仅差常数因子 2），不是“$\bar\alpha_t\approx1$ 时的近似”。若漏掉第 3 步，会得到 $1/\bar\alpha_t$，只能靠 $\bar\alpha_t\approx1$ 勉强近似——这正是把一个精确恒等式误读成近似的典型来源（参见 12.4 “简化目标下的等价性”）。
 
 ---
 
@@ -142,6 +142,6 @@ $$c_{\text{in}}(\sigma) = \frac{1}{\sqrt{\sigma^2 + \sigma_{\text{data}}^2}},\qu
 
 ### 与 VE / VP 的关系：一套设计"一记两通"
 
-上述推导写在 VE 规范（$s(t)=1$，$\mathbf{x} = \mathbf{x}_0 + \sigma\,\varepsilon$）下，四个系数**只依赖 $\sigma$**。回到 B.1 的核心观察——推理只取决于噪声水平 $\sigma(t)$、与信号缩放 $s(t)$ 无关——对 VP-SDE 只需把 $\sigma$ 换成 $\sigma_{\text{VP}}(t) = \sqrt{(1-\bar{\alpha}_t)/\bar{\alpha}_t}$，整套最优设计原样适用；两种参数化下网络输出动态范围的差异，由 $c_{\text{in}}, c_{\text{out}}$ 自动吸收。
+上述推导写在 VE 规范（$s(t)=1$，$\mathbf{x} = \mathbf{x}_0 + \sigma\,\varepsilon$）下，四个系数**只依赖 $\sigma$**。回到 B.1 的核心观察——推理只取决于噪声水平 $\sigma(t)$、与信号缩放 $s(t)$ 无关——对 VP-SDE 只需把 $\sigma$ 换成 $\sigma_{\text{VP}}(t) = \sqrt{(1-\bar\alpha_t)/\bar\alpha_t}$，整套最优设计原样适用；两种参数化下网络输出动态范围的差异，由 $c_{\text{in}}, c_{\text{out}}$ 自动吸收。
 
 这说明"VE 与 VP 是同一框架的两种参数化"不仅体现在推理层面（B.1–B.2），也落地到**训练实现**层面：连最优网络预处理都共享同一组关于 $\sigma$ 的闭式公式。至此，正向 SDE 与转移核（B.1）、得分与训练目标（B.2–B.3）、权重映射（B.4）与最优预处理（本节）五个环节，都被统一在同一组 $(s(t), \sigma(t))$ 参数化之下——附录 7B 遗留的"表面差异"被彻底消解。

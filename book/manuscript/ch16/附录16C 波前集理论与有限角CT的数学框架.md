@@ -30,7 +30,7 @@ $$(\mathbf{x}_0,\xi_0) \in WF(u) \iff \text{存在 }\theta_0\text{ 使得 }(\the
 
 ## C.3 有限角CT的可见性定理
 
-**定理**（Greenleaf & Uhlmann 1989；Frikel & Quinto 2013）：设测量角度范围为 $\Theta \subset [0,\pi)$，则从有限角度数据 $\mathcal{R}_\Theta u$ 能稳定恢复的波前集为：
+**定理**（Greenleaf & Uhlmann 1990；Frikel & Quinto 2013）：设测量角度范围为 $\Theta \subset [0,\pi)$，则从有限角度数据 $\mathcal{R}_\Theta u$ 能稳定恢复的波前集为：
 
 $$WF_{\text{visible}}(u) = \{(\mathbf{x},\xi) \in WF(u) : \xi/|\xi| = (\cos\theta,\sin\theta),\ \theta \in \Theta\}$$
 
@@ -58,4 +58,3 @@ $$WF_{\text{invisible}}(u) = \{(\mathbf{x},\xi) \in WF(u) : \xi/|\xi| \notin \Th
 
 这也正是 16.2.3、16.4、16.5 一脉相承的线索：正向算子决定了哪些波前集信息进入测量（这是数学的硬约束），而先验——无论来自剪切波的统计模型，还是来自学习网络的映射、扩散模型的分布——决定了不可见那部分信息能否被合理地猜回。波前集理论划定了"不可救的边缘"，也反过来指明了"学习型 / 扩散先验"的用武之地。
 
-**来源**：@greenleaf1989visibility；@quinto1993limitedangle；@frikel2013deconv；@bubba2019learning Inverse Problems；@natterer1986ct

@@ -74,7 +74,7 @@ $$\mathcal{L}_{\text{R2R}} = \underbrace{\|\mathbf{y} - f(\mathbf{y})\|^2 + 2\si
 
 即：$\mathcal{L}_{\text{R2R}}$ 与 $\mathcal{L}_{\text{SURE}}$ 相差一个**与 $f$ 无关**的项 $n\sigma^2/\alpha^2$。最小化时它对 $f$ 的梯度为零，所以两者的最优解相同——这正是 R2R “不用算散度也能学对”的数学根据。
 
-（对线性 $f(\mathbf{y}) = J\mathbf{y}$，$O(\alpha^2)$ 项可精确算为 $\alpha^2\sigma^2\|J_f\|_F^2$：取 $n=10,\sigma=1,\alpha\in\{0.5,0.2,0.1\}$，蒙特卡洛残差分别为 $1.2248, 0.1955, 0.0480$，与 $\alpha^2\sigma^2\|J\|_F^2 = 1.225, 0.196, 0.049$ 逐项吻合。）
+（对线性 $f(\mathbf{y}) = Jy$，$O(\alpha^2)$ 项可精确算为 $\alpha^2\sigma^2\|J_f\|_F^2$：取 $n=10,\sigma=1,\alpha\in\{0.5,0.2,0.1\}$，蒙特卡洛残差分别为 $1.2248, 0.1955, 0.0480$，与 $\alpha^2\sigma^2\|J\|_F^2 = 1.225, 0.196, 0.049$ 逐项吻合。）
 
 ---
 

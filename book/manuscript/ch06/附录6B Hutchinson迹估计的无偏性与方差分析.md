@@ -75,5 +75,3 @@ SSM 里 $A=\nabla_x s_\theta(\mathbf{x})$ 是得分网络的 Jacobian。要估 $
 实践中 $M=1$ 就能拿无偏估计（方差大点无所谓），多次平均再降方差。SSM 训练常取 $M=1$，因为训练本身的小批量采样和 SGD 噪声已经能平滑单次估计的方差。
 
 从更深层次看，这一"无偏但略抖、可以靠多次平均补救"的特点，正是随机投射类方法共通的代价与便捷：用可控的方差交换掉高不可攀的精确计算。
-
-**来源**：@hutchinson1990stochastic; @song2019ncsn Sliced Score Matching

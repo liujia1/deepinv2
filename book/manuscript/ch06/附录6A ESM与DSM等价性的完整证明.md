@@ -92,5 +92,3 @@ $C(\sigma)$ 只依赖噪声水平 $\sigma$ 和数据分布 $p(\mathbf{x})$，与
 1. **为什么交叉项相等**：直觉上，边际得分 $\nabla\log q_\sigma(\tilde{\mathbf{x}})$ 是"对 $\mathbf{x}$ 平均之后"的得分；条件得分 $\nabla\log q_\sigma(\tilde{\mathbf{x}}|\mathbf{x})$ 是"给定 $\mathbf{x}$"的得分。对 $\mathbf{x}$ 取条件期望，恰好回到边际得分——这其实是 Tweedie 等式的一种推广。
 2. **$C(\sigma)$ 的符号**：由 Jensen 不等式，边际得分范数 $\le$ 条件得分范数的期望，故 $C(\sigma)\ge0$。
 3. **$\sigma\to0$ 的极限**：此时 $q_\sigma(\tilde{\mathbf{x}})\to p(\tilde{\mathbf{x}})$，$q_\sigma(\tilde{\mathbf{x}}|\mathbf{x})\to\delta(\tilde{\mathbf{x}}-\mathbf{x})$，$C(\sigma)\to0$，DSM 与 ESM 完全一致。这一极限也解释了 6.3 节"$\sigma$ 足够小时 $s_{\theta^*}\approx\nabla\log p$"的说法，并为 6.5 节"$\sigma$ 太小会有低密度区问题"埋下伏笔。
-
-**来源**：@vincent2011stacked; Tutorial_Diffusion_Imaging_Vision Theorem 3.4

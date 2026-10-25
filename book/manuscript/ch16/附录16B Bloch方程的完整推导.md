@@ -20,11 +20,11 @@ $$A(t) = \begin{pmatrix} -1/T_2 & \gamma B_z & -\gamma B_y \\ -\gamma B_z & -1/T
 
 ## B.2 旋转部分的解析解
 
-在没有弛豫项时（$T_1,T_2 \to \infty$），磁化矢量绕 $\mathbf{z}$ 轴做 Larmor 进动（Larmor precession，像陀螺绕轴转）：
+在没有弛豫项时（$T_1,T_2 \to \infty$），磁化矢量绕 $z$ 轴做 Larmor 进动（Larmor precession，像陀螺绕轴转）：
 
 $$\mathbf{m}(t) = R_z(\omega_0 t) \mathbf{m}(0)$$
 
-其中 $\omega_0 = \gamma B_0$ 是 Larmor 频率，$R_z(\phi)$ 是绕 $\mathbf{z}$ 轴转 $\phi$ 角的旋转矩阵：
+其中 $\omega_0 = \gamma B_0$ 是 Larmor 频率，$R_z(\phi)$ 是绕 $z$ 轴转 $\phi$ 角的旋转矩阵：
 
 $$R_z(\phi) = \begin{pmatrix} \cos\phi & -\sin\phi & 0 \\ \sin\phi & \cos\phi & 0 \\ 0 & 0 & 1 \end{pmatrix}$$
 
@@ -68,4 +68,3 @@ $$s(\mathbf{k}) = \int u(\mathbf{r}) e^{-2\pi i \mathbf{k}\cdot\mathbf{r}} d\mat
 
 走到这一步，"从自旋到 k-space"的链条便完整闭合：磁化矢量在梯度中进动（旋转项）、随时间弛豫（弛豫项），线圈读到的合成信号正好是对有效自旋密度的傅里叶采样。也就是说，MRI 求逆问题的难度并不在于"信号难解"，而在于"我们选择只采一部分频率"——这正是 16.3.3、16.3.4 加速采集及后续学习型、扩散方法的真正切入点。
 
-**来源**：IP_and_Im_Lectures-master magnetic_resonance_imaging.md；@bloch1946nmr Nuclear Induction

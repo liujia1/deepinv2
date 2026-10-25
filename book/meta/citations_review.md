@@ -7,6 +7,7 @@
 > - B/C 节其余非正式来源处置、A.2 同名消歧结论，见 `citations_mapping.md` 第一/三节与 `verify_checklist.md` 2026-10-21 修订日志。
 > **2026-10-21 正文修正已完成**（不等 Phase 5）：① 13.3#630 及 #815/#944 来源行的 "Wu et al. (2024) SMCDiff" → "Trippe et al. (2022)"（写作源与成书树同步；bib 键更名为 trippe2022smcdiff）；② 12.7#158 与 13.3#742 的 "Chung et al. (2025)" → "Daras et al. (2024)"。**13.3#746 "DPPS（Wu et al., 2024）" 同日坐实**（该处引用本就正确）：Hongjie Wu 等 9 人，*Diffusion Posterior Proximal Sampling for Image Restoration*, ACM MM 2024, pp. 214–223（arXiv:2402.16907），bib 键 `wu2024dpps`。扫描已重跑：仍 **211 条 / 602 次**（+Trippe 2022 ×3、−Chung 2025 ×2、Wu 2024 余 1、Daras 2024 ×8）；⚠ 待核清零。
 
+> **2026-10-25 二次口径修正**：扫描根已由不参与构建的旧镜像 `book/manuscript/` 改为构建源（仓库根 `第N章*/` + `绪论/`），且 Phase 5 已把大量散文引用转成 `@key` citeproc——故本文件「211 条 / 602 次」是**旧镜像 + citeproc 转换前**的快照，不是现基线。现基线：重跑 `scan_citations.py` 得 **19 目录 / 185 md / 95 条散文引用**（`citations_raw.csv` 96 行含表头）↔ `citations_mapping.md` **213 行映射** ↔ `references.bib` **199 键**（`validate_bib.py` rc=0，第 5 项已改单向覆盖）。下列表格与条目保留为历史快照，数值不再维护。
 > 工具：`book/tools/scan_citations.py`（2026-10-18 升级 v3：支持连字符姓氏跨大写、中文连接符多作者、"等人"式、APA 全名式/斜体文献式、arXiv 编号式、括号内前缀/后缀/会场名、同括号多引用拆分；作者串自动清洗：剥首字母缩写、去附录编号残留、标题/会场剥离、中文连接符归一、模型缩写过滤）。
 > 扫描范围：`book/manuscript/` 全部 180 个正文 md（排除代码块、行内代码、`$...$` 公式）。
 > 逐条上下文样例见 `.audit_tmp/scan_citations_out_utf8.txt`（旧版）与 `.audit_tmp/scan_v6_out.txt`（升级版）；机器可读版见 `citations_raw.csv`。

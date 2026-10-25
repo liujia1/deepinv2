@@ -92,4 +92,3 @@ $$\mathbb{E}_{q(\mathbf{x},\mathbf{z})}[\log p(\mathbf{x}|\mathbf{z})] \;\leq\; 
 
 最大化重建项等价于抬高互信息的下界——即 $\mathbf{z}$ 应尽量多携带 $\mathbf{x}$ 的信息。这和第 9 章 VAE"编码器要保留信息"的直觉一致。
 
-**来源**：@cover2006information Elements of Information Theory; @minka2005divergence Divergence measures and message passing; @higgins2017betavae $\beta$-VAE; @alemi2017vib Fixing a Broken ELBO

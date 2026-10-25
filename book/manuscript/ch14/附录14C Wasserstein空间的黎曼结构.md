@@ -62,5 +62,3 @@ $$\frac{\partial \mu_t}{\partial t} = \nabla\cdot(\mu_t\,\text{grad}_W\text{KL})
 - Ambrosio, L., Gigli, N., & Savaré, G. (2008). *Gradient Flows in Metric Spaces and in the Space of Probability Measures*. Birkhäuser.
 - Otto, F. (2001). The geometry of dissipative evolution equations: the porous medium equation. *Communications in Partial Differential Equations*, 26(1-2), 101-174.
 - Villani, C. (2008). *Optimal Transport: Old and New*. Springer.
-
-**来源**：Villani (2008) Ch. 7-8; Ambrosio et al. (2008) Ch. 8; Otto (2001); Santambrogio (2015) Ch. 7
