@@ -1,7 +1,7 @@
 # 正文引用 ↔ bib 键 对照表（Phase 3 交付物）
 
 > 用途：Phase 5 排版时，按本表把正文里每一处散文式 `Author (Year)` 替换为 `\cite{bibkey}`。
-> 输入：`meta/citations_review.md` 反查 211 条（实例计数）；产出键见 `meta/references.bib`（去重合并后 **197 键**，经 `book/tools/validate_bib.py` 校验通过；历史：200→198→197→196→197——废弃 2 键（holden2022langevin 后平反、chung2025survey redirect）+ 新增 laumont2023convergence + 2026-10-21 tachella2025unknown 合并入 tachella2025unsure + 新增 wu2024dpps（DPPS 坐实））。
+> 输入：`meta/citations_review.md` 反查 211 条（实例计数）；产出键见 `meta/references.bib`（去重合并后 **198 键**，经 `book/tools/validate_bib.py` 校验通过；历史：200→198→197→196→197→198——废弃 2 键（holden2022langevin 后平反、chung2025survey redirect）+ 新增 laumont2023convergence + 2026-10-21 tachella2025unknown 合并入 tachella2025unsure + 新增 wu2024dpps（DPPS 坐实）+ 2026-10-25 E1 返工：新增 laumont2022langevintweedie(WT)+hurault2024convergence、废弃 laumont2022pnpdm）。
 > 状态图例：`✓`=字段完整可信｜`⚠`=bib 中带 `note={⚠待补/待核}`，须作者坐实｜`合并`=多条正文写法并入同一键。
 > 口径（作者已拍板）：优先已发表版；非正式来源剔除；`Black Forest Labs (2024) Flux` 保留为 `@misc`；citekey=作者+年份+关键词小写。
 
@@ -162,7 +162,7 @@
 | 137 | Kim & Ye | 2021 | ch17/17.3#117 | kim2021n2score | ✓ |
 | 138 | Kingma | 2021 | ch11/11B#3 | kingma2021vdm | 合并 |
 | 139 | Kingma et al | 2021 | ch08/8.5#113 | kingma2021vdm | 合并 |
-| 140 | Laumont et al | 2021 | ch03/3.7#182 | laumont2022pnpdm | 合并 |
+| 140 | Laumont et al | 2022 | ch03/3.7#182；ch04/4.7#153；ch05/5.5；ch05/5.6 | laumont2022langevintweedie | 合并（E1：WT《When Langevin Meets Tweedie》；PnP-ULA 收敛理论统一归此，2026-10-25） |
 | 141 | Nakkiran et al | 2021 | ch09/9C#72 | nakkiran2021double | ✓ |
 | 142 | Nichol & Dhariwal | 2021 | ch07/7.6#37 | nichol2021improved | ✓ |
 | 143 | Pang et al | 2021 | ch17/17.3#121 | pang2021r2r | ✓ |
@@ -178,7 +178,7 @@
 | 153 | Holden, Pereyra & Zygalakis | 2022 | ch02/2.4#293 | holden2022datadriven | 合并 |
 | 154 | Karras et al | 2022 | ch07/7.2#89 | karras2022edm | ✓ |
 | 155 | Kawar et al | 2022 | ch07/7B#61 | kawar2022ddrm | ✓ |
-| 156 | Laumont et al | 2022 | ch13/13.3#601 | laumont2023convergence | ✓ |
+| 156 | Laumont et al | 2023 | ch13/13.3#607 | laumont2023convergence | ✓（E1：13.3 由 2022 改标 2023 与 WT 消歧，2026-10-25） |
 | 157 | Lu et al | 2022 | ch07/7.5#109 | lu2022dpmsolver | ✓ |
 | 158 | Lugmayr et al | 2022 | ch18/18.6#58 | lugmayr2022repaint | ✓ |
 | 159 | Rombach et al | 2022 | ch13/13.3#506 | rombach2022ldm | ✓ |
@@ -234,6 +234,7 @@
 | 210 | Xu et al | 2025 | ch13/13.3#745 | xu2025dmap | ✓ |
 | 211 | Chung et al | 2209.14687 | ch13/13.4#402 | chung2023dps | 合并 |
 | 212 | Trippe et al | 2022 | ch13/13.3#630 | trippe2022smcdiff | ✓（2026-10-21 正文修正后新增行；原 #196 的 SMCDiff 三处已并入本行） |
+| 213 | Hurault et al | 2024 | ch04/4.7#153 | hurault2024convergence | ✓（E1 补引：非对数凹严格收敛后续分析，主引仍 laumont2022langevintweedie，2026-10-25） |
 
 ## 三、需作者优先坐实的 ⚠ 清单（按影响排序）
 

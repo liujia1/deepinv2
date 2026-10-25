@@ -210,7 +210,7 @@ if _use_pnp:
     # δ = 1/L_total 位于 Langevin 均方稳定域 (δ < 2/L_total) 内，实测数值稳定。
     L_total = L_net / eps + L_y
     delta_max = 1.0 / L_total
-    # 严格的【未投影 PnP-ULA】（含 λ 尾项，Hurault et al., 2022）理论上界为
+    # 严格的【未投影 PnP-ULA】（含 λ 尾项，Laumont et al., 2022；非对数凹严格证明见 Hurault et al., 2024）理论上界为
     #   λ* = 1/(2αL_net/ε + 4L_y),  δ < (1/3)/(αL_net/ε + L_y + 1/λ*)
     # 简化核步长约为该严格上界的 15 倍：之所以仍稳定，是因为后验质量在 [0,1]
     # 边界附近很少、官方投影核实测几乎不触发（两种核 10000 步结果仅差 0.022 dB）。
