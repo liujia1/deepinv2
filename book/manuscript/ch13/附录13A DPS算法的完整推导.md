@@ -168,7 +168,7 @@ $$\boxed{\nabla_{\mathbf{x}_t}\log p(\mathbf{y}|\mathbf{x}_t) \approx \zeta \cdo
 
 ### 4.4 中间那一档：把 Jacobian 标量化，缩放因子该取谁
 
-16.3 的正文用的是“左乘转置”形式，这里保持同一记法。完整 Jacobian 可以拆成两个角色不同的部分：
+13.3 的正文用的是“左乘转置”形式，这里保持同一记法。完整 Jacobian 可以拆成两个角色不同的部分：
 
 $$\nabla_{\mathbf{x}_t}\hat{x}_{0|t} = \frac{1}{\sqrt{\bar\alpha_t}}\Big[I + (1-\bar\alpha_t)\nabla_{\mathbf{x}_t}s_\theta(\mathbf{x}_t,t)\Big]$$
 
@@ -183,7 +183,7 @@ $$\nabla_{\mathbf{x}_t}\hat{x}_{0|t} = \frac{1}{\sqrt{\bar\alpha_t}}\Big[I + (1-
 | `1`（§4.3 的写法） | `A^⊤(y-Ax̂_{0\|t})/σ_y²` | `1/√ᾱ_t`，高噪段约高估 10 倍 | 引导虚高、轨迹过冲，靠小 `ζ` 压回 |
 | `1/√ᾱ_t`（把方向写反） | `A^⊤(y-Ax̂_{0\|t})/(√ᾱ_t\,σ_y²)` | `1/ᾱ_t`，`t→T` 时约 150 倍 | 梯度全程撞裁剪上限，退化为“常数强度引导” |
 
-**为什么 `mean_t` 是精确的**：设先验 `N(μ, v)`。VP 缩放下 `x_t` 的边缘方差是 `ᾱ_t v + (1-\bar\alpha_t)`，故 `∇_{x_t}s_θ = -I/(\bar\alpha_t v+1-\bar\alpha_t)`，代回上式：
+**为什么 `mean_t` 是精确的**：设先验 `N(μ, v)`。VP 缩放下 `x_t` 的边缘方差是 `ᾱ_t v + (1-ᾱ_t)`，故 `∇_{x_t}s_θ = -I/(ᾱ_t v+1-ᾱ_t)`，代回上式：
 
 $$\nabla_{\mathbf{x}_t}\hat{x}_{0|t} = \frac{1}{\sqrt{\bar\alpha_t}}\left[1-\frac{1-\bar\alpha_t}{\bar\alpha_t v+1-\bar\alpha_t}\right]I = \frac{\sqrt{\bar\alpha_t}\,v}{\bar\alpha_t v+(1-\bar\alpha_t)}\,I$$
 

@@ -643,14 +643,23 @@ axes[0, 0].set_title('轨迹对比：DOC vs DPS（最后一次试验示例）')
 axes[0, 0].legend(fontsize=9)
 axes[0, 0].grid(True, alpha=0.3)
 
-# 子图2：控制输入（索引按逆向顺序：0=最早的高噪声步控制）
-axes[0, 1].plot(range(T), doc_controls.cpu().numpy(), 'o-', label='DOC控制变量 raw_u（实际施加 0.5·tanh(raw_u)）',
+# 子图2：控制输入（横轴与子图1同向：0=高噪声端 x_T，T-1=末端 x_0 前一步）
+# ★ control_sequence 按 t_idx 索引：t_idx=T-1 是首个逆向步（高噪声端），t_idx=0 是末步。
+#   必须把数组倒过来画，否则末步会落在横轴 0 上、与子图1"左=高噪声"的方向相反
+#   （旧版直接用 range(T) 配原数组，横轴标签与曲线方向互相矛盾）。
+axes[0, 1].plot(range(T), doc_controls.flip(0).cpu().numpy(), 'o-',
+                label='DOC控制变量 raw_u（实际施加 0.5·tanh(raw_u)）',
                 linewidth=2, markersize=5)
 axes[0, 1].axhline(y=0, color='gray', linewidth=0.8)
-axes[0, 1].set_xlabel(f'逆向步序号（0=高噪声端，{T-1}=末端）')
-axes[0, 1].set_ylabel('控制输入 $u_t$')
-axes[0, 1].set_title('DOC控制输入（全轨迹协调，PF-ODE）')
-axes[0, 1].legend()
+axes[0, 1].set_xlabel(f'逆向步序号（0=高噪声端 $x_T$，{T-1}=末端 $x_0$ 前一步）')
+axes[0, 1].set_ylabel('控制输入 raw $u_t$（施加量为 0.5·tanh）')
+_b_title = 'DOC控制输入（全轨迹协调，PF-ODE）'
+if not IS_MAIN_T:
+    # 补充对照固定 300 次迭代，对 T 维控制序列欠收敛：终端点已收敛，但控制形状不唯一，
+    # 不能读成"最优控制的时间分布"（一阶条件 u_t* ∝ ∂x_0/∂u_t 单调递减，见正文步骤4b）
+    _b_title += f'\n（T={T}：300 次迭代对 {T} 维序列欠收敛，控制形状非唯一；终端点已收敛）'
+axes[0, 1].set_title(_b_title, fontsize=(10 if not IS_MAIN_T else 12))
+axes[0, 1].legend(fontsize=(8 if not IS_MAIN_T else 10))
 axes[0, 1].grid(True, alpha=0.3)
 
 # 子图3：n次试验的平均终端误差（总体统计，带标准差棒）
@@ -660,15 +669,37 @@ stds = [doc_std_error, dps_std_error, np.std(yA_errors), np.std(postmean_errors)
 colors = ['steelblue', 'coral', 'purple', 'saddlebrown']
 bars = axes[1, 0].bar(methods, means, yerr=stds, color=colors, alpha=0.75,
                       capsize=5, edgecolor='black', linewidth=0.6)
+# ★ 注意：max(means + stds) 是**列表拼接**、不是逐元素求和，旧版据此定轴高，结果只按
+#   "最大均值"取上限，DOC 与 DPS 的误差棒上须都被裁掉。逐元素求和后再留 15% 余量。
+_y_top = float(np.max(np.asarray(means) + np.asarray(stds))) * 1.15
 for bar, m in zip(bars, means):
-    axes[1, 0].text(bar.get_x() + bar.get_width()/2, m + 0.004, f'{m:.4f}',
-                    ha='center', va='bottom', fontsize=9)
+    # 标签偏移按坐标轴量程取并加白底，避免被误差棒的竖线/帽线穿过（旧版固定 +0.004 会压字）
+    axes[1, 0].text(bar.get_x() + bar.get_width()/2, m + 0.035 * _y_top, f'{m:.4f}',
+                    ha='center', va='bottom', fontsize=9,
+                    bbox=dict(boxstyle='round,pad=0.15', fc='white', ec='none', alpha=0.8))
 axes[1, 0].set_ylabel('$|x_0 - x^*|$ 平均终端误差')
-axes[1, 0].set_title(f'终端误差对比（n={n_trials}配对试验，误差棒为±1标准差）\n'
-                     f'DOC相对DPS改进 {(dps_mean_error-doc_mean_error)/dps_mean_error*100:.1f}%，'
-                     f'DOC胜出 {doc_win_count}/{n_trials} 次')
+# ★ 口径：T≠20 时"主报 ζ"是按 ζ∝T 外推选的，可能已越界（本实验 T=200 的 ζ=0.3 方差比≈40、
+#   单条链过冲到 -6.6）。用"主报 ζ"的分母算改进率等于挑最有利的对照，故标题改用 ζ 扫描里
+#   最有利于 DPS 的那一档，并把主报 ζ 越界这件事写进标题。
+_zeta_ok = [k for k, v in dps_errors_by_zeta.items() if len(v)]
+_best_zeta = min(_zeta_ok, key=lambda k: float(np.mean(dps_errors_by_zeta[k])))
+_best_dps_err = float(np.mean(dps_errors_by_zeta[_best_zeta]))
+if IS_MAIN_T or _best_dps_err <= 0:
+    _c_line2 = (f'DOC相对DPS改进 {(dps_mean_error-doc_mean_error)/dps_mean_error*100:.1f}%，'
+                f'DOC胜出 {doc_win_count}/{n_trials} 次')
+else:
+    _c_line2 = (f'DOC 胜出 {doc_win_count}/{n_trials} 次；对 DPS 最优 ζ={_best_zeta:g} 仍低 '
+                f'{(_best_dps_err - doc_mean_error)/_best_dps_err*100:.1f}%'
+                f'（主报 ζ={DPS_ZETA_MAIN:g} 已越界，见正文）')
+axes[1, 0].set_title(f'终端误差对比（n={n_trials}配对试验，误差棒为±1标准差）\n{_c_line2}',
+                     fontsize=(10 if not IS_MAIN_T else 12))
 axes[1, 0].grid(True, alpha=0.3, axis='y')
-axes[1, 0].set_ylim(0, max(means + stds) * 1.25)
+axes[1, 0].set_ylim(0, _y_top)
+# 标准差远大于均值时上须会超出轴范围：标注被裁剪的上界，避免读者把"截断"当数据
+if dps_mean_error + dps_std_error > 0.98 * _y_top:
+    axes[1, 0].text(bars[1].get_x() + bars[1].get_width() / 2, 0.97 * _y_top,
+                    f'DPS 误差棒上界 {dps_mean_error + dps_std_error:.2f}（超出轴范围，已裁剪）',
+                    ha='center', va='top', fontsize=8, color='0.35')
 
 # 子图4：优化历史（同时展示终端代价和终端状态x0的收敛）
 iter_costs_history = []
@@ -859,7 +890,9 @@ if not IS_MAIN_T:
     # 补充对照只求量级（主实验的完整校准诊断不重复），否则 T 步数会把耗时放大 T/20 倍
     _cal_M, _cal_K = 200, 2
     _cal_zetas = tuple(DPS_ZETA_SWEEP)
-_ratios02 = []                       # 汇总 ζ=0.02 在所有(y,批次)上的方差比
+_ratios02 = []                       # 汇总主报 ζ 在所有(y,批次)上的方差比
+_cal_log = []                        # (y, ζ, 方差比批次均值, 尾部逃逸率)，供结论段自动定性
+_cal_raw = {}                        # ζ -> 所有(y,批次)的方差比原始值（用于报中位数）
 print(f"每个设定独立重复{_cal_K}批×{_cal_M}条链，报告批次均值±标准差\n")
 for _y in _cal_ys:
     _th_mean, _th_var = _theory_posterior(_y)
@@ -879,6 +912,8 @@ for _y in _cal_ys:
         _rs, _bias, _tail, _div = map(np.asarray, (_rs, _bias, _tail, _div))
         if abs(_zeta - DPS_ZETA_MAIN) < 1e-12:
             _ratios02.extend(_rs.tolist())
+        _cal_log.append((_y, _zeta, float(_rs.mean()), float(_tail.mean())))
+        _cal_raw.setdefault(_zeta, []).extend(_rs.tolist())
         print(f"  ζ={_zeta:<5} 方差比={_rs.mean():5.2f}±{_rs.std(ddof=1):4.2f} "
               f"(范围{_rs.min():.2f}~{_rs.max():.2f})  均值偏差={_bias.mean():+.4f}  "
               f"尾部逃逸(>3σ)={_tail.mean():5.1%}  非有限={_div.mean():.1%}")
@@ -887,19 +922,39 @@ for _y in _cal_ys:
 _r02 = np.asarray(_ratios02, dtype=float)
 calib_ratio_002 = float(_r02.mean()) if _r02.size else float('nan')
 calib_ratio_002_cv = float(_r02.std(ddof=1) / _r02.mean()) if _r02.size > 1 else float('nan')
-print(f"诊断结论（ζ=0.02，主实验取值，{len(_r02)}个批次、每批{_cal_M}条链汇总）：")
+print(f"诊断结论（ζ={DPS_ZETA_MAIN:g}=主报取值，{len(_r02)}个批次、每批{_cal_M}条链汇总）：")
 print(f"  主体批次方差比 = {calib_ratio_002:.2f} ± {_r02.std(ddof=1):.2f}"
       f"（CV={calib_ratio_002_cv:.0%}，范围{_r02.min():.2f}~{_r02.max():.2f}；理想=1）")
-print("  → ζ=0.02 的主体行为是稳定的严重欠扩散（方差仅真实后验的约15%）。")
-print("  ζ=0.01：欠引导，方差膨胀约8倍、均值偏移0.067、1/3轨迹逃逸；")
-print("  ζ=0.025：多数批次欠扩散，但偶发整批重尾（上方有一批方差比达60）；")
-print("  ζ=0.03：约8%轨迹尾部逃逸、方差膨胀4倍以上（更弱的x_T下直接发散）。")
-print("  没有任何ζ能在不同随机批次下稳定给出校准的后验覆盖——这正是少步大步长")
-print("  (T=20, β≈0.215)下离散化脆性的量化证据。注意：只跑单批会被'个别逃逸")
-print("  轨迹抬高方差'误导（方差比可能偶然接近1），必须多批次重复才能识别。")
-print("  终端点误差的均值主要由'末端均值跟踪后验众数'决定，对方差覆盖不敏感——")
-print("  主实验DPS 0.0426 与理想校准样本0.056的差异(p≈0.02)来自这种欠扩散收缩，")
-print("  不能解读为DPS的后验样本质量更好：多样性与不确定度被系统性低估。")
+
+
+def _verdict(r):
+    """按实测量方差比自动定性，避免把某个 T 的结论写死在代码里"""
+    if not np.isfinite(r):
+        return "发散（非有限）"
+    if r < 0.5:
+        return "欠扩散：方差明显偏小，多样性被低估"
+    if r <= 2.0:
+        return "接近校准"
+    if r <= 10.0:
+        return "过扩散：方差偏大，轨迹在漂"
+    return "发散：方差比失控"
+
+
+for _z in _cal_zetas:
+    _rr = np.array([row[2] for row in _cal_log if abs(row[1] - _z) < 1e-12])
+    _tt = np.array([row[3] for row in _cal_log if abs(row[1] - _z) < 1e-12])
+    if not _rr.size:
+        continue
+    # 定性看中位数：均方差比会被个别重尾批次（方差比可达数十）抬高，不适合直接下结论
+    _med = float(np.median(_cal_raw[_z]))
+    print(f"  ζ={_z:<5} 方差比 均值={_rr.mean():9.3g}  中位数={_med:7.3g}  尾部逃逸={_tt.mean():5.1%}"
+          f"  → {_verdict(_med)}")
+
+print(f"  以上为 T={T}（首步 β≈{float(betas[0]):.3g}）下的实测：本基准中没有任何 ζ 能在不同随机批次下")
+print("  稳定给出校准的后验覆盖——同一 ζ 换 T（即换 β_t 尺度）后定性会整体平移。")
+print("  注意：只跑单批会被'个别逃逸轨迹抬高方差'误导（方差比可能偶然接近1），")
+print("  必须多批次重复才能识别。终端点误差对方差覆盖不敏感：误差好看的 ζ 往往")
+print("  正是收缩（欠扩散）那一档，不能据此判断后验样本质量，多样性要单独检查。")
 
 # ===== 保存数值结果 =====
 import json
@@ -938,9 +993,29 @@ _sweep_entry = {
     "DOC胜出次数": doc_win_count,
     "DPS_各zeta平均误差": {str(_k): _r(np.mean(_v)) for _k, _v in dps_errors_by_zeta.items() if len(_v)},
     "DPS_各zeta误差标准差": {str(_k): _r(np.std(_v)) for _k, _v in dps_errors_by_zeta.items() if len(_v)},
+    # 后验校准诊断：方差比 Var_DPS/Var_post 按 ζ 分工，理想为 1（正文据此判"欠扩散/过扩散"）
+    # 均值与中位数一并存：ζ 接近发散边界时会出现个别重尾批次，只看均值会被带偏
+    "DPS后验校准_各zeta方差比": {
+        str(_z): _r(float(np.mean([row[2] for row in _cal_log if abs(row[1] - _z) < 1e-12])), 3)
+        for _z in _cal_zetas
+        if any(abs(row[1] - _z) < 1e-12 for row in _cal_log)
+    },
+    "DPS后验校准_各zeta方差比中位数": {
+        str(_z): _r(float(np.median(_cal_raw[_z])), 3) for _z in _cal_zetas if _cal_raw.get(_z)
+    },
+    "后验校准_诊断规模": f"{len(_cal_ys)}个y × {_cal_K}批 × {_cal_M}条链；噪声由 torch 全局种子生成，与计算设备相关",
 }
 
 _json_path = os.path.join(SAVE_DIR, 'results_summary.json')
+
+# 先读出已有 JSON：重跑主实验时也要保留其它 T 的补充条目（否则会把 T=200 那块抹掉）
+_prev = {}
+if os.path.exists(_json_path):
+    with open(_json_path, encoding='utf-8') as f:
+        _prev = json.load(f)
+
+_sweep = dict(_prev.get("T扫描补充", {}))
+_sweep[str(T)] = _sweep_entry
 
 if IS_MAIN_T:
     results_summary = {
@@ -957,16 +1032,12 @@ if IS_MAIN_T:
         "DPS引导系数zeta": DPS_ZETA_MAIN,
         "DPS后验校准_末端方差比_zeta0.02_理想为1": _r(calib_ratio_002, 3),
         "DPS后验校准_方差比批次间变异系数CV": _r(calib_ratio_002_cv, 3),
-        "T扫描补充": {"20": _sweep_entry},
+        "实验设备": str(device),
+        "T扫描补充": _sweep,
     }
 else:
     # 补充对照：只并入 T扫描补充，不动主实验字段、不覆盖主图
-    results_summary = {}
-    if os.path.exists(_json_path):
-        with open(_json_path, encoding='utf-8') as f:
-            results_summary = json.load(f)
-    _sweep = dict(results_summary.get("T扫描补充", {}))
-    _sweep[str(T)] = _sweep_entry
+    results_summary = dict(_prev)
     results_summary["T扫描补充"] = _sweep
 
 results_summary = _to_native(results_summary)

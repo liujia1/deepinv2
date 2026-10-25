@@ -859,7 +859,9 @@ if not IS_MAIN_T:
     # 补充对照只求量级（主实验的完整校准诊断不重复），否则 T 步数会把耗时放大 T/20 倍
     _cal_M, _cal_K = 200, 2
     _cal_zetas = tuple(DPS_ZETA_SWEEP)
-_ratios02 = []                       # 汇总 ζ=0.02 在所有(y,批次)上的方差比
+_ratios02 = []                       # 汇总主报 ζ 在所有(y,批次)上的方差比
+_cal_log = []                        # (y, ζ, 方差比批次均值, 尾部逃逸率)，供结论段自动定性
+_cal_raw = {}                        # ζ -> 所有(y,批次)的方差比原始值（用于报中位数）
 print(f"每个设定独立重复{_cal_K}批×{_cal_M}条链，报告批次均值±标准差\n")
 for _y in _cal_ys:
     _th_mean, _th_var = _theory_posterior(_y)
@@ -879,6 +881,8 @@ for _y in _cal_ys:
         _rs, _bias, _tail, _div = map(np.asarray, (_rs, _bias, _tail, _div))
         if abs(_zeta - DPS_ZETA_MAIN) < 1e-12:
             _ratios02.extend(_rs.tolist())
+        _cal_log.append((_y, _zeta, float(_rs.mean()), float(_tail.mean())))
+        _cal_raw.setdefault(_zeta, []).extend(_rs.tolist())
         print(f"  ζ={_zeta:<5} 方差比={_rs.mean():5.2f}±{_rs.std(ddof=1):4.2f} "
               f"(范围{_rs.min():.2f}~{_rs.max():.2f})  均值偏差={_bias.mean():+.4f}  "
               f"尾部逃逸(>3σ)={_tail.mean():5.1%}  非有限={_div.mean():.1%}")
@@ -887,19 +891,39 @@ for _y in _cal_ys:
 _r02 = np.asarray(_ratios02, dtype=float)
 calib_ratio_002 = float(_r02.mean()) if _r02.size else float('nan')
 calib_ratio_002_cv = float(_r02.std(ddof=1) / _r02.mean()) if _r02.size > 1 else float('nan')
-print(f"诊断结论（ζ=0.02，主实验取值，{len(_r02)}个批次、每批{_cal_M}条链汇总）：")
+print(f"诊断结论（ζ={DPS_ZETA_MAIN:g}=主报取值，{len(_r02)}个批次、每批{_cal_M}条链汇总）：")
 print(f"  主体批次方差比 = {calib_ratio_002:.2f} ± {_r02.std(ddof=1):.2f}"
       f"（CV={calib_ratio_002_cv:.0%}，范围{_r02.min():.2f}~{_r02.max():.2f}；理想=1）")
-print("  → ζ=0.02 的主体行为是稳定的严重欠扩散（方差仅真实后验的约15%）。")
-print("  ζ=0.01：欠引导，方差膨胀约8倍、均值偏移0.067、1/3轨迹逃逸；")
-print("  ζ=0.025：多数批次欠扩散，但偶发整批重尾（上方有一批方差比达60）；")
-print("  ζ=0.03：约8%轨迹尾部逃逸、方差膨胀4倍以上（更弱的x_T下直接发散）。")
-print("  没有任何ζ能在不同随机批次下稳定给出校准的后验覆盖——这正是少步大步长")
-print("  (T=20, β≈0.215)下离散化脆性的量化证据。注意：只跑单批会被'个别逃逸")
-print("  轨迹抬高方差'误导（方差比可能偶然接近1），必须多批次重复才能识别。")
-print("  终端点误差的均值主要由'末端均值跟踪后验众数'决定，对方差覆盖不敏感——")
-print("  主实验DPS 0.0426 与理想校准样本0.056的差异(p≈0.02)来自这种欠扩散收缩，")
-print("  不能解读为DPS的后验样本质量更好：多样性与不确定度被系统性低估。")
+
+
+def _verdict(r):
+    """按实测量方差比自动定性，避免把某个 T 的结论写死在代码里"""
+    if not np.isfinite(r):
+        return "发散（非有限）"
+    if r < 0.5:
+        return "欠扩散：方差明显偏小，多样性被低估"
+    if r <= 2.0:
+        return "接近校准"
+    if r <= 10.0:
+        return "过扩散：方差偏大，轨迹在漂"
+    return "发散：方差比失控"
+
+
+for _z in _cal_zetas:
+    _rr = np.array([row[2] for row in _cal_log if abs(row[1] - _z) < 1e-12])
+    _tt = np.array([row[3] for row in _cal_log if abs(row[1] - _z) < 1e-12])
+    if not _rr.size:
+        continue
+    # 定性看中位数：均方差比会被个别重尾批次（方差比可达数十）抬高，不适合直接下结论
+    _med = float(np.median(_cal_raw[_z]))
+    print(f"  ζ={_z:<5} 方差比 均值={_rr.mean():9.3g}  中位数={_med:7.3g}  尾部逃逸={_tt.mean():5.1%}"
+          f"  → {_verdict(_med)}")
+
+print(f"  以上为 T={T}（首步 β≈{float(betas[0]):.3g}）下的实测：本基准中没有任何 ζ 能在不同随机批次下")
+print("  稳定给出校准的后验覆盖——同一 ζ 换 T（即换 β_t 尺度）后定性会整体平移。")
+print("  注意：只跑单批会被'个别逃逸轨迹抬高方差'误导（方差比可能偶然接近1），")
+print("  必须多批次重复才能识别。终端点误差对方差覆盖不敏感：误差好看的 ζ 往往")
+print("  正是收缩（欠扩散）那一档，不能据此判断后验样本质量，多样性要单独检查。")
 
 # ===== 保存数值结果 =====
 import json
@@ -938,9 +962,29 @@ _sweep_entry = {
     "DOC胜出次数": doc_win_count,
     "DPS_各zeta平均误差": {str(_k): _r(np.mean(_v)) for _k, _v in dps_errors_by_zeta.items() if len(_v)},
     "DPS_各zeta误差标准差": {str(_k): _r(np.std(_v)) for _k, _v in dps_errors_by_zeta.items() if len(_v)},
+    # 后验校准诊断：方差比 Var_DPS/Var_post 按 ζ 分工，理想为 1（正文据此判"欠扩散/过扩散"）
+    # 均值与中位数一并存：ζ 接近发散边界时会出现个别重尾批次，只看均值会被带偏
+    "DPS后验校准_各zeta方差比": {
+        str(_z): _r(float(np.mean([row[2] for row in _cal_log if abs(row[1] - _z) < 1e-12])), 3)
+        for _z in _cal_zetas
+        if any(abs(row[1] - _z) < 1e-12 for row in _cal_log)
+    },
+    "DPS后验校准_各zeta方差比中位数": {
+        str(_z): _r(float(np.median(_cal_raw[_z])), 3) for _z in _cal_zetas if _cal_raw.get(_z)
+    },
+    "后验校准_诊断规模": f"{len(_cal_ys)}个y × {_cal_K}批 × {_cal_M}条链；噪声由 torch 全局种子生成，与计算设备相关",
 }
 
 _json_path = os.path.join(SAVE_DIR, 'results_summary.json')
+
+# 先读出已有 JSON：重跑主实验时也要保留其它 T 的补充条目（否则会把 T=200 那块抹掉）
+_prev = {}
+if os.path.exists(_json_path):
+    with open(_json_path, encoding='utf-8') as f:
+        _prev = json.load(f)
+
+_sweep = dict(_prev.get("T扫描补充", {}))
+_sweep[str(T)] = _sweep_entry
 
 if IS_MAIN_T:
     results_summary = {
@@ -957,16 +1001,12 @@ if IS_MAIN_T:
         "DPS引导系数zeta": DPS_ZETA_MAIN,
         "DPS后验校准_末端方差比_zeta0.02_理想为1": _r(calib_ratio_002, 3),
         "DPS后验校准_方差比批次间变异系数CV": _r(calib_ratio_002_cv, 3),
-        "T扫描补充": {"20": _sweep_entry},
+        "实验设备": str(device),
+        "T扫描补充": _sweep,
     }
 else:
     # 补充对照：只并入 T扫描补充，不动主实验字段、不覆盖主图
-    results_summary = {}
-    if os.path.exists(_json_path):
-        with open(_json_path, encoding='utf-8') as f:
-            results_summary = json.load(f)
-    _sweep = dict(results_summary.get("T扫描补充", {}))
-    _sweep[str(T)] = _sweep_entry
+    results_summary = dict(_prev)
     results_summary["T扫描补充"] = _sweep
 
 results_summary = _to_native(results_summary)

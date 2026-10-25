@@ -1,0 +1,45 @@
+{
+  "config": {
+    "depths": [
+      4,
+      12
+    ],
+    "inits": [
+      "zero",
+      "nozero"
+    ],
+    "seeds": [
+      0,
+      1
+    ],
+    "lrs": [
+      0.0002
+    ],
+    "hidden": 128,
+    "epochs_by_depth": {
+      "4": 20,
+      "12": 20
+    },
+    "quick_mode": false
+  },
+  "summary": {
+    "depth4_lr0.0002": {
+      "final_val_zero": 0.0582180565036073,
+      "final_val_nozero": 0.059969355057696905,
+      "paired_diff_pixel_frechet_mean": 0.3652321160186851,
+      "paired_diff_pixel_frechet_std": 0.2899571138770858,
+      "paired_diff_nn_psnr_mean": -0.14723777770996094,
+      "early_instability_zero": 0.010999019847472964,
+      "early_instability_nozero": 0.010541971740886611
+    },
+    "depth12_lr0.0002": {
+      "final_val_zero": 0.051518770490373886,
+      "final_val_nozero": 0.05247380906708386,
+      "paired_diff_pixel_frechet_mean": -0.03782036042442494,
+      "paired_diff_pixel_frechet_std": 0.02745456248657252,
+      "paired_diff_nn_psnr_mean": 0.024173259735107422,
+      "early_instability_zero": 0.009926089638027557,
+      "early_instability_nozero": 0.00940865112794163
+    }
+  }
+}
